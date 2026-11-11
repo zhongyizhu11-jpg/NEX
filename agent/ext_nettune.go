@@ -15,7 +15,7 @@ BBR + fq、大缓冲、连接跟踪表、几项 TCP 行为。这里是同一套�
 
 指令：{"runs": [{"id": "...", "apply": true|false, "mode": "...", "values": {...}}]}，面板每轮重发，直到收到对应 id 的结果。
 
-2.2.253 起多两种 mode（老 Agent 不认 mode，只看 apply=false，当一次「检查」，不会误改）：
+2.2.255 起多两种 mode（老 Agent 不认 mode，只看 apply=false，当一次「检查」，不会误改）：
   - set：把指定的几项改成给定的值（只收 netTuneEditableKey 里的键，值按键校验）；每项写完读回来核对，
     读回来不一样就把这一项改回原值。写进同一个 sysctl.d 文件。
   - restore：改回「面板第一次改这台机器之前」的值（见 netTuneBackupPath），并删掉面板写的 sysctl.d /
@@ -516,7 +516,7 @@ func netTuneWriteConf(entries [][2]string) error {
 	return writeFileAtomicDurable(netTuneConfPath, []byte(builder.String()), 0644)
 }
 
-/* ---------- 2.2.253：逐项设置、还原 ---------- */
+/* ---------- 2.2.255：逐项设置、还原 ---------- */
 
 // netTuneBackupKeys：备份 / 还原覆盖的键 —— 一键调优和逐项设置会动到的全部。
 func netTuneBackupKeys() []string {

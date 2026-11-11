@@ -8,8 +8,8 @@ import test from "node:test";
 /**
  * VLESS Reality 出口落到库里、接口、心跳上的那几条规矩（Shadowsocks 那份见 ssEgressDb.test.ts，同一个测试架子）：
  *   - 保存：落地入站要是 VLESS + RAW/TCP + REALITY + Vision；外部链接严格解析、加密保存；UDP 跟着协议走出口；
- *     入口机 Agent 低于 2.2.253 时不能新挂；
- *   - 心跳：2.2.253 起的 Agent 拿到 gost 的本机 socks5 链 + 单独一份 sing-box 桥接配置，两边的端口和凭据对得上；
+ *     入口机 Agent 低于 2.2.255 时不能新挂；
+ *   - 心跳：2.2.255 起的 Agent 拿到 gost 的本机 socks5 链 + 单独一份 sing-box 桥接配置，两边的端口和凭据对得上；
  *     旧 Agent 上这种规则按停用下发，也不发桥接；
  *   - 落地入站被当作 VLESS 出口时不能删、不能改成别的传输。
  */
@@ -40,7 +40,7 @@ function runInDatabase(body: string) {
         'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)',
         [id, name, ip, ip, "slave", token, owner, now, version],
       );
-      await addHost(10, "香港入口", "203.0.113.10", "2.2.253", "tok10");
+      await addHost(10, "香港入口", "203.0.113.10", "2.2.255", "tok10");
       await addHost(20, "东京落地", "203.0.113.20", "2.2.226", "tok20");
       await addHost(30, "老入口", "203.0.113.30", "2.2.252", "tok30");
 
@@ -176,7 +176,7 @@ test("保存：落地入站 / 外部链接两种来源，形态、Agent 版本�
   `);
 });
 
-test("心跳：2.2.253 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent 上按停用下发、不发桥接", () => {
+test("心跳：2.2.255 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent 上按停用下发、不发桥接", () => {
   runInDatabase(String.raw`
     const inboundId = await makeInbound();
     const viaHost = await rules.create(directRule({ egressType: "vless_host", egressInboundId: inboundId }));
@@ -184,7 +184,7 @@ test("心跳：2.2.253 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent
     const plain = await rules.create(directRule());
     const viaHostBoth = await rules.create(directRule({ protocol: "both", egressType: "vless_host", egressInboundId: inboundId, egressUdp: true }));
 
-    const { gost, bridge, bridgeAction } = await heartbeat("tok10", "2.2.253");
+    const { gost, bridge, bridgeAction } = await heartbeat("tok10", "2.2.255");
     const service = (name) => gost.services.find((item) => item.name === name);
     const hostService = service("fwx-" + viaHost.id + "-tcp");
     assert.ok(hostService, "出口规则要生成 gost 服务");

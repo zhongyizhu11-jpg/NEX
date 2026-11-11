@@ -121,7 +121,7 @@ export function hostAddressRowTags(row: HostAddressRow): string[] {
 }
 
 /**
- * 多 IP 主机（Agent 2.2.253+ 报了网卡上的全部公网地址）：卡片 / 表格上主地址后面写「+N」，
+ * 多 IP 主机（Agent 2.2.255+ 报了网卡上的全部公网地址）：卡片 / 表格上主地址后面写「+N」，
  * 悬停列出全部，主 IP 标出来。只有一个地址的主机 extra 是 0，什么都不多画。
  */
 export function hostExtraAddressSummary(host: HostPrimaryAddressSource | null | undefined) {

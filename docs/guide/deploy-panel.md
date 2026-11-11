@@ -70,7 +70,7 @@ sudo bash /opt/forwardx-panel/scripts/install-panel-local.sh reset-admin
 
 ## SSH 管理命令 fwxm
 
-用一键脚本安装或升级面板后，SSH 里可以直接用 `fwxm` 管理面板，不需要打开网页（2.3.524 起）：
+用一键脚本安装或升级面板后，SSH 里可以直接用 `fwxm` 管理面板，不需要打开网页（2.3.525 起）：
 
 ```bash
 fwxm                 # 交互菜单

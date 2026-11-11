@@ -71,7 +71,7 @@ export type HostVitals = {
   tcpConnections: number | null;
   udpConnections: number | null;
   /**
-   * 1 / 5 / 15 分钟系统负载（Agent 2.2.253 起报，shared/hostLoadAverage.ts）。和 CPU 一样是
+   * 1 / 5 / 15 分钟系统负载（Agent 2.2.255 起报，shared/hostLoadAverage.ts）。和 CPU 一样是
    * 「此刻」的量：离线回 null；老 Agent、没有 /proc/loadavg 的平台也是 null，界面上什么都不多画。
    */
   load1: number | null;

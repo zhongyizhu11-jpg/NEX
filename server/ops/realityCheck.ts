@@ -1,5 +1,5 @@
 /*
-  REALITY 伪装目标检查（Agent 2.2.253 起）的面板侧：排检查、收结果。规则和候选清单在 shared/realityDestCheck.ts，
+  REALITY 伪装目标检查（Agent 2.2.255 起）的面板侧：排检查、收结果。规则和候选清单在 shared/realityDestCheck.ts，
   扩展模块 "realitycheck" 的注册在 realityCheckAgent.ts（只由 agentExtModules.ts 引入，理由同 unlock.ts），
   Go 端是 agent/ext_realitycheck.go。
 

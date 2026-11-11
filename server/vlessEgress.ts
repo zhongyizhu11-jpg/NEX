@@ -217,7 +217,7 @@ export function buildVlessEgressOutbound(tag: string, endpoint: VlessEgressEndpo
  * 入口机上桥接用的那份 sing-box 配置。每条规则一对「socks 入站 → vless 出站」，路由按入站一一对上。
  *
  * 刻意没有 direct 出站：sing-box 没配 final 时用第一个出站兜底，要是有 direct，一条对不上的连接就会从
- * 入口机自己出去 —— 出口最不能出的错就是「显示在走落地，其实直连了」。Agent 2.2.253 写入前也查这一条
+ * 入口机自己出去 —— 出口最不能出的错就是「显示在走落地，其实直连了」。Agent 2.2.255 写入前也查这一条
  * （agent/singbox_egress_bridge.go）。
  */
 export function buildVlessEgressBridgeConfig(bridges: readonly VlessEgressBridge[]): string {

@@ -97,7 +97,7 @@ type ServiceForm = {
   targetPort: string;
   /** 目标是域名时按哪一族解析（Agent 2.2.226 起生效） */
   addressFamily: ProbeAddressFamily;
-  /** 下面三项只有 URL 连接检测用（Agent 2.2.253 起）；这时 targetIp 是完整 URL */
+  /** 下面三项只有 URL 连接检测用（Agent 2.2.255 起）；这时 targetIp 是完整 URL */
   httpTimeoutSeconds: number;
   httpExpectedStatus: string;
   httpSkipTlsVerify: boolean;

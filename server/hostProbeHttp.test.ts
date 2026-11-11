@@ -7,7 +7,7 @@ import test from "node:test";
 
 /*
   URL 连接检测（method = "http"）在面板这头的三件事：
-    1. 只下发给 Agent ≥ 2.2.253 的主机，带超时、预期状态码、证书开关和规格指纹 probeKey；老 Agent 拿不到。
+    1. 只下发给 Agent ≥ 2.2.255 的主机，带超时、预期状态码、证书开关和规格指纹 probeKey；老 Agent 拿不到。
     2. 回报靠 probeKey 认：改了配置之后还在路上的旧结果、方式对不上的结果都丢掉。
     3. 失败种类和 HTTP 状态码随样本入库，「最近一轮」读得出来；范围内版本不够的主机列进 agentUpgradeHosts。
   另外顺带测负载：心跳报的小数存成乘 100 的整数，读最新指标时除回去。
@@ -29,7 +29,7 @@ test("http host probe services: version gate, probeKey matching, failure storage
       const { flushPendingWrites } = await mod("server/dbWriteBatcher.ts");
 
       await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "role") VALUES (?, ?, ?, ?, ?)', [1, "admin", "h", "Admin", "admin"]);
-      await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "hostType", "agentToken", "userId", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, ?)', [10, "new", "10.0.0.10", "slave", "t10", 1, "2.2.253"]);
+      await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "hostType", "agentToken", "userId", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, ?)', [10, "new", "10.0.0.10", "slave", "t10", 1, "2.2.255"]);
       await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "hostType", "agentToken", "userId", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, ?)', [11, "old", "10.0.0.11", "slave", "t11", 1, "2.2.252"]);
       await runtime.executeRaw('INSERT INTO "hosts" ("id", "name", "ip", "hostType", "agentToken", "userId") VALUES (?, ?, ?, ?, ?, ?)', [12, "never", "10.0.0.12", "slave", "t12", 1]);
 
@@ -56,7 +56,7 @@ test("http host probe services: version gate, probeKey matching, failure storage
       assert.match(httpTask.probeKey, /^service:\d+:http:[0-9a-f]{32}$/);
       // 老 Agent 只拿到 TCPing；心跳传进来的新版本号优先于库里的
       assert.deepEqual((await probes.getHostProbeTasksForHost(11)).map((task) => task.method), ["tcping"]);
-      assert.deepEqual((await probes.getHostProbeTasksForHost(11, { agentVersion: "2.2.253" })).map((task) => task.method).sort(), ["http", "tcping"]);
+      assert.deepEqual((await probes.getHostProbeTasksForHost(11, { agentVersion: "2.2.255" })).map((task) => task.method).sort(), ["http", "tcping"]);
       assert.deepEqual((await probes.getHostProbeTasksForHost(12)).map((task) => task.method), ["tcping"]);
 
       // 需要升级的只有报过版本、而且不够的那台

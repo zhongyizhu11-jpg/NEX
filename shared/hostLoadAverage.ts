@@ -1,5 +1,5 @@
 /*
-  系统平均负载（1 / 5 / 15 分钟，Agent 2.2.253 起随心跳报 loadAverage）。
+  系统平均负载（1 / 5 / 15 分钟，Agent 2.2.255 起随心跳报 loadAverage）。
 
   和 shared/hostLoad.ts 不是一回事：那边是「这台机器此刻有多忙」的 0–100 分（CPU、带宽占用取大），
   给线路评分用；这里是 Linux /proc/loadavg 的原始三个数 —— 在跑和等 CPU / 等磁盘的任务数的滑动平均，

@@ -383,7 +383,7 @@ type RuleFormData = {
   /**
    * 入口方式：port = 自己占一个端口；sni = 挂到主机的共享 TLS 入站上，按 SNI 分流
    * （shared/tlsInbound.ts）。sni 时没有源端口，协议固定 TCP，不支持线路组。端口转发页签是直连
-   * （或经端口转发资源），隧道 / 转发链 / 转发组页签是经它们走（Agent 2.2.253 起）。
+   * （或经端口转发资源），隧道 / 转发链 / 转发组页签是经它们走（Agent 2.2.255 起）。
    */
   entryMode: "port" | "sni";
   tlsInboundId: number | null;

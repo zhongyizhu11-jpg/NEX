@@ -193,7 +193,7 @@ function PublicHostCard({
   const cpuUsage = Number(metric?.cpuUsage ?? 0);
   const memoryUsage = Number(metric?.memoryUsage ?? 0);
   const diskUsage = Number(metric?.diskUsage ?? 0);
-  // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：离线、没报都不画
+  // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）：离线、没报都不画
   const loadAverageText = isOnline ? formatHostLoadAverage(metric) : null;
   const totalIn = traffic?.bytesIn == null ? 0 : Number(traffic.bytesIn) || 0;
   const totalOut = traffic?.bytesOut == null ? 0 : Number(traffic.bytesOut) || 0;

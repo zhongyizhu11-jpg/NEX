@@ -35,7 +35,7 @@ import { VLESS_EGRESS_TCP_ONLY_MESSAGE, VLESS_EGRESS_TUNNEL_MESSAGE, VLESS_EGRES
 export const SS_EGRESS_AGENT_VERSION = "2.2.226";
 
 /**
- * vless_host / vless_link 是 VLESS Reality 出口（面板 2.3.524，规则见 shared/vlessEgress.ts）：落地入站 / 外部
+ * vless_host / vless_link 是 VLESS Reality 出口（面板 2.3.525，规则见 shared/vlessEgress.ts）：落地入站 / 外部
  * vless:// 链接，入口机上的 gost 经本机 sing-box 桥接出去。列名、存法和 Shadowsocks 出口共用（egressInboundId 指向
  * 落地入站，egressConfigJson 存加密后的外部链接），所以这一份 helper 两种协议都管。
  */
@@ -442,7 +442,7 @@ export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
     /*
       VLESS 出口靠入口机上的 sing-box 桥接（shared/vlessEgress.ts），隧道出口机那一侧的本机转发目前只会接 Shadowsocks
       链。UDP 经同一个桥接（socks5 UDP ASSOCIATE → xudp），协议和 egressUdp 要对得上的规矩和 Shadowsocks 一样；
-      不同的是不看入口机的运行时能力：这条路只用上游 gost 本来就有的 socks5 UDP，Agent 2.2.253 的门槛就够了。
+      不同的是不看入口机的运行时能力：这条路只用上游 gost 本来就有的 socks5 UDP，Agent 2.2.255 的门槛就够了。
     */
     if (Number(shape.tunnelId || 0) > 0) return VLESS_EGRESS_TUNNEL_MESSAGE;
     const vlessGroupMode = String(shape.forwardGroupMode ?? "").trim();

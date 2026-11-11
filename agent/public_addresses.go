@@ -7,7 +7,7 @@ import (
 )
 
 /*
-  主机上配置的全部公网地址（2.2.253 起随静态信息一起上报，面板 shared/hostPublicAddresses.ts 收）。
+  主机上配置的全部公网地址（2.2.255 起随静态信息一起上报，面板 shared/hostPublicAddresses.ts 收）。
 
   原来只报一个 IPv4（ipify 看到的出口）和一个 IPv6：多 IP 的机器（站群、多段 IPv6、一张网卡挂好几个
   公网 IP）面板只知道出口那一个，主 IP 选不了，DDNS 也只能发一条记录。这里列的是**网卡上真正配着的**

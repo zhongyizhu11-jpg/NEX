@@ -115,7 +115,7 @@ curl -fsSL http://你的面板地址:9810/api/agent/install.sh | bash -s -- upgr
 
 ### 按主机使用不同的面板入口 {#per-host-panel-url}
 
-某些机器连不上「面板公开地址」时，可以在「编辑主机 → 其他配置 → Agent 连接与保护」给它单独填一个反代到同一面板的地址（见[主机管理 → Agent 面板连接地址](./hosts.md#agent-panel-url)）。Agent 2.2.253 起，收到新地址会先用自己的 Token 对 `/api/agent/panel-url-probe` 做一次认证探测，通了才切换并写进 `config.json`；探测不通就继续用原地址，日志里能看到 `panel URL ... failed verification, keep using ...`。
+某些机器连不上「面板公开地址」时，可以在「编辑主机 → 其他配置 → Agent 连接与保护」给它单独填一个反代到同一面板的地址（见[主机管理 → Agent 面板连接地址](./hosts.md#agent-panel-url)）。Agent 2.2.255 起，收到新地址会先用自己的 Token 对 `/api/agent/panel-url-probe` 做一次认证探测，通了才切换并写进 `config.json`；探测不通就继续用原地址，日志里能看到 `panel URL ... failed verification, keep using ...`。
 
 填错了也不会把 Agent 弄丢：它一直留在原地址上，改正或关掉这一项即可。反代需要放行 `/api/sync`、`/api/stream`、`/api/agent/` 这几条路径。
 

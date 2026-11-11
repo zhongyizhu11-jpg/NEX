@@ -448,7 +448,7 @@ export default function HostCard({
   const osInfoText = compactHostOsInfo(host.osInfo);
   const hostOs = parseHostOs(host.osInfo);
   const cpuUsageLabel = formatCpuPercent(latestMetric?.cpuUsage ?? 0, isOnline);
-  // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：离线、老 Agent 没报都是 null，什么都不多画
+  // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）：离线、老 Agent 没报都是 null，什么都不多画
   const loadAverageText = isOnline ? formatHostLoadAverage(latestMetric) : null;
   const remainingTimeClass = remainingTimeLabel === "已到期"
     ? "border-destructive/30 bg-destructive/10 text-destructive"

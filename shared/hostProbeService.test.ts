@@ -25,9 +25,9 @@ test("method normalization keeps legacy rows as tcping and accepts http", () => 
 });
 
 test("HTTP probe is gated on the first supporting Agent version", () => {
-  assert.equal(HOST_PROBE_HTTP_AGENT_VERSION, "2.2.253");
+  assert.equal(HOST_PROBE_HTTP_AGENT_VERSION, "2.2.255");
   assert.equal(hostAgentSupportsHttpProbe("2.2.252"), false);
-  assert.equal(hostAgentSupportsHttpProbe("2.2.253"), true);
+  assert.equal(hostAgentSupportsHttpProbe("2.2.255"), true);
   assert.equal(hostAgentSupportsHttpProbe("v2.3.0"), true);
   assert.equal(hostAgentSupportsHttpProbe(""), false);
   assert.equal(hostAgentSupportsHttpProbe(null), false);

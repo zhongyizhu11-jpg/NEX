@@ -20,7 +20,7 @@ import (
 )
 
 /*
-URL 连接检测（2.2.253 起）：探测服务的第三种方式，面板在 hostProbeServices 里带 method = "http"。
+URL 连接检测（2.2.255 起）：探测服务的第三种方式，面板在 hostProbeServices 里带 method = "http"。
 面板那头见 shared/hostProbeService.ts。
 
 一次探测 = 对这个 http:// 或 https:// 地址发一次 GET：

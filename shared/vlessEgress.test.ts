@@ -171,9 +171,9 @@ test("规则形态：VLESS 出口的 UDP 和协议要对得上、不接隧道、
   assert.match(String(ruleEgressShapeError({ ...shape, tlsInboundId: 2 })), /VLESS Reality/);
 });
 
-test("Agent 门槛：2.2.253 起；比它旧的不支持", () => {
-  assert.equal(VLESS_EGRESS_AGENT_VERSION, "2.2.253");
-  assert.equal(isVlessEgressAgentSupported("2.2.253"), true);
+test("Agent 门槛：2.2.255 起；比它旧的不支持", () => {
+  assert.equal(VLESS_EGRESS_AGENT_VERSION, "2.2.255");
+  assert.equal(isVlessEgressAgentSupported("2.2.255"), true);
   assert.equal(isVlessEgressAgentSupported("2.3.0"), true);
   assert.equal(isVlessEgressAgentSupported("2.2.252"), false);
   assert.equal(isVlessEgressAgentSupported(""), false);

@@ -290,7 +290,7 @@ https://ddns.example.com/update?domain={{domain}}&type={{type}}&value={{value}}&
 | 仅主 IP（默认） | 只发主 IP，也就是主机卡片上显示的那个地址（见 [主机管理 › 多个公网 IP 与主 IP](./hosts.md#multi-ip)） |
 | 全部 IP | Agent 在网卡上检测到的这一族全部公网地址，各发一条同名记录，主 IP 排第一 |
 
-「全部 IP」要 Agent 2.2.253 起才有地址列表；旧 Agent 没报列表时只发主 IP。各服务商的做法：
+「全部 IP」要 Agent 2.2.255 起才有地址列表；旧 Agent 没报列表时只发主 IP。各服务商的做法：
 
 | 服务商 | 全部 IP | 说明 |
 | --- | --- | --- |

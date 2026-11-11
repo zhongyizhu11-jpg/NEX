@@ -1,7 +1,7 @@
 import { col, type TableDef } from "./tableDefs";
 
 /*
-  网络画像的 IP 信息缓存（Agent 2.2.253 起，见 shared/ipIntel.ts、server/ops/ipIntel.ts）。
+  网络画像的 IP 信息缓存（Agent 2.2.255 起，见 shared/ipIntel.ts、server/ops/ipIntel.ts）。
 
   host_ip_intel —— 每台主机 × 每个协议族（4 / 6）× 每家数据库一行，存最近一次的结果：
     via：agent 从主机出口查的 / panel 面板代查的（带 Key 的那几家、旧 Agent 的兜底）。

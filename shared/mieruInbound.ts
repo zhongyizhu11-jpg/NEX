@@ -17,7 +17,7 @@ import type { ProxyInbound, ProxyInboundUser } from "./proxyInbound";
 import { isAgentVersionAtLeast } from "./version";
 
 /** Agent 从这一版起带 mita 扩展模块。比它旧的 Agent 上，Mieru 入站照常保存，但不下发。 */
-export const MIERU_AGENT_VERSION = "2.2.253";
+export const MIERU_AGENT_VERSION = "2.2.255";
 
 export function isMieruAgentSupported(agentVersion: string | null | undefined): boolean {
   return isAgentVersionAtLeast(agentVersion, MIERU_AGENT_VERSION);

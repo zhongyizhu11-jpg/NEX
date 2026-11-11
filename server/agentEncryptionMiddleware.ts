@@ -41,7 +41,7 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/rule-status",
   "/api/agent/rule-status-batch",
   "/api/agent/ext",
-  // 切换面板地址前的认证探测（主机独立的 Agent 面板连接地址，Agent 2.2.253 起）
+  // 切换面板地址前的认证探测（主机独立的 Agent 面板连接地址，Agent 2.2.255 起）
   "/api/agent/panel-url-probe",
 ]);
 

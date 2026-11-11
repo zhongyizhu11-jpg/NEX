@@ -3,7 +3,7 @@ import { classifyIpAddress } from "./ipAddress";
 /**
  * 主机的多个公网地址与「主 IP」（上游 2.3.286 的多 IP 检测）。
  *
- * Agent 2.2.253 起在静态信息里多报一份 publicAddresses：网卡上真正配着的全部公网 IPv4 / IPv6
+ * Agent 2.2.255 起在静态信息里多报一份 publicAddresses：网卡上真正配着的全部公网 IPv4 / IPv6
  * （agent/public_addresses.go），外加它现在出网用的那个。面板存在 hosts.detectedAddresses（JSON），
  * 管理员可以在编辑框里分别挑一个主 IPv4、主 IPv6（hosts.primaryIpv4 / primaryIpv6）。
  *
@@ -20,7 +20,7 @@ import { classifyIpAddress } from "./ipAddress";
  */
 
 /** 从这个版本起 Agent 会上报网卡上的全部公网地址（agent/public_addresses.go）。 */
-export const HOST_PUBLIC_ADDRESS_LIST_AGENT_VERSION = "2.2.253";
+export const HOST_PUBLIC_ADDRESS_LIST_AGENT_VERSION = "2.2.255";
 
 /** 每一族最多存多少个：和 Agent 那边的 maxReportedPublicAddresses 一致，面板这边再截一次防异常上报。 */
 export const MAX_HOST_PUBLIC_ADDRESSES = 16;

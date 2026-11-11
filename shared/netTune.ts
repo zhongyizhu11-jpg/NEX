@@ -74,14 +74,14 @@ export type NetTuneChange = { key: string; from: string; to: string };
 export type NetTuneFailure = { key: string; error: string };
 
 /*
-  2.2.253 起除了「检查 / 一键调优」还有两种（老 Agent 不认，只当一次检查，不会误改）：
+  2.2.255 起除了「检查 / 一键调优」还有两种（老 Agent 不认，只当一次检查，不会误改）：
     set      逐项设置：只收 NETTUNE_EDITABLE_KEYS 里的键，值在面板和 Agent 两头都校验，
              Agent 写完读回来核对，内核没接受就改回原值；
     restore  还原到面板第一次改这台机器之前的值（第一次改动前 Agent 自动存一份），并删掉面板写的持久化文件。
   上游 poouo/Forwardx 的 BBR 管理插件（2.3.287）给的也是这两样：按参数改、能还原。
 */
 export type NetTuneMode = "check" | "apply" | "set" | "restore";
-export const NETTUNE_CUSTOM_AGENT_VERSION = "2.2.253";
+export const NETTUNE_CUSTOM_AGENT_VERSION = "2.2.255";
 
 export type NetTuneResult = {
   id: string;
@@ -322,7 +322,7 @@ export function netTuneKeyLabel(key: string): string {
   return NETTUNE_RULES.find((rule) => rule.key === key)?.label ?? key;
 }
 
-/* ---------- 逐项设置（2.2.253） ---------- */
+/* ---------- 逐项设置（2.2.255） ---------- */
 
 /** 能逐项设置的键：规则表里的全部，加拥塞控制和默认队列。和 agent/ext_nettune.go 的 netTuneEditableKey 一致。 */
 export const NETTUNE_EDITABLE_KEYS: readonly string[] = [...NETTUNE_RULES.map((rule) => rule.key), NETTUNE_KEY_CC, NETTUNE_KEY_QDISC];

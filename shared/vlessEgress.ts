@@ -33,7 +33,7 @@
  * 对外部 Xray 落地最稳妥（实测用的是 sing-box 落地，Xray 落地没有拿真二进制验过）。
  * 这条路是拿随 Agent 下发的真二进制（gost 3.2.6-nex5、sing-box 1.14.0）端到端跑通的（scripts/verify-vless-egress.mjs），
  * 用到的都是上游 gost 本来就有的代码，不依赖 NEX 补丁（官方 gost 3.2.6 跑同一套也通），所以 UDP 不另设运行时能力
- * 门槛，门槛还是 Agent 2.2.253。
+ * 门槛，门槛还是 Agent 2.2.255。
  * 只 TCP 的规则生成的 gost / sing-box 配置和以前一字不差（packet_encoding 只写在带 UDP 的规则的出站上）。
  *
  * 这里只放纯函数和常量（客户端也 import，不能碰 node:crypto / Buffer）；凭据加密、查库在 server/vlessEgress.ts。
@@ -46,7 +46,7 @@ import { isAgentVersionAtLeast } from "./version";
  * （只许听回环地址、只许 vless + REALITY 出站、没有直连出站 —— 见 agent/singbox_egress_bridge.go）。
  * 比它旧的 Agent 上，带 VLESS 出口的规则按停用下发，卡片显示「需要升级 Agent」。
  */
-export const VLESS_EGRESS_AGENT_VERSION = "2.2.253";
+export const VLESS_EGRESS_AGENT_VERSION = "2.2.255";
 
 /** 唯一收的流控。 */
 export const VLESS_EGRESS_FLOW = "xtls-rprx-vision";

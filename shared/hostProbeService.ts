@@ -1,7 +1,7 @@
 /*
   主机探测服务（「服务管理」里的 Ping / TCPing / URL 连接检测）前后端共用的常量和校验。
 
-  URL 连接检测（method = "http"，Agent 2.2.253 起）：由主机上的 Agent 对一个 http:// 或 https:// 地址
+  URL 连接检测（method = "http"，Agent 2.2.255 起）：由主机上的 Agent 对一个 http:// 或 https:// 地址
   发一次 GET，每次都新建连接、不跟随跳转、不读响应体，延迟 = 开始建连 → 收到响应的第一个字节。
   拿到的状态码落在「预期状态码」里才算通；证书不对默认算失败，除非这条服务勾了「忽略证书错误」。
 
@@ -37,7 +37,7 @@ export function normalizeHostProbeMethod(value: unknown): HostProbeMethod {
 }
 
 /** 第一个认识 URL 连接检测的 Agent 版本。 */
-export const HOST_PROBE_HTTP_AGENT_VERSION = "2.2.253";
+export const HOST_PROBE_HTTP_AGENT_VERSION = "2.2.255";
 
 export function hostAgentSupportsHttpProbe(agentVersion: string | null | undefined) {
   return isAgentVersionAtLeast(agentVersion, HOST_PROBE_HTTP_AGENT_VERSION);

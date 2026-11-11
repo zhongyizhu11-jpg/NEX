@@ -16,8 +16,8 @@ const base = {
   agentSupported: true as boolean | undefined,
 };
 
-test("门槛版本是具名常量 2.2.253", () => {
-  assert.equal(HOST_TRAFFIC_SHUTDOWN_AGENT_VERSION, "2.2.253");
+test("门槛版本是具名常量 2.2.255", () => {
+  assert.equal(HOST_TRAFFIC_SHUTDOWN_AGENT_VERSION, "2.2.255");
 });
 
 test("开着、到了阈值、Agent 够新且能关、本周期没关过 → 该关", () => {

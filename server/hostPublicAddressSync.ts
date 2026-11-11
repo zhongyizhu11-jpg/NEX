@@ -10,7 +10,7 @@ import {
 } from "../shared/hostPublicAddresses";
 
 /*
-  心跳里的 publicAddresses（Agent 2.2.253+，agent/public_addresses.go）落库。
+  心跳里的 publicAddresses（Agent 2.2.255+，agent/public_addresses.go）落库。
 
   单独一个模块、单独一次写：心跳路由那边只多一行调用（那个文件别的功能也在改，改动越少越好），
   也不掺进 updateHostHeartbeat 那一大包 —— 地址列表十分钟才报一次，没变就一个字节都不写。

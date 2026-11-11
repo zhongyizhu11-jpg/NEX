@@ -29,7 +29,7 @@ export type LandingInbound = {
   id: number;
   name: string;
   port: number;
-  /** shadowsocks / vless（VLESS Reality 出口，2.3.524）。老面板不带这个字段，按 shadowsocks 算。 */
+  /** shadowsocks / vless（VLESS Reality 出口，2.3.525）。老面板不带这个字段，按 shadowsocks 算。 */
   protocol?: "shadowsocks" | "vless";
   method: string;
   methodError: string | null;

@@ -1,7 +1,7 @@
 package main
 
 /*
-扩展模块 "realitycheck"（2.2.253 起）：REALITY 伪装目标检查。面板那头见 server/ops/realityCheck.ts，
+扩展模块 "realitycheck"（2.2.255 起）：REALITY 伪装目标检查。面板那头见 server/ops/realityCheck.ts，
 候选清单和结果形状见 shared/realityDestCheck.ts。
 
 开 VLESS + REALITY 落地入站时，要偷的那个握手目标（dest）必须从这台落地机本身连得上、并且像一个正常的

@@ -61,7 +61,7 @@ async function generate(out) {
   const exec = (sql, params = []) => runtime.executeRaw(sql, params);
   const query = (sql, params = []) => runtime.queryRaw(sql, params);
   const now = Math.floor(Date.now() / 1000);
-  const agentVersion = "2.2.253";
+  const agentVersion = "2.2.255";
 
   await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
   const addHost = (id, name, ip, token) => exec(

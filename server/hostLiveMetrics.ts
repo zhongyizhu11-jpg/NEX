@@ -44,7 +44,7 @@ export type HostLiveSample = {
   uptime: number | null;
   tcpConnections: number | null;
   udpConnections: number | null;
-  /** 1 / 5 / 15 分钟负载（小数）。Agent 2.2.253 起报；老 Agent、没有 /proc/loadavg 的平台是 null。 */
+  /** 1 / 5 / 15 分钟负载（小数）。Agent 2.2.255 起报；老 Agent、没有 /proc/loadavg 的平台是 null。 */
   load1: number | null;
   load5: number | null;
   load15: number | null;

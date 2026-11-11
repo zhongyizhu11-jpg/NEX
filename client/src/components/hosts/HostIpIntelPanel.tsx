@@ -23,7 +23,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 /*
-  网络画像里的「IP 信息」（Agent 2.2.253 起，数据怎么来见 server/ops/ipIntel.ts）：
+  网络画像里的「IP 信息」（Agent 2.2.255 起，数据怎么来见 server/ops/ipIntel.ts）：
   基础信息（IP / ASN / 组织 / 位置）、原生 IP 还是广播 IP（列出证据）、各家数据库认的 IP 类型、各家的风险分。
 
   只读面板的缓存，打开详情从不等第三方；面板在后台查的时候每 5 秒刷一下。

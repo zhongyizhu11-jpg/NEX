@@ -2,7 +2,7 @@
 
 普通的端口转发是入口机自己去连目标，目标看到的来源 IP 就是入口机。给规则设一个 **出口** 之后，入口机不再直接连目标，而是经 Shadowsocks 或 VLESS Reality 让另一台服务器（「落地」）代为连接：流量从落地出去，目标看到的是落地的 IP。
 
-页面前半部分讲 Shadowsocks 出口；VLESS Reality 出口（面板 2.3.524 起）和它的不同之处见下面的 [VLESS Reality 出口](#vless-reality)。
+页面前半部分讲 Shadowsocks 出口；VLESS Reality 出口（面板 2.3.525 起）和它的不同之处见下面的 [VLESS Reality 出口](#vless-reality)。
 
 ```text
 客户端 ──▶ 入口机:端口（gost 监听，计数、限速都在这里）
@@ -100,7 +100,7 @@
 
 ## VLESS Reality 出口 {#vless-reality}
 
-面板 2.3.524 起，出口也可以是 **VLESS + REALITY + Vision**：选落地主机上的 VLESS Reality 入站（「落地入站」页面开的那种），或者粘贴一条外部 `vless://` 链接。
+面板 2.3.525 起，出口也可以是 **VLESS + REALITY + Vision**：选落地主机上的 VLESS Reality 入站（「落地入站」页面开的那种），或者粘贴一条外部 `vless://` 链接。
 
 ```text
 客户端 ──TCP/UDP──▶ 入口机:端口（gost 监听，计数、限速都在这里，TCP 和 UDP 一样）
@@ -114,8 +114,8 @@
 
 和 Shadowsocks 出口的不同：
 
-- **需要入口机 Agent 2.2.253 或更新**。旧 Agent 上这种规则按停用下发（不退回直连），卡片显示「需要升级 Agent」。Agent 写入桥接配置前会再查一遍：只许听回环地址、只许 VLESS + REALITY 出站、没有直连出站 —— 配错了宁可不跑，也不会让流量从入口机自己出去。落地主机不需要升级。
-- **UDP 也能走**。协议选 TCP+UDP 时 UDP 也经 VLESS 从落地出去（和 Shadowsocks 出口一样没有「只 UDP」的选项，接口里协议写 UDP 也行）；选 TCP 就只转 TCP，UDP 不会绕过出口直连。和 Shadowsocks 不同，这里**不要求入口机报 UDP 能力**：只要 Agent 2.2.253 或更新就行，运行时是不是 nex 自编版都一样。
+- **需要入口机 Agent 2.2.255 或更新**。旧 Agent 上这种规则按停用下发（不退回直连），卡片显示「需要升级 Agent」。Agent 写入桥接配置前会再查一遍：只许听回环地址、只许 VLESS + REALITY 出站、没有直连出站 —— 配错了宁可不跑，也不会让流量从入口机自己出去。落地主机不需要升级。
+- **UDP 也能走**。协议选 TCP+UDP 时 UDP 也经 VLESS 从落地出去（和 Shadowsocks 出口一样没有「只 UDP」的选项，接口里协议写 UDP 也行）；选 TCP 就只转 TCP，UDP 不会绕过出口直连。和 Shadowsocks 不同，这里**不要求入口机报 UDP 能力**：只要 Agent 2.2.255 或更新就行，运行时是不是 nex 自编版都一样。
   - 怎么走的：gost 的 UDP 监听收到包后，经同一个本机 SOCKS5 入口做标准的 UDP ASSOCIATE（同一份凭据），sing-box 再用 XUDP 经 VLESS + REALITY + Vision 送到落地。不另开端口、不另开入站，Agent 也只认这一种（出站的 `packet_encoding` 只许不写或 `xudp`）。
   - 实测（`scripts/verify-vless-egress.mjs`，gost 运行时 3.2.6-nex5、sing-box 1.14.0 做桥接和落地）：1~8192 字节的 UDP 包逐字节回来、32 个源端口同时发互不串包、空闲到会话被回收后同一个源端口立刻恢复、gost 和 nft 端口计数数到的字节与客户端发收的一致、单条规则限速对出口规则和普通规则一样生效、桥接停掉时 UDP / TCP 都不通（不会直连）、桥接重启后恢复。
   - 单个 UDP 包最大 8192 字节（入口 gost UDP 监听的读缓冲，和普通 gost 规则一样）。

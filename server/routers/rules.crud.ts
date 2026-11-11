@@ -2063,7 +2063,7 @@ export async function createDirectForwardRuleForActor(
   走自己的一条路，不混进下面那一千多行的通用分支：入口方式定了就不能互相切换（要换就新建），
   能改的只有名字、目标、转发工具、SNI 和同一台主机上的另一个入站。
 
-  转送规则（Agent 2.2.253 起，见 server/tlsInbounds.ts 开头）：
+  转送规则（Agent 2.2.255 起，见 server/tlsInbounds.ts 开头）：
   - 经隧道：就是一条普通的隧道规则，只是入口端口换成回环端口（借 createDirectForwardRuleForActor 的
     隧道那一套：出口端口、出口映射、权限都一样）。入站必须在隧道的入口机上，隧道不能挂入口组。
   - 转发组 / 转发链 / 端口转发资源：模板挂入站（锚点），同步时每台入口机上的子规则挂它自己同端口的入站

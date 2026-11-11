@@ -52,7 +52,7 @@ VLESS + REALITY 的池，「要偷的握手域名」最好先在任意一台成�
 
 ## REALITY 伪装目标检查
 
-开 VLESS + REALITY 落地入站时（订阅管理 › 新建 › 在我的机器上开一个 › REALITY 高级），握手目标下面有两个按钮（面板 2.3.524，落地机 Agent 2.2.253 起）：
+开 VLESS + REALITY 落地入站时（订阅管理 › 新建 › 在我的机器上开一个 › REALITY 高级），握手目标下面有两个按钮（面板 2.3.525，落地机 Agent 2.2.255 起）：
 
 - **检查目标**：让这台落地机去连填着的握手域名 / 握手目标，看四样：**TLS 1.3**、**X25519**、**h2**、**证书对得上握手域名**。四样都有才算「可用」，否则写出缺的是哪几样，或者「落地机连不上」「解析不出」。
 - **扫描候选**：一次测候选清单 v2 里的 9 个常用大站（cloudflare、amazon、aws、samsung、nvidia、amd、intel、sony、dl.google.com；已经去掉了握手常失败的 Microsoft 系）。能用的那一行点「用这个」就填进握手域名。
@@ -61,7 +61,7 @@ VLESS + REALITY 的池，「要偷的握手域名」最好先在任意一台成�
 
 ## 转发规则拿落地当出口
 
-单台的 VLESS + REALITY + Vision 落地入站可以直接当转发规则的出口（规则 → 出口 → 落地主机，面板 2.3.524 起），见 [VLESS Reality 出口](./ss-egress.md#vless-reality)。落地池的成员入站跟着池走，不单独拿来当出口。
+单台的 VLESS + REALITY + Vision 落地入站可以直接当转发规则的出口（规则 → 出口 → 落地主机，面板 2.3.525 起），见 [VLESS Reality 出口](./ss-egress.md#vless-reality)。落地池的成员入站跟着池走，不单独拿来当出口。
 
 ## 分享
 
@@ -82,7 +82,7 @@ VLESS + REALITY 的池，「要偷的握手域名」最好先在任意一台成�
 Mieru 不在落地池里，但单台的落地节点可以选它。和别的协议不一样的地方：
 
 - **运行时是 mita，不是 sing-box**：sing-box 没有 Mieru 服务端。面板把这台机器上所有 Mieru 入站合成一份 mita 配置，Agent 装一个钉死版本的 mita（`forwardx-mita` 服务，systemd / OpenRC / OpenWrt 都支持），只在配置变了时才重启它。机器上另装的 mita（`mita.service`、`/etc/mita`）不是 NEX 的，Agent 不碰。
-- **需要 Agent 2.2.253 以上**：Agent 旧的机器上，Mieru 入站照常保存，但不下发，行上写「需要升级 Agent」。升级 Agent 后一分钟内自动开起来。
+- **需要 Agent 2.2.255 以上**：Agent 旧的机器上，Mieru 入站照常保存，但不下发，行上写「需要升级 Agent」。升级 Agent 后一分钟内自动开起来。
 - **承载**：TCP、UDP，或者两个都开（同一个端口 TCP、UDP 各听一份）。
 - **端口段**：可以填一个终点，比如 27010–27019，mita 整段都听，客户端每条连接随便挑一个（最多 100 个端口）。段里每个端口都要没被别的转发、隧道、落地占用。经中转时只用起点那一个。
 - **每人一份凭据**：和 VLESS 一样能加几份凭据、分享给别人时单独发一份。用户名是面板生成的随机串（`nex` 开头）。

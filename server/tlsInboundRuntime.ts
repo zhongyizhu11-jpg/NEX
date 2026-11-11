@@ -10,7 +10,7 @@
  *      默认规则上（否则一个用户停掉的规则，流量会跑到别人的默认规则里）。
  *   3. 转送规则（经隧道 / 转发链 / 转发组走，见 shared/tlsInbound.ts 的 sniRuleRouteKind）：规则在入口机上
  *      的入口（隧道入口、转发链第一跳、组成员上的子规则）只听 127.0.0.1:<规则端口>，分流器照样把连接
- *      交过去，限速、计数、配额还挂在规则自己的入口上。要 Agent 2.2.253，路由表带 revision，Agent 装上
+ *      交过去，限速、计数、配额还挂在规则自己的入口上。要 Agent 2.2.255，路由表带 revision，Agent 装上
  *      以后原样报回来 —— 报回来的和下发的一致，这台入口的 SNI 配置才算「已确认」（见 tlsInboundReadiness.ts）。
  */
 
@@ -53,7 +53,7 @@ export type AgentSniInbound = {
   allowedSni: string[];
   defaultBackend: AgentSniBackend | null;
   routes: AgentSniRoute[];
-  /** 这张表的版本号（只发给 2.2.253 起的 Agent）：表的内容一变它就变，Agent 装上后原样回报。 */
+  /** 这张表的版本号（只发给 2.2.255 起的 Agent）：表的内容一变它就变，Agent 装上后原样回报。 */
   revision?: string;
 };
 
@@ -233,7 +233,7 @@ export type TlsInboundRuntimeStatus = {
   listening: boolean;
   error: string;
   updatedAt: number;
-  /** 以下 Agent 2.2.253 起才有：装上的表的版本号、可用的名字数、分流计数（监听起来以后累计）。 */
+  /** 以下 Agent 2.2.255 起才有：装上的表的版本号、可用的名字数、分流计数（监听起来以后累计）。 */
   revision: string;
   routes: number;
   matched: number;
@@ -246,7 +246,7 @@ function counterValue(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
-/** Agent 2.2.253 起多报的那几项；老 Agent 没有，全是空 / 0。 */
+/** Agent 2.2.255 起多报的那几项；老 Agent 没有，全是空 / 0。 */
 function reportedTableFields(item: unknown) {
   const record = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
   return {

@@ -117,11 +117,11 @@ test("会让 mita 整个起不来的入站 / 用户单独跳过，不拖累别�
   assert.equal(buildMitaHostPlan([]).config, null);
 });
 
-test("Agent 版本门槛：低于 2.2.253 不下发，提示需要升级 Agent", () => {
-  assert.equal(MIERU_AGENT_VERSION, "2.2.253");
+test("Agent 版本门槛：低于 2.2.255 不下发，提示需要升级 Agent", () => {
+  assert.equal(MIERU_AGENT_VERSION, "2.2.255");
   assert.equal(isMieruAgentSupported("2.2.252"), false);
   assert.equal(isMieruAgentSupported(""), false);
-  assert.equal(isMieruAgentSupported("2.2.253"), true);
+  assert.equal(isMieruAgentSupported("2.2.255"), true);
   assert.equal(isMieruAgentSupported("2.3.0"), true);
   assert.match(mieruAgentUpgradeMessage("2.2.251"), /需要升级 Agent.*2\.2\.253.*2\.2\.251/);
 });

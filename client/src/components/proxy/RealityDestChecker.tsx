@@ -1,7 +1,7 @@
 /**
  * 落地入站表单「REALITY 高级」里的「检查目标 / 扫描候选」（规则见 shared/realityDestCheck.ts）。
  *
- * 检查从落地机自己发起（Agent 2.2.253 起的 realitycheck 扩展模块）：面板那台机器测出来的结果说明不了落地机
+ * 检查从落地机自己发起（Agent 2.2.255 起的 realitycheck 扩展模块）：面板那台机器测出来的结果说明不了落地机
  * 连不连得上、DNS 有没有被污染。结果只放在面板内存里，这个框关掉就没了 —— 它只是帮人挑一个能偷的目标。
  *
  * 选中一个能用的候选，就把它填进「要偷的握手域名」，并清掉「握手目标」（候选都是同名域名的 443）。
@@ -97,7 +97,7 @@ export function RealityDestChecker({ hostId, serverName, realityDest, defaultSer
         </Button>
       </div>
       <p data-fx-help="" className="text-xs text-muted-foreground">
-        让这台落地机去连目标，看 TLS 1.3、X25519、h2 和证书；四样都有才适合偷。候选清单 {REALITY_DEST_CANDIDATE_LIST_VERSION}，要 Agent 2.2.253 起。
+        让这台落地机去连目标，看 TLS 1.3、X25519、h2 和证书；四样都有才适合偷。候选清单 {REALITY_DEST_CANDIDATE_LIST_VERSION}，要 Agent 2.2.255 起。
       </p>
       {busy && runId ? <p className="text-xs text-muted-foreground">落地机正在检查…</p> : null}
       {timedOut && !done ? <p className="text-xs text-[var(--fx-warn-text)]">等了很久没有结果：落地机可能离线了，或者 Agent 太旧。</p> : null}

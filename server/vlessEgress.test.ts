@@ -60,7 +60,7 @@ function rule(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const entry = { entryHostId: 10, entryAgentVersion: "2.2.253", entryHostName: "香港入口" };
+const entry = { entryHostId: 10, entryAgentVersion: "2.2.255", entryHostName: "香港入口" };
 
 test("落地入站：取主人自己的 UUID（分享出去的凭据会被收回），带上桥接端口和凭据", () => {
   const ports = createVlessEgressBridgePortAllocator([], [7]);
@@ -83,7 +83,7 @@ test("落地入站：取主人自己的 UUID（分享出去的凭据会被收回
   assert.equal(pickVlessEgressInboundUuid([]), "");
 });
 
-test("旧 Agent（低于 2.2.253）：按停用下发，卡片显示「需要升级 Agent」，绝不退回直连", () => {
+test("旧 Agent（低于 2.2.255）：按停用下发，卡片显示「需要升级 Agent」，绝不退回直连", () => {
   const ports = createVlessEgressBridgePortAllocator([], [7]);
   for (const version of ["2.2.252", "2.2.226", ""]) {
     const view: any = ruleEgressRuntimeView(rule(), { ...entry, entryAgentVersion: version, context: context(), vlessBridgePorts: ports });

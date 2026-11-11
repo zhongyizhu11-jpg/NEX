@@ -31,7 +31,7 @@ import { StatusChip } from "./HostNetProfileSection";
 
   「检查」只读；「一键调优」只往更适合转发的方向调、已经更好的值保留、自选的拥塞控制算法不动，
   并写进 /etc/sysctl.d/99-forwardx-network.conf，重启后还在。
-  Agent 2.2.253 起还能「逐项设置」（自己填每一项的值）和「还原」（回到面板第一次改这台机器之前的值）。
+  Agent 2.2.255 起还能「逐项设置」（自己填每一项的值）和「还原」（回到面板第一次改这台机器之前的值）。
 */
 
 const MODE_TEXT: Record<string, string> = { apply: "调优", set: "设置", restore: "还原", check: "检查" };

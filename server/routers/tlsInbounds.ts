@@ -97,7 +97,7 @@ export const tlsInboundsRouter = router({
           ...inbound,
           rules: rulesByInbound.get(inbound.id) || [],
           runtime: getTlsInboundRuntimeStatus(input.hostId, inbound.id),
-          // 路由表已确认：Agent 报回来的版本号就是最近下发的那张（2.2.253 起才有）。
+          // 路由表已确认：Agent 报回来的版本号就是最近下发的那张（2.2.255 起才有）。
           tableConfirmed: isTlsInboundTableConfirmed(input.hostId, inbound.id),
         })),
       };

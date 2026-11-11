@@ -16,7 +16,7 @@ import (
 // 扩展模块 ports：主机实际监听端口核对（端口占用告警）。面板那头见 server/ops/portOccupancyAgent.ts
 // 和 server/rulePortOccupancy.ts。
 //
-// 面板指令 {"enabled": true}（只发给 2.2.253 起的 Agent）；开着时每一轮上报一次：
+// 面板指令 {"enabled": true}（只发给 2.2.255 起的 Agent）；开着时每一轮上报一次：
 // 这台机器上启用规则用到的入口端口（按协议）上，有没有不归 ForwardX 管的进程在监听。
 // 只看规则端口，不报整机所有监听：一来上报有界，二来别的端口有谁在听不关面板的事。
 //

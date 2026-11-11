@@ -405,7 +405,7 @@ export const hosts = table("hosts", {
   */
   addressManual: boolean("addressManual").notNull().default(false),
   /*
-    Agent 2.2.253 起上报的网卡全部公网地址（JSON，shared/hostPublicAddresses）。老 Agent 不报，一直为空。
+    Agent 2.2.255 起上报的网卡全部公网地址（JSON，shared/hostPublicAddresses）。老 Agent 不报，一直为空。
     primaryIpv4 / primaryIpv6 是管理员挑的主 IP：空 = 没挑过，照旧用 Agent 上报的那一个。
   */
   detectedAddresses: text("detectedAddresses"),
@@ -1385,7 +1385,7 @@ export const hostMetrics = table("host_metrics", {
   tcpConnections: int("tcpConnections"),
   udpConnections: int("udpConnections"),
   /**
-   * 系统平均负载（1 / 5 / 15 分钟）乘 100 的整数（Agent 2.2.253 起上报；没报为 null）。
+   * 系统平均负载（1 / 5 / 15 分钟）乘 100 的整数（Agent 2.2.255 起上报；没报为 null）。
    * 库里没有浮点列，所以 0.12 存成 12，读的地方除回去（shared/hostLoadAverage.ts）。
    */
   loadAvg1: int("loadAvg1"),
@@ -1570,7 +1570,7 @@ export const hostProbeServices = table("host_probe_services", {
   /** 目标是域名时按哪一族解析：auto / ipv4 / ipv6（shared/probeFamily.ts，Agent 2.2.225 起生效）。 */
   addressFamily: varchar("addressFamily", { length: 8 }).notNull().default("auto"),
   /*
-    下面三项只有 method = "http"（URL 连接检测，Agent 2.2.253 起）用得上，这时 targetIp 里存的是完整 URL：
+    下面三项只有 method = "http"（URL 连接检测，Agent 2.2.255 起）用得上，这时 targetIp 里存的是完整 URL：
     超时秒数（1-30）、预期状态码（"200-399"、"200,204" 这样的规范写法）、要不要忽略证书错误。
     见 shared/hostProbeService.ts。
   */

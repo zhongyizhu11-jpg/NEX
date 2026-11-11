@@ -1,5 +1,5 @@
 /**
- * REALITY 伪装目标检查 / 扫描（面板 2.3.524，Agent 2.2.253 起）—— 面板、界面、测试共用。
+ * REALITY 伪装目标检查 / 扫描（面板 2.3.525，Agent 2.2.255 起）—— 面板、界面、测试共用。
  *
  * 开 VLESS + REALITY 落地入站时要选一个「偷」的握手目标。REALITY 把探测流量转给这个目标、把它的证书原样
  * 递给探测者，所以目标得是一个从这台落地机连得上的正常大站：TLS 1.3、支持 X25519、能协商 h2、证书对得上
@@ -15,7 +15,7 @@
 import { isAgentVersionAtLeast } from "./version";
 
 /** 落地机的 Agent 从这一版起有 realitycheck 扩展模块。 */
-export const REALITY_DEST_CHECK_AGENT_VERSION = "2.2.253";
+export const REALITY_DEST_CHECK_AGENT_VERSION = "2.2.255";
 
 export const REALITY_DEST_CANDIDATE_LIST_VERSION = "v2";
 

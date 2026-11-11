@@ -17,7 +17,7 @@ import { isAgentVersionAtLeast } from "./version";
 */
 
 /** Agent 从这一版起认得 traffic_shutdown 扩展指令。比它旧的 Agent 不下发、界面提示先升级。 */
-export const HOST_TRAFFIC_SHUTDOWN_AGENT_VERSION = "2.2.253";
+export const HOST_TRAFFIC_SHUTDOWN_AGENT_VERSION = "2.2.255";
 export const HOST_TRAFFIC_SHUTDOWN_DEFAULT_PERCENT = 100;
 
 export function normalizeTrafficShutdownPercent(value: unknown) {

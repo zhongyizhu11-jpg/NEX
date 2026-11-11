@@ -22,7 +22,7 @@ export const TLS_INBOUND_AGENT_VERSION = "2.2.224";
  * DDNS 只会切到（加进）已确认的成员。老 Agent 不回报，永远确认不了，所以转送规则在它上面
  * 一律不下发、显示「需要升级 Agent」，老的直连 SNI 规则不受影响。
  */
-export const TLS_INBOUND_ROUTED_AGENT_VERSION = "2.2.253";
+export const TLS_INBOUND_ROUTED_AGENT_VERSION = "2.2.255";
 /** 一台主机最多开几个共享入站。 */
 export const TLS_INBOUND_MAX_PER_HOST = 64;
 /** 一条规则最多几个 SNI。 */

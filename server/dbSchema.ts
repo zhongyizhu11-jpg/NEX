@@ -331,7 +331,7 @@ const tables: TableDef[] = [
       c("geoManual", "bool", { notNull: true, default: false }),
       // 「Agent 检测 IP」手改过：心跳不再覆盖 ip / ipv4 / ipv6（agentAddressState）
       c("addressManual", "bool", { notNull: true, default: false }),
-      // Agent 2.2.253 起上报的网卡全部公网地址（JSON）和管理员挑的主 IP（空 = 没挑过），见 shared/hostPublicAddresses
+      // Agent 2.2.255 起上报的网卡全部公网地址（JSON）和管理员挑的主 IP（空 = 没挑过），见 shared/hostPublicAddresses
       c("detectedAddresses", "text"), c("primaryIpv4", "text"), c("primaryIpv6", "text"),
       c("portRangeStart", "int"), c("portRangeEnd", "int"), c("portAllowlist", "text"),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),

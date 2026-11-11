@@ -19,7 +19,7 @@ export const netTuneRouter = router({
       if (!host) throw new Error("主机不存在");
       return {
         online: isHostConsideredOnline(host),
-        // 逐项设置、还原要 Agent 2.2.253 起；老 Agent 收到会当成一次检查，界面上直接不让点
+        // 逐项设置、还原要 Agent 2.2.255 起；老 Agent 收到会当成一次检查，界面上直接不让点
         supportsCustom: isAgentVersionAtLeast((host as { agentVersion?: string | null }).agentVersion, NETTUNE_CUSTOM_AGENT_VERSION),
         ...netTuneStatus(input.hostId),
       };

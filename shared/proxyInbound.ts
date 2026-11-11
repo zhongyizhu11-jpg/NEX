@@ -47,7 +47,7 @@ export const PROXY_INBOUND_PROTOCOLS = [
   "snell",
   "socks5",
   /*
-    Mixed（2.3.524）：sing-box 的 mixed 入站，同一个端口既是 HTTP 代理也是 SOCKS5。它不是一种「节点协议」：
+    Mixed（2.3.525）：sing-box 的 mixed 入站，同一个端口既是 HTTP 代理也是 SOCKS5。它不是一种「节点协议」：
     派生给客户端的节点按 SOCKS5 写（同一组用户名密码，SOCKS5 那一面各家客户端都能导入，见 proxyNodeFromInbound），
     HTTP 那一面不进订阅 —— 订阅里写 HTTP 代理节点的客户端各家字段不一，没核实就不发。
   */

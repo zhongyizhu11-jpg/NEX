@@ -216,7 +216,7 @@ async function agentCheckedAtFor(hostId: number) {
 export async function netProfileDirectiveFor(host: AgentExtHost) {
   const hostId = Number(host.id);
   const state = netProfileRunState(hostId);
-  // IP 信息（Agent 2.2.253 起）：缓存过期或手动重新检测时才带，见 ipIntel.ts
+  // IP 信息（Agent 2.2.255 起）：缓存过期或手动重新检测时才带，见 ipIntel.ts
   const intel = await agentIntelDirective(host, state.pending).catch(() => []);
   return {
     intervalSeconds: NETPROFILE_INTERVAL_SECONDS,

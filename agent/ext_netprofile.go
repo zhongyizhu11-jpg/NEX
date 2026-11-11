@@ -15,7 +15,7 @@ package main
 // 结果先留在内存里，每轮上报，直到指令里的回执（ackResultId，或 lastCheckedAt 追上它）说
 // 面板存好了才丢掉，一次上报失败不会把结果弄丢。
 //
-// 2.2.253 起指令里可能带 intel 列表（IP 信息的几家公开数据库，见 shared/ipIntel.ts）：双栈测通以后，
+// 2.2.255 起指令里可能带 intel 列表（IP 信息的几家公开数据库，见 shared/ipIntel.ts）：双栈测通以后，
 // 对每个测通的协议族、强制 tcp4 / tcp6 去 GET 一遍，原始响应（32KB 封顶）随结果上报，由面板解读。
 // 只请求白名单里的域名（netProfileIntelAllowedHosts）—— 面板就算被人改了指令，也指使不了 Agent 去
 // 请求别的地址。不要 Key 的几家才走这里，带 Key 的由面板自己查，Key 不下发。
@@ -71,7 +71,7 @@ type netProfileDirective struct {
 	SMTPTargets     []string `json:"smtpTargets"`
 	IPv4URLs        []string `json:"ipv4Urls"`
 	IPv6URLs        []string `json:"ipv6Urls"`
-	// 2.2.253 起：IP 信息的数据源，url 里的 {ip} 换成这个协议族测到的出口地址
+	// 2.2.255 起：IP 信息的数据源，url 里的 {ip} 换成这个协议族测到的出口地址
 	Intel []netProfileIntelSource `json:"intel"`
 }
 
@@ -593,7 +593,7 @@ func interpretDNSBLEntry(entry *netProfileDNSBLEntry) {
 	}
 }
 
-// ---------------------------------------------------------------- IP 信息（2.2.253 起）
+// ---------------------------------------------------------------- IP 信息（2.2.255 起）
 
 // netProfileIntelURL 把 {ip} 换成出口地址，检查协议和域名在白名单里。不合格返回 ""。
 func netProfileIntelURL(raw, address string) string {

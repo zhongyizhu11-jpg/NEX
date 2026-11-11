@@ -15,17 +15,17 @@ test("开发者公告 feed：坏条目整条丢掉，版本范围和过期时间
       { id: "no-content", title: "x", content: "  " },
       { id: "ok-one", title: "重复的 id", content: "z" },
       { id: "upgrade-no-target", title: "x", content: "y", type: "upgrade_popup" },
-      { id: "popup-two", title: "弹窗", content: "y", type: "popup", minVersion: "v2.3.524", expiresAt: "2026-12-31T00:00:00Z" },
+      { id: "popup-two", title: "弹窗", content: "y", type: "popup", minVersion: "v2.3.525", expiresAt: "2026-12-31T00:00:00Z" },
       null,
       "string",
     ],
   });
   assert.deepEqual(items.map((item) => item.id), ["ok-one", "popup-two"]);
-  assert.equal(items[1].minVersion, "2.3.524");
+  assert.equal(items[1].minVersion, "2.3.525");
   assert.equal(items[1].expiresAt, Date.parse("2026-12-31T00:00:00Z") / 1000);
   const now = Date.parse("2026-11-10T00:00:00Z") / 1000;
   assert.equal(developerAnnouncementApplies(items[0], "2.3.523", now), true);
-  assert.equal(developerAnnouncementApplies(items[0], "2.3.524", now), false, "只提醒旧版本的");
+  assert.equal(developerAnnouncementApplies(items[0], "2.3.525", now), false, "只提醒旧版本的");
   assert.equal(developerAnnouncementApplies(items[1], "2.3.523", now), false);
   assert.equal(developerAnnouncementApplies(items[1], "2.3.530", now), true);
   assert.equal(developerAnnouncementApplies(items[1], "2.3.530", Date.parse("2027-01-01T00:00:00Z") / 1000), false, "过期的不插");

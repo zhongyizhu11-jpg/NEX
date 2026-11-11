@@ -180,7 +180,7 @@ export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { 
                       {inbound.runtime && !inbound.runtime.listening && inbound.isEnabled && (
                         <Badge variant="destructive" title={inbound.runtime.error || undefined}>监听失败</Badge>
                       )}
-                      {/* 2.2.253 起 Agent 回报路由表版本号；对不上时转发组 / 入口组的 DDNS 不会切到这台。 */}
+                      {/* 2.2.255 起 Agent 回报路由表版本号；对不上时转发组 / 入口组的 DDNS 不会切到这台。 */}
                       {data?.routedAgentSupported && inbound.isEnabled && inbound.runtime?.listening && !inbound.tableConfirmed && (
                         <Badge variant="outline" title="Agent 还没回报装上最新的 SNI 路由表；转发组 / 入口组的 DDNS 暂不会切到这台">路由表待确认</Badge>
                       )}

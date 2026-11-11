@@ -18,7 +18,7 @@ import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 */
 
 /** 从这个 Agent 版本起有 ports 扩展模块（agent/ext_ports.go）；更老的不发指令，也就不会有黄色告警。 */
-export const AGENT_PORT_OCCUPANCY_VERSION = "2.2.253";
+export const AGENT_PORT_OCCUPANCY_VERSION = "2.2.255";
 
 export function agentSupportsPortOccupancy(agentVersion: string | null | undefined) {
   return isAgentVersionAtLeast(agentVersion, AGENT_PORT_OCCUPANCY_VERSION);

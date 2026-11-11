@@ -47,7 +47,7 @@ test("落地选择器清单：按主机分组、按权限过滤、带最新解�
     await inbound(6, 4, 1, { name: "日本私有" });
     await inbound(7, 4, 1, { name: "日本 vless", protocol: "vless" });
     await inbound(8, 2, 1, { name: "美西停用", enabled: false });
-    // VLESS + REALITY + Vision（2.3.524 起能做出口）：列出来，带 protocol；ws 传输的照列、带原因。
+    // VLESS + REALITY + Vision（2.3.525 起能做出口）：列出来，带 protocol；ws 传输的照列、带原因。
     const reality = (id, transport) => exec(
       'INSERT INTO proxy_inbounds (id, "userId", "hostId", name, protocol, port, transport, security, flow, "serverName", "realityPublicKey", "isEnabled") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [id, 1, 2, "美西 REALITY " + transport, "vless", 30000 + id, transport, "reality", "xtls-rprx-vision", "dl.google.com", "TiSmUw53M68pgep1_Cc7AXzh1QpUzeBM74jRZbWHj3Q", 1],

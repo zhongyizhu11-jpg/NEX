@@ -15,10 +15,10 @@ export const UNLOCK_FAMILIES = ["auto", "ipv4", "ipv6"] as const;
 export type UnlockFamily = (typeof UNLOCK_FAMILIES)[number];
 
 /**
- * Prime Video、Spotify、Steam、Bilibili 港澳台这四项是 Agent 2.2.253 起才有的检测
+ * Prime Video、Spotify、Steam、Bilibili 港澳台这四项是 Agent 2.2.255 起才有的检测
  * （agent/unlock_check.go）。更旧的 Agent 交上来的结果里没有它们，界面提示升级，不当成「检测失败」。
  */
-export const UNLOCK_EXTENDED_AGENT_VERSION = "2.2.253";
+export const UNLOCK_EXTENDED_AGENT_VERSION = "2.2.255";
 
 export const UNLOCK_SCHEDULES = ["off", "daily", "weekly"] as const;
 export type UnlockSchedule = (typeof UNLOCK_SCHEDULES)[number];
@@ -210,7 +210,7 @@ export function unlockRegionTone(service: string, region: string | null | undefi
   return "mismatch";
 }
 
-/** 这台 Agent 测得了这一项吗（新加的几项要 2.2.253）。版本号比较放这里，免得界面再引一份 version.ts。 */
+/** 这台 Agent 测得了这一项吗（新加的几项要 2.2.255）。版本号比较放这里，免得界面再引一份 version.ts。 */
 export function unlockServiceSupported(def: Pick<UnlockServiceDef, "sinceAgent">, agentVersion: string | null | undefined) {
   if (!def.sinceAgent) return true;
   const parse = (value: string | null | undefined) => String(value || "").replace(/^v/i, "").split(/[.-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);

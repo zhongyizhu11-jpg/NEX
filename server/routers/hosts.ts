@@ -143,7 +143,7 @@ const hostProbeServiceFieldsSchema = z.object({
   targetPort: z.number().int().min(1).max(65535).nullable().optional(),
   // 目标是域名时按哪一族解析（Agent 2.2.226 起生效，老 Agent 照旧 auto）
   addressFamily: z.enum(PROBE_ADDRESS_FAMILIES).default("auto"),
-  // 下面三项只有 URL 连接检测用（Agent 2.2.253 起）：超时秒数、预期状态码、要不要忽略证书错误
+  // 下面三项只有 URL 连接检测用（Agent 2.2.255 起）：超时秒数、预期状态码、要不要忽略证书错误
   httpTimeoutSeconds: z.number().int().min(HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS).max(HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS).default(HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS),
   httpExpectedStatus: z.string().trim().max(HOST_PROBE_HTTP_EXPECTED_STATUS_MAX_LENGTH).default(""),
   httpSkipTlsVerify: z.boolean().default(false),
@@ -628,7 +628,7 @@ function compactHostMetricSummary(row: any) {
     uptime: row?.uptime ?? null,
     tcpConnections: row?.tcpConnections ?? null,
     udpConnections: row?.udpConnections ?? null,
-    // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）；没报是 null，界面上什么都不多画
+    // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）；没报是 null，界面上什么都不多画
     load1: row?.load1 ?? null,
     load5: row?.load5 ?? null,
     load15: row?.load15 ?? null,

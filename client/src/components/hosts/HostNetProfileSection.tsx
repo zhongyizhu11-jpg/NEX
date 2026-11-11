@@ -27,7 +27,7 @@ import { hostGeoTooltip, hostNetworkText, hostRegionText } from "./hostDisplay";
   主机侧检测（双栈、25 端口、DNSBL）要 Agent 2.2.226：每 6 小时测一次，管理员可以点「重新检测」。
   更旧的 Agent 只能从面板服务器查 DNSBL —— 那是面板的解析器在查，不是主机的。
   运营商 / ASN 跟地区一起由定位服务给（主机行上的 geoAsn / geoIsp / geoOrg），不需要 Agent。
-  下面的「IP 信息」（原生 / 广播、IP 类型、风险）是 Agent 2.2.253 起的另一块，见 HostIpIntelPanel。
+  下面的「IP 信息」（原生 / 广播、IP 类型、风险）是 Agent 2.2.255 起的另一块，见 HostIpIntelPanel。
 */
 
 type Tone = "good" | "warn" | "bad" | "muted";

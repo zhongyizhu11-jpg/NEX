@@ -174,7 +174,7 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             ) : (
               <Row label="地址" value={host.ip && host.ip !== "unknown" ? <span className="font-mono">{host.ip}</span> : "—"} />
             )}
-            {/* 多 IP 主机：网卡上检测到的全部公网地址，主 IP、出口 IP 标出来（Agent 2.2.253+） */}
+            {/* 多 IP 主机：网卡上检测到的全部公网地址，主 IP、出口 IP 标出来（Agent 2.2.255+） */}
             {extraAddresses.extra > 0 ? (
               <div className="space-y-0.5" data-host-detail-addresses="">
                 <span className="text-meta text-muted-foreground">全部公网 IP</span>
@@ -216,7 +216,7 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               25%，而这两件事该做的处理完全不同。
             */}
             <ResourceMeter label="CPU" percent={vitals.cpuPercent} valueText={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} />
-            {/* 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：没报就不占这一行 */}
+            {/* 1 / 5 / 15 分钟负载（Agent 2.2.255 起）：没报就不占这一行 */}
             {formatHostLoadAverage(vitals) ? <Row label="负载" value={formatHostLoadAverage(vitals)} /> : null}
             <ResourceMeter label="内存" percent={vitals.memoryPercent} />
             <Row label="" value={sizePair(vitals.memoryUsed, vitals.memoryTotal)} />

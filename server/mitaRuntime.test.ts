@@ -83,26 +83,26 @@ test("行上的状态：需要升级 Agent → 没下发 → 出错 → 等生�
   assert.match(upgrade.message, /需要升级 Agent/);
   assert.equal(mieruInboundStatusView({ ...base, isEnabled: false, agentVersion: "2.2.252" }).state, "disabled");
 
-  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.253" }).state, "pending");
+  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.255" }).state, "pending");
 
   const plan = buildMitaHostPlan([{ id: 3, inbound: mieru() }, { id: 4, inbound: mieru({ users: [] }) }]);
   rememberMitaPlan(9, plan, "rev-1");
-  assert.equal(mieruInboundStatusView({ ...base, inboundId: 4, agentVersion: "2.2.253" }).state, "skipped");
+  assert.equal(mieruInboundStatusView({ ...base, inboundId: 4, agentVersion: "2.2.255" }).state, "skipped");
 
   const now = Date.now();
   rememberMitaReport(9, { state: "running", error: "", revision: "rev-0", version: "3.39.0", active: true, listeners: [], at: now });
-  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.253" }, now).state, "pending");
+  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.255" }, now).state, "pending");
 
   rememberMitaReport(9, { state: "error", error: "安装 mita 失败", revision: "rev-0", version: "3.39.0", active: false, listeners: [], at: now });
-  assert.deepEqual(mieruInboundStatusView({ ...base, agentVersion: "2.2.253" }, now), { state: "error", message: "安装 mita 失败" });
+  assert.deepEqual(mieruInboundStatusView({ ...base, agentVersion: "2.2.255" }, now), { state: "error", message: "安装 mita 失败" });
 
   rememberMitaReport(9, { state: "running", error: "", revision: "rev-1", version: "3.39.0", active: true, listeners: [{ port: 27001, protocol: "TCP", ready: false }], at: now });
-  assert.match(mieruInboundStatusView({ ...base, agentVersion: "2.2.253" }, now).message, /端口没有听上：TCP 27001/);
+  assert.match(mieruInboundStatusView({ ...base, agentVersion: "2.2.255" }, now).message, /端口没有听上：TCP 27001/);
 
   rememberMitaReport(9, { state: "running", error: "", revision: "rev-1", version: "3.39.0", active: true, listeners: [{ port: 27001, protocol: "TCP", ready: true }], at: now });
-  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.253" }, now).state, "ready");
+  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.255" }, now).state, "ready");
   // 报告太旧了不当真
-  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.253" }, now + 10 * 60_000).state, "pending");
+  assert.equal(mieruInboundStatusView({ ...base, agentVersion: "2.2.255" }, now + 10 * 60_000).state, "pending");
   resetMitaRuntimeStateForTest();
 });
 

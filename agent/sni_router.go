@@ -17,7 +17,7 @@ package main
 //
 // 路由表整份原子替换：改配置不影响已经建立的连接，换端口才会关掉旧监听（已建立的连接照旧跑完）。
 //
-// 转送规则（经隧道 / 转发链 / 转发组走的 SNI 规则，Agent 2.2.253 起）在这里和直连规则没有区别：
+// 转送规则（经隧道 / 转发链 / 转发组走的 SNI 规则，Agent 2.2.255 起）在这里和直连规则没有区别：
 // 规则在本机的入口（隧道入口、转发链第一跳、组成员上的子规则）由面板改成只听 127.0.0.1:<规则端口>，
 // 这里照样把连接交到那个端口。限速、计数、配额都挂在规则自己的入口上，所以照旧按规则算。
 // 面板要知道这张表真的装上了（DDNS 只切到 SNI 配置已确认的成员），所以每张表带一个 revision，
@@ -89,7 +89,7 @@ type sniInboundSpec struct {
 	AllowedSNI              []string    `json:"allowedSni"`
 	DefaultBackend          *sniBackend `json:"defaultBackend"`
 	Routes                  []sniRoute  `json:"routes"`
-	// Revision 是面板给这张表算的版本号（2.2.253 起）。原样回报，面板拿它确认表已经装上。
+	// Revision 是面板给这张表算的版本号（2.2.255 起）。原样回报，面板拿它确认表已经装上。
 	Revision string `json:"revision,omitempty"`
 }
 
@@ -538,7 +538,7 @@ type sniInboundStatus struct {
 	Port      int    `json:"port"`
 	Listening bool   `json:"listening"`
 	Error     string `json:"error,omitempty"`
-	// 以下 2.2.253 起：装上的表的版本号、其中可用的名字数、分流计数。
+	// 以下 2.2.255 起：装上的表的版本号、其中可用的名字数、分流计数。
 	Revision      string `json:"revision,omitempty"`
 	Routes        int    `json:"routes"`
 	Matched       uint64 `json:"matched"`

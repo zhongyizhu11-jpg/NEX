@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// 2.2.253 起的四项：Prime Video、Spotify 注册、Steam 商店币种、Bilibili 港澳台。页面都是假的（fakeSites）。
+// 2.2.255 起的四项：Prime Video、Spotify 注册、Steam 商店币种、Bilibili 港澳台。页面都是假的（fakeSites）。
 
 func TestUnlockPrimeVideo(t *testing.T) {
 	ctx := context.Background()

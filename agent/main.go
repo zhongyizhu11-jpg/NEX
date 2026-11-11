@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.253"
+var Version = "2.2.255"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -660,7 +660,7 @@ type hostProbeServiceProbe struct {
 	IntervalSeconds int    `json:"intervalSeconds"`
 	// 目标是域名时只用这一族的地址：ipv4 / ipv6；空或 auto 照旧（2.2.226 起，见 probe_family.go）
 	Family string `json:"family,omitempty"`
-	// 下面几项只有 URL 连接检测（method = "http"，2.2.253 起，见 url_probe.go）带：这时 TargetIP 是完整 URL
+	// 下面几项只有 URL 连接检测（method = "http"，2.2.255 起，见 url_probe.go）带：这时 TargetIP 是完整 URL
 	TimeoutSeconds     int    `json:"timeoutSeconds,omitempty"`
 	ExpectStatus       string `json:"expectStatus,omitempty"`
 	InsecureSkipVerify bool   `json:"insecureSkipVerify,omitempty"`
@@ -1133,7 +1133,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["fxpVersion"] = reportedFXPVersion()
 	addGostRuntimeReport(payload)
 	addHostHealthCounters(payload)
-	// 1 / 5 / 15 分钟负载（2.2.253 起）：不在紧凑数组 m 里，读不到就不带，见 load_average.go
+	// 1 / 5 / 15 分钟负载（2.2.255 起）：不在紧凑数组 m 里，读不到就不带，见 load_average.go
 	addLoadAverageReport(payload)
 	if (!compactEnabled || shouldReportStatic) && primaryIP != "" {
 		payload["ip"] = primaryIP

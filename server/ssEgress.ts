@@ -256,7 +256,7 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
   const assertEntryAgents = () => {
     for (const host of entryHosts) {
       if (vless) {
-        // VLESS 出口要入口机的 Agent 认得本机桥接（2.2.253 起，见 shared/vlessEgress.ts）。
+        // VLESS 出口要入口机的 Agent 认得本机桥接（2.2.255 起，见 shared/vlessEgress.ts）。
         if (!isVlessEgressAgentSupported(String(host?.agentVersion || ""))) throw new Error(vlessEgressAgentUpgradeMessage(host?.name));
       } else if (!isSsEgressAgentSupported(String(host?.agentVersion || ""))) throw new Error(ssEgressAgentUpgradeMessage(host?.name));
     }
@@ -334,7 +334,7 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
 
 /**
  * VLESS Reality 出口那一半（shared/vlessEgress.ts）。和 SS 的区别：入站要是 VLESS + RAW/TCP + REALITY + Vision，
- * 链接走严格解析，Agent 门槛是 2.2.253。UDP 走出口（egressUdp）和协议对不对得上已经在 ruleEgressShapeError 里查过；
+ * 链接走严格解析，Agent 门槛是 2.2.255。UDP 走出口（egressUdp）和协议对不对得上已经在 ruleEgressShapeError 里查过；
  * 不查入口机的 ssEgressUdp 能力：VLESS 的 UDP 用的是上游 gost 的 socks5 UDP，和 NEX 运行时补丁无关。
  */
 async function resolveVlessEgressColumns(
@@ -595,7 +595,7 @@ export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonl
       ss2022: capabilities.ss2022,
       udpMessage: capabilities.udp ? null : ssEgressUdpUpgradeMessage(canSee ? host : null),
       ss2022Message: capabilities.ss2022 ? null : ssEgress2022UpgradeMessage(canSee ? host : null),
-      // VLESS Reality 出口只看 Agent 版本（2.2.253 起认得本机 sing-box 桥接）。
+      // VLESS Reality 出口只看 Agent 版本（2.2.255 起认得本机 sing-box 桥接）。
       vless: isVlessEgressAgentSupported(String(host?.agentVersion || "")),
       vlessMessage: isVlessEgressAgentSupported(String(host?.agentVersion || "")) ? null : vlessEgressAgentUpgradeMessage(canSee ? host?.name : null),
     };
@@ -786,7 +786,7 @@ export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): 
 
 /**
  * VLESS Reality 出口的状态。顺序和 SS 那份一样：先看出口本身（入站在不在、能不能做出口、链接解不解得开），
- * 再看规则形态，最后看入口机的 Agent 够不够新（2.2.253）。
+ * 再看规则形态，最后看入口机的 Agent 够不够新（2.2.255）。
  */
 function evaluateVlessRuleEgress(rule: Parameters<typeof evaluateRuleEgress>[0], type: "vless_host" | "vless_link", options: RuleEgressEntryOptions): RuleEgressEvaluation {
   const base = { runtime: null, landingHost: null, inbound: null, endpoint: null, vlessEndpoint: null } as const;

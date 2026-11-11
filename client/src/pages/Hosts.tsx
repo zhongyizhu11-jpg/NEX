@@ -1476,7 +1476,7 @@ const HostTableRow = memo(function HostTableRow({
     host.mimicRuntimeStatus ? `Mimic: ${host.mimicRuntimeStatus}` : "",
     host.mimicRuntimeMessage ? String(host.mimicRuntimeMessage) : "",
   ].filter(Boolean).join("\n");
-  // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：离线、没报都不画
+  // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）：离线、没报都不画
   const loadAverageText = host.isOnline ? formatHostLoadAverage(latestMetric) : null;
   const cpuTitle = [host.cpuInfo ? String(host.cpuInfo) : "", loadAverageText ? `负载（1 / 5 / 15 分钟）：${loadAverageText}` : ""].filter(Boolean).join("\n");
   const pct = (value: unknown) => (host.isOnline && typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "--");

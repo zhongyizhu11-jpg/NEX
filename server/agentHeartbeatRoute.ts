@@ -481,7 +481,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 2.2.215 起 Agent 多报两个数：此刻的 TCP / UDP 连接数。旧 Agent 没有这两项，存 null，界面画「—」。
     const tcpConnections = heartbeatMetric("tcpConnections", 13, 2147483647);
     const udpConnections = heartbeatMetric("udpConnections", 14, 2147483647);
-    // 2.2.253 起 Agent 多报 loadAverage：[1, 5, 15 分钟负载]，小数。不走上面的 heartbeatMetric（那边一律取整），
+    // 2.2.255 起 Agent 多报 loadAverage：[1, 5, 15 分钟负载]，小数。不走上面的 heartbeatMetric（那边一律取整），
     // 老 Agent、没有 /proc/loadavg 的平台不报，三个都是 null，界面上不多画。
     const loadAverage = parseAgentLoadAverage(req.body?.loadAverage);
     const { cpuInfo, agentVersion } = req.body;
@@ -674,7 +674,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 地址单独写、带条件：用户刚好在这次心跳期间手改了地址时不盖掉它（见 applyAgentReportedHostAddress）
     const addressApplied = addressChanged && await db.applyAgentReportedHostAddress(host.id, reportedAddress);
     if (addressApplied) Object.assign(host as any, reportedAddress);
-    // Agent 2.2.253+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
+    // Agent 2.2.255+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
     await syncHostDetectedAddressesSafely(host, req.body);
     if (fxpVersionChanged) {
       appendPanelLog(
@@ -4797,7 +4797,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       /*
         VLESS Reality 出口的本机桥接（server/vlessEgress.ts）：单独一个 sing-box 服务，规则改了不打断上面的落地入站。
-        只发给 2.2.253 起的 Agent（旧 Agent 上这类规则本来就按停用下发，也就没有桥接）；没有桥接时发一份收尾。
+        只发给 2.2.255 起的 Agent（旧 Agent 上这类规则本来就按停用下发，也就没有桥接）；没有桥接时发一份收尾。
       */
       if (isVlessEgressAgentSupported(effectiveAgentVersion)) {
         const bridgePlan = buildVlessEgressBridgePlan({

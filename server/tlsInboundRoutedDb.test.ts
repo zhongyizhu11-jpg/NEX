@@ -14,7 +14,7 @@ const setup = String.raw`
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'bob', 'hash', 'user')");
     for (const [id, name] of [[10, 'hk'], [11, 'sg'], [12, 'jp']]) {
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (?, ?, ?, ?, ?, 1, '2.2.253')", [id, name, '1.2.3.' + id, '1.2.3.' + id, 'tok' + id]);
+      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (?, ?, ?, ?, ?, 1, '2.2.255')", [id, name, '1.2.3.' + id, '1.2.3.' + id, 'tok' + id]);
     }
     const makeInbound = async (hostId, overrides = {}) => {
       const value = service.normalizeTlsInboundInput({ name: "共享", port: 443, ...overrides });

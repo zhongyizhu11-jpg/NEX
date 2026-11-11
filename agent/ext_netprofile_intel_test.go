@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// IP 信息（2.2.253 起）：只查测通的协议族、{ip} 换成出口地址、白名单外的域名不请求、状态码原样交回。
+// IP 信息（2.2.255 起）：只查测通的协议族、{ip} 换成出口地址、白名单外的域名不请求、状态码原样交回。
 func TestNetProfileIntelFetchesPerFamilyWithAllowlist(t *testing.T) {
 	m := newTestNetProfileModule()
 	m.httpGet = func(ctx context.Context, network, url string) (string, error) {

@@ -104,15 +104,15 @@ test("编辑框的提交拦截和服务端说同样的话", () => {
 });
 
 test("转送规则（经隧道 / 转发链 / 转发组）的 Agent 门槛是一个具名常量，老规则不受影响", () => {
-  assert.equal(TLS_INBOUND_ROUTED_AGENT_VERSION, "2.2.253");
-  assert.equal(isTlsInboundRoutedAgentSupported("2.2.253"), true);
+  assert.equal(TLS_INBOUND_ROUTED_AGENT_VERSION, "2.2.255");
+  assert.equal(isTlsInboundRoutedAgentSupported("2.2.255"), true);
   assert.equal(isTlsInboundRoutedAgentSupported("2.2.252"), false);
   assert.equal(sniRuleRouteKind({}), "direct");
   assert.equal(sniRuleRouteKind({ tunnelId: 3 }), "tunnel");
   // 转发组的子规则可能也带着 tunnelId（隧道型组），按组算。
   assert.equal(sniRuleRouteKind({ tunnelId: 3, forwardGroupId: 9 }), "group");
   assert.equal(isRoutedSniRule({ tunnelId: null, forwardGroupId: null }), false);
-  // 直连规则还是 2.2.224 就够；转送规则要 2.2.253。
+  // 直连规则还是 2.2.224 就够；转送规则要 2.2.255。
   assert.equal(isSniRouteAgentSupported("direct", "2.2.230"), true);
   assert.equal(isSniRouteAgentSupported("tunnel", "2.2.230"), false);
   assert.equal(tlsInboundRuleState({ inbound: { isEnabled: true }, agentVersion: "2.2.230", routeKind: "group" }), "agent_upgrade");

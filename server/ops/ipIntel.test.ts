@@ -11,7 +11,7 @@ import { isSecretSettingKey } from "../settingsSecretKeys";
 import { IP_INTEL_KEY_SETTINGS } from "../../shared/ipIntel";
 
 test("谁去查：新 Agent 查不要 Key 的，面板查注册地和带 Key 的；旧 Agent 全由面板代查", () => {
-  const fresh = { agentVersion: "2.2.253" };
+  const fresh = { agentVersion: "2.2.255" };
   const old = { agentVersion: "2.2.226" };
   assert.deepEqual(panelIntelProviders(fresh, {}), ["ripestat"]);
   assert.deepEqual(agentIntelSources({}).map((item) => item.id), ["ipapi_is", "ipinfo", "proxycheck"]);
@@ -75,7 +75,7 @@ test("落库：Agent 交上来的原始响应、面板补查、指令什么时�
       await schema.ensureDatabaseSchema();
       const exec = (sql, params = []) => runtime.executeRaw(sql, params);
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
-      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (1, ?, ?, ?, ?, ?, 1, ?)', ["新", "8.8.8.8", "8.8.8.8", "slave", "tok1", "2.2.253"]);
+      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (1, ?, ?, ?, ?, ?, 1, ?)', ["新", "8.8.8.8", "8.8.8.8", "slave", "tok1", "2.2.255"]);
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (2, ?, ?, ?, ?, ?, 1, ?)', ["旧", "9.9.9.9", "9.9.9.9", "slave", "tok2", "2.2.226"]);
       const intel = await import(url("server/ops/ipIntel.ts"));
       const requested = [];

@@ -89,12 +89,12 @@ test("带地区的显示：解锁 / 仅自制 / 屏蔽 / 检测失败，地区�
   assert.equal(unlockRegionTone("netflix", null, "JP"), "none");
 });
 
-test("新加的四项要 Agent 2.2.253", () => {
+test("新加的四项要 Agent 2.2.255", () => {
   const added = UNLOCK_SERVICES.filter((def) => def.sinceAgent === UNLOCK_EXTENDED_AGENT_VERSION).map((def) => def.id);
   assert.deepEqual(added, ["prime_video", "spotify", "steam", "bilibili_hmt"]);
   const steam = UNLOCK_SERVICES.find((def) => def.id === "steam")!;
   assert.equal(unlockServiceSupported(steam, "2.2.252"), false);
-  assert.equal(unlockServiceSupported(steam, "2.2.253"), true);
+  assert.equal(unlockServiceSupported(steam, "2.2.255"), true);
   assert.equal(unlockServiceSupported(steam, "2.3.0"), true);
   assert.equal(unlockServiceSupported(steam, null), false);
   assert.equal(unlockServiceSupported(UNLOCK_SERVICES[0], null), true);

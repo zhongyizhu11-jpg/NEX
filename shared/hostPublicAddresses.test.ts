@@ -26,7 +26,7 @@ const detected = serializeHostDetectedAddresses({
 });
 
 test("agent version gate is the next agent release", () => {
-  assert.equal(HOST_PUBLIC_ADDRESS_LIST_AGENT_VERSION, "2.2.253");
+  assert.equal(HOST_PUBLIC_ADDRESS_LIST_AGENT_VERSION, "2.2.255");
 });
 
 test("report normalization drops private / bogus addresses, dedupes and bounds", () => {

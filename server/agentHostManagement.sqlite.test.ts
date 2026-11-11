@@ -93,12 +93,12 @@ test("host agent management state against a real database", () => {
       const snapshot = await shutdown.readHostTrafficShutdownSnapshot(1);
       assert.equal(snapshot.usedBytes, 95 * GB);
       assert.equal(snapshot.cycleMark, 1000);
-      assert.equal(shutdown.evaluateSnapshot(snapshot, "2.2.253", true).due, true);
+      assert.equal(shutdown.evaluateSnapshot(snapshot, "2.2.255", true).due, true);
       assert.equal(shutdown.evaluateSnapshot(snapshot, "2.2.252", true).due, false);
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), 1000, "第一次认领到");
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), null, "同一周期不再认领");
       const triggered = await shutdown.readHostTrafficShutdownSnapshot(1);
-      assert.equal(shutdown.evaluateSnapshot(triggered, "2.2.253", true).reason, "already-triggered");
+      assert.equal(shutdown.evaluateSnapshot(triggered, "2.2.255", true).reason, "already-triggered");
 
       // 流量重置换了周期，用量再到阈值才能再认领
       await runtime.executeRaw("UPDATE host_traffic_counters SET bytesIn = 0, bytesOut = 0, resetAt = 2000 WHERE hostId = 1");
@@ -129,10 +129,10 @@ test("host agent management state against a real database", () => {
         { modules: supported === undefined ? {} : { traffic_shutdown: { supported, lastMark: "", lastError: "" } } },
       );
       assert.equal((await round("2.2.252", true)).modules.traffic_shutdown, undefined, "旧 Agent 不认这条指令");
-      assert.equal((await round("2.2.253", false)).modules.traffic_shutdown, undefined, "不是 root Linux 不下发");
-      const first = await round("2.2.253", true);
+      assert.equal((await round("2.2.255", false)).modules.traffic_shutdown, undefined, "不是 root Linux 不下发");
+      const first = await round("2.2.255", true);
       assert.deepEqual(first.modules.traffic_shutdown, { shutdown: true, mark: "1:2000", thresholdPercent: 90 });
-      assert.equal((await round("2.2.253", true)).modules.traffic_shutdown, undefined, "同一周期只下发一次");
+      assert.equal((await round("2.2.255", true)).modules.traffic_shutdown, undefined, "同一周期只下发一次");
       let notice = [];
       for (const deadline = Date.now() + 15_000; Date.now() < deadline;) {
         notice = await events.listPanelEvents({ kindPrefix: "host.traffic", limit: 5 });

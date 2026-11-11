@@ -28,7 +28,7 @@ function sandbox() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nex-fwxm-"));
   fs.mkdirSync(path.join(dir, "app"), { recursive: true });
   fs.writeFileSync(path.join(dir, "app", ".env"), "PORT=9911\nFORWARDX_GITHUB_ACCELERATOR_URL=\n");
-  fs.writeFileSync(path.join(dir, "app", "package.json"), '{\n  "name": "forwardx",\n  "version": "2.3.524"\n}\n');
+  fs.writeFileSync(path.join(dir, "app", "package.json"), '{\n  "name": "forwardx",\n  "version": "2.3.525"\n}\n');
   return dir;
 }
 
@@ -125,7 +125,7 @@ test("fwxm-panel.sh：读配置不执行它；info / address / version 按部署
     assert.match(address.stdout, /http:\/\/\[2001:db8::9\]:9911/);
     assert.doesNotMatch(address.stdout, /127\.0\.0\.1/);
 
-    assert.equal(run(`bash ${JSON.stringify(manager)} version`, env).stdout.trim(), "2.3.524");
+    assert.equal(run(`bash ${JSON.stringify(manager)} version`, env).stdout.trim(), "2.3.525");
     assert.match(run(`bash ${JSON.stringify(manager)} help`, env).stdout, /fwxm panel upgrade/);
     assert.notEqual(run(`bash ${JSON.stringify(manager)} nonsense`, env).status, 0);
 

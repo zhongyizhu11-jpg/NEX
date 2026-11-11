@@ -24,7 +24,7 @@ package main
   Grok / Perplexity  打开首页：地区封锁页 → 不支持；Cloudflare 人机验证 → 无法判断；正常打开 → 支持。
   TikTok    www.tiktok.com 页面里的 "region":"XX" → 支持；拿不到地区 → 无法判断。
 
-2.2.253 起又加了四项（照 RegionRestrictionCheck 的判断方法，不带任何第三方凭据）：
+2.2.255 起又加了四项（照 RegionRestrictionCheck 的判断方法，不带任何第三方凭据）：
 
   Prime Video  www.primevideo.com 页面里有 isServiceRestricted → 这个地区不提供服务；
                有 "currentTerritory":"XX" → 可用，地区就是它。
@@ -94,7 +94,7 @@ var unlockServices = []unlockService{
 	{ID: "grok", Check: unlockCheckGrok},
 	{ID: "perplexity", Check: unlockCheckPerplexity},
 	{ID: "tiktok", Check: unlockCheckTikTok},
-	// 2.2.253 起
+	// 2.2.255 起
 	{ID: "prime_video", Check: unlockCheckPrimeVideo},
 	{ID: "spotify", Check: unlockCheckSpotify},
 	{ID: "steam", Check: unlockCheckSteam},

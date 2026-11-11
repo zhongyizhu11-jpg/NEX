@@ -1,7 +1,7 @@
 /*
   主机实际监听端口核对的 Agent 扩展模块 "ports"（Go 端 agent/ext_ports.go）。
 
-  指令：{ enabled: true }，只发给 Agent 2.2.253 起（AGENT_PORT_OCCUPANCY_VERSION）。老 Agent 不认这个
+  指令：{ enabled: true }，只发给 Agent 2.2.255 起（AGENT_PORT_OCCUPANCY_VERSION）。老 Agent 不认这个
   模块、也不会上报，规则卡上就没有黄色的端口占用告警；红色的绑定失败来自规则状态回执，新老 Agent 都有。
   上报：启用规则的入口端口上不归 ForwardX 管的监听（只报冲突），结论放在 server/rulePortOccupancy.ts 的内存里。
 */

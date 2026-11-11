@@ -26,7 +26,7 @@ import {
  * 以及面板这边排检查 → 下指令 → 收结果 → 按 runId 查的整条路（不经 HTTP，直接调模块）。
  */
 
-const host = { id: 5, name: "东京落地", agentVersion: "2.2.253", isOnline: true };
+const host = { id: 5, name: "东京落地", agentVersion: "2.2.255", isOnline: true };
 const admin = { id: 1, role: "admin" };
 
 test("表单 → 检查目标：握手目标留空按握手域名的 443；IP 不能当握手域名", () => {
@@ -67,7 +67,7 @@ test("结果规整：可不可用面板自己算；结论写出缺了哪几样",
   assert.equal(normalizeRealityDestCheckResults("nope"), null);
 });
 
-test("排检查：旧 Agent（低于 2.2.253）和离线主机直接报错；同一台主机同时只排一次", () => {
+test("排检查：旧 Agent（低于 2.2.255）和离线主机直接报错；同一台主机同时只排一次", () => {
   resetRealityCheckStateForTest();
   assert.throws(() => startRealityCheck({ ...host, agentVersion: "2.2.252" }, { targets: realityDestCandidateTargets(), requestedBy: 1 }),
     (error: unknown) => error instanceof RealityCheckError && new RegExp(REALITY_DEST_CHECK_AGENT_VERSION.replace(/\./g, "\\.")).test(error.message));

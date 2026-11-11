@@ -10,7 +10,7 @@ import (
 )
 
 /*
-转发规则的 VLESS Reality 出口（2.2.253 起；面板 shared/vlessEgress.ts、server/vlessEgress.ts）。
+转发规则的 VLESS Reality 出口（2.2.255 起；面板 shared/vlessEgress.ts、server/vlessEgress.ts）。
 
 随 Agent 下发的 gost 运行时没有 vless 连接器，所以入口机上另起一个 sing-box（forwardx-singbox-egress 服务，
 配置 /etc/forwardx/singbox/egress.json）：每条规则一个只听 127.0.0.1 的 socks 入站（带凭据）→ 一个 vless +

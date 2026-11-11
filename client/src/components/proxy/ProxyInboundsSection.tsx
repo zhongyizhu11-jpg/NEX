@@ -1102,7 +1102,7 @@ export default function ProxyInboundsSection({
                     />
                   </FormField>
                   <p data-fx-help="" className="text-xs text-muted-foreground sm:col-span-2">
-                    Mieru 由 mita 承担（不是 sing-box），需要 Agent 2.2.253 以上；Agent 太旧时节点照常保存，但不会下发。
+                    Mieru 由 mita 承担（不是 sing-box），需要 Agent 2.2.255 以上；Agent 太旧时节点照常保存，但不会下发。
                     端口段最多 {MIERU_PORT_RANGE_MAX_PORTS} 个端口，客户端每条连接随便挑一个；经中转时只用起点那一个。
                     订阅里只有 Clash Verge / mihomo 能用（只走 TCP 那份），其他客户端用「复制链接」里的 mierus:// 链接导入 Mieru 官方客户端。
                   </p>

@@ -377,13 +377,13 @@ export function uiThemeStarterArchive(): { filename: string; archive: Buffer } {
 /**
  * 开机时补装：站点默认主题是官方主题库里的一套、库里却没有它。
  *
- * 两种情况会这样：从 2.3.523 及以前升上来（那时这几套是内置的，库里自然没有）；
+ * 两种情况会这样：从 2.3.524 及以前升上来（那时这几套是内置的，库里自然没有）；
  * 或者从备份 / 别的面板带过来的设置指着一套没带过来的主题。主题库是随面板发的，不用外网，补上就行 ——
  * 升级不该让一个用着墨金的站点突然变回经典。
  * 只补站点默认这一套：其余几套谁想用谁在「主题管理」里装，这正是改成按需安装的意思。
  */
 export async function ensureSiteUiThemeInstalled(): Promise<string | null> {
-  // 现在是内置的主题，以前可能当主题包装过（液态玻璃在 2.3.524 开发期间是主题包）：那一行已经用不上了，
+  // 现在是内置的主题，以前可能当主题包装过（液态玻璃在 2.3.525 开发期间是主题包）：那一行已经用不上了，
   // 名单里也认不出它（id 和内置重名），删掉免得占着「最多装几套」的名额
   const builtinPlaceholders = BUILTIN_UI_THEME_IDS.map(() => "?").join(", ");
   const removed = await executeRaw(`DELETE FROM ${q(TABLE)} WHERE ${q("themeId")} IN (${builtinPlaceholders})`, [...BUILTIN_UI_THEME_IDS]).catch(() => null);

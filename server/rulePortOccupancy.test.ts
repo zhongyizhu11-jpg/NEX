@@ -22,9 +22,9 @@ const report = (conflicts: unknown[], extra: Record<string, unknown> = {}) => ({
 const nginx = { ruleId: 11, port: 443, protocol: "tcp", forwardType: "nftables", listeners: [{ address: "0.0.0.0", process: "nginx", pid: 812 }] };
 
 test("下一个 Agent 版本起才发指令；版本号常量和 Agent 那头对得上", () => {
-  assert.equal(AGENT_PORT_OCCUPANCY_VERSION, "2.2.253");
+  assert.equal(AGENT_PORT_OCCUPANCY_VERSION, "2.2.255");
   assert.equal(agentSupportsPortOccupancy("2.2.252"), false);
-  assert.equal(agentSupportsPortOccupancy("2.2.253"), true);
+  assert.equal(agentSupportsPortOccupancy("2.2.255"), true);
   assert.equal(agentSupportsPortOccupancy(null), false);
   const goSource = fs.readFileSync(path.join(process.cwd(), "agent/ext_ports.go"), "utf8");
   assert.match(goSource, /func \(m \*portOccupancyModule\) Name\(\) string \{ return "ports" \}/);

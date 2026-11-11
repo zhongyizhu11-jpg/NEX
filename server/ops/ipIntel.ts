@@ -1,5 +1,5 @@
 /*
-  网络画像的 IP 信息 —— 面板这头（Agent 2.2.253 起，读法见 shared/ipIntel.ts）。
+  网络画像的 IP 信息 —— 面板这头（Agent 2.2.255 起，读法见 shared/ipIntel.ts）。
 
   三条来路，结果都落 host_ip_intel（每台主机 × 协议族 × 数据库一行，见 ipIntelTables.ts）：
 
@@ -8,7 +8,7 @@
        只在缓存过期（一天）或管理员点了「重新检测」时才下发，免得每 6 小时都去打第三方。
     2. 面板带着主机的 IP 去查：RIPEstat（注册地，不要 Key）、配了 Key 的 ipapi.is / AbuseIPDB / IPinfo。
        Key 只在面板上用，不下发给 Agent，也不回给浏览器。
-    3. Agent 低于 2.2.253：不要 Key 的那几家也由面板代查（查的是主机行上 / 上次检测到的公网地址）。
+    3. Agent 低于 2.2.255：不要 Key 的那几家也由面板代查（查的是主机行上 / 上次检测到的公网地址）。
 
   面板这头的请求一律走 server/ssrf.ts 的 safeHttpGet（8 秒超时、64KB 上限），在后台跑，
   界面只读缓存，从不等第三方。

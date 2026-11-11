@@ -601,7 +601,7 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
   界面主题（设置 › 个性化 › 界面主题）：整套界面的气质，一次换掉底、卡、外壳、控件的形状。
   配色 / 页面底色 / 卡片风格那三项是「在当前主题上微调」，主题是它们底下那一层。
 
-  面板自带三套（2.3.524 起；其余改成按需安装的主题包，见 shared/uiThemePackage.ts）：
+  面板自带三套（2.3.525 起；其余改成按需安装的主题包，见 shared/uiThemePackage.ts）：
 
     classic 经典 —— 浅灰页面托白卡、细线、天蓝渐变控件；深色是炭灰。出厂值，不往 <html> 上写属性。
 
