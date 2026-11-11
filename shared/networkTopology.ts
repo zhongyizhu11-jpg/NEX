@@ -28,8 +28,9 @@ import { routeGroupOf, routePathDestination, routePathLabel, type RouteGroupRule
  * 纯函数：数据由 server/networkTopology.ts 取好传进来，测试直接喂样例。
  */
 
-export type TopologyNodeKind = "host" | "target" | "inbound" | "group";
-export type TopologyEdgeKind = "rule" | "tunnel" | "chain" | "routePath" | "subscription" | "group";
+/** external / manual：用户手动标注的外部节点和连线（shared/topologyManual.ts），只是展示，不对应任何配置。 */
+export type TopologyNodeKind = "host" | "target" | "inbound" | "group" | "external";
+export type TopologyEdgeKind = "rule" | "tunnel" | "chain" | "routePath" | "subscription" | "group" | "manual";
 export type TopologyStatus = "running" | "stopped" | "degraded" | "failed";
 export type TopologyRole = "entry" | "relay" | "exit" | "landing";
 
@@ -226,6 +227,7 @@ export const TOPOLOGY_EDGE_KIND_LABELS: Record<TopologyEdgeKind, string> = {
   routePath: "线路组路径",
   subscription: "落地入站",
   group: "入口组 / 转发组",
+  manual: "手动标注",
 };
 
 export const TOPOLOGY_STATUS_LABELS: Record<TopologyStatus, string> = {

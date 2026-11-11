@@ -844,6 +844,9 @@ export async function deleteUser(userId: number): Promise<{ hostIds: number[] }>
       }
     }
   }
+  // 他在网络拓扑上手动画的外部节点和连线（server/topologyManual.ts）：只是展示用，人没了一起删，
+  // 不然迁移导入时 userId 映射不出来会被当成缺依赖
+  await (await import("../topologyManual")).deleteTopologyManualForUser(userId);
   await db.delete(users).where(eq(users.id, userId));
   // 被他邀请来的人不再有邀请人：留着悬空的 id，哪天 id 被复用就错绑到别人头上。
   // 已经返过的返利记录保留，账要对得上。

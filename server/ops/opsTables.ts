@@ -12,6 +12,7 @@ import { webhooksTables, webhooksMigrationTables } from "./webhooksTables";
 import { statusAvailabilityTables, statusAvailabilityMigrationTables } from "./statusAvailabilityTables";
 import { netProfileTables, netProfileMigrationTables } from "./netProfileTables";
 import { ipIntelTables } from "./ipIntelTables";
+import { topologyManualTables, topologyManualMigrationTables } from "./topologyManualTables";
 import { unlockTables, unlockMigrationTables } from "./unlockTables";
 import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
 import { nodeCheckTables, nodeCheckMigrationTables } from "./nodeCheckTables";
@@ -39,6 +40,7 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...nodePoolTables,
   ...loginDevicesTables,
   ...operationAuditTables,
+  ...topologyManualTables,
 ];
 
 export const OPS_MIGRATION_TABLES: string[] = [
@@ -60,4 +62,5 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...nodePoolMigrationTables,
   ...loginDevicesMigrationTables,
   ...operationAuditMigrationTables,
+  ...topologyManualMigrationTables,
 ];

@@ -8,6 +8,7 @@ import { pipeline } from "stream/promises";
 import { createGzip } from "zlib";
 import Database from "better-sqlite3";
 import { MIGRATION_TABLES, ensureDatabaseSchema, getDatabaseTableDefs } from "./dbSchema";
+import { remapTopologyManualRef } from "../shared/topologyManual";
 import {
   getDb,
   defaultSqlitePath,
@@ -206,6 +207,9 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "rule_sni_names",
   "host_network_profiles",
   "host_unlock_checks",
+  // 网络拓扑的手动标注：老面板没有这两张表 = 还没画过
+  "topology_manual_nodes",
+  "topology_manual_links",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -927,6 +931,9 @@ const IMPORT_TABLE_ORDER = [
   // 主机网络画像：只依赖主机
   "host_network_profiles",
   "host_unlock_checks",
+  // 拓扑手动标注：依赖用户、主机；连线引用节点，节点先导
+  "topology_manual_nodes",
+  "topology_manual_links",
   "system_settings",
 ] as const;
 
@@ -1836,6 +1843,19 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       // 发起人是源面板的用户 ID，搬过来对不上，不留。
       row.requestedBy = null;
       return { row, existingWhere: { runId: row.runId } };
+
+    case "topology_manual_nodes":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
+    case "topology_manual_links": {
+      // 引用里的主机 / 标注节点 ID 换成新库的；那一头没导进来（主机被删了）这条线就不要了
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      const remap = (table: "hosts" | "topology_manual_nodes", id: number) => mapId(maps, table, id) || null;
+      row.fromRef = remapTopologyManualRef(source.fromRef, remap);
+      row.toRef = remapTopologyManualRef(source.toRef, remap);
+      if (!row.fromRef || !row.toRef) return null;
+      return { row };
+    }
 
     case "system_settings": {
       const key = String(source.key || "");

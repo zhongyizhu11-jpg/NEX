@@ -118,6 +118,9 @@ export const MIGRATION_TABLES = [
   "host_unlock_checks",
   // 节点池（server/ops/nodePoolTables.ts）：线路里一层候选用的机器分组
   "node_pools",
+  // 网络拓扑上手动标注的外部节点 / 连线（server/ops/topologyManualTables.ts）：节点在前，连线引用它
+  "topology_manual_nodes",
+  "topology_manual_links",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
