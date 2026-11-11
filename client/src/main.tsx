@@ -15,6 +15,7 @@ import { startLayoutProbeIfRequested } from "./lib/layoutProbe";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
 import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
 import { loadUiThemeStyles } from "./lib/uiThemeStyles";
+import { prepareLanguage } from "./i18n";
 
 // 精简布局：刷新时先按上次记住的挂上，auth.me 回来后 LayoutLayer 再校正
 applyRememberedLayout();
@@ -29,6 +30,12 @@ const BOOT_THEME_WAIT_MS = 5_000;
 const bootUiThemeStyles = typeof document === "undefined"
   ? Promise.resolve()
   : loadUiThemeStyles(document.documentElement.getAttribute("data-ui-theme"));
+
+/*
+  英文界面：词典按需下载（中文用户不多下这几百 KB），和主题样式一起等，第一帧就是英文。
+  词典慢的话和主题一样最多等 BOOT_THEME_WAIT_MS，之后先画中文，词典到了原地换成英文。
+*/
+const bootLanguage = prepareLanguage();
 
 const LOGIN_EXPIRED_NOTICE = "登录状态已失效，请重新登录";
 
@@ -198,7 +205,7 @@ async function bootstrap() {
   restorePersistedQueryCache(queryClient, { scope: cacheScope() });
   startQueryCachePersistence(queryClient, { scope: cacheScope });
 
-  await Promise.race([bootUiThemeStyles, new Promise<void>((resolve) => setTimeout(resolve, BOOT_THEME_WAIT_MS))]);
+  await Promise.race([Promise.all([bootUiThemeStyles, bootLanguage]), new Promise<void>((resolve) => setTimeout(resolve, BOOT_THEME_WAIT_MS))]);
 
   createRoot(document.getElementById("root")!).render(
     <trpc.Provider client={trpcClient} queryClient={queryClient}>

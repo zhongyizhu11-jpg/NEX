@@ -33,6 +33,7 @@
     "check:versions": "node scripts/check-versions.mjs",
     "lint": "node scripts/lint-baseline.mjs",
     "lint:update": "node scripts/lint-baseline.mjs --update",
+    "i18n:report": "node --import tsx scripts/i18n-extract.mjs",
     "knip": "knip",
     "migrate:legacy": "node dist/migrate-legacy.js",
     "start": "NODE_ENV=production node dist/index.js",

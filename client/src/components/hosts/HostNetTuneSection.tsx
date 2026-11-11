@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -112,7 +113,7 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
             label="连接跟踪"
             value={evaluation.conntrackMax === null
               ? "没加载"
-              : `${(evaluation.conntrackCount ?? 0).toLocaleString("zh-CN")} / ${evaluation.conntrackMax.toLocaleString("zh-CN")}`}
+              : `${(evaluation.conntrackCount ?? 0).toLocaleString(getFormatLocale())} / ${evaluation.conntrackMax.toLocaleString(getFormatLocale())}`}
           />
           <Row label="达标" value={`${evaluation.ok} / ${evaluation.total}`} />
           {evaluation.kernel ? <Row label="内核" value={evaluation.kernel} /> : null}

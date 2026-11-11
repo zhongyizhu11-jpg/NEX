@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { Activity, ArrowRight, ArrowRightLeft, Route, Server } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,8 +21,8 @@ export type SystemHealth = {
 
 /** 首页那一格的补充行：手机上只放得下一个数，TCP 优先；桌面两个都给，完整的挂在 title 上。 */
 export function connectionsHint(connections: { tcp: number; udp: number }) {
-  const tcp = `TCP ${connections.tcp.toLocaleString("zh-CN")}`;
-  const udp = `UDP ${connections.udp.toLocaleString("zh-CN")}`;
+  const tcp = `TCP ${connections.tcp.toLocaleString(getFormatLocale())}`;
+  const udp = `UDP ${connections.udp.toLocaleString(getFormatLocale())}`;
   return {
     full: `${tcp} · ${udp}`,
     node: (

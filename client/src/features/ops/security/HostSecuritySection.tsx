@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { formatAgo } from "@shared/dashboardAttention";
@@ -64,7 +65,7 @@ export default function HostSecuritySection({ host }: { host: any }) {
             )}
           />
           <Row label="最近巡检" value={data.lastCheckAt ? `${formatAgo(Date.now() - data.lastCheckAt * 1000)} · 每 ${data.intervalMinutes} 分钟` : "还没有巡检过"} />
-          <Row label="基线" value={data.baselineReady && data.baselineAt ? `${new Date(data.baselineAt * 1000).toLocaleDateString("zh-CN")} 建立` : "正在建立"} />
+          <Row label="基线" value={data.baselineReady && data.baselineAt ? `${new Date(data.baselineAt * 1000).toLocaleDateString(getFormatLocale())} 建立` : "正在建立"} />
           <Link href={`/insights?tab=security&host=${hostId}`} className="self-start text-meta font-medium text-primary underline-offset-4 hover:underline">
             查看这台主机的发现
           </Link>

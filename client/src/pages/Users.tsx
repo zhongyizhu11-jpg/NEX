@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { FormField } from "@/components/ui/form-field";
 import UserProxySubConfig from "@/components/proxy/UserProxySubConfig";
 import OpsUserMenuItems from "@/features/ops/slots/UserMenuItems";
@@ -143,13 +144,13 @@ type UserManageType = typeof USER_MANAGE_TYPES[number];
 function dateText(value?: string | Date | null) {
   if (!value) return "永久";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(getFormatLocale());
 }
 
 function billingDateTimeText(value?: string | Date | null) {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN", BILLING_DATE_TIME_FORMAT_OPTIONS);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale(), BILLING_DATE_TIME_FORMAT_OPTIONS);
 }
 
 function currentBillingResetDay() {

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -103,7 +104,7 @@ export function exitSiteTitle(label: string, host: string, site: ExitQualitySite
 function formatCheckedAt(value: number) {
   if (!value) return "";
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  return Number.isFinite(date.getTime()) ? date.toLocaleString(getFormatLocale(), { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 }
 
 /** 一台主机的出口：四个站点各一格 + 解锁。概览不再放，订阅管理的出口检测和线路详情共用。 */

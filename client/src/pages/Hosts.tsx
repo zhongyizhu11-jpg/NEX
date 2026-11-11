@@ -1434,7 +1434,7 @@ const HostTableRow = memo(function HostTableRow({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-1.5">
               <HostListStatusBadge host={host} />
-              <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle}>{host.name}</span>
+              <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle} data-no-translate="">{host.name}</span>
             </div>
             <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={primaryAddressText}>
               <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
@@ -1511,7 +1511,7 @@ const HostTableRow = memo(function HostTableRow({
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex min-w-0 items-center gap-1.5">
               <HostListStatusBadge host={host} />
-              <span className="min-w-0 truncate font-semibold" title={hostRuntimeTitle}>{host.name}</span>
+              <span className="min-w-0 truncate font-semibold" title={hostRuntimeTitle} data-no-translate="">{host.name}</span>
             </div>
             <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
               {hostOs.label && (

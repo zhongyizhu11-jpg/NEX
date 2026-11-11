@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { resolveSiteTitle } from "@shared/brand";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import OpsPublicMonitorExtras from "@/features/ops/slots/PublicMonitorExtras";
@@ -125,7 +126,7 @@ function formatMonitorDate(value: unknown) {
       : Date.parse(String(value));
   if (!Number.isFinite(ms)) return "--";
   const date = new Date(ms);
-  const text = date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+  const text = date.toLocaleDateString(getFormatLocale(), { year: "numeric", month: "2-digit", day: "2-digit" });
   return ms < Date.now() ? `${text} 已到期` : text;
 }
 

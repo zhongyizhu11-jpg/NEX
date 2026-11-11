@@ -993,7 +993,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
                   </span>
                 ) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
               </span>
-              <span className="truncate" title={rule.name}>{rule.name}</span>
+              <span className="truncate" title={rule.name} data-no-translate="">{rule.name}</span>
               {ui.renderSubscriptionMark(rule)}
             </div>
             <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
@@ -1191,7 +1191,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
         <div className="fx-ds-rule-names">
           <div className="fx-ds-rule-name">
             <span className="fx-ds-rule-kind" data-kind={category}>{desktopRuleTypeLabels[category as RuleGroupType] || "转发"}</span>
-            <span className="truncate" title={rule.name}>{rule.name}</span>
+            <span className="truncate" title={rule.name} data-no-translate="">{rule.name}</span>
             {ui.renderSubscriptionMark(rule)}
           </div>
           <div className="fx-ds-rule-sub" title={subtitle}>{subtitle}</div>
@@ -5040,7 +5040,7 @@ function RulesContent() {
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                   {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
-                  <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
+                  <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
                   <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                 </span>
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
@@ -7778,7 +7778,7 @@ function RulesContent() {
               {supported ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
             </span>
             <div className="min-w-0 flex-1">
-              <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
+              <span className="block truncate font-medium" title={rule.name} data-no-translate="">{rule.name}</span>
               {compactLayout ? (
                 /* 精简的表：协议自己一列，名字下面挂类型标签（端口转发 / 隧道转发 / 转发链 / 转发组）和所属人 */
                 <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
@@ -9372,7 +9372,7 @@ function RulesContent() {
                         <div key={`${rule.name}-${rule.sourcePort}-${index}`} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
                           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                             <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-                            <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
+                            <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
                             <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
                           </div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">
@@ -9541,7 +9541,7 @@ function RulesContent() {
                           <div key={rule.id} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
                             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                               {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
-                              <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
+                              <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
                               <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                             </div>
                             <div className="mt-1 truncate text-xs text-muted-foreground">

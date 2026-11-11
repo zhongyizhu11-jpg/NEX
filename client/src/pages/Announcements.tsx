@@ -189,7 +189,7 @@ export default function Announcements() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-sm leading-6 text-foreground/85" dangerouslySetInnerHTML={renderAnnouncementHtml(item.content || "")} />
+                    <div className="text-sm leading-6 text-foreground/85" data-no-translate="" dangerouslySetInnerHTML={renderAnnouncementHtml(item.content || "")} />
                   </CardContent>
                 </Card>
               );
@@ -293,7 +293,7 @@ export default function Announcements() {
             </DialogHeader>
             <div
               className="max-h-[60svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
-              dangerouslySetInnerHTML={renderAnnouncementHtml(form.content)}
+              data-no-translate="" dangerouslySetInnerHTML={renderAnnouncementHtml(form.content)}
             />
             <DialogFooter>
               <Button onClick={() => setPreviewOpen(false)}>关闭</Button>

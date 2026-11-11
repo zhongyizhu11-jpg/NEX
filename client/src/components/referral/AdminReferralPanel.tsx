@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Gift, ShieldCheck, Users } from "lucide-react";
@@ -22,7 +23,7 @@ const PAGE_SIZE = 20;
 function dateText(value?: string | Date | null) {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale());
 }
 
 function sourceText(type: string) {
