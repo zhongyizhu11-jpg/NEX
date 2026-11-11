@@ -62,7 +62,7 @@ test("events, webhook settings and digest blocks work against a real database", 
       const messages = recent.map((event) => event.message);
       assert.deepEqual(messages, [
         "规则「web」（港-1 :443）恢复运行",
-        "规则「web」（港-1 :443）出错：bind: address already in use",
+        "规则「web」（港-1 :443）出错：端口绑定失败：bind: address already in use",
         "用户 小王 流量用完，转发已暂停",
         "港-1 的 Agent 升级到 2.2.216 并重启",
         "港-1 断线 35 分钟后恢复",
@@ -108,6 +108,18 @@ test("events, webhook settings and digest blocks work against a real database", 
       // 快到期扫描：一天只记一次
       assert.equal(await hooks.recordExpiringUsersEvents(), 1);
       assert.equal(await hooks.recordExpiringUsersEvents(), 0);
+
+      // Agent 报的英文原因换成中文：监听没起来 + 服务日志里那一句
+      hooks.recordRuleStatusEvent({
+        rule: { id: 12, name: "realm TCP", isEnabled: true, sourcePort: 30021, userId: 2 },
+        host: { id: 1, name: "入口 A", agentVersion: "2.2.256" },
+        wasRunning: false,
+        isRunning: false,
+        message: "managed runtime listener not ready after apply port=30021 protocol=tcp forwardType=realm; cause=ipv6-unavailable; log: [tcp]failed to bind [::]:30021: Address family not supported by protocol (os error 97)",
+      });
+      await settled();
+      const [realmError] = await caller.recent({ limit: 1 });
+      assert.equal(realmError.message, "规则「realm TCP」（入口 A :30021）出错：监听没起来：IPv6 在这台机器上不可用（日志：[tcp]failed to bind [::]:30021: Address family not supported by protocol (os error 97)）");
       console.log("OK");
     `;
     const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {

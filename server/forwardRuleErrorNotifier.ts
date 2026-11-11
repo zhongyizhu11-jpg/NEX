@@ -6,6 +6,7 @@ import { isTelegramBotReady } from "./telegramReady";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
+import { ruleRuntimeFailureReason } from "./ruleRuntimeFailureText";
 
 type ForwardRuleErrorPayload = {
   rule: any;
@@ -73,7 +74,7 @@ function ruleModeLabel(rule: any, forwardGroup?: any | null) {
 
 function ruleErrorMessage(payload: ForwardRuleErrorPayload) {
   const { rule, host, forwardGroup, message } = payload;
-  const reason = String(message || "").trim() || "Agent 上报规则运行异常";
+  const reason = ruleRuntimeFailureReason(message, Number(rule?.sourcePort) || 0, { agentVersion: host?.agentVersion }) || "Agent 上报规则运行异常";
   const modeLabel = ruleModeLabel(rule, forwardGroup);
   return [
     `<b>🔴 NEX 转发规则异常提醒</b>`,

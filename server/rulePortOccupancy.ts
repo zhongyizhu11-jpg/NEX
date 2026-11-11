@@ -1,5 +1,6 @@
 import { isAgentVersionAtLeast } from "@shared/version";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { classifyRuleRuntimeFailure, type RuleRuntimeFailureKind, type RuleRuntimeFailureOptions } from "./ruleRuntimeFailureText";
 
 /*
   主机实际监听端口核对（端口占用告警）。
@@ -10,7 +11,8 @@ import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
       socket，外来进程照样能听这个端口而不报错，只能靠这条核对发现；
     · 红：规则的动作状态（/api/agent/rule-status）里绑定失败的原因 —— 用户态转发起不来时 Agent 会说
       「port 443/tcp occupied by nginx (pid 812)」或者 address already in use；内核转发装不上 DOCKER-USER
-      放行之类（[docker-compat]）也在这里显示，不再只剩一个「没运行」。
+      放行之类（[docker-compat]）也在这里显示，不再只剩一个「没运行」。用户态转发监听没起来的原因
+      （IPv6 不可用、运行时没装、服务日志里的报错，Agent 2.2.256 起带上）也是这一路，见 ruleRuntimeFailureText.ts。
   冲突消失（下一轮上报不再有、规则报运行）就清掉。随机分配端口时避开最近见过被占的端口
   （tunnelRepository.findAvailablePort 调 knownOccupiedPortsOnHost）。
 
@@ -41,7 +43,8 @@ export type PortOccupancyReport = {
 
 export type RulePortWarning = {
   level: "warn" | "error";
-  kind: "occupied" | "bind" | "kernel";
+  /** runtime：用户态转发的监听没起来（IPv6 不可用、运行时没装……），原因见 ruleRuntimeFailureText.ts。 */
+  kind: "occupied" | RuleRuntimeFailureKind;
   label: string;
   message: string;
   hostId: number;
@@ -62,7 +65,7 @@ const FUTURE_SKEW_MS = 60 * 1000;
 
 type StoredConflict = PortOccupancyConflict & { displayRuleId: number };
 const hostConflicts = new Map<number, { receivedAt: number; collectedAt: number; conflicts: StoredConflict[] }>();
-type StoredFailure = { hostId: number; kind: "bind" | "kernel"; port: number; admin: string; user: string; at: number };
+type StoredFailure = { hostId: number; kind: RuleRuntimeFailureKind; label: string; port: number; admin: string; user: string; at: number };
 /** 键：展示用的规则编号（转发组成员 / 线路组中继算到模板上），再按主机分。 */
 const ruleFailures = new Map<number, Map<number, StoredFailure>>();
 const knownOccupied = new Map<number, Map<string, number>>();
@@ -151,50 +154,14 @@ export function displayRuleIdForRow(rule: RuleRow | null | undefined) {
   return positiveInt(rule?.forwardGroupRuleId) || positiveInt(rule?.routeParentRuleId) || positiveInt(rule?.id);
 }
 
-const OCCUPANT_PATTERN = /port (\d{1,5})\/(tcp|udp) occupied by ([^;()]{1,64}?) \(pid (\d{1,8})\)/gi;
-const BIND_FAILURE_PATTERN = /address already in use|listen port still busy|port still busy|occupied by|端口[^，。]{0,12}(?:被占|占用)/i;
-const KERNEL_FAILURE_PATTERN = /\[docker-compat\]|kernel firewall state mismatch|kernel forward (?:apply|cleanup) failed/i;
-
-/** 把规则动作状态里的失败原因归类：端口被占（bind）、内核转发没装全（kernel），别的返回 null（照旧只显示「没运行」）。 */
-export function classifyRuleRuntimeFailure(message: unknown, port: number): Omit<StoredFailure, "hostId" | "at"> | null {
-  const text = cleanText(message, 300);
-  if (!text) return null;
-  if (BIND_FAILURE_PATTERN.test(text)) {
-    const occupants = Array.from(text.matchAll(OCCUPANT_PATTERN)).map((match) => ({
-      port: Number(match[1]), protocol: match[2].toUpperCase(), process: match[3].trim(), pid: Number(match[4]),
-    }));
-    const failedPort = occupants[0]?.port || port;
-    if (occupants.length > 0) {
-      return {
-        kind: "bind",
-        port: failedPort,
-        admin: `端口绑定失败：${occupants.map((item) => `${item.port}/${item.protocol} 被 ${item.process}（pid ${item.pid}）占用`).join("；")}`,
-        user: `端口绑定失败：${occupants.map((item) => `${item.port}/${item.protocol}`).join("、")} 已被其他程序占用`,
-      };
-    }
-    return {
-      kind: "bind",
-      port: failedPort,
-      admin: `端口绑定失败：${text}`,
-      user: failedPort ? `端口绑定失败：入口端口 ${failedPort} 已被占用` : "端口绑定失败：入口端口已被占用",
-    };
-  }
-  if (KERNEL_FAILURE_PATTERN.test(text)) {
-    return {
-      kind: "kernel",
-      port,
-      admin: `内核转发未就绪：${text}`,
-      user: "内核转发未就绪：主机防火墙拦下了转发，或规则没装全，请联系管理员",
-    };
-  }
-  return null;
-}
+/** 归类和中文原因在 ruleRuntimeFailureText.ts（事件时间线、规则异常提醒也用它）；这里沿用老名字导出。 */
+export { classifyRuleRuntimeFailure };
 
 /**
  * 规则状态回执（agentStatusRoutes.applyAgentRuleStatus）：报运行就清掉这台主机上的失败；报没运行且原因认得出来
  * 就记下。认不出的原因不动已有记录 —— 同一次失败后面跟着的通用回执不该把具体原因冲掉。
  */
-export function recordRuleRuntimeStatus(input: { rule: RuleRow; hostId: number; isRunning: boolean; message?: unknown }, now = Date.now()) {
+export function recordRuleRuntimeStatus(input: { rule: RuleRow; hostId: number; isRunning: boolean; message?: unknown } & RuleRuntimeFailureOptions, now = Date.now()) {
   const hostId = positiveInt(input.hostId);
   const displayRuleId = displayRuleIdForRow(input.rule);
   if (!hostId || !displayRuleId) return;
@@ -204,7 +171,7 @@ export function recordRuleRuntimeStatus(input: { rule: RuleRow; hostId: number; 
     return;
   }
   const port = positiveInt(input.rule?.sourcePort, 65535);
-  const failure = classifyRuleRuntimeFailure(input.message, port);
+  const failure = classifyRuleRuntimeFailure(input.message, port, { agentVersion: input.agentVersion });
   if (!failure) return;
   let perHost = ruleFailures.get(displayRuleId);
   if (!perHost) {
@@ -243,7 +210,7 @@ export function getRulePortWarnings(rule: RuleRow, admin: boolean, now = Date.no
     warnings.push({
       level: "error",
       kind: failure.kind,
-      label: failure.kind === "bind" ? "端口绑定失败" : "内核转发未就绪",
+      label: failure.label,
       message: admin ? failure.admin : failure.user,
       hostId: failure.hostId,
       port: failure.port,
