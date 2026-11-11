@@ -236,6 +236,12 @@ export const users = table("users", {
   discordEmail: text("discordEmail"),
   discordLinkedAt: epoch("discordLinkedAt"),
   discordDmBlockedAt: epoch("discordDmBlockedAt"),
+  // 通用 OIDC 登录（server/oidcLoginService.ts）：IdP 的 issuer 和 sub（同一个 sub 在别的 IdP 那里是另一个人）、
+  // 绑定时的邮箱（只用来显示）、绑定时间。(oidcIssuer, oidcSub) 的联合唯一索引建在 server/dbSchema.ts 里。
+  oidcIssuer: varchar("oidcIssuer", { length: 191 }),
+  oidcSub: varchar("oidcSub", { length: 191 }),
+  oidcEmail: text("oidcEmail"),
+  oidcLinkedAt: epoch("oidcLinkedAt"),
   browserSessionToken: text("browserSessionToken"),
   mobileSessionToken: text("mobileSessionToken"),
   telegramSessionToken: text("telegramSessionToken"),

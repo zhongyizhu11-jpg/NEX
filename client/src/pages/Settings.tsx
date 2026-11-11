@@ -117,6 +117,7 @@ import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSectio
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import GoogleLoginSettingsCard from "@/components/settings/GoogleLoginSettingsCard";
 import DiscordSettingsCard from "@/components/settings/DiscordSettingsCard";
+import OidcLoginSettingsCard from "@/components/settings/OidcLoginSettingsCard";
 import PanelProfilingCard from "@/components/settings/PanelProfilingCard";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
@@ -6261,6 +6262,8 @@ function SystemInfoSection() {
       </div>
 
       <GoogleLoginSettingsCard />
+
+      <OidcLoginSettingsCard />
 
       <DiscordSettingsCard />
 

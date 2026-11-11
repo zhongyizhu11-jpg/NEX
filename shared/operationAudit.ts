@@ -195,6 +195,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   telegram: "Telegram",
   googleAuth: "Google 登录",
   discordAuth: "Discord",
+  oidcAuth: "OIDC 登录",
   auth: "账号",
   "ipChange.accounts": "换 IP · 云账号",
   "ipChange.hosts": "换 IP · 主机",

@@ -232,6 +232,8 @@ const tables: TableDef[] = [
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
       c("discordId", "varchar", { length: 32 }), c("discordUsername", "text"), c("discordEmail", "text"), c("discordLinkedAt", "epoch"),
       c("discordDmBlockedAt", "epoch"),
+      // 通用 OIDC 登录（server/oidcLoginService.ts）：按 (oidcIssuer, oidcSub) 认人，两列一起建唯一索引。
+      c("oidcIssuer", "varchar", { length: 191 }), c("oidcSub", "varchar", { length: 191 }), c("oidcEmail", "text"), c("oidcLinkedAt", "epoch"),
       c("browserSessionToken", "text"), c("mobileSessionToken", "text"), c("telegramSessionToken", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
@@ -240,7 +242,7 @@ const tables: TableDef[] = [
       // 绑定邀请人的时刻：这之前下的单不返利（老数据为空，按注册时刻算）。
       c("inviterBoundAt", "epoch"),
     ],
-    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"]],
+    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"], ["oidcIssuer", "oidcSub"]],
     indexes: [["inviterId"]],
   },
   {

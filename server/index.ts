@@ -34,6 +34,7 @@ import { mcpRouter } from "./ops/mcpRoute";
 import { llmsTxtRouter } from "./llmsTxt";
 import { googleAuthRouter } from "./googleAuthRoute";
 import { discordAuthRouter } from "./discordAuthRoute";
+import { oidcAuthRouter } from "./oidcAuthRoute";
 import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
 import { startDatabaseHealthMonitor } from "./databaseHealthMonitor";
 import { startPerfSamplerFromEnv } from "./perfSampler";
@@ -212,6 +213,8 @@ async function startServer() {
   app.use(googleAuthRouter);
   // GET /api/auth/discord/start、/callback：Discord 登录的整页跳转（server/discordAuthRoute.ts）。
   app.use(discordAuthRouter);
+  // GET /api/auth/oidc/start、/callback：通用 OIDC 登录（Pocket ID、Keycloak……）的整页跳转（server/oidcAuthRoute.ts）。
+  app.use(oidcAuthRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
   // 规则集镜像要排在订阅路由前面：/api/sub/ruleset/… 会被 /api/sub/:token/:format 抢走。

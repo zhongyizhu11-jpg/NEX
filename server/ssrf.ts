@@ -77,6 +77,11 @@ type LookupCallback = (error: NodeJS.ErrnoException | null, address: string | dn
 export type SafeLookupOptions = SafeOutboundOptions & {
   /** 自定义「这个地址不能连」。不给就用 isRestrictedOutboundAddress（按 allowPrivate）。 */
   isBlockedAddress?: (address: string) => boolean;
+  /**
+   * 放行 .local / .internal / .lan 这类内网域名（localhost 永远不放）。只在 allowPrivate 同时为 true 时生效：
+   * 自建的身份提供方常常就叫 auth.home.lan 之类；解析出来的地址照样逐个检查（内网放行，回环、链路本地照拦）。
+   */
+  allowLanHostNames?: boolean;
 };
 
 function blockedByOptions(address: string, options: SafeLookupOptions) {
@@ -93,8 +98,10 @@ export class SafeOutboundError extends Error {
   }
 }
 
-function isBlockedHostName(host: string) {
-  return !host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal");
+function isBlockedHostName(host: string, options: SafeLookupOptions = {}) {
+  if (!host || host === "localhost" || host.endsWith(".localhost")) return true;
+  if (options.allowPrivate === true && options.allowLanHostNames === true) return false;
+  return host.endsWith(".local") || host.endsWith(".internal");
 }
 
 /** 给 http(s).request / net.connect 用的 lookup：解析、逐个检查、只交出检查过的地址。 */
@@ -103,7 +110,7 @@ export function createSafeLookup(options: SafeLookupOptions = {}) {
   return (hostname: string, lookupOptions: dns.LookupOptions | number | undefined, callback: LookupCallback) => {
     const opts: dns.LookupOptions = typeof lookupOptions === "number" ? { family: lookupOptions } : { ...(lookupOptions || {}) };
     const host = normalizeHost(hostname);
-    if (isBlockedHostName(host)) {
+    if (isBlockedHostName(host, options)) {
       callback(new SafeOutboundError(`${purpose} 不允许访问受限地址 ${host || "-"}`, "blocked"), "");
       return;
     }
@@ -149,6 +156,20 @@ export function safeHttpGet(rawUrl: string, options: SafeLookupOptions & {
   timeoutMs: number;
   maxBytes: number;
 }): Promise<SafeHttpResponse> {
+  return safeHttpRequest(rawUrl, { ...options, method: "GET" });
+}
+
+/**
+ * 和 safeHttpGet 一样的防护，多了 method / body（OIDC 换票要 POST 表单）。
+ * 同样不跟随跳转：3xx 原样返回。
+ */
+export function safeHttpRequest(rawUrl: string, options: SafeLookupOptions & {
+  method: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+  timeoutMs: number;
+  maxBytes: number;
+}): Promise<SafeHttpResponse> {
   const purpose = options.purpose || "此请求";
   let url: URL;
   try {
@@ -165,6 +186,9 @@ export function safeHttpGet(rawUrl: string, options: SafeLookupOptions & {
     return Promise.reject(new SafeOutboundError(`${purpose} 不允许访问受限地址 ${literal}`, "blocked"));
   }
   const client = url.protocol === "https:" ? https : http;
+  const body = options.body === undefined ? null : Buffer.from(options.body, "utf8");
+  const headers: Record<string, string> = { ...(options.headers || {}) };
+  if (body) headers["Content-Length"] = String(body.length);
   return new Promise<SafeHttpResponse>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -176,8 +200,9 @@ export function safeHttpGet(rawUrl: string, options: SafeLookupOptions & {
       else resolve(value!);
     };
     const asError = (error: Error) => (error instanceof SafeOutboundError ? error : new SafeOutboundError(error.message, "network"));
-    const request = client.get(url, {
-      headers: options.headers,
+    const request = client.request(url, {
+      method: options.method,
+      headers,
       lookup: createSafeLookup(options) as any,
       // 不用连接池：池里的连接可能是按别的口径检查过的。
       agent: false,
@@ -212,5 +237,6 @@ export function safeHttpGet(rawUrl: string, options: SafeLookupOptions & {
       request.destroy();
     }, options.timeoutMs);
     request.on("error", (error) => finish(asError(error)));
+    request.end(body ?? undefined);
   });
 }

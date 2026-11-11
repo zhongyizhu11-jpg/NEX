@@ -30,6 +30,7 @@ import { ipChangeRouter } from "./routers/ipChange";
 import { googleAuthRouter } from "./routers/googleAuth";
 import { topologyRouter } from "./routers/topology";
 import { discordAuthRouter } from "./routers/discordAuth";
+import { oidcAuthRouter } from "./routers/oidcAuth";
 import { netProfileRouter } from "./routers/netProfile";
 import { agentRuntimeRouter } from "./routers/agentRuntime";
 
@@ -65,6 +66,7 @@ export const appRouter = router({
   googleAuth: googleAuthRouter,
   topology: topologyRouter,
   discordAuth: discordAuthRouter,
+  oidcAuth: oidcAuthRouter,
   netProfile: netProfileRouter,
   agentRuntime: agentRuntimeRouter,
 });

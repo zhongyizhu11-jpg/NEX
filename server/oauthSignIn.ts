@@ -1,5 +1,5 @@
 /*
-  第三方登录（Google、Discord）共用的那部分：「换回来一个第三方身份之后，该让谁登录」的规则，
+  第三方登录（Google、Discord、通用 OIDC）共用的那部分：「换回来一个第三方身份之后，该让谁登录」的规则，
   和 App 里那条「系统浏览器 + 轮询」流程的内存表。
 
   各家只是认人的那个 ID 不一样（Google 的 sub、Discord 的用户 ID），规则完全相同：
@@ -37,8 +37,10 @@ export type OAuthSignInErrorCode =
 export type OAuthIdentity = {
   /** 第三方账号的永久 ID：认人只看它。 */
   id: string;
-  /** 已验证过的邮箱（小写）。 */
+  /** 邮箱（小写）。Google / Discord 只给已验证的；通用 OIDC 在管理员关了「只接受已验证邮箱」时可能没验证过。 */
   email: string;
+  /** 邮箱是不是 IdP 验证过的。不给 = 验证过（Google / Discord 的老路径）；false 时建号不把邮箱记成已验证。 */
+  emailVerified?: boolean;
   /** 显示名。 */
   name: string | null;
   /** 建号时用户名从哪里取：不给就取邮箱 @ 前面那段。 */
@@ -197,8 +199,8 @@ export async function resolveOAuthSignIn<U extends OAuthUserLike>(
       password: "",
       name: (identity.name || username).slice(0, 24),
       email: identity.email,
-      emailVerified: true,
-      emailVerifiedAt: new Date(),
+      emailVerified: identity.emailVerified !== false,
+      emailVerifiedAt: identity.emailVerified !== false ? new Date() : null,
       unusablePassword: true,
       inviterId,
     }, identity);

@@ -77,6 +77,7 @@ export default defineConfig({
           { text: "Telegram 和通知", link: "/guide/notifications" },
           { text: "工单", link: "/guide/tickets" },
           { text: "Google 登录", link: "/guide/google-login" },
+          { text: "OIDC 登录（Pocket ID 等）", link: "/guide/oidc-login" },
           { text: "Discord 登录和通知", link: "/guide/discord" },
           { text: "插件", link: "/guide/plugins" },
           { text: "iOS 客户端自签安装", link: "/ios-self-sign" },

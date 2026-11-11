@@ -24,6 +24,7 @@ import { parseGoogleLoginReturn, stripGoogleLoginReturnFromUrl } from "@/feature
 import DiscordLoginButton from "@/features/discordLogin/DiscordLoginButton";
 import DiscordMark from "@/features/discordLogin/DiscordMark";
 import { parseDiscordLoginReturn, stripDiscordLoginReturnFromUrl } from "@/features/discordLogin/discordLoginReturn";
+import OidcLoginButton from "@/features/oidcLogin/OidcLoginButton";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -1239,6 +1240,15 @@ export default function Login() {
                   }}
                 />
               ) : null}
+
+              {/* 通用 OIDC（Pocket ID、Keycloak……）：显不显示、失败提示、2FA 跳回都在组件里自己处理 */}
+              <OidcLoginButton
+                disabled={isPending}
+                inviteCode={referralEnabled ? inviteCode : null}
+                onTwoFactorRequired={(data) => {
+                  startTwoFactorFromTelegram({ twoFactorRequired: true, ...data });
+                }}
+              />
 
               <OpsLoginExtras disabled={isPending} />
 

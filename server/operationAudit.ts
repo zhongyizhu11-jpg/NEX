@@ -74,7 +74,7 @@ export const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
   "rules.startSelfTest", "rules.connectionsStart", "tunnels.test", "forwardGroups.test",
   "hosts.startSpeedTest", "hosts.startUnlockCheck", "netProfile.recheck", "proxySubscriptions.nodeExitCheckStart",
   "ipChange.accounts.test", "ops.webhooks.test", "ops.resourceAlert.test", "ops.digest.sendTest",
-  "ops.offsiteBackup.testConnection", "telegram.testSend", "system.sendTestEmail", "discordAuth.testBot",
+  "ops.offsiteBackup.testConnection", "telegram.testSend", "system.sendTestEmail", "discordAuth.testBot", "oidcAuth.testDiscovery",
   "payment.testGmPayGateway", "system.testDatabaseSwitchTarget",
   "plugins.checkUpdate", "plugins.checkUpdates", "plugins.refreshStore", "plugins.refreshStoreSource",
   // 预览、解析、盯着看、已读、用量
