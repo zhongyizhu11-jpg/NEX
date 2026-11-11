@@ -34,6 +34,7 @@ import { createKeyedSerial } from "./keyedSerial";
 import { notifyProxySubEvent } from "./proxySubNotify";
 import { announceHeaderValue, renderProxySubPage } from "./proxySubPage";
 import { panelRulesetMirrorBase } from "./proxySubRulesetMirror";
+import { countProxySubAddressFamilySkips, parseProxySubIpVersion, type ProxySubIpVersion } from "../shared/proxySubIpVersion";
 
 export const proxySubscriptionRouter = express.Router();
 
@@ -285,6 +286,12 @@ async function deviceGateLocked(req: Request, context: ProxySubTokenContext, cli
   return { allowed: decision.allowed, reason: decision.reason, headers: decision.headers, hwid };
 }
 
+/**
+ * 按 IPv4 / IPv6 输出时跳过了几条（没有那种地址的）。和上游 ForwardX 的接入订阅同一个头名，
+ * 客户端 / 脚本据此提示「少了几个」；不带 ipVersion 时不发这个头，响应和原来一样。
+ */
+export const PROXY_SUB_SKIPPED_ENTRIES_HEADER = "X-ForwardX-Skipped-Entries";
+
 /** 和 server/index.ts 的 compression({ threshold: 1024 }) 一致：小于它的不压。 */
 const COMPRESSION_THRESHOLD = 1024;
 
@@ -402,6 +409,14 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       ?? formatFromUserAgent(userAgent, req.query.flag)
       ?? normalizeProxySubscriptionFormat(token.defaultFormat);
 
+    // ?ipVersion=4 / 6：只用这一种真实地址，没有的跳过，绝不退回另一种（shared/proxySubIpVersion.ts）。
+    const ipVersionParam = parseProxySubIpVersion(req.query.ipVersion);
+    if (!ipVersionParam.ok) {
+      res.status(400).type("text/plain").send(ipVersionParam.error);
+      return;
+    }
+    const ipVersion: ProxySubIpVersion | null = ipVersionParam.version;
+
     // 同一个令牌提供两种订阅：不带 rules 参数是节点订阅，带上才是规则订阅。
     const rulesParam = String(req.query.rules ?? "").trim().toLowerCase();
     const rulePreset = !rulesParam || rulesParam === "0" || rulesParam === "false"
@@ -437,10 +452,13 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       infoNodesWanted(gated.context) ? Math.floor(gated.context.info.trafficUsed / 10_485_760) : -1,
       // 只有按访客就近时多一格：国家 + 取整到 1° 的经纬度，同城访客共用一份缓存。
       ...proxySubVisitorCacheParts(tokenOptions.sortMode, visitor),
+      // 只在带了 ipVersion 时多一格：不带的缓存键和原来一样。
+      ...(ipVersion ? ["ipVersion", ipVersion] : []),
     ]);
     // 开着缓存时存「发出去的样子」（字节、ETag、压好的 gzip / br，见 proxySubCache）；关着时和原来一样直接发字符串。
     let prepared = settings.cacheTtlSec > 0 ? getProxySubCached(cacheKey) : null;
     let body: string | null = null;
+    let skippedEntries = prepared?.skippedEntries ?? 0;
     if (prepared === null) {
       const built = await db.buildProxySubscriptionForToken(Number(token.userId), {
         rulePreset,
@@ -452,7 +470,19 @@ async function handleSubscription(req: Request, res: Response, options: { param:
         info: infoNodesWanted(gated.context) ? gated.context.info : null,
         vars,
         visitor,
+        ipVersion,
       });
+      skippedEntries = ipVersion ? countProxySubAddressFamilySkips(built.plan) : 0;
+      /*
+        要了 v6、却一条都不剩：回 422 说清楚，而不是 200 一份空订阅 —— 客户端会显示「更新成功」，
+        节点全没了，用户只会以为订阅坏了。透传的外部订阅（provider）不经面板，有它们就不算空。
+      */
+      if (ipVersion && skippedEntries > 0 && built.document.nodes.length === 0 && !(built.document.providers?.length)) {
+        res.setHeader(PROXY_SUB_SKIPPED_ENTRIES_HEADER, String(skippedEntries));
+        res.setHeader("Cache-Control", "no-store");
+        res.status(422).type("text/plain").send(`没有可用的 IPv${ipVersion} 节点：${skippedEntries} 个节点的入口都没有 IPv${ipVersion} 地址。去掉地址上的 ipVersion 参数即可照常拉取。`);
+        return;
+      }
       body = renderProxySubPipeline({
         built,
         format,
@@ -467,11 +497,13 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       });
       if (settings.cacheTtlSec > 0) {
         prepared = prepareProxySubBody(body);
+        if (skippedEntries > 0) prepared.skippedEntries = skippedEntries;
         setProxySubCached(cacheKey, prepared, settings.cacheTtlSec);
       }
     }
 
     applyHeaders(res, gated.context, { format, profile, panelUrl, token, byAlias: options.byAlias });
+    if (ipVersion) res.setHeader(PROXY_SUB_SKIPPED_ENTRIES_HEADER, String(skippedEntries));
     let bytes: number;
     if (prepared) {
       bytes = prepared.buffer.length;

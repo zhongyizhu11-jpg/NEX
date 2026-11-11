@@ -416,10 +416,19 @@ function goldenRequests(): GoldenRequest[] {
   }
   requests.push({ label: "alias/mihomo", path: `/s/${ALIAS}?rules=1`, userAgent: DETECTED_CLIENTS.mihomo });
   requests.push({ label: "query/emoji-region", path: `/api/sub/${TOKENS.default}/clash?rules=1&emoji=1&sort=region&include=${encodeURIComponent("香港|日本")}`, userAgent: DETECTED_CLIENTS.mihomo });
+  // 按 IPv4 / IPv6 输出：落地机约三成有 IPv6、中转机都没有，v6 只剩有 IPv6 的落地直连。
+  requests.push({ label: "query/ipv6-clash", path: `/api/sub/${TOKENS.default}/clash?rules=1&ipVersion=6`, userAgent: DETECTED_CLIENTS.mihomo });
+  requests.push({ label: "query/ipv6-base64", path: `/api/sub/${TOKENS.default}/base64?ipVersion=6`, userAgent: FORMAT_CLIENT.base64 });
+  requests.push({ label: "query/ipv6-quantumultx", path: `/api/sub/${TOKENS.default}/quantumultx?ipVersion=6`, userAgent: FORMAT_CLIENT.quantumultx });
+  requests.push({ label: "query/ipv6-singbox", path: `/api/sub/${TOKENS.default}/singbox?ipVersion=6`, userAgent: FORMAT_CLIENT.singbox });
+  requests.push({ label: "query/ipv4-surge", path: `/api/sub/${TOKENS.default}/surge?rules=1&ipVersion=4`, userAgent: FORMAT_CLIENT.surge });
+  // 「信息节点」那条令牌排除了直连，中转机又都没有 IPv6：一个不剩 → 422。写错参数 → 400。
+  requests.push({ label: "query/ipv6-none", path: `/api/sub/${TOKENS.info}/clash?ipVersion=6`, userAgent: DETECTED_CLIENTS.mihomo });
+  requests.push({ label: "query/ipversion-invalid", path: `/api/sub/${TOKENS.default}/clash?ipVersion=5`, userAgent: DETECTED_CLIENTS.mihomo });
   return requests;
 }
 
-type Fetched = { status: number; body: Buffer; type: string; etag: string; encoding: string };
+type Fetched = { status: number; body: Buffer; type: string; etag: string; encoding: string; skipped: string };
 
 async function get(port: number, path: string, userAgent: string, acceptEncoding = ""): Promise<Fetched> {
   return new Promise((resolve, reject) => {
@@ -437,6 +446,7 @@ async function get(port: number, path: string, userAgent: string, acceptEncoding
           type: String(res.headers["content-type"] || ""),
           etag: String(res.headers.etag || ""),
           encoding,
+          skipped: String(res.headers["x-forwardx-skipped-entries"] ?? ""),
         });
       });
     });
@@ -452,15 +462,16 @@ if (mode === "golden") {
   const counts = await runtime.withDatabaseTransaction(() => seed(SCALES.golden));
   const { server, port } = await startServer();
   const sha = (body: Buffer) => createHash("sha256").update(body).digest("hex");
-  const same = (a: Fetched, b: Fetched) => a.status === b.status && sha(a.body) === sha(b.body) && a.type === b.type && a.etag === b.etag;
+  const same = (a: Fetched, b: Fetched) => a.status === b.status && sha(a.body) === sha(b.body) && a.type === b.type && a.etag === b.etag && a.skipped === b.skipped;
   const cold = new Map<string, Fetched>();
   for (const request of goldenRequests()) {
     const plain = await get(port, request.path, request.userAgent);
     cold.set(request.label, plain);
     // 同一条再带 gzip 拉一次：解压后必须和不压的逐字节一样，头也一样。
     const gzipped = await get(port, request.path, request.userAgent, "gzip");
-    const gzipSame = gzipped.encoding === "gzip" && same(gzipped, plain);
-    process.stdout.write(`${JSON.stringify({ label: request.label, status: plain.status, bytes: plain.body.length, sha256: sha(plain.body), type: plain.type, etag: plain.etag, gzipSame })}\n`);
+    // 小于压缩门槛（422 / 400 那几句话）的本来就不压：那几条要的是「不压、其余一样」。
+    const gzipSame = (plain.body.length < 1024 ? gzipped.encoding === "" : gzipped.encoding === "gzip") && same(gzipped, plain);
+    process.stdout.write(`${JSON.stringify({ label: request.label, status: plain.status, bytes: plain.body.length, sha256: sha(plain.body), type: plain.type, etag: plain.etag, gzipSame, skipped: plain.skipped })}\n`);
   }
   // 再开着缓存把整张表拉一遍（第一次填缓存、之后命中）：不压、gzip、br、deflate 解开都得和冷的一模一样。
   const { saveProxySubSettings } = await import("./proxySubSettings");

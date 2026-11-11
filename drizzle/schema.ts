@@ -989,6 +989,10 @@ export const proxySubTemplates = table("proxy_sub_templates", {
   target: varchar("target", { length: 16 }).notNull(),
   prelude: text("prelude").notNull().default(""),
   customGroupsJson: text("customGroupsJson"),
+  /** 模板里的分流规则文本（shared/proxySubCustomRules.ts 的写法）。 */
+  customRules: text("customRules"),
+  /** 模块 / 插件引用（JSON 数组），目前只有 Loon 模板用，见 shared/proxySubModules.ts。 */
+  modulesJson: text("modulesJson"),
   isDefault: boolean("isDefault").notNull().default(false),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),

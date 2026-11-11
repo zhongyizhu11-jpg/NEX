@@ -368,11 +368,14 @@ export function buildProxySubscriptionUrl(options: {
   pinFormat?: boolean;
   /** 给了就拼成短链 /s/<别名>（内容和 /api/sub/<令牌> 一样），不给就用令牌。 */
   alias?: string;
+  /** 只要 IPv4 / 只要 IPv6（shared/proxySubIpVersion.ts）。不给 = 照旧按域名 / 首选地址。 */
+  ipVersion?: "4" | "6" | null;
 }): string {
   const params = new URLSearchParams();
   if (options.format !== "base64" || options.pinFormat) params.set("format", options.format);
   // rules=1 表示按订阅链接上配置的预设来，具体档位不暴露在地址里。
   if (options.kind === "rules") params.set("rules", "1");
+  if (options.ipVersion === "4" || options.ipVersion === "6") params.set("ipVersion", options.ipVersion);
   const query = params.toString();
   const path = options.alias ? `/s/${options.alias}` : `/api/sub/${options.token}`;
   return `${options.origin.replace(/\/+$/, "")}${path}${query ? `?${query}` : ""}`;

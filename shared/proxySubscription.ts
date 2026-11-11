@@ -45,6 +45,8 @@ import {
   type ProxyClientCapability,
 } from "./proxyClientUserAgent";
 import { renderV2rayJsonSubscription } from "./proxySubscriptionV2rayJson";
+import { formatHostAddressWithPort } from "./hostEntryAddress";
+import { loonPluginSection, type ProxySubTemplateModule } from "./proxySubModules";
 
 export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "v2rayjson", "loon", "surge", "quantumultx", "shadowrocket"] as const;
 
@@ -578,7 +580,8 @@ function singboxGroupOutbound(group: ProxySubscriptionGroup): Record<string, unk
   return {
     type: "urltest",
     tag: group.name,
-    outbounds: [...group.members],
+    // 模板里的自定义组可以把 DIRECT 列成成员，和上面 selector 一样换成 direct 出站。
+    outbounds: group.members.map((member) => (member === PROXY_RULE_TARGET_DIRECT ? "direct" : member)),
     url: currentSettings.testUrl,
     interval: `${currentSettings.testIntervalSec}s`,
     ...(group.type === "fallback" ? {} : { tolerance: currentSettings.toleranceMs }),
@@ -1067,7 +1070,8 @@ function renderSurge(nodes: readonly ProxyNode[], notices: readonly string[]): s
  */
 function quantumultxNodeLine(node: ProxyNode): string {
   const parts: string[] = [];
-  const target = `${node.address}:${node.port}`;
+  // QX 写的是「地址:端口」：IPv6 字面量要加方括号，不然它把最后一段当端口、前面当地址。
+  const target = formatHostAddressWithPort(node.address, node.port);
 
   if (node.protocol === "vless") {
     // VLESS 本身不加密，QX 要求 method 固定填 none。
@@ -1209,7 +1213,7 @@ function iosProfileRules(
   return out;
 }
 
-function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, profileUrl: string, shadowrocketClient = false, prelude = ""): string {
+function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, profileUrl: string, shadowrocketClient = false, prelude = "", modules: readonly ProxySubTemplateModule[] = []): string {
   /**
    * 名字统一收拾一次再渲染：节点行、组行、规则行都按名字引用，三处必须一字不差。
    * Loon / QX / Shadowrocket 没有前置代理的位置，节点名上要带「需手动接」的标记
@@ -1236,7 +1240,8 @@ function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, 
   // 模板的 [General] 段：有就整段替换内置的那几行（模板文本自带 [General] 这一行）。
   const general = prelude.trim() ? prelude.trim().split("\n").map((line) => line.replace(/\s+$/, "")) : null;
   if (format === "surge") return renderSurgeProfile(nodes, groups, rules, header, profileUrl, asShadowrocket, general);
-  if (format === "loon") return renderLoonProfile(nodes, groups, rules, header, asShadowrocket, general);
+  // Shadowrocket 读 Loon 配置时不认 [Plugin]（它的模块是另一套），这时不写。
+  if (format === "loon") return renderLoonProfile(nodes, groups, rules, header, asShadowrocket, general, asShadowrocket ? [] : modules);
   if (format === "quantumultx") return renderQuantumultXProfile(nodes, groups, rules, header, general);
   return renderShadowrocketProfile(groups, rules, header, profileUrl, general);
 }
@@ -1301,6 +1306,7 @@ function renderLoonProfile(
   header: readonly string[],
   shadowrocketClient = false,
   general: readonly string[] | null = null,
+  modules: readonly ProxySubTemplateModule[] = [],
 ): string {
   const lines: string[] = [...header];
   if (general) lines.push(...general);
@@ -1340,6 +1346,8 @@ function renderLoonProfile(
     // 按官方 example.conf 的写法；tag 这个键官方没写，不加。
     if (rule.kind === "list") lines.push(`${rule.url},policy=${rule.target},enabled=true`);
   }
+  // 模板里挂的插件（shared/proxySubModules.ts）；没有就不出这一段，输出和原来一字不差。
+  lines.push(...loonPluginSection(modules));
   return `${lines.join("\n")}\n`;
 }
 
@@ -1462,6 +1470,13 @@ export type RenderProxySubscriptionOptions = {
   infoNodes?: readonly ProxyNode[];
   /** 认出来的客户端：按家族和版本再挡一层节点（REALITY / Hy2 / XHTTP……）。 */
   client?: DetectedProxyClient;
+  /**
+   * 渲染之前就被跳过的节点要说的话（已带 `#`），比如按 IPv6 输出时没有 IPv6 的那几条。
+   * 只有能写注释的格式（Clash、Surge、Loon、QX、Shadowrocket 的配置）写，JSON / base64 不写。
+   */
+  extraNotices?: readonly string[];
+  /** 模板里挂的模块 / 插件。目前只有 Loon 的完整配置写成 [Plugin]，别的格式忽略。 */
+  modules?: readonly ProxySubTemplateModule[];
 };
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u2028\u2029]/g;
@@ -1522,7 +1537,9 @@ export function renderProxySubscription(
   // 信息节点在最前：客户端列表第一眼就是「剩余 x GB」。它们不进组，所以不参与去重和引用检查。
   const infoNodes = sanitizeDocumentForTextFormats({ nodes: [...(options.infoNodes || [])], groups: [], ruleSets: [], rules: [] }).nodes;
   const nodes = infoNodes.length > 0 ? [...infoNodes, ...filtered.nodes] : filtered.nodes;
-  const { groups, ruleSets, rules, notices } = filtered;
+  const { groups, ruleSets, rules } = filtered;
+  const extraNotices = format === "singbox" || format === "base64" || format === "v2rayjson" ? [] : [...(options.extraNotices || [])];
+  const notices = extraNotices.length > 0 ? [...extraNotices, ...filtered.notices] : filtered.notices;
   const prelude = String(options.prelude || "");
   if (format === "clash") return renderClash(nodes, groups, ruleSets, rules, notices, !!options.weightedLoadBalance, prelude, document.providers || []);
   if (format === "singbox") return renderSingbox(nodes, groups, ruleSets, rules, prelude);
@@ -1530,7 +1547,7 @@ export function renderProxySubscription(
     return renderV2rayJsonSubscription(nodes, rules, { testUrl: currentSettings.testUrl }, new Map(ruleSets.map((ref) => [ref.name, { geoKey: ref.geoKey, behavior: ref.behavior }])));
   }
   if (options.profile && proxySubscriptionFormatHasProfile(format)) {
-    return renderIosProfile({ ...filtered, nodes }, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient, prelude);
+    return renderIosProfile({ ...filtered, nodes, notices }, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient, prelude, options.modules || []);
   }
   if (format === "loon") return renderLoon(nodes, notices);
   if (format === "surge") return renderSurge(nodes, notices);
