@@ -21,6 +21,9 @@
  *   - v2rayN / v2rayNG 默认是 Xray 内核：VLESS / REALITY / Vision / SS2022 / HTTPUpgrade 都有。
  *   - Hiddify、NekoBox / NekoRay 用 sing-box 内核，能力跟 sing-box 走，但 Snell 没有分享链接，
  *     通用订阅装不下。
+ *   - Mieru：mihomo 1.19 起有 type: mieru（只有 TCP 承载）；sing-box、Xray 内核都没有，原版 Clash、
+ *     Stash 的协议表里也没有。NekoBox / Karing 靠插件或自带内核可能能连，但它们吃的是 base64 /
+ *     sing-box 订阅，那两种格式装不下 Mieru，结论一样是「订阅里不会出现」。
  */
 
 import { PROXY_CLIENT_TARGETS } from "./proxyClientImport";
@@ -79,12 +82,14 @@ const ALL_PROTOCOLS_YES: Record<ProxyInboundProtocol, Fact> = {
   snell: Y,
   // SOCKS5 各家客户端都有，是最老的那一档。
   socks5: Y,
+  // Mieru 只有 mihomo 系认，其余各家在下面逐个写成 N / U。
+  mieru: Y,
 };
 
 /** sing-box 内核、但走通用 Base64 订阅的客户端（Hiddify / NekoBox）。 */
 const SINGBOX_CORE_VIA_LINKS: ClientFacts = {
   // AnyTLS 进 sing-box 是 1.12，这些 GUI 跟进内核的节奏不一，没核实。
-  protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: N },
+  protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: N, mieru: U },
   reality: Y,
   vision: Y,
   ss2022: Y,
@@ -94,7 +99,7 @@ const SINGBOX_CORE_VIA_LINKS: ClientFacts = {
 
 /** Xray 内核、走通用 Base64 / Xray JSON 订阅的客户端（Happ / v2RayTun / Streisand）。 */
 const XRAY_CORE_VIA_LINKS: ClientFacts = {
-  protocols: { ...ALL_PROTOCOLS_YES, hysteria2: U, tuic: U, anytls: U, snell: N },
+  protocols: { ...ALL_PROTOCOLS_YES, hysteria2: U, tuic: U, anytls: U, snell: N, mieru: N },
   reality: Y,
   vision: Y,
   ss2022: Y,
@@ -127,7 +132,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     importTargets: [],
     facts: {
       // TUIC：Premium 内核晚期的版本说法不一，没核实。
-      protocols: { ...ALL_PROTOCOLS_YES, vless: N, hysteria2: N, tuic: U, anytls: N },
+      protocols: { ...ALL_PROTOCOLS_YES, vless: N, hysteria2: N, tuic: U, anytls: N, mieru: N },
       reality: N,
       vision: N,
       ss2022: N,
@@ -141,7 +146,8 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "clash",
     importTargets: ["stash"],
     facts: {
-      protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: U },
+      // Mieru：协议表里没有；面板也不给 Stash 发（shared/proxyClientUserAgent.ts 的 FAMILY_UNSUPPORTED）。
+      protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: U, mieru: N },
       reality: U,
       vision: U,
       ss2022: U,
@@ -155,7 +161,8 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "singbox",
     importTargets: ["singbox"],
     facts: {
-      protocols: ALL_PROTOCOLS_YES,
+      // sing-box 没有 Mieru。
+      protocols: { ...ALL_PROTOCOLS_YES, mieru: N },
       reality: Y,
       vision: Y,
       ss2022: Y,
@@ -171,7 +178,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     importTargets: ["shadowrocket"],
     facts: {
       // Snell 没有分享链接，节点订阅（Base64）装不下。
-      protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: N },
+      protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: N, mieru: U },
       reality: Y,
       vision: Y,
       ss2022: Y,
@@ -185,7 +192,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "quantumultx",
     importTargets: ["quantumultx"],
     facts: {
-      protocols: { ...ALL_PROTOCOLS_YES, hysteria2: N, tuic: N, anytls: N, snell: N },
+      protocols: { ...ALL_PROTOCOLS_YES, hysteria2: N, tuic: N, anytls: N, snell: N, mieru: N },
       reality: N,
       vision: U,
       ss2022: U,
@@ -199,7 +206,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "surge",
     importTargets: ["surge"],
     facts: {
-      protocols: { ...ALL_PROTOCOLS_YES, vless: N },
+      protocols: { ...ALL_PROTOCOLS_YES, vless: N, mieru: N },
       reality: N,
       vision: N,
       ss2022: Y,
@@ -214,7 +221,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     importTargets: ["surfboard"],
     facts: {
       // 读 Surge 的格式，但协议跟进得比 Surge 慢，新协议都没核实。
-      protocols: { ...ALL_PROTOCOLS_YES, vless: N, hysteria2: U, tuic: U, anytls: U, snell: U },
+      protocols: { ...ALL_PROTOCOLS_YES, vless: N, hysteria2: U, tuic: U, anytls: U, snell: U, mieru: N },
       reality: N,
       vision: N,
       ss2022: U,
@@ -228,7 +235,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "loon",
     importTargets: ["loon"],
     facts: {
-      protocols: { ...ALL_PROTOCOLS_YES, tuic: N, snell: N },
+      protocols: { ...ALL_PROTOCOLS_YES, tuic: N, snell: N, mieru: N },
       reality: Y,
       vision: U,
       ss2022: U,
@@ -250,7 +257,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     importTargets: ["v2rayn", "v2rayng"],
     facts: {
       // Hysteria2 / TUIC / AnyTLS 在这两个客户端里靠另挂内核，各版本差别大，没核实。
-      protocols: { ...ALL_PROTOCOLS_YES, hysteria2: U, tuic: U, anytls: U, snell: N },
+      protocols: { ...ALL_PROTOCOLS_YES, hysteria2: U, tuic: U, anytls: U, snell: N, mieru: N },
       reality: Y,
       vision: Y,
       ss2022: Y,
@@ -271,7 +278,7 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "singbox",
     importTargets: ["karing"],
     // sing-box 内核，吃 sing-box 配置；AnyTLS 跟内核版本走，没核实。
-    facts: { ...SINGBOX_CORE_VIA_LINKS, protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: U }, snellVersions: null, transports: { tcp: Y, ws: Y, grpc: Y, http: Y, httpupgrade: Y } },
+    facts: { ...SINGBOX_CORE_VIA_LINKS, protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: U, mieru: U }, snellVersions: null, transports: { tcp: Y, ws: Y, grpc: Y, http: Y, httpupgrade: Y } },
   },
   {
     id: "happ",
@@ -306,6 +313,8 @@ export type CompatInboundInput = {
   method?: unknown;
   snellVersion?: unknown;
   obfs?: unknown;
+  /** Mieru 的承载：只开 UDP 的 mihomo 也用不了。 */
+  mieruTransport?: unknown;
 };
 
 export type ProxyClientCompatResult = {
@@ -394,6 +403,7 @@ function judge(family: ProxyClientFamily, inbound: CompatInboundInput): Omit<Pro
   node.realityPublicKey = security === "reality" ? "reality" : "";
   node.snellVersion = Number(inbound.snellVersion) || 0;
   node.obfs = str(inbound.obfs);
+  node.mieruTransport = str(inbound.mieruTransport);
   const formatReason = proxyNodeUnsupportedReasonForFormat(node, family.format);
   if (formatReason) return { ok: false, why: `订阅里不会出现：${formatReason}` };
 

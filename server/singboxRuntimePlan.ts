@@ -228,7 +228,8 @@ export function buildSingboxRuntimePlan(options: {
   accelerator?: GithubAcceleratorConfig | null;
   panelRelayBase?: string;
 }): SingboxRuntimePlan {
-  const entries = options.inbounds.filter((entry) => entry && entry.inbound && !invalidSingboxInboundReason(entry));
+  // Mieru 入站由 mita 承担（server/ops/mitaAgent.ts），不进 sing-box；一台机器上只剩 Mieru 时 sing-box 走收尾。
+  const entries = options.inbounds.filter((entry) => entry && entry.inbound && entry.inbound.protocol !== "mieru" && !invalidSingboxInboundReason(entry));
   if (entries.length === 0) return buildSingboxRetirementPlan();
 
   const config = buildSingboxConfig(entries);

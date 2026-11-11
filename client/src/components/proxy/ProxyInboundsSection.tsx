@@ -36,6 +36,8 @@ import {
   type ProxyInboundSecurity,
 } from "@shared/proxyInbound";
 import { PROXY_NODE_PROTOCOL_LABELS, type ProxyNodeProtocol, type ProxyNodeTransport } from "@shared/proxyNode";
+import { MIERU_PORT_RANGE_MAX_PORTS, MIERU_TRANSPORT_LABELS, MIERU_TRANSPORTS, normalizeMieruTransport, type MieruTransport } from "@shared/mieruInbound";
+import { formatBytes } from "@shared/formatBytes";
 import { groupProxyNodes, resolveProxyNodeGroupMode, type ProxyNodeGroupMode } from "@shared/proxyNodeGrouping";
 import {
   ChevronDown,
@@ -111,6 +113,9 @@ type InboundForm = {
   snellVersion: number;
   /** Shadowsocks 的加密方式。其他协议用不到，留着也不会下发。 */
   method: string;
+  /** Mieru 的承载（TCP / UDP / 两个都开）和端口段终点（空串 = 只开一个端口）。别的协议不下发。 */
+  mieruTransport: MieruTransport;
+  portRangeEnd: string;
   /**
    * 这个端口自己的额度与用量（GB / Mbps，空串 = 没填）。
    *
@@ -125,7 +130,7 @@ type InboundForm = {
   isEnabled: boolean;
   /** 只有 id 与名字：凭据一律服务端生成，前端拿不到也不该传。 */
   /** sharedUserId > 0 = 分享时自动发的凭据，界面上只读：它的生死跟着分享走。 */
-  users: Array<{ id: number; name: string; sharedUserId?: number }>;
+  users: Array<{ id: number; name: string; sharedUserId?: number; trafficUsed?: number }>;
   /** 分流（按服务 / 域名从别的落地出去）。空 = 全部直连。 */
   routes: InboundRouteForm[];
 };
@@ -155,6 +160,8 @@ function emptyForm(): InboundForm {
     downMbps: "",
     snellVersion: PROXY_INBOUND_SNELL_VERSIONS[0],
     method: PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD,
+    mieruTransport: "TCP",
+    portRangeEnd: "",
     bandwidthMbps: "",
     trafficLimitGb: "",
     trafficUsedGb: "",
@@ -513,6 +520,8 @@ export default function ProxyInboundsSection({
       downMbps: Number(row.downMbps || 0) > 0 ? String(row.downMbps) : "",
       snellVersion: Number(row.snellVersion || PROXY_INBOUND_SNELL_VERSIONS[0]),
       method: String(row.method || PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD),
+      mieruTransport: normalizeMieruTransport(row.mieruTransport),
+      portRangeEnd: Number(row.portRangeEnd || 0) > Number(row.port || 0) ? String(row.portRangeEnd) : "",
       bandwidthMbps: Number(row.bandwidthMbps || 0) > 0 ? String(row.bandwidthMbps) : "",
       trafficLimitGb: gbFromBytes(row.trafficLimit),
       trafficUsedGb: gbFromBytes(row.trafficUsed),
@@ -524,6 +533,7 @@ export default function ProxyInboundsSection({
           id: Number(user.id) || 0,
           name: String(user.name || ""),
           sharedUserId: Number(user.sharedUserId || 0),
+          trafficUsed: Number(user.trafficUsed || 0),
         }))
         : [{ id: 0, name: "默认" }],
       routes: inboundRoutesToForm(row.routing),
@@ -559,6 +569,9 @@ export default function ProxyInboundsSection({
       downMbps: positiveIntFromInput(form.downMbps),
       snellVersion: form.snellVersion,
       method: form.method,
+      // 端口段和承载只有 Mieru 用；别的协议发 0，服务端也会清掉。
+      ...(form.protocol === "mieru" ? { mieruTransport: form.mieruTransport } : {}),
+      portRangeEnd: form.protocol === "mieru" ? positiveIntFromInput(form.portRangeEnd) : 0,
       bandwidthMbps: positiveIntFromInput(form.bandwidthMbps),
       trafficLimit: bytesFromGb(form.trafficLimitGb),
       trafficUsed: bytesFromGb(form.trafficUsedGb),
@@ -566,7 +579,7 @@ export default function ProxyInboundsSection({
       trafficResetDay: Math.min(MONTHLY_RESET_MAX_DAY, Math.max(1, positiveIntFromInput(form.trafficResetDay) || 1)),
       isEnabled: form.isEnabled,
       users: form.users.map((user, index) => ({ id: user.id, name: user.name.trim() || `凭据 ${index + 1}` })),
-      routing: inboundRoutesFromForm(form.routes),
+      routing: form.protocol === "mieru" ? null : inboundRoutesFromForm(form.routes),
     };
     if (form.id > 0) updateInbound.mutate({ id: form.id, ...payload });
     else createInbound.mutate(payload);
@@ -622,7 +635,12 @@ export default function ProxyInboundsSection({
       "自建",
       // 备注排在地址前面：一排端口里，认出「哪个是给谁的」比看地址更常用。
       String(row.remark || "").trim(),
-      `${hostName(Number(row.hostId))}:${row.port}`,
+      `${hostName(Number(row.hostId))}:${row.port}${Number(row.portRangeEnd || 0) > Number(row.port || 0) ? `-${row.portRangeEnd}` : ""}`,
+      row.protocol === "mieru" ? MIERU_TRANSPORT_LABELS[normalizeMieruTransport(row.mieruTransport)] : "",
+      // Mieru 由 mita 承担：Agent 太旧（「需要升级 Agent」）、没下发、端口没听上，都在行上直接说。
+      row.mieruStatus && row.mieruStatus.state !== "ready" && row.mieruStatus.state !== "disabled"
+        ? (row.mieruStatus.state === "upgrade" ? "需要升级 Agent" : String(row.mieruStatus.message || ""))
+        : "",
       row.security !== "none"
         ? PROXY_INBOUND_SECURITY_LABELS[row.security as ProxyInboundSecurity] || row.security
         : "",
@@ -1059,6 +1077,35 @@ export default function ProxyInboundsSection({
                   )}
                 </FormField>
               ) : null}
+              {form.protocol === "mieru" ? (
+                <>
+                  <FormField className="min-w-0 space-y-1.5">
+                    <Label className="text-xs">承载</Label>
+                    <Select value={form.mieruTransport} onValueChange={(value) => setForm((prev) => ({ ...prev, mieruTransport: value as MieruTransport }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {MIERU_TRANSPORTS.map((item) => (
+                          <SelectItem key={item} value={item}>{MIERU_TRANSPORT_LABELS[item]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField className="min-w-0 space-y-1.5">
+                    <Label className="text-xs">端口段终点（可选）</Label>
+                    <Input
+                      type="number"
+                      value={form.portRangeEnd}
+                      onChange={(event) => setForm((prev) => ({ ...prev, portRangeEnd: event.target.value }))}
+                      placeholder="留空 = 只开一个端口"
+                    />
+                  </FormField>
+                  <p data-fx-help="" className="text-xs text-muted-foreground sm:col-span-2">
+                    Mieru 由 mita 承担（不是 sing-box），需要 Agent 2.2.253 以上；Agent 太旧时节点照常保存，但不会下发。
+                    端口段最多 {MIERU_PORT_RANGE_MAX_PORTS} 个端口，客户端每条连接随便挑一个；经中转时只用起点那一个。
+                    订阅里只有 Clash Verge / mihomo 能用（只走 TCP 那份），其他客户端用「复制链接」里的 mierus:// 链接导入 Mieru 官方客户端。
+                  </p>
+                </>
+              ) : null}
               {form.protocol === "snell" ? (
                 <FormField className="min-w-0 space-y-1.5">
                   <Label className="text-xs">Snell 版本</Label>
@@ -1282,6 +1329,12 @@ export default function ProxyInboundsSection({
                         className={`h-8 text-xs ${fromShare ? "text-muted-foreground" : ""}`}
                         title={fromShare ? "分享给这个用户时自动发的凭据，改名或删除都请去分享那边操作" : undefined}
                       />
+                      {form.protocol === "mieru" && user.id > 0 ? (
+                        // Mieru 按用户计数（mita 自己记的），这一份凭据跑了多少能单独看。
+                        <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground" title="这一份凭据自己的用量">
+                          {formatBytes(Number(user.trafficUsed || 0))}
+                        </span>
+                      ) : null}
                       {fromShare ? (
                         <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">分享发出</span>
                       ) : (
@@ -1304,7 +1357,10 @@ export default function ProxyInboundsSection({
                   同一个端口、同一份配置，只是凭据不同：一份凭据在订阅里是一条单独的节点，名字叫「入站名 · 这里填的标签」。
                   删掉一份，只有拿那份的人连不上，别人照常。
                   <br />
-                  这里的标签只是给你自己认人用的，跟上面的「归属用户」和面板账号没有绑定；流量按端口统计，分不到每一份头上。
+                  这里的标签只是给你自己认人用的，跟上面的「归属用户」和面板账号没有绑定；
+                  {form.protocol === "mieru"
+                    ? "Mieru 的流量按每一份凭据单独统计（mita 自己计数），合计扣这个端口归属用户的套餐。"
+                    : "流量按端口统计，分不到每一份头上。"}
                 </p>
               </div>
             ) : (
@@ -1410,12 +1466,15 @@ export default function ProxyInboundsSection({
               </div>
             </div>
 
-            <InboundRoutingEditor
-              routes={form.routes}
-              onChange={(routes) => setForm((prev) => ({ ...prev, routes }))}
-              hostId={form.hostId}
-              status={editingRoutingStatus}
-            />
+            {/* 分流是 sing-box 的路由做的，Mieru 由 mita 承担，没有这一层。 */}
+            {form.protocol !== "mieru" ? (
+              <InboundRoutingEditor
+                routes={form.routes}
+                onChange={(routes) => setForm((prev) => ({ ...prev, routes }))}
+                hostId={form.hostId}
+                status={editingRoutingStatus}
+              />
+            ) : null}
 
             <div className="flex items-center justify-between rounded-md border p-3">
               <div className="min-w-0">

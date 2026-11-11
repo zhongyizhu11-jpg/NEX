@@ -5,6 +5,7 @@ import fsp from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { AGENT_VERSION, APP_VERSION } from "../shared/versions";
+import { MITA_AGENT_ASSET_NAMES } from "../shared/mitaAssets";
 import { setBoundedMapValue } from "./boundedCache";
 
 const REPO_URL = "https://github.com/zhongyizhu11-jpg/NEX";
@@ -44,7 +45,15 @@ export const AGENT_ASSET_NAMES = [
   "forwardx-runtime-linux-arm64",
 ] as const;
 
-export const AGENT_ASSET_NAME_SET = new Set<string>(AGENT_ASSET_NAMES);
+/*
+  mita（Mieru 服务端）也随 Agent 发布包一起发、走同一个 /api/agent/assets 转发、同一份 SHA256SUMS。
+  但不进 AGENT_ASSET_NAMES：那张表是「升级 Agent 前发布页上必须齐」的清单（hosts.ts 的
+  assertAgentReleaseAssetsReady、装机脚本的校验和），mita 只在开了 Mieru 落地的机器上按需取，
+  缺了它不该挡住所有人升级。Agent 装之前按 shared/mitaAssets.ts 钉死的哈希再校验一遍。
+*/
+export const AGENT_RELAY_ONLY_ASSET_NAMES: readonly string[] = MITA_AGENT_ASSET_NAMES;
+
+export const AGENT_ASSET_NAME_SET = new Set<string>([...AGENT_ASSET_NAMES, ...AGENT_RELAY_ONLY_ASSET_NAMES]);
 
 const serverDir = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 

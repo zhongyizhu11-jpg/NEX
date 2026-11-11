@@ -652,6 +652,10 @@ export const proxyNodes = table("proxy_nodes", {
   snellMode: text("snellMode"),
   // XHTTP 传输的 mode：auto | stream-one | stream-up | packet-up
   xhttpMode: text("xhttpMode"),
+  // socks5 / mieru 的用户名。Mieru 的端口段终点（0 = 单端口）与承载（TCP | UDP | BOTH）。
+  username: text("username"),
+  portRangeEnd: int("portRangeEnd").notNull().default(0),
+  mieruTransport: varchar("mieruTransport", { length: 8 }),
   // 多台中转指向同一落地节点时，订阅里额外生成的选路组类型：off | url-test | fallback | load-balance（负载均衡）
   autoGroup: varchar("autoGroup", { length: 16 }).notNull().default("url-test"),
   // 把落地机自己的地址也作为一个节点放进订阅。默认关：开了之后落地 IP 会出现在
@@ -714,7 +718,7 @@ export const proxyInbounds = table("proxy_inbounds", {
   remark: text("remark"),
   /** 对外标注：分享出去时对方看得到的那一句，会带到派生节点上。见 proxy_nodes.publicLabel。 */
   publicLabel: text("publicLabel"),
-  // vless | vmess | trojan | shadowsocks | hysteria2 | tuic | anytls | snell
+  // vless | vmess | trojan | shadowsocks | hysteria2 | tuic | anytls | snell | socks5 | mieru
   protocol: varchar("protocol", { length: 32 }).notNull().default("vless"),
   port: int("port").notNull(),
   transport: varchar("transport", { length: 16 }).notNull().default("tcp"), // tcp | ws | grpc | http
@@ -744,6 +748,9 @@ export const proxyInbounds = table("proxy_inbounds", {
   congestionControl: text("congestionControl"),
   snellVersion: int("snellVersion").notNull().default(0),
   snellMode: text("snellMode"),
+  /** Mieru（mita，shared/mieruInbound.ts）：端口段终点（0 = 单端口）与承载（TCP | UDP | BOTH）。 */
+  portRangeEnd: int("portRangeEnd").notNull().default(0),
+  mieruTransport: varchar("mieruTransport", { length: 8 }),
   /**
    * 这个入站是从哪个入站克隆出来的（0 = 人手建的）。
    *
@@ -823,6 +830,14 @@ export const proxyInboundUsers = table("proxy_inbound_users", {
    */
   sharedUserId: int("sharedUserId").notNull().default(0),
   sortOrder: int("sortOrder").notNull().default(0),
+  /**
+   * 这一份凭据自己跑了多少字节。只有 Mieru 有（mita 按用户计数，server/mitaTraffic.ts）；
+   * mitaCounter* 是上次见到的 mita 累计值和它属于哪个 mita 进程，用来算增量。
+   */
+  trafficUsed: bigint("trafficUsed", { mode: "number" }).notNull().default(0),
+  mitaCounterKey: text("mitaCounterKey"),
+  mitaCounterUp: bigint("mitaCounterUp", { mode: "number" }).notNull().default(0),
+  mitaCounterDown: bigint("mitaCounterDown", { mode: "number" }).notNull().default(0),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

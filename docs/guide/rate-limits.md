@@ -57,4 +57,13 @@
 
 「客户端订阅 → 添加节点」也能直接粘贴 `socks://` 或 `socks5://` 链接。
 
+## Mieru 落地
+
+「落地节点」可以选 Mieru（需要 Agent 2.2.253）。sing-box 没有 Mieru 服务端，所以它由单独的 mita 承担（每台机器一个 `forwardx-mita` 服务，版本和哈希由面板钉死）：
+
+- 承载可选 TCP、UDP 或两个都开，端口可以是一段（最多 100 个）；凭据一人一份，用户名、密码由面板生成。
+- 流量按凭据统计（mita 自己按用户计数），合计扣这个端口归属用户的套餐、记进端口用量；**上面那几级转发限速管不到落地本身**：mita 不经过 NEX 的转发器。要限速就经中转走，在中转那一跳的转发上限。
+- 订阅里只有 Clash Verge / mihomo（1.19 起）能用，而且只走 TCP 那份；sing-box、v2rayN、Shadowrocket、Surge、Loon、Quantumult X 都没有 Mieru，订阅里会跳过并写明原因（见[客户端订阅](./subscriptions.md#mieru)）。别的客户端可以用「复制链接」里的 `mierus://` 链接导入 Mieru 官方客户端。
+- Agent 低于 2.2.253 时节点照常保存，但不下发，行上显示「需要升级 Agent」。
+
 Juicity、SSH 入站目前不支持：落地节点的运行时 sing-box 没有这两种入站。

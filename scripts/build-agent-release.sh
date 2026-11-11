@@ -125,6 +125,68 @@ else
   download_gost_runtime arm64 forwardx-runtime-linux-arm64
 fi
 
+# mita（Mieru 的服务端，GPLv3，作为独立程序随发布包分发，不链接）：从上游发布页下官方静态构建，
+# 发布包和包里二进制的 SHA-256 都按 shared/mitaAssets.ts 钉死的值校验，对不上就整个构建失败 ——
+# 面板会把它转发给落地机以 root 跑，宁可这一版发不出去，也不能带上一个没核对过的程序。
+MITA_ASSETS_FILE="$ROOT_DIR/shared/mitaAssets.ts"
+MITA_VERSION="$(sed -nE 's/^export const MITA_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)";.*/\1/p' "$MITA_ASSETS_FILE" | head -n 1)"
+MITA_REPO="$(sed -nE 's/^export const MITA_RELEASE_REPO = "([^"]+)";.*/\1/p' "$MITA_ASSETS_FILE" | head -n 1)"
+if [ -z "$MITA_VERSION" ] || [ -z "$MITA_REPO" ]; then
+  echo "[mita] MITA_VERSION / MITA_RELEASE_REPO not found in shared/mitaAssets.ts" >&2
+  exit 1
+fi
+
+mita_pinned_sha256() {
+  # 取 "<版本>/<名字>": "<64 位十六进制>" 那一行的哈希。键里带 /，所以 sed 用 | 作分隔符。
+  local key="$1"
+  sed -nE "s|^[[:space:]]*\"${key//./\\.}\":[[:space:]]*\"([0-9a-f]{64})\".*|\1|p" "$MITA_ASSETS_FILE" | head -n 1
+}
+
+download_mita_runtime() {
+  local arch="$1"
+  local out="forwardx-mita-linux-${arch}"
+  local tarball="mita_${MITA_VERSION}_linux_${arch}.tar.gz"
+  local url="https://github.com/${MITA_REPO}/releases/download/v${MITA_VERSION}/${tarball}"
+  local want_tarball want_binary got tmp mita_bin
+  want_tarball="$(mita_pinned_sha256 "${MITA_VERSION}/${tarball}")"
+  want_binary="$(mita_pinned_sha256 "${MITA_VERSION}/${out}")"
+  if [ -z "$want_tarball" ] || [ -z "$want_binary" ]; then
+    echo "[mita] no pinned SHA-256 for ${tarball} / ${out} in shared/mitaAssets.ts" >&2
+    exit 1
+  fi
+  echo "[mita] downloading mita v${MITA_VERSION} linux/${arch} -> ${out}"
+  tmp="$(mktemp -d)"
+  rm -f "$OUT_DIR/$out"
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 -o "$tmp/$tarball" "$url"
+  got="$(sha256sum "$tmp/$tarball" | awk '{print $1}')"
+  if [ "$got" != "$want_tarball" ]; then
+    echo "[mita] ${tarball} SHA-256 mismatch: got ${got}, pinned ${want_tarball}" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  tar -xzf "$tmp/$tarball" -C "$tmp"
+  mita_bin="$(find "$tmp" -type f -name mita | head -n1)"
+  if [ -z "$mita_bin" ]; then
+    echo "[mita] mita binary not found in ${tarball}" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  got="$(sha256sum "$mita_bin" | awk '{print $1}')"
+  if [ "$got" != "$want_binary" ]; then
+    echo "[mita] extracted mita SHA-256 mismatch: got ${got}, pinned ${want_binary}" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  install -m 0755 "$mita_bin" "$OUT_DIR/$out"
+  rm -rf "$tmp"
+}
+
+# NEX_SKIP_MITA=1 只给离线开发用（不打 Mieru 的二进制）；正式发布不要设，面板会退回去从上游下。
+if [ "${NEX_SKIP_MITA:-0}" != "1" ]; then
+  download_mita_runtime amd64
+  download_mita_runtime arm64
+fi
+
 NOTICE_FILE="$ROOT_DIR/THIRD_PARTY_NOTICES.md"
 if [ ! -f "$NOTICE_FILE" ]; then
   echo "[agent] missing third-party notices: $NOTICE_FILE" >&2
@@ -138,6 +200,9 @@ if compgen -G "$OUT_DIR/forwardx-fxp-linux-*" >/dev/null; then
 fi
 if compgen -G "$OUT_DIR/forwardx-runtime-linux-*" >/dev/null; then
   artifacts+=("$OUT_DIR"/forwardx-runtime-linux-*)
+fi
+if compgen -G "$OUT_DIR/forwardx-mita-linux-*" >/dev/null; then
+  artifacts+=("$OUT_DIR"/forwardx-mita-linux-*)
 fi
 # 只写文件名：SHA256SUMS 是给装机脚本和面板按资产名查的，带上 CI 机器上的绝对路径就对不上了。
 (cd "$OUT_DIR" && sha256sum "${artifacts[@]##*/}") > "$OUT_DIR"/SHA256SUMS

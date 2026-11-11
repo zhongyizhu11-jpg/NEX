@@ -10,6 +10,9 @@
  * shadowsocks / hysteria2 / tuic / anytls / snell），出站也一样，一个二进制两头都够，
  * 不必像别家那样维护一个 Xray 分支去 cherry-pick 协议实现。
  *
+ * 例外是 Mieru：sing-box 没有 Mieru 服务端，这个协议由 mita 承担（规则在 shared/mieruInbound.ts，
+ * 下发走 Agent 的 mita 扩展模块）。它照样存在 proxy_inbounds、照样派生节点，只是不进 sing-box 配置。
+ *
  * 本文件保持纯计算：客户端也会 import 它，所以不能碰 node:crypto。Reality 密钥对
  * 由服务端生成（私钥绝不能经过浏览器），这里只接收结果。
  */
@@ -22,6 +25,7 @@ import {
   type ProxyNodeTransport,
 } from "./proxyNode";
 import { buildSingboxRouting, type ResolvedInboundRoute } from "./inboundRouting";
+import { normalizeMieruTransport, validateMieruInboundFields } from "./mieruInbound";
 
 /**
  * REALITY 要偷的默认握手域名。
@@ -31,7 +35,7 @@ import { buildSingboxRouting, type ResolvedInboundRoute } from "./inboundRouting
  */
 export const PROXY_INBOUND_DEFAULT_REALITY_SERVER_NAME = "dl.google.com";
 
-/** 能作为落地节点开出去的协议。与 PROXY_NODE_PROTOCOLS 一致，因为两头都由 sing-box 承担。 */
+/** 能作为落地节点开出去的协议。与 PROXY_NODE_PROTOCOLS 一致：除 Mieru（mita）外两头都由 sing-box 承担。 */
 export const PROXY_INBOUND_PROTOCOLS = [
   "vless",
   "vmess",
@@ -42,6 +46,7 @@ export const PROXY_INBOUND_PROTOCOLS = [
   "anytls",
   "snell",
   "socks5",
+  "mieru",
 ] as const;
 
 export type ProxyInboundProtocol = (typeof PROXY_INBOUND_PROTOCOLS)[number];
@@ -79,7 +84,8 @@ export const PROXY_INBOUND_REALITY_PROTOCOLS: readonly ProxyInboundProtocol[] = 
 const ALWAYS_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["trojan", "hysteria2", "tuic", "anytls"];
 
 /** 压根没有 TLS 层的协议，安全层只能选「无」。 */
-const NO_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["shadowsocks", "snell", "socks5"];
+// Mieru 自己做加密（用户名 + 密码派生密钥），没有 TLS 层可配。
+const NO_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["shadowsocks", "snell", "socks5", "mieru"];
 
 /**
  * sing-box 的 Snell 入站只收 v5 和 v6 —— 注意这和出站不是一回事，出站收的是
@@ -186,6 +192,8 @@ export const PROXY_INBOUND_MULTI_USER_PROTOCOLS: readonly ProxyInboundProtocol[]
   "anytls",
   // SOCKS5：每个用户一组用户名（存在 uuid 上，生成的随机串）+ 密码。
   "socks5",
+  // Mieru：和 SOCKS5 一样，用户名存在 uuid 上。mita 自己按用户计流量，所以每份凭据能单独记账。
+  "mieru",
 ];
 
 export function proxyInboundSupportsMultiUser(protocol: unknown): boolean {
@@ -201,7 +209,7 @@ export type ProxyInboundUser = {
   id: number;
   /** 给人看的标签，会拼进派生出来的节点名，例如「HK 落地 · 小王」。 */
   name: string;
-  /** vless / vmess / tuic 用；socks5 拿它当用户名 */
+  /** vless / vmess / tuic 用；socks5 / mieru 拿它当用户名 */
   uuid: string;
   /** trojan / hysteria2 / tuic / anytls 用 */
   password: string;
@@ -212,6 +220,8 @@ export type ProxyInboundUser = {
    * 分享，只会让对方莫名其妙连不上。
    */
   sharedUserId?: number;
+  /** 这份凭据自己跑了多少字节（只读）。只有 Mieru 有：mita 按用户计数；别的协议按端口计，一直是 0。 */
+  trafficUsed?: number;
 };
 
 export function createEmptyProxyInboundUser(): ProxyInboundUser {
@@ -221,7 +231,7 @@ export function createEmptyProxyInboundUser(): ProxyInboundUser {
 /** 这个协议的每用户凭据是哪一种。决定要生成 UUID 还是密码。 */
 export function proxyInboundUserCredentialKinds(protocol: ProxyInboundProtocol): Array<"uuid" | "password"> {
   if (protocol === "vless" || protocol === "vmess") return ["uuid"];
-  if (protocol === "tuic" || protocol === "socks5") return ["uuid", "password"];
+  if (protocol === "tuic" || protocol === "socks5" || protocol === "mieru") return ["uuid", "password"];
   if (proxyInboundSupportsMultiUser(protocol)) return ["password"];
   return [];
 }
@@ -244,6 +254,7 @@ export function proxyInboundTransports(protocol: ProxyInboundProtocol): ProxyNod
     return ["tcp", "ws", "grpc", "http", "httpupgrade"];
   }
   // shadowsocks / snell / hysteria2 / tuic / anytls 都只有一种承载。
+  // Mieru 的 TCP / UDP 是它自己的承载（mieruTransport），不是这里的传输层。
   return ["tcp"];
 }
 
@@ -302,6 +313,12 @@ export type ProxyInbound = {
   /** Snell 的版本与 v6 的整形模式。入站只能是 5 或 6，见 PROXY_INBOUND_SNELL_VERSIONS。 */
   snellVersion: number;
   snellMode: string;
+  /**
+   * 端口段终点（含），0 = 只开 port 一个端口。只有 Mieru 用：mita 能在一段端口上一起听。
+   */
+  portRangeEnd: number;
+  /** Mieru 的承载：TCP / UDP / BOTH。别的协议留空。 */
+  mieruTransport: string;
 };
 
 export function createEmptyProxyInbound(): ProxyInbound {
@@ -335,6 +352,8 @@ export function createEmptyProxyInbound(): ProxyInbound {
     users: [],
     snellVersion: 0,
     snellMode: "",
+    portRangeEnd: 0,
+    mieruTransport: "",
   };
 }
 
@@ -486,6 +505,13 @@ export function validateProxyInbound(inbound: ProxyInbound): string {
       // sing-box 会拒绝加载，同一台落地机上其他入站跟着一起停。
       return `sing-box 的 Snell 入站只支持 v${PROXY_INBOUND_SNELL_VERSIONS.join(" 和 v")}，这个是 v${version || "?"}`;
     }
+  }
+  if (inbound.protocol === "mieru") {
+    // 承载、端口段、用户名字符集：任何一项不对 mita 都会拒绝整份配置。
+    const mieruError = validateMieruInboundFields(inbound);
+    if (mieruError) return mieruError;
+  } else if (Number(inbound.portRangeEnd || 0) > 0) {
+    return `${label} 只能开一个端口，端口段只有 Mieru 支持`;
   }
   const enumError = proxyInboundEnumFieldError(inbound);
   if (enumError) return enumError;
@@ -679,8 +705,10 @@ export function buildSingboxCertificateProviders(
  * 没有分流就一个字都不多 —— 和以前逐字节一致，老落地不会因为面板升级被重启。
  */
 export function buildSingboxConfig(
-  inbounds: readonly { inbound: ProxyInbound; tag: string; routes?: readonly ResolvedInboundRoute[] }[],
+  allInbounds: readonly { inbound: ProxyInbound; tag: string; routes?: readonly ResolvedInboundRoute[] }[],
 ): string {
+  // Mieru 不归 sing-box 管（由 mita 承担）：写进来 sing-box 会因为不认识的入站类型拒绝整份配置。
+  const inbounds = allInbounds.filter((item) => item.inbound.protocol !== "mieru");
   const providers = buildSingboxCertificateProviders(inbounds);
   const routing = buildSingboxRouting(inbounds.map((item) => ({ tag: item.tag, routes: item.routes || [] })));
   const config = {
@@ -782,6 +810,14 @@ export function proxyNodeFromInbound(
   if (inbound.protocol === "hysteria2") {
     node.upMbps = Math.max(0, Math.floor(Number(inbound.upMbps) || 0));
     node.downMbps = Math.max(0, Math.floor(Number(inbound.downMbps) || 0));
+  }
+  if (inbound.protocol === "mieru") {
+    // 和 SOCKS5 同理，用户名存在 uuid 上。UDP 由 Mieru 自己在连接里转（mihomo 的 udp: true），
+    // 跟承载是不是 UDP 无关，所以照常开。
+    node.username = node.uuid;
+    node.uuid = "";
+    node.mieruTransport = normalizeMieruTransport(inbound.mieruTransport);
+    node.portRangeEnd = Number(inbound.portRangeEnd || 0) > inbound.port ? Number(inbound.portRangeEnd) : 0;
   }
   node.congestionControl = inbound.congestionControl;
   node.snellVersion = inbound.snellVersion;
