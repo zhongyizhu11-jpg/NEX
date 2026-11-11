@@ -44,6 +44,8 @@ test("repairs persisted port-forward hosts before host deletion checks", () => {
     await runtime.executeRaw('CREATE TABLE "forward_group_members" ("id" INTEGER PRIMARY KEY, "groupId" INTEGER NOT NULL, "memberType" TEXT NOT NULL, "hostId" INTEGER, "priority" INTEGER NOT NULL, "ruleId" INTEGER, "isEnabled" INTEGER NOT NULL DEFAULT 1)');
     await runtime.executeRaw('CREATE TABLE "forward_rules" ("id" INTEGER PRIMARY KEY, "hostId" INTEGER NOT NULL, "userId" INTEGER NOT NULL, "forwardGroupId" INTEGER, "forwardGroupRuleId" INTEGER, "forwardGroupMemberId" INTEGER, "isForwardGroupTemplate" INTEGER NOT NULL, "isEnabled" INTEGER NOT NULL, "pendingDelete" INTEGER NOT NULL, "isRunning" INTEGER NOT NULL, "updatedAt" INTEGER NOT NULL)');
     await runtime.executeRaw('CREATE TABLE "forward_rule_tunnel_exits" ("id" INTEGER PRIMARY KEY, "ruleId" INTEGER NOT NULL)');
+    // 删规则时一并清个人分组关系（server/ruleGroupRelations.ts），这张表也要有
+    await runtime.executeRaw('CREATE TABLE "rule_group_members" ("id" INTEGER PRIMARY KEY, "userId" INTEGER NOT NULL, "ruleId" INTEGER NOT NULL, "groupId" INTEGER NOT NULL)');
     await runtime.executeRaw('INSERT INTO "users" ("id", "username", "name") VALUES (9, \'owner\', \'Owner\')');
     await runtime.executeRaw('INSERT INTO "forward_groups" ("id", "groupMode") VALUES (5, \'port\')');
     await runtime.executeRaw('INSERT INTO "forward_group_members" ("id", "groupId", "memberType", "hostId", "priority", "ruleId") VALUES (20, 5, \'host\', 2, 0, NULL)');
@@ -121,6 +123,8 @@ test("pending rule cleanup never remains an active host delete blocker", () => {
     await runtime.executeRaw('CREATE TABLE "forward_group_members" ("id" INTEGER PRIMARY KEY, "groupId" INTEGER NOT NULL, "memberType" TEXT NOT NULL, "hostId" INTEGER, "priority" INTEGER NOT NULL, "ruleId" INTEGER, "updatedAt" INTEGER, "isEnabled" INTEGER NOT NULL DEFAULT 1)');
     await runtime.executeRaw('CREATE TABLE "forward_rules" ("id" INTEGER PRIMARY KEY, "hostId" INTEGER NOT NULL, "userId" INTEGER NOT NULL, "forwardGroupId" INTEGER, "forwardGroupRuleId" INTEGER, "forwardGroupMemberId" INTEGER, "isForwardGroupTemplate" INTEGER NOT NULL, "isEnabled" INTEGER NOT NULL, "pendingDelete" INTEGER NOT NULL, "isRunning" INTEGER NOT NULL, "updatedAt" INTEGER NOT NULL)');
     await runtime.executeRaw('CREATE TABLE "forward_rule_tunnel_exits" ("id" INTEGER PRIMARY KEY, "ruleId" INTEGER NOT NULL)');
+    // 删规则时一并清个人分组关系（server/ruleGroupRelations.ts），这张表也要有
+    await runtime.executeRaw('CREATE TABLE "rule_group_members" ("id" INTEGER PRIMARY KEY, "userId" INTEGER NOT NULL, "ruleId" INTEGER NOT NULL, "groupId" INTEGER NOT NULL)');
     await runtime.executeRaw('INSERT INTO "users" ("id", "username", "name") VALUES (99, \'customer-a\', \'Customer A\')');
     await runtime.executeRaw('INSERT INTO "forward_rules" ("id", "hostId", "userId", "forwardGroupId", "forwardGroupRuleId", "forwardGroupMemberId", "isForwardGroupTemplate", "isEnabled", "pendingDelete", "isRunning", "updatedAt") VALUES (10, 2, 99, NULL, NULL, NULL, 0, 1, 0, 1, 1)');
 
