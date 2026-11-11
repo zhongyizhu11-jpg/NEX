@@ -427,27 +427,28 @@ export const PERSONALIZATION_THEME_PRESETS = [
 export type PersonalizationThemePresetId = typeof PERSONALIZATION_THEME_PRESETS[number]["id"];
 
 /*
-  主色控件（主按钮、选中的分段项 / chip / 侧栏项、开关、复选框）是一道渐变，走令牌 --fx-primary-gradient。
-  「面板默认」的两端就是 design-tokens.css 里那两组（照 kfchost 主按钮量的），这里抄一份给设置页的色块用，
-  shared/personalization.test.ts 守着两边一致。其余预设从各自的主色推：浅色是「主色兑白 → 主色」，
-  深色是「主色 → 主色兑黑」—— 和默认那道一样，左上亮、右下深。
+  主色控件（主按钮、选中的分段项 / chip、开关、复选框）走令牌 --fx-primary-gradient。
+  「面板默认」的两端就是 design-tokens.css 里那两组，这里抄一份给设置页的色块用，
+  shared/personalization.test.ts 守着两边一致。
+
+  2026-11：原来浅色是「主色兑白 → 主色」的一道浅渐变，白字压在左上那一段只有 2～3:1（面板默认
+  1.7:1）。现在两端都是主色本身（实色）：白字和主色的对比就是预设自己定的那一档，不再被兑白冲淡。
+  深色同样两端都用主色 —— 原来「主色 → 主色兑黑」，深色预设的字多是深色，右下那一段会把对比压下去。
 */
 export const PANEL_DEFAULT_PRIMARY_GRADIENT = {
-  light: ["#8ccfff", "#56aaf2"],
-  dark: ["#5fb0f5", "#2f86d6"],
+  light: ["#155ec4", "#155ec4"],
+  dark: ["#1765cc", "#1765cc"],
 } as const;
 
-export function primaryGradientStops(primary: string, mode: "light" | "dark"): [string, string] {
-  return mode === "dark"
-    ? [primary, `color-mix(in oklab, ${primary} 75%, black)`]
-    : [`color-mix(in oklab, ${primary} 65%, white)`, primary];
+export function primaryGradientStops(primary: string, _mode: "light" | "dark"): [string, string] {
+  return [primary, primary];
 }
 
 export function linearGradient135([from, to]: readonly [string, string]) {
   return `linear-gradient(135deg, ${from} 0%, ${to} 100%)`;
 }
 
-/** 设置页色卡上第一枚色块：这套预设在浅色下主按钮的那道渐变。 */
+/** 设置页色卡上第一枚色块：这套预设在浅色下主按钮的颜色（写成两端同色的渐变，和令牌同一个形状）。 */
 export function personalizationSwatchGradient(value: unknown) {
   const preset = getPersonalizationThemePreset(value);
   if ((preset as { followsTokens?: boolean }).followsTokens === true) {

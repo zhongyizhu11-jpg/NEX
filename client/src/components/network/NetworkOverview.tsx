@@ -95,8 +95,10 @@ function useMeasuredWidth(fallback: number) {
 
 /** 画布高度：手机上接近 3:2，桌面封顶，和 NetworkMapCardPlaceholder 的占位一致 */
 /** 画布高度随宽度走；精简布局（dense）下矮一档：首页第一屏多放下一截状态卡和列表 */
-export function overviewHeight(width: number, dense = false) {
+export function overviewHeight(width: number, dense = false, short = false) {
   if (dense) return Math.round(Math.min(220, Math.max(150, width * 0.42)));
+  // 首页把地图放到数字和「需要关注」下面之后（2026-11），它不再是第一屏的主角：矮一截，桌面封顶 240
+  if (short) return Math.round(Math.min(240, Math.max(180, width * 0.42)));
   return Math.round(Math.min(320, Math.max(220, width * 0.66)));
 }
 
@@ -130,16 +132,18 @@ function popoverRowHeight() {
   }
 }
 
-export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 720 }: {
+export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 720, short = false }: {
   model: Pick<NetworkMapModel, "nodes" | "links">;
   forwardLinks: readonly ForwardMapLink[];
   onOpen?: (href: string) => void;
   /** 量到真实宽度之前（以及服务端渲染时）按这个宽度画 */
   initialWidth?: number;
+  /** 画矮一点（首页默认布局：地图在数字和「需要关注」下面），见 overviewHeight */
+  short?: boolean;
 }) {
   const { ref, width } = useMeasuredWidth(initialWidth);
   const dense = useCompactLayoutAttribute();
-  const height = overviewHeight(width, dense);
+  const height = overviewHeight(width, dense, short);
   const [openId, setOpenId] = useState<number | null>(null);
   const viewport = useMemo(() => overviewViewport(model.nodes, width, height), [model.nodes, width, height]);
   const placed = useMemo(() => layoutOverview(model.nodes, width, height), [model.nodes, width, height]);

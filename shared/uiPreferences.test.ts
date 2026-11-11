@@ -6,6 +6,7 @@ import {
   mergeUiPreferences,
   moveTableColumn,
   parseUiPreferences,
+  readViewModePreference,
   resolveTableColumns,
   sanitizeTableColumnPreference,
   serializeUiPreferences,
@@ -110,4 +111,22 @@ test("界面动画默认开，只有明确存成 false 才关", () => {
   assert.equal(isUiMotionEnabled({ uiPreferences: JSON.stringify({ motion: true }) }), true);
   assert.equal(isUiMotionEnabled({ uiPreferences: JSON.stringify({ motion: false }) }), false);
   assert.equal(isUiMotionEnabled({ uiPreferences: "not json" }), true);
+});
+
+test("视图偏好：主机页按手机 / 电脑各记一份，只认那一页有的视图，null 回到默认", () => {
+  let prefs = mergeUiPreferences({}, { view: { id: "hosts", device: "desktop", mode: "table" } });
+  prefs = mergeUiPreferences(prefs, { view: { id: "hosts", device: "mobile", mode: "compact-card" } });
+  assert.deepEqual(prefs, { views: { hosts: { desktop: "table", mobile: "compact-card" } } });
+  // 不认识的视图不存，原来那份照旧
+  assert.deepEqual(mergeUiPreferences(prefs, { view: { id: "hosts", device: "desktop", mode: "globe3d" } }), prefs);
+  const user = { uiPreferences: serializeUiPreferences(prefs) };
+  assert.equal(readViewModePreference(user, "hosts", "desktop"), "table");
+  assert.equal(readViewModePreference(user, "hosts", "mobile"), "compact-card");
+  assert.equal(readViewModePreference(null, "hosts", "desktop"), null);
+  // 库里被塞了不认识的值：读出来当没有
+  assert.deepEqual(parseUiPreferences(JSON.stringify({ views: { hosts: { desktop: "nope", tablet: "table" }, rules: { desktop: "table" } } })), {});
+  prefs = mergeUiPreferences(prefs, { view: { id: "hosts", device: "desktop", mode: null } });
+  prefs = mergeUiPreferences(prefs, { view: { id: "hosts", device: "mobile", mode: null } });
+  assert.deepEqual(prefs, {});
+  assert.equal(serializeUiPreferences(prefs), null);
 });

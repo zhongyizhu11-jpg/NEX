@@ -4,6 +4,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { NetworkMapCardPlaceholder } from "@/components/network/NetworkMapPlaceholder";
 import { useNetworkMapData } from "@/features/network/networkMapData";
 
+import { readNetworkMapCollapsed } from "./networkMapCollapse";
+
 /**
  * 首页里「概览」那一格。首屏包里只有这个小壳：发请求、占位置；卡片本身（地图模型、中文地名表、
  * 连线图）lazy 进来。
@@ -35,12 +37,14 @@ function writeHint(scope: string, shown: boolean) {
   }
 }
 
-export function NetworkMapSlot({ enabled = true, cacheScope = "current", onOpen }: {
+export function NetworkMapSlot({ enabled = true, cacheScope = "current", onOpen, collapsible = false }: {
   /** health 说一台主机都没有时为 false（health 还没回来时照常取，不等它） */
   enabled?: boolean;
   /** 占位提示按账号分开记 */
   cacheScope?: string;
   onOpen: (href: string) => void;
+  /** 首页默认布局：矮一截、能收起（见 NetworkMapSection 的 NetworkOverviewSection） */
+  collapsible?: boolean;
 }) {
   const data = useNetworkMapData(enabled);
   const { user } = useAuth();
@@ -62,11 +66,13 @@ export function NetworkMapSlot({ enabled = true, cacheScope = "current", onOpen 
     loadCard().catch(() => { /* 取不到时 lazy 渲染那一下会再取、再报错 */ });
   }, [prefetch]);
 
+  const [collapsed] = useState(() => collapsible && readNetworkMapCollapsed());
+  const placeholder = <NetworkMapCardPlaceholder short={collapsible} collapsed={collapsed} />;
   if (hasHosts === false) return null;
-  if (hasHosts === null) return expected ? <NetworkMapCardPlaceholder /> : null;
+  if (hasHosts === null) return expected ? placeholder : null;
   return (
-    <Suspense fallback={<NetworkMapCardPlaceholder />}>
-      <NetworkMapCard data={data} onOpen={open} />
+    <Suspense fallback={placeholder}>
+      <NetworkMapCard data={data} onOpen={open} collapsible={collapsible} />
     </Suspense>
   );
 }

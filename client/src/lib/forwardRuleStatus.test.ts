@@ -3,6 +3,7 @@ import test from "node:test";
 import { LINK_PROBE_FRESH_MS } from "@shared/linkProbePolicy";
 import {
   preferLastKnownForwardRuleVisualStatus,
+  resolveForwardRuleNotRunningReason,
   resolveForwardRuleStopReason,
   resolveForwardRuleVisualStatus,
 } from "./forwardRuleStatus";
@@ -259,4 +260,23 @@ test("探测不通时说清是哪一种不通：被拒、解析失败各有各�
   assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: "timeout" }, now).title, "最近一次端到端探测超时");
   assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: null }, now).title, "最近一次端到端探测超时");
   assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: "weird" }, now).title, "最近一次端到端探测超时");
+});
+
+test("灰点的规则说出原因：先用 Agent 报的失败原因，没有就说在等什么", () => {
+  const pending = { state: "pending" as const, title: "转发资源可用，等待 Agent 确认规则监听" };
+  assert.deepEqual(resolveForwardRuleNotRunningReason(pending), { label: "等待 Agent 应用", detail: pending.title, tone: "off", fromWarning: false });
+  assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "等待转发资源完成检测" })?.label, "等待资源检测");
+  assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "等待 Agent 确认托管监听（0 / 2）" })?.label, "等待 Agent 确认");
+  const failed = resolveForwardRuleNotRunningReason(pending, [
+    { level: "warn", label: "端口被占用", message: "黄的不算" },
+    { level: "error", label: "监听没起来", message: "监听没起来：managed runtime listener not ready after apply port=443" },
+  ]);
+  assert.equal(failed?.label, "监听没起来");
+  assert.equal(failed?.tone, "down");
+  assert.equal(failed?.fromWarning, true);
+  assert.match(failed!.detail, /managed runtime listener not ready/);
+  // 绿 / 红 / 停用的不归这里
+  for (const state of ["running", "error", "disabled"] as const) {
+    assert.equal(resolveForwardRuleNotRunningReason({ state, title: "x" }, [{ level: "error", label: "监听没起来", message: "" }]), null);
+  }
 });

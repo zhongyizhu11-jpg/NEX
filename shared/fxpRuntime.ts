@@ -96,6 +96,43 @@ export function hostNeedsAgentUpgrade(host: HostVersions | null | undefined, lat
   return fxpRuntimeNeedsUpgrade(host);
 }
 
+/**
+ * 「可升级」到底是哪一件事（2026-11 走查：Agent 已是最新的主机也挂着「可升级」，原因其实是没装 FXP）。
+ *
+ * 一键升级做的是同一件事（重跑安装脚本：Agent 和 FXP 一起装），但人要知道为什么亮着：
+ *   - agent：Agent 落后于面板带的版本（FXP 有问题也会顺带修好，写在 detail 里）；
+ *   - fxp：Agent 已是最新，FXP 没装 / 过旧 / 握不上 / 没报版本。
+ * label 是详情里那几个字（带目标版本）；short 是卡片注脚上放得下的那几个字；detail 是悬停和详情里的一句完整说明。
+ * 不该升级时返回 null。
+ */
+export type HostUpgradeReason = { kind: "agent" | "fxp"; label: string; short: string; detail: string };
+
+export function hostUpgradeReason(host: HostVersions | null | undefined, latestAgentVersion: string | null | undefined): HostUpgradeReason | null {
+  if (!host?.agentVersion) return null;
+  const agent = normalizeVersion(host.agentVersion);
+  const fxp = fxpRuntimeStatus(host);
+  if (isAgentVersionBehind(host.agentVersion, latestAgentVersion)) {
+    const target = normalizeVersion(latestAgentVersion);
+    const fxpNote = !fxp.needsUpgrade
+      ? ""
+      : fxp.state === "missing"
+        ? "；这台还没装 FXP 运行时，升级会一并装上"
+        : `；FXP 运行时（${fxp.label}）也会一并更新`;
+    return { kind: "agent", label: `Agent 有新版本 ${target}`, short: "Agent 有新版本", detail: `Agent ${agent} → ${target}${fxpNote}` };
+  }
+  if (!fxp.needsUpgrade) return null;
+  switch (fxp.state) {
+    case "missing":
+      return { kind: "fxp", label: "缺 FXP 运行时", short: "缺 FXP 运行时", detail: `Agent 已是最新（${agent}），但这台没装 FXP 运行时，隧道转发用不了；点升级会重新安装 FXP` };
+    case "incompatible":
+      return { kind: "fxp", label: "FXP 过旧", short: "FXP 过旧", detail: `Agent 已是最新（${agent}），FXP 运行时（${fxp.label}）握不上现在的隧道协议；点升级会重新安装 FXP ${FXP_RUNTIME_VERSION}` };
+    case "outdated":
+      return { kind: "fxp", label: "FXP 可升级", short: "FXP 可升级", detail: `Agent 已是最新（${agent}），FXP 运行时 ${fxp.label} → ${FXP_RUNTIME_VERSION}` };
+    default:
+      return { kind: "fxp", label: "FXP 未上报", short: "FXP 未上报", detail: `Agent 已是最新（${agent}），但没报 FXP 运行时的版本；点升级会重新安装 FXP 补上` };
+  }
+}
+
 /** 这台主机的 FXP 确定握不上当前的隧道协议（或者根本没装）。 */
 export function fxpRuntimeIncompatible(host: HostVersions | null | undefined) {
   return fxpRuntimeStatus(host).wireCompatible === false;

@@ -7,6 +7,7 @@ import {
   PORT_OCCUPANCY_FRESH_MS,
   agentSupportsPortOccupancy,
   classifyRuleRuntimeFailure,
+  ruleRuntimeFailureLabel,
   getRulePortWarnings,
   knownOccupiedPortsOnHost,
   parsePortOccupancyReport,
@@ -137,4 +138,38 @@ test("扩展模块 ports：只给新 Agent 发指令，老 Agent 的上报不收
   assert.equal("ports" in oldRound.modules, false);
   const newRound = await handleAgentExtRound({ id: 3, agentVersion: AGENT_PORT_OCCUPANCY_VERSION }, { modules: { ports: report([]) } });
   assert.deepEqual(newRound.modules.ports, { enabled: true });
+});
+
+test("别的失败原因也显示出来：短标签按原文归类，管理员看原文，租户看短标签", () => {
+  resetPortOccupancyForTests();
+  const failing = rule({ forwardType: "gost" });
+  recordRuleRuntimeStatus({ rule: failing, hostId: 3, isRunning: false, message: "managed runtime listener not ready after apply port=443 protocol=tcp forwardType=gost" }, now);
+  let warnings = getRulePortWarnings(failing, true, now);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].kind, "runtime");
+  assert.equal(warnings[0].level, "error");
+  assert.equal(warnings[0].label, "监听没起来");
+  assert.match(warnings[0].message, /managed runtime listener not ready after apply port=443/);
+  assert.doesNotMatch(getRulePortWarnings(failing, false, now)[0].message, /managed runtime/);
+
+  // 换成更新的笼统原因：照样更新（都是 runtime）
+  recordRuleRuntimeStatus({ rule: failing, hostId: 3, isRunning: false, message: "fxp runtime missing: install /usr/local/bin/forwardx-fxp to use custom encrypted tunnels" }, now + 1000);
+  warnings = getRulePortWarnings(failing, true, now + 1000);
+  assert.equal(warnings[0].label, "运行时没装");
+
+  // 认得出的（端口被占）盖掉笼统的；之后再来笼统的不冲掉具体的
+  recordRuleRuntimeStatus({ rule: failing, hostId: 3, isRunning: false, message: "listen tcp :443: bind: address already in use" }, now + 2000);
+  recordRuleRuntimeStatus({ rule: failing, hostId: 3, isRunning: false, message: "runtime action failed: gost" }, now + 3000);
+  assert.equal(getRulePortWarnings(failing, true, now + 3000)[0].kind, "bind");
+
+  // 报运行：清掉
+  recordRuleRuntimeStatus({ rule: failing, hostId: 3, isRunning: true, message: "" }, now + 4000);
+  assert.deepEqual(getRulePortWarnings(failing, true, now + 4000), []);
+  // 没运行但没说原因（正常移除的回执）：什么都不记
+  recordRuleRuntimeStatus({ rule: failing, hostId: 3, isRunning: false, message: "" }, now + 5000);
+  assert.deepEqual(getRulePortWarnings(failing, true, now + 5000), []);
+
+  assert.equal(ruleRuntimeFailureLabel("managed runtime listeners not ready after sync: realm"), "监听没起来");
+  assert.equal(ruleRuntimeFailureLabel("exec: \"gost\": executable file not found in $PATH"), "运行时没装");
+  assert.equal(ruleRuntimeFailureLabel("fxp runtime exited immediately"), "启动失败");
 });

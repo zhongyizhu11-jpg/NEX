@@ -57,11 +57,14 @@ export function AttentionSection({
   attention,
   isAdmin,
   onOpen,
+  header = "需要关注",
   now = Date.now(),
 }: {
   attention: DashboardAttention | null | undefined;
   isAdmin: boolean;
   onOpen: (href: string) => void;
+  /** 列表标题。首页默认布局把顶上那句结论（「4 处需要关注」）挪到这里当标题，见 SystemStatusHeader 的 attentionListedBelow */
+  header?: string;
   now?: number;
 }) {
   if (!attention) return null;
@@ -70,7 +73,7 @@ export function AttentionSection({
   const shown = sorted.slice(0, ATTENTION_VISIBLE_ROWS);
 
   return (
-    <ListSection id="dashboard-attention" header="需要关注" footer={summarizeHiddenAttention(attention.totals, shown)}>
+    <ListSection id="dashboard-attention" header={header} footer={summarizeHiddenAttention(attention.totals, shown)}>
       {shown.map((row) => {
         const { title, detail } = describeAttentionRow(row, now);
         const href = attentionHref(row, { isAdmin });

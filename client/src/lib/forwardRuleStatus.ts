@@ -166,3 +166,47 @@ export function resolveForwardRuleStopReason(rule: {
   }
   return { label: "已停用", detail: "规则已手动关闭，打开开关即可恢复", autoResume: false };
 }
+
+export type ForwardRuleNotRunningReason = {
+  /** 卡片 / 表格上那几个字（「监听没起来」「等待 Agent 应用」） */
+  label: string;
+  /** 悬停的完整说明：Agent 报的原文，或者状态那一句 */
+  detail: string;
+  /** down：Agent 报了失败原因；off：还没有结论，只是在等 */
+  tone: "down" | "off";
+  /** 原因来自规则上的 portWarnings（那一枚红色徽标就不用再画一遍） */
+  fromWarning: boolean;
+};
+
+type RuleWarningLike = { level?: unknown; label?: unknown; message?: unknown };
+
+/**
+ * 灰点（没在运行、也没停用）的规则为什么是灰的（2026-11 走查：卡片上只有一颗灰点，说不出原因）。
+ *
+ * 先看 Agent 报回来的失败原因（服务端 rulePortOccupancy 挂在 portWarnings 上的红色那几条：端口被占、
+ * 内核转发没装全、运行时没装、监听没起来……），有就用它；没有就是还在等，按状态那一句归成几个短词。
+ * 绿 / 红 / 停用的规则不归这里管：红的有自己的标签，停用有 resolveForwardRuleStopReason。
+ */
+export function resolveForwardRuleNotRunningReason(
+  visual: ForwardRuleVisualStatus,
+  portWarnings?: unknown,
+): ForwardRuleNotRunningReason | null {
+  if (visual.state !== "pending") return null;
+  const errors = (Array.isArray(portWarnings) ? portWarnings as RuleWarningLike[] : [])
+    .filter((item) => item && item.level === "error" && String(item.label || "").trim());
+  if (errors.length > 0) {
+    return {
+      label: String(errors[0].label).trim(),
+      detail: errors.map((item) => String(item.message || item.label || "").trim()).filter(Boolean).join("\n"),
+      tone: "down",
+      fromWarning: true,
+    };
+  }
+  const title = String(visual.title || "").trim();
+  const label = title.includes("转发资源完成检测")
+    ? "等待资源检测"
+    : title.includes("托管监听")
+      ? "等待 Agent 确认"
+      : "等待 Agent 应用";
+  return { label, detail: title || label, tone: "off", fromWarning: false };
+}
