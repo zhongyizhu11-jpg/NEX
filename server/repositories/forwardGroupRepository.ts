@@ -18,7 +18,10 @@ import {
 import { pushAgentRefresh } from "../agentEvents";
 import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
-import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues } from "../ddns";
+import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues, type DdnsSettings } from "../ddns";
+import { prepareForwardGroupDdnsLines, syncForwardGroupDdnsLines, type ForwardGroupLineContext } from "../forwardGroupDdnsLines";
+import type { LineMemberStatus, LinePlannerMember } from "../ddnsLinePlanner";
+import { serializeDdnsLines } from "../../shared/ddnsLines";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { withForwardTestDates } from "./forwardTestRepository";
@@ -154,6 +157,8 @@ export type ForwardGroupMemberInput = {
   aggregationWeight?: number | null;
   /** 可用时段（shared/memberSchedule.ts）。undefined = 不改原来的；null = 不限时段。 */
   activeSchedule?: unknown;
+  /** 分到的运营商线路（shared/ddnsLines.ts）。undefined = 不改原来的；null / [] = 只在默认线路。 */
+  ddnsLines?: unknown;
 };
 
 /**
@@ -4106,6 +4111,7 @@ export async function createForwardGroup(data: InsertForwardGroup, members: Forw
       connectHost: member.connectHost ?? null,
       priority: member.priority ?? index,
       ...memberSchedulePayload(groupMode, member, null),
+      ddnsLines: serializeDdnsLines(member.ddnsLines),
       createdAt: nowDate(),
       updatedAt: nowDate(),
     });
@@ -4317,6 +4323,8 @@ export async function replaceForwardGroupMembers(
       connectHost: member.connectHost ?? null,
       bandwidthMbps: normalizeMemberBandwidthMbps(member.bandwidthMbps),
       aggregationWeight: normalizeMemberWeight(member.aggregationWeight),
+      // 线路没传（节点池同步、时段切换这些只改别的字段的写入方）= 不动原来的分线路配置。
+      ...(member.ddnsLines !== undefined ? { ddnsLines: serializeDdnsLines(member.ddnsLines) } : {}),
       updatedAt: nowDate(),
     } as any;
     if (found) {
@@ -4333,6 +4341,7 @@ export async function replaceForwardGroupMembers(
         ...memberSchedulePayload(groupMode, member, null, options.scheduleAt),
         bandwidthMbps: normalizeMemberBandwidthMbps(member.bandwidthMbps),
         aggregationWeight: normalizeMemberWeight(member.aggregationWeight),
+        ddnsLines: serializeDdnsLines(member.ddnsLines),
         createdAt: nowDate(),
         updatedAt: nowDate(),
       });
@@ -5008,7 +5017,107 @@ async function resolveEntryGroupAggregation(
   return { ...applied, plan };
 }
 
+/*
+  分线路解析（server/forwardGroupDdnsLines.ts）挂在组原来那次 DDNS 发布上的钩子：默认线路那套逻辑
+  在评估每个成员时顺手把结论记下来（note），评估完只发布默认线路上的成员，走到「默认线路已经定了」
+  的几个出口（发布成功 / 已是最新 / 保留最后一条 / 等健康结果）时标 settled，之后再按线路发布。
+  没分线路的组钩子是 null，原来的每一步都不变。
+*/
+// 组 / 成员行在这个文件里都是宽松的查询结果；分线路这几处沿用 sortedMembers 的同一个形状，不另起类型。
+type LineGroupRow = Parameters<typeof sortedMembers>[0];
+type LineMemberRow = ReturnType<typeof sortedMembers>[number];
+
+type ForwardGroupLineHook = {
+  ctx: ForwardGroupLineContext;
+  defaultMemberIds: Set<number>;
+  /** 上一轮各条线路发布过的值：成员在别的线路里也算「已经在解析里」，故障观察时间照样给。 */
+  previouslyPublished: Set<string>;
+  members: LinePlannerMember[];
+  settled: boolean;
+  note(member: LineMemberRow, value: string, status: LineMemberStatus, recovered?: boolean): void;
+};
+
+function createForwardGroupLineHook(group: LineGroupRow, ctx: ForwardGroupLineContext): ForwardGroupLineHook {
+  const domain = String(group.domain || "").trim().toLowerCase();
+  const recordType = normalizeForwardGroupRecordType(group.recordType);
+  const previouslyPublished = new Set<string>();
+  if (ctx.state && ctx.state.domain === domain && ctx.state.recordType === recordType) {
+    for (const entry of Object.values(ctx.state.lines)) for (const value of entry.values) previouslyPublished.add(value);
+  }
+  const members: LinePlannerMember[] = [];
+  return {
+    ctx,
+    defaultMemberIds: new Set(ctx.defaultOnly(sortedMembers(group, true)).map((member) => Number(member.id))),
+    previouslyPublished,
+    members,
+    settled: false,
+    note(member, value, status, recovered) {
+      const memberId = Number(member?.id || 0);
+      if (!memberId || members.some((entry) => entry.memberId === memberId)) return;
+      members.push({
+        memberId,
+        hostId: Number(member.hostId || 0),
+        priority: Number(member.priority || 0),
+        value,
+        lines: ctx.linesOf(member),
+        status,
+        recovered,
+        bandwidthMbps: Number(member.bandwidthMbps || 0),
+        aggregationWeight: Number(member.aggregationWeight || 0),
+      });
+    },
+  };
+}
+
+/** 入口组按线路排序时用的带宽排序：和默认线路同一套（server/bandwidthAggregation.ts），只是成员换成这条线路的。 */
+async function entryGroupLineRanker(group: LineGroupRow, members: LinePlannerMember[], recordType: ForwardGroupRecordType) {
+  if (!isBandwidthAggregationGroup(group) || members.length === 0) return undefined;
+  const rows = await withHostLineBandwidth(members.map((member): AggregationMemberRow => ({
+    memberId: member.memberId,
+    hostId: member.hostId,
+    value: member.value,
+    healthy: true,
+    bandwidthMbps: member.bandwidthMbps,
+    aggregationWeight: member.aggregationWeight,
+  })));
+  const throughputByHostId = resolveAggregationSettings(group).strategy === "adaptive"
+    ? await memberThroughputMbps(rows)
+    : new Map<number, number>();
+  const rowById = new Map<number, AggregationMemberRow>(rows.map((row) => [row.memberId, row]));
+  return (lineMembers: LinePlannerMember[], values: string[]) => {
+    const plan = buildEntryGroupAggregationPlan({
+      group,
+      members: lineMembers.map((member) => rowById.get(member.memberId)).filter((row): row is AggregationMemberRow => !!row),
+      throughputByHostId,
+      singleValuePerMember: recordType === "CNAME",
+    });
+    return applyAggregationToDdnsValues(plan, values).values;
+  };
+}
+
+async function syncForwardGroupLinesAfterDefault(group: LineGroupRow, ddnsSettings: DdnsSettings, hook: ForwardGroupLineHook, mode: "multi" | "single", options: ForwardGroupFailoverOptions) {
+  const recordType = normalizeForwardGroupRecordType(group.recordType);
+  await syncForwardGroupDdnsLines({
+    group,
+    ctx: hook.ctx,
+    settings: ddnsSettings,
+    mode,
+    members: hook.members,
+    forceSync: !!options.forceSync,
+    rank: mode === "multi" ? await entryGroupLineRanker(group, hook.members, recordType).catch(() => undefined) : undefined,
+    recordEvent: (type, message, memberId) => insertForwardGroupEvent(Number(group.id), memberId ?? null, type, message),
+  });
+}
+
 async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: ForwardGroupFailoverOptions = {}) {
+  const lineCtx = prepareForwardGroupDdnsLines(group, ddnsSettings);
+  if (!lineCtx) return syncEntryGroupDefaultDdns(group, ddnsSettings, options, null);
+  const hook = createForwardGroupLineHook(group, lineCtx);
+  await syncEntryGroupDefaultDdns(group, ddnsSettings, options, hook);
+  if (hook.settled) await syncForwardGroupLinesAfterDefault(group, ddnsSettings, hook, "multi", options);
+}
+
+async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: DdnsSettings, options: ForwardGroupFailoverOptions = {}, lines: ForwardGroupLineHook | null = null) {
   const db = await getDb();
   const members = sortedMembers(group, true) as any[];
   const recordType = normalizeForwardGroupRecordType(group.recordType);
@@ -5052,8 +5161,11 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
   for (const member of members) {
     if (member.memberType !== "host") continue;
     const value = await memberDdnsValue(member, recordType).catch(() => "");
-    if (!value) continue;
-    const previouslyIncluded = previousValues.has(value);
+    if (!value) {
+      lines?.note(member, "", "down");
+      continue;
+    }
+    const previouslyIncluded = previousValues.has(value) || !!lines?.previouslyPublished.has(value);
     const liveness = await resolveMemberAgentLiveness(member, chinaHealthNow);
     const memberId = Number(member.id);
     initialAgentLivenessSnapshot.set(memberId, liveness.signature);
@@ -5062,6 +5174,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       // 流量到阈值：立刻移出解析，不走离线宽限期。
       trafficExcludedMemberCount += 1;
       if (!excluded.includes(value)) excluded.push(value);
+      lines?.note(member, value, "quota");
       continue;
     }
     const checkedAt = chinaHealthEnabled ? member.chinaHealthCheckedAt : member.lastCheckedAt;
@@ -5091,9 +5204,11 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       else pendingHealthExpiryCandidates.push(expiresAt);
     }
     if (healthStatus === "pending") {
-      pendingAgentHealth = true;
+      // 分线路时只有默认线路上的成员在等结果才让默认线路等；线路成员的等待由线路规划自己处理。
+      if (!lines || lines.defaultMemberIds.has(memberId)) pendingAgentHealth = true;
       if (previouslyIncluded) includeMember(member, value);
-      if (recordType === "CNAME" && previouslyIncluded) break;
+      lines?.note(member, value, "pending");
+      if (recordType === "CNAME" && previouslyIncluded && !lines) break;
       continue;
     }
 
@@ -5146,6 +5261,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
 
     if (include) includeMember(member, value);
     else if (!excluded.includes(value)) excluded.push(value);
+    lines?.note(member, value, include ? "up" : "down");
     healthWindows.push({
       healthy,
       failureSince,
@@ -5153,7 +5269,8 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       failedLongEnough,
       recoveredLongEnough,
     });
-    if (recordType === "CNAME" && include) break;
+    // 分线路时每条线路各取一个 CNAME，得把所有成员都评估完。
+    if (recordType === "CNAME" && include && !lines) break;
   }
   const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
     members: healthWindows,
@@ -5213,6 +5330,14 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
   const retryChangedAgentSelection = () => {
     scheduleForwardGroupFailover([Number(group.id)]);
   };
+  if (lines) {
+    // 分线路：默认线路只发布默认线路上的成员（server/ddnsLinePlanner.ts 规则 1），其余交给线路发布。
+    const kept = aggregationMembers.filter((entry) => lines.defaultMemberIds.has(entry.memberId));
+    aggregationMembers.splice(0, aggregationMembers.length, ...kept);
+    const keptValues = Array.from(new Set(kept.map((entry) => entry.value)));
+    values.splice(0, values.length, ...(recordType === "CNAME" ? keptValues.slice(0, 1) : keptValues));
+    activeMemberId = kept[0]?.memberId || null;
+  }
   // Bandwidth aggregation reorders the healthy entries so the front VPS hosts
   // with the most spare uplink are offered to clients first. It never adds or
   // removes an entry, so the health decisions above still stand.
@@ -5235,6 +5360,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       lastStatus: "unknown",
       lastMessage: "等待 Agent 健康度检测结果；暂不变更现有 DDNS 解析",
     });
+    if (lines) lines.settled = true;
     return;
   }
 
@@ -5260,6 +5386,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       });
     } else {
       await preserveForwardGroupDdns(group, ddnsSettings, options, reason);
+      if (lines) lines.settled = true;
     }
     return;
   }
@@ -5293,6 +5420,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       lastStatus: "healthy",
       lastMessage: `入口组 DDNS 已是最新；${publishedValues.length} 个入口${excludedSuffix}${aggregationSuffix}`,
     });
+    if (lines) lines.settled = true;
     return;
   }
 
@@ -5323,6 +5451,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       updatedAt: nowDate(),
     }).where(eq(forwardGroups.id, group.id));
     await insertForwardGroupEvent(group.id, null, "ddns-update", `入口组 DDNS 已同步；domain=${String(group.domain || "-")} values=${joined}${excludedSuffix}${forceSync ? " force=true" : ""}`);
+    if (lines) lines.settled = true;
     if (previousValue && previousValue !== joined) recordForwardGroupSwitchEvent({ group, mode: "entry", toLabel: `${values.length} 个健康入口`, reason: `新增 ${addedValues.length} 个、剔除 ${removedValues.length} 个` }); // 事件时间线
     if (groupSwitchNotifyEnabled(group) && !switchNotifySuppressed(options) && previousValue && previousValue !== joined) {
       void notifyForwardGroupSwitch({
@@ -5508,6 +5637,8 @@ async function runForwardGroupFailoverForGroups(
     const recordType = normalizeForwardGroupRecordType(group.recordType);
     const members = [...(group.members || [])].sort((a, b) => Number(a.priority) - Number(b.priority));
     if (members.length === 0) continue;
+    // 分线路解析：默认线路只在默认线路上的成员里挑，其余线路在默认线路定下来之后按线路发布。没分线路的组是 null。
+    const lineCtx = prepareForwardGroupDdnsLines(group, ddnsSettings);
     const chinaHealthExpiryAt = nextForwardGroupChinaHealthExpiryAt({
       enabled: dbBool(group.chinaHealthCheckEnabled),
       members,
@@ -5520,7 +5651,7 @@ async function runForwardGroupFailoverForGroups(
         pendingChinaHealth,
         agentFailurePending,
         agentLivenessRecheckAt,
-      } = await firstAvailableResolvableMember(members, group, recordType);
+      } = await firstAvailableResolvableMember(lineCtx ? lineCtx.defaultOnly(members) : members, group, recordType);
       const nextNoTemplateRecheckAt = [chinaHealthExpiryAt, agentLivenessRecheckAt]
         .filter((value): value is number => typeof value === "number" && value > Date.now())
         .sort((left, right) => left - right)[0] ?? null;
@@ -5549,6 +5680,7 @@ async function runForwardGroupFailoverForGroups(
         } else {
           await preserveForwardGroupDdns(group, ddnsSettings, options, `没有在线且具备${recordTypeRequirementLabel(recordType)}的成员`);
         }
+        if (lineCtx) await syncFailoverGroupLinesWithoutRules(group, lineCtx, ddnsSettings, members, recordType, options);
         continue;
       }
       await updateForwardGroupRuntimeIfChanged(db, group, {
@@ -5563,7 +5695,7 @@ async function runForwardGroupFailoverForGroups(
     }
 
     if (!options.skipRuleSync) await syncForwardGroupRules(Number(group.id), { preserveRuntime: true });
-    const evaluated = [];
+    const evaluated: Array<Awaited<ReturnType<typeof evaluateMemberHealth>>> = [];
     for (const member of members) evaluated.push(await evaluateMemberHealth(member, group));
 
     const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
@@ -5594,24 +5726,28 @@ async function runForwardGroupFailoverForGroups(
       continue;
     }
 
-    const active = evaluated.find((m) => Number(m.id) === Number(group.activeMemberId));
+    // 分线路时默认线路只看默认线路上的成员；线路成员的健康结论照样评估过，留给线路发布用。
+    const defaultEvaluated = lineCtx ? lineCtx.defaultOnly(evaluated) : evaluated;
+    const syncLines = () => (lineCtx ? syncFailoverGroupLines(group, lineCtx, ddnsSettings, evaluated, recordType, options) : Promise.resolve());
+    const active = defaultEvaluated.find((m) => Number(m.id) === Number(group.activeMemberId));
     // `members` is normally loaded in priority order, but keep the selection
     // explicit here. A failover may pass through several members; when a
     // higher-priority member recovers, it must win over the currently active
     // lower-priority member regardless of how the evaluation array was built.
-    const healthyMembers = evaluated
+    const healthyMembers = defaultEvaluated
       .filter((member) => member.healthy)
       .sort((left, right) => {
         const priorityDelta = Number(left.priority) - Number(right.priority);
         return priorityDelta || Number(left.id) - Number(right.id);
       });
     const firstHealthy = healthyMembers[0];
-    const anyPending = evaluated.some((member) => member.healthPending);
+    const anyPending = defaultEvaluated.some((member) => member.healthPending);
     if ((active?.healthPending && String(group.lastDdnsValue || "").trim()) || (!active && !firstHealthy && anyPending)) {
       await updateForwardGroupRuntimeIfChanged(db, group, {
         lastStatus: "unknown",
         lastMessage: "等待国内健康度检测结果；暂不变更现有 DDNS 解析",
       });
+      await syncLines();
       continue;
     }
     const failbackCandidate = healthyMembers.find((member) => member.recoveredLongEnough);
@@ -5644,6 +5780,7 @@ async function runForwardGroupFailoverForGroups(
         continue;
       }
       await preserveForwardGroupDdns(group, ddnsSettings, options, "没有可用于 DDNS 故障转移的健康成员");
+      await syncLines();
       continue;
     }
 
@@ -5666,7 +5803,67 @@ async function runForwardGroupFailoverForGroups(
       beforeCommit: () => failoverAgentSelectionStillCurrent(group, active, next),
     });
     if (committed === false) scheduleForwardGroupFailover([Number(group.id)]);
+    await syncLines();
   }
+}
+
+/** 主备组（有规则在用）的分线路发布：每个成员的健康结论来自上面的 evaluateMemberHealth。 */
+async function syncFailoverGroupLines(group: LineGroupRow, ctx: ForwardGroupLineContext, ddnsSettings: DdnsSettings, evaluated: LineMemberRow[], recordType: ForwardGroupRecordType, options: ForwardGroupFailoverOptions) {
+  const hook = createForwardGroupLineHook(group, ctx);
+  for (const member of evaluated) {
+    if (!dbBool(member?.isEnabled)) continue;
+    const value = await memberDdnsValue(member, recordType).catch(() => "");
+    const status: LineMemberStatus = !value
+      ? "down"
+      : member.message === HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE
+        ? "quota"
+        : member.healthPending
+          ? "pending"
+          : member.healthy
+            ? "up"
+            : member.failedLongEnough ? "down" : "grace";
+    hook.note(member, value, status, !!member.recoveredLongEnough);
+  }
+  await syncForwardGroupLinesAfterDefault(group, ddnsSettings, hook, "single", options);
+}
+
+/**
+ * 主备组（还没有规则在用）的分线路发布。判定和 firstAvailableResolvableMember 一致：流量到阈值直接跳过，
+ * Agent 离线在故障观察时间内算观察期，开了国内检测就看检测结果。
+ */
+async function syncFailoverGroupLinesWithoutRules(group: LineGroupRow, ctx: ForwardGroupLineContext, ddnsSettings: DdnsSettings, members: LineMemberRow[], recordType: ForwardGroupRecordType, options: ForwardGroupFailoverOptions) {
+  const hook = createForwardGroupLineHook(group, ctx);
+  const chinaHealthEnabled = dbBool(group?.chinaHealthCheckEnabled);
+  const now = Date.now();
+  const failoverMs = forwardGroupFailoverDelayMs(group);
+  for (const member of members) {
+    if (!dbBool(member?.isEnabled, true)) continue;
+    const value = await memberDdnsValue(member, recordType).catch(() => "");
+    if (!value) {
+      hook.note(member, "", "down");
+      continue;
+    }
+    const liveness = await resolveMemberAgentLiveness(member, now);
+    if (liveness.trafficExcluded) {
+      hook.note(member, value, "quota");
+      continue;
+    }
+    if (!liveness.available) {
+      const failoverAt = (liveness.failureSince?.getTime() || now) + failoverMs;
+      hook.note(member, value, now < failoverAt ? "grace" : "down");
+      continue;
+    }
+    if (chinaHealthEnabled) {
+      const state = agentHealthSampleIsCurrent(liveness, member.chinaHealthCheckedAt) ? forwardGroupChinaHealthStateAt(member, now) : "pending";
+      if (state !== "healthy") {
+        hook.note(member, value, state === "pending" ? "pending" : "down");
+        continue;
+      }
+    }
+    // 没有规则时总是挑顺序最前面能用的（和默认线路一样），所以都算「恢复够久」，可以回切。
+    hook.note(member, value, "up", true);
+  }
+  await syncForwardGroupLinesAfterDefault(group, ddnsSettings, hook, "single", options);
 }
 
 async function runForwardGroupFailoverByIds(groupIds: number[], options: ForwardGroupFailoverOptions = {}) {

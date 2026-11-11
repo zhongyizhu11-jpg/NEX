@@ -1075,6 +1075,10 @@ export const forwardGroups = table("forward_groups", {
   bandwidthAggregationStrategy: varchar("bandwidthAggregationStrategy", { length: 32 }).notNull().default("capacity"),
   bandwidthAggregationSlots: int("bandwidthAggregationSlots").notNull().default(8),
   bandwidthAggregationMinMembers: int("bandwidthAggregationMinMembers").notNull().default(1),
+  /** 分线路解析：线路成员全挂时 default = 改用默认线路健康成员，remove = 删掉线路记录（shared/ddnsLines.ts）。 */
+  ddnsLineFallback: varchar("ddnsLineFallback", { length: 16 }).notNull().default("default"),
+  /** 面板在每条非默认线路上发布的值和服务商记录 ID（运行状态，JSON）。 */
+  ddnsLineState: text("ddnsLineState"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   activeMemberId: int("activeMemberId"),
   /** 成员跟着哪个节点池（server/nodePoolGroups.ts）；null = 手动维护。 */
@@ -1105,6 +1109,8 @@ export const forwardGroupMembers = table("forward_group_members", {
   // aggregation weight (0 = derive the weight from the group strategy).
   bandwidthMbps: int("bandwidthMbps").notNull().default(0),
   aggregationWeight: int("aggregationWeight").notNull().default(0),
+  /** 分到的运营商线路，JSON [{id,name}]；null = 只在默认线路（shared/ddnsLines.ts）。 */
+  ddnsLines: text("ddnsLines"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   activeSchedule: text("activeSchedule"),
   scheduleSuspended: boolean("scheduleSuspended").notNull().default(false),

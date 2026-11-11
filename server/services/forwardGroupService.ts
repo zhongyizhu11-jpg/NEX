@@ -9,6 +9,7 @@ import { normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../shared/forwardTypes";
 import { normalizeExitGroupStrategy, type ExitGroupStrategy } from "../../shared/exitStrategy";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
+import { normalizeDdnsLineFallback, serializeDdnsLines, type DdnsLineFallbackMode } from "../../shared/ddnsLines";
 import {
   normalizeForwardGroupHealthCheckMethod,
   type ForwardGroupHealthCheckMethod,
@@ -38,6 +39,8 @@ export type ForwardGroupMemberRequest = {
   aggregationWeight?: number | null;
   /** 可用时段（shared/memberSchedule.ts）。不传 = 不动原来的。 */
   activeSchedule?: unknown;
+  /** 分到的运营商线路（shared/ddnsLines.ts）。不传 = 不动原来的。转发组、入口组才有。 */
+  ddnsLines?: unknown;
 };
 
 export type ForwardGroupInput = {
@@ -78,6 +81,8 @@ export type ForwardGroupInput = {
   bandwidthAggregationStrategy?: BandwidthAggregationStrategy;
   bandwidthAggregationSlots?: number;
   bandwidthAggregationMinMembers?: number;
+  /** 分线路解析：线路成员全挂时的处理（shared/ddnsLines.ts）。 */
+  ddnsLineFallback?: DdnsLineFallbackMode;
   autoFailback: boolean;
   isEnabled: boolean;
   members: ForwardGroupMemberRequest[];
@@ -131,8 +136,16 @@ export function normalizeForwardGroupMembers(
       activeSchedule: member.activeSchedule === undefined
         ? undefined
         : groupModeSupportsMemberSchedule(groupMode) ? serializeMemberSchedule(member.activeSchedule) : null,
+      // 运营商线路只有发布 DDNS 的转发组、入口组用得上；别的组模式存 null。没传 = 不动原来的。
+      ddnsLines: !groupModeSupportsDdnsLines(groupMode)
+        ? null
+        : member.ddnsLines === undefined ? undefined : serializeDdnsLines(member.ddnsLines),
     };
   });
+}
+
+function groupModeSupportsDdnsLines(groupMode: ForwardGroupMode) {
+  return groupMode === "entry" || groupMode === "failover";
 }
 
 function memberPrioritySignature(members: ForwardGroupMemberRequest[]) {
@@ -155,9 +168,16 @@ function memberPrioritySignature(members: ForwardGroupMemberRequest[]) {
 function withExistingSchedules(members: ForwardGroupMemberRequest[], existing: ForwardGroupMemberRequest[]) {
   const memberKey = (member: ForwardGroupMemberRequest) => `${member.memberType}:${member.memberType === "host" ? Number(member.hostId || 0) : Number(member.tunnelId || 0)}`;
   const existingByKey = new Map(existing.map((member) => [memberKey(member), member]));
-  return members.map((member) => (member.activeSchedule !== undefined
-    ? member
-    : { ...member, activeSchedule: existingByKey.get(memberKey(member))?.activeSchedule ?? null }));
+  return members.map((member) => {
+    const existingMember = existingByKey.get(memberKey(member));
+    const withSchedule = member.activeSchedule !== undefined
+      ? member
+      : { ...member, activeSchedule: existingMember?.activeSchedule ?? null };
+    // 线路也一样：没传 = 沿用库里的，签名里不能把它当成「改成没分线路」。
+    return withSchedule.ddnsLines !== undefined
+      ? withSchedule
+      : { ...withSchedule, ddnsLines: existingMember?.ddnsLines ?? null };
+  });
 }
 
 function memberRuntimeSignature(members: ForwardGroupMemberRequest[]) {
@@ -172,9 +192,11 @@ function memberRuntimeSignature(members: ForwardGroupMemberRequest[]) {
       // in the signature that decides whether members are rewritten.
       bandwidthMbps: normalizeMemberBandwidthMbps(member.bandwidthMbps),
       aggregationWeight: normalizeMemberWeight(member.aggregationWeight),
+      // 分线路配置改了也要重写成员行（并重新发布线路记录）。
+      lines: member.ddnsLines === undefined ? "keep" : serializeDdnsLines(member.ddnsLines) || "",
     }))
     .sort((a, b) => a.priority - b.priority)
-    .map((member) => `${member.key}:${member.enabled ? 1 : 0}:${member.connectHost}:${member.bandwidthMbps}:${member.aggregationWeight}:${member.schedule}`)
+    .map((member) => `${member.key}:${member.enabled ? 1 : 0}:${member.connectHost}:${member.bandwidthMbps}:${member.aggregationWeight}:${member.schedule}:${member.lines}`)
     .join("|");
 }
 
@@ -284,6 +306,7 @@ async function normalizeForwardGroupInput(input: ForwardGroupInput, userId?: num
     bandwidthAggregationStrategy: normalizeBandwidthAggregationStrategy(input.bandwidthAggregationStrategy),
     bandwidthAggregationSlots: normalizeAggregationRecordSlots(input.bandwidthAggregationSlots),
     bandwidthAggregationMinMembers: normalizeAggregationMinMembers(input.bandwidthAggregationMinMembers),
+    ddnsLineFallback: normalizeDdnsLineFallback(input.ddnsLineFallback),
     autoFailback: input.autoFailback,
     isEnabled: input.isEnabled,
   };
