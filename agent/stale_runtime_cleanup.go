@@ -316,6 +316,9 @@ func cleanupStaleRuntimeBeforeApply(cfg Config, a action, actionMessage *actionM
 	if localForwardType == "nftables" && localRuleID > 0 {
 		_ = runShell(nftRuleCleanupCmd(localRuleID))
 	}
+	if isKernelForwardType(localForwardType) && !isKernelForwardType(a.ForwardType) && localRuleID > 0 {
+		cleanupDockerCompatAllowances(localRuleID, a.SourcePort, runtimeProtocols(cleanupProtocol))
+	}
 	for _, cmd := range managedPortCleanupCmdsForApply(port, sharedNginxRuntimePort) {
 		_ = runShell(cmd)
 	}

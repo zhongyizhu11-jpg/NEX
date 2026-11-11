@@ -365,6 +365,39 @@ tcpdump -ni any 'port 入口端口'
 
 ---
 
+### Docker 入口机内核转发超时
+
+Docker 会把 iptables 的 `FORWARD` 默认策略改成 `DROP`，只跳进它自己的链。nftables 模式下面板在 `inet forwardx` 表里的放行盖不过这个 DROP；iptables 模式下如果 Agent 用的前端（`iptables-legacy` / `iptables-nft`）和 Docker 不是同一个，也一样被丢。现象是 DNAT 在、规则显示运行，外面连进来全部超时。
+
+面板会在每个「FORWARD 默认 DROP 且跳转 `DOCKER-USER`」的前端里，为每条 IPv4 内核转发规则装两条放行（去程、回程），注释是 `fwx-docker-<规则>-<入口端口>-<协议>-<in|out>-<目标摘要>`。它们排在你自己写在 `DOCKER-USER` 里的规则之后（你的显式拒绝仍然优先），不改 FORWARD 策略、不删别人的规则；改目标、改协议、停用、删除时会就地收敛。
+
+```bash
+iptables-nft -S FORWARD | head -3; iptables-nft -S DOCKER-USER
+iptables-legacy -S DOCKER-USER 2>/dev/null
+sysctl net.ipv4.ip_forward
+```
+
+- 规则卡上出现红色「内核转发未就绪」时，鼠标悬停（管理员）能看到 Agent 报的原因，例如 `DOCKER-USER allowance missing`、`net.ipv4.ip_forward is not enabled`、缺少回程放行。Agent 的就绪检查现在会核实转发开关、源地址转换、去回程放行和 Docker 放行，不再只看 DNAT。
+- 只处理 IPv4 和上面这一种结构。ufw、自定义防火墙、Docker 的 nftables 原生后端不判断、不修改，需要自己放行。
+- 放行会结束 `DOCKER-USER` 的求值，受管流量不再经过之后的 Docker 隔离链；目标如果是本机容器，请继续用 Docker 自己的端口发布。
+
+---
+
+### 规则卡上的端口告警
+
+Agent 2.2.253 起会核对启用规则的入口端口上（按协议），有没有不归 ForwardX 管的进程在监听，结果在规则卡上单独显示，不改规则的运行状态：
+
+- **黄色「端口被占用」**：有别的程序在听这个端口。内核转发（iptables/nftables）不绑端口，外来进程照样能听而不报错，只能这样发现；用户态转发多半随后就会绑定失败。管理员悬停可以看到进程名和 pid。只在本机回环（127.0.0.1）上听的程序不影响内核转发，不会报。
+- **红色「端口绑定失败」**：用户态转发（Realm、Socat、GOST、Nginx、FXP）起不来，原因是端口被占，例如 `443/TCP 被 nginx（pid 812）占用`。
+
+处理方式：停掉占用端口的程序，或把规则换一个端口。冲突消失后下一轮核对（约一分钟）告警自动消失。随机分配端口时会避开最近几小时内见过被占的端口。老 Agent 不做这项核对，不会出现黄色告警。
+
+```bash
+ss -H -lntup | grep -E ':(入口端口)\b'
+```
+
+---
+
 ### 规则状态异常或流量不增长
 
 先区分界面状态：“等待探测”表示尚无探测结果；“检测中”表示本轮探测尚未结束；“部分可用”表示部分入口或分支失败；“不可用”才表示最近一次检测失败；“停用”表示规则未启用。首次进入页面还未发起探测时显示“等待探测”不是故障。
