@@ -193,6 +193,8 @@ type GroupForm = {
   udpOverTcpPort: number;
   domain: string;
   recordType: "A" | "AAAA" | "CNAME";
+  /** 双栈 DDNS：A 组同时发 AAAA、AAAA 组同时发 A，跟着同一批成员（server/forwardGroupDualStackDdns.ts） */
+  ddnsDualStack: boolean;
   failoverSeconds: string;
   recoverSeconds: string;
   rateLimitMbps: string;
@@ -229,6 +231,7 @@ const makeDefaultForm = (): GroupForm => ({
   udpOverTcpPort: 0,
   domain: "",
   recordType: "A",
+  ddnsDualStack: false,
   failoverSeconds: "60",
   recoverSeconds: "120",
   rateLimitMbps: "0",
@@ -1091,6 +1094,7 @@ export function ForwardGroupsContent({
       udpOverTcpPort: Number(group.udpOverTcpPort || 0),
       domain: group.domain || "",
       recordType: group.recordType || "A",
+      ddnsDualStack: !!group.ddnsDualStack,
       failoverSeconds: String(Number(group.failoverSeconds || 60)),
       recoverSeconds: String(Number(group.recoverSeconds || 120)),
       rateLimitMbps: String(Math.max(0, Number(group.rateLimitMbps) || 0)),
@@ -1522,6 +1526,7 @@ export function ForwardGroupsContent({
       exitStrategy: isExitGroup ? normalizeExitGroupStrategy(form.exitStrategy) : "round_robin",
       domain: isFailoverMode || isEntryGroup ? form.domain.trim() || null : null,
       recordType: isChainGroup || isExitGroup ? "A" : form.recordType,
+      ddnsDualStack: (isFailoverMode || isEntryGroup) && form.recordType !== "CNAME" && form.ddnsDualStack,
       failoverSeconds,
       recoverSeconds,
       rateLimitMbps: runtimeConfigSupported ? rateLimitMbps : 0,
@@ -2506,6 +2511,21 @@ export function ForwardGroupsContent({
                     </label>
                   )}
                 </div>
+                {/*
+                  双栈（上游 2.3.294）：成员挑选、健康、切换照旧按上面的记录类型；另一族跟着同一批成员发，
+                  切走一台机器两族一起切 —— 只切 A 不切 AAAA，双栈客户端会继续连到坏机器上。
+                */}
+                {form.recordType !== "CNAME" && (
+                  <label className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
+                    <span className="space-y-1">
+                      <span className="block text-sm font-medium">{form.recordType === "AAAA" ? "同时发 IPv4（A）" : "同时发 IPv6（AAAA）"}</span>
+                      <span data-fx-help="" className="block text-xs text-muted-foreground">
+                        按上面选中的成员，把它们的{form.recordType === "AAAA" ? " IPv4 " : " IPv6 "}也发成同名记录；没有这一族地址的成员少一条，全都没有时清空这一族。
+                      </span>
+                    </span>
+                    <Checkbox aria-label="双栈 DDNS" checked={form.ddnsDualStack} onCheckedChange={(ddnsDualStack) => setForm({ ...form, ddnsDualStack })} />
+                  </label>
+                )}
 
                 {form.groupMode === "entry" && (
                   <div className="space-y-3 rounded-md border border-border/60 p-3">

@@ -188,7 +188,7 @@
     "server/googleOidc.ts": 3,
     "server/gostProxyProtocol.ts": 2,
     "server/hostAddressRuntime.ts": 9,
-    "server/hostDdns.ts": 10,
+    "server/hostDdns.ts": 9,
     "server/hostGeo.ts": 18,
     "server/hostHeartbeatPolicy.ts": 2,
     "server/hostStatusNotifier.ts": 20,

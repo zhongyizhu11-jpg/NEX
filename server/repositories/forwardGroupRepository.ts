@@ -18,7 +18,8 @@ import {
 import { pushAgentRefresh } from "../agentEvents";
 import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
-import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues } from "../ddns";
+import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues, type DdnsRecordValuesInput } from "../ddns";
+import { forwardGroupMirrorRecordType, mirrorForwardGroupDdnsValues } from "../forwardGroupDualStackDdns";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { withForwardTestDates } from "./forwardTestRepository";
@@ -2802,6 +2803,7 @@ export function filterForwardGroupFieldsForUse(
     forwardType: group.forwardType,
     domain: group.domain,
     recordType: group.recordType,
+    ddnsDualStack: dbBool(group.ddnsDualStack),
     trafficMultiplier: group.trafficMultiplier,
     failoverSeconds: group.failoverSeconds,
     recoverSeconds: group.recoverSeconds,
@@ -4812,10 +4814,42 @@ async function evaluateMemberHealth(member: any, group: any) {
   };
 }
 
+/**
+ * 组 DDNS 写服务商都走这里：先写主记录，开了双栈（forwardGroupDualStackDdns）再按同一批成员写另一族。
+ * 副记录失败也算这次同步失败 —— 两族不一致比都没更新更糟（双栈客户端会连到已经切走的那台）。
+ */
+type ForwardGroupDdnsTarget = { id?: unknown; domain?: unknown; recordType?: unknown; ddnsDualStack?: unknown; ddnsAutoResolveEnabled?: unknown };
+
+async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput) {
+  await updateDdnsRecordValues(input);
+  const mirrorType = forwardGroupMirrorRecordType(group);
+  if (!mirrorType) return;
+  const primaryType = normalizeForwardGroupRecordType(input.recordType);
+  const pairs: Array<{ primary: string; mirror: string }> = [];
+  const members: unknown[] = sortedMembers(group);
+  for (const member of members) {
+    const primary = await memberDdnsValue(member, primaryType).catch(() => "");
+    const mirror = primary ? await memberDdnsValue(member, mirrorType).catch(() => "") : "";
+    if (primary && mirror) pairs.push({ primary, mirror });
+  }
+  await updateDdnsRecordValues({ ...input, recordType: mirrorType, values: mirrorForwardGroupDdnsValues(input.values, pairs) });
+}
+
+/** 关掉双栈时把面板发过的副记录清掉：留着它，双栈客户端会一直连那条不再跟着切换的记录。 */
+export async function clearForwardGroupMirrorDdns(group: ForwardGroupDdnsTarget) {
+  const mirrorType = forwardGroupMirrorRecordType(group);
+  const domain = String(group?.domain || "").trim();
+  if (!mirrorType || !domain || group?.ddnsAutoResolveEnabled === false) return;
+  const ddnsSettings = await getDdnsSettings();
+  if (!ddnsSettings.enabled || ddnsSettings.provider === "disabled") return;
+  await updateDdnsRecordValues({ groupId: Number(group.id), domain, recordType: mirrorType, values: [], ttl: Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL) });
+}
+
 function exactDdnsSignature(group: any, value: string) {
   return [
     String(group?.domain || "").trim().toLowerCase(),
     normalizeForwardGroupRecordType(group?.recordType),
+    forwardGroupMirrorRecordType(group) || "",
     value,
   ].join("|");
 }
@@ -4868,7 +4902,7 @@ async function preserveForwardGroupDdns(
       const retainedValues = String(group.lastDdnsValue || "").split(",").map((value) => value.trim()).filter((value) => value && allowedValues.has(value));
       const changed = retainedValues.join(",") !== String(group.lastDdnsValue || "").trim();
       if ((changed || options.forceSync) && ddnsSettings.enabled && ddnsSettings.provider !== "disabled" && group.ddnsAutoResolveEnabled !== false && domain) {
-        await updateDdnsRecordValues({ groupId, domain, recordType, values: retainedValues, ttl: Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL) }).catch((error) => {
+        await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: retainedValues, ttl: Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL) }).catch((error) => {
           console.warn(`[ForwardGroup] removing traffic-excluded DDNS values failed group=${groupId}: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
@@ -4916,7 +4950,7 @@ async function preserveForwardGroupDdns(
   }
 
   try {
-    await updateDdnsRecordValues({
+    await publishForwardGroupDdnsValues(group, {
       groupId,
       domain,
       recordType,
@@ -5301,7 +5335,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
     return;
   }
   try {
-    await updateDdnsRecordValues({
+    await publishForwardGroupDdnsValues(group, {
       groupId: Number(group.id),
       domain: String(group.domain || ""),
       recordType,
@@ -5428,7 +5462,7 @@ async function syncSingleForwardGroupDdns(
 
   try {
     await insertForwardGroupEvent(group.id, memberId, "ddns-update", `Starting DDNS update; ${detail}${forceSync ? " force=true" : ""}`);
-    await updateDdnsRecordValues({
+    await publishForwardGroupDdnsValues(group, {
       groupId: Number(group.id),
       domain: String(group.domain || ""),
       recordType,

@@ -76,6 +76,7 @@ func heartbeatStaticChanged(a, b heartbeatStaticSnapshot) bool {
 		a.IPv6 != b.IPv6 ||
 		a.PrivateIPv4 != b.PrivateIPv4 ||
 		a.DefaultNetworkInterface != b.DefaultNetworkInterface ||
+		a.PublicAddresses != b.PublicAddresses ||
 		a.CPUInfo != b.CPUInfo ||
 		a.MemoryTotal != b.MemoryTotal ||
 		a.SwapTotal != b.SwapTotal ||
@@ -106,6 +107,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 		IPv6:                    ipv6,
 		PrivateIPv4:             localPrivateIPv4(),
 		DefaultNetworkInterface: defaultNetworkInterface(),
+		PublicAddresses:         publicAddressListSignature(),
 		CPUInfo:                 cpuInfo(),
 		MemoryTotal:             memoryTotal,
 		SwapTotal:               swapTotal,
@@ -184,6 +186,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	if shouldReportStatic && ipv6 != "" {
 		payload["ipv6"] = ipv6
 	}
+	addPublicAddressReport(payload, shouldReportStatic, ipv4, ipv6)
 	if compactAgentReports.Load() && shouldReportStatic {
 		payload["cpuInfo"] = currentStatic.CPUInfo
 		payload["agentVersion"] = Version

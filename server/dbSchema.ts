@@ -300,6 +300,8 @@ const tables: TableDef[] = [
       c("trafficAutoReset", "bool", { notNull: true, default: false }), c("trafficResetDay", "int", { notNull: true, default: 1 }),
       c("lastTrafficReset", "epoch"), c("ddnsEnabled", "bool", { notNull: true, default: false }), c("ddnsDomain", "text"),
       c("ddnsRecordType", "varchar", { length: 8, notNull: true, default: "A" }), c("ddnsIpVersion", "varchar", { length: 8, notNull: true, default: "ipv4" }),
+      // 主机 DDNS 的值：primary 只发主 IP（老配置默认就是它，行为不变），all 发检测到的全部地址（shared/hostDdnsPlan）
+      c("ddnsValueMode", "varchar", { length: 8, notNull: true, default: "primary" }),
       c("lastDdnsValue", "text"), c("lastDdnsAt", "epoch"), c("lastDdnsError", "text"), c("networkInterface", "text"), c("sortOrder", "int", { notNull: true, default: 0 }),
       c("geoCountryCode", "varchar", { length: 8 }), c("geoCountryName", "text"), c("geoRegion", "text"), c("geoEmoji", "varchar", { length: 16 }),
       c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("geoUpdatedAt", "epoch"),
@@ -309,6 +311,8 @@ const tables: TableDef[] = [
       c("geoManual", "bool", { notNull: true, default: false }),
       // 「Agent 检测 IP」手改过：心跳不再覆盖 ip / ipv4 / ipv6（agentAddressState）
       c("addressManual", "bool", { notNull: true, default: false }),
+      // Agent 2.2.253 起上报的网卡全部公网地址（JSON）和管理员挑的主 IP（空 = 没挑过），见 shared/hostPublicAddresses
+      c("detectedAddresses", "text"), c("primaryIpv4", "text"), c("primaryIpv6", "text"),
       c("portRangeStart", "int"), c("portRangeEnd", "int"), c("portAllowlist", "text"),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),
@@ -666,6 +670,8 @@ const tables: TableDef[] = [
       c("chinaHealthCheckMethod", "varchar", { length: 16, notNull: true, default: "tcp" }),
       c("telegramSwitchNotifyEnabled", "bool", { notNull: true, default: false }),
       c("ddnsAutoResolveEnabled", "bool", { notNull: true, default: true }), c("autoFailback", "bool", { notNull: true, default: true }),
+      // 双栈 DDNS：A / AAAA 组同时发另一族，跟着同一批成员走（server/forwardGroupDualStackDdns.ts）。默认关，老组不变。
+      c("ddnsDualStack", "bool", { notNull: true, default: false }),
       // Multi-front-VPS bandwidth aggregation. Off by default so existing entry
       // groups keep publishing one equal record per healthy member.
       c("bandwidthAggregationEnabled", "bool", { notNull: true, default: false }),

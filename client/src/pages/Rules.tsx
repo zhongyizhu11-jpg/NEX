@@ -1672,8 +1672,14 @@ function hostEntryFamilies(host: any | null | undefined) {
   if (manualEntry) {
     addLiteralHostFamily(families, manualEntry);
   } else if (hostDdnsDomain(host)) {
-    const ddnsFamily = hostDdnsFamily(host);
-    if (ddnsFamily) families.add(ddnsFamily);
+    // 双栈 DDNS（A + AAAA）的域名两族都能解析
+    if (String(host?.ddnsIpVersion || "").trim().toLowerCase() === "dual") {
+      families.add("ipv4");
+      families.add("ipv6");
+    } else {
+      const ddnsFamily = hostDdnsFamily(host);
+      if (ddnsFamily) families.add(ddnsFamily);
+    }
   } else {
     addLiteralHostFamily(families, hostAutoIpv4(host) || hostAutoIpv6(host) || host?.ip);
   }

@@ -33,6 +33,8 @@ const VOLATILE_KEYS = new Set([
   "agentLastAppliedRevision", "agentLastReceivedHash", "agentLastAppliedHash",
   // 规则专属域名是面板对 DNS 的簿记，和 Agent 跑的配置无关，不能让它改动配置摘要。
   "entryDomain", "entryDomainValue", "entryDomainAt", "entryDomainError",
+  // Agent 上报的网卡地址列表（shared/hostPublicAddresses）是检测结果，不是谁改的配置。
+  "detectedAddresses",
 ]);
 
 type SecretMode = "redact" | "hash" | "plain";

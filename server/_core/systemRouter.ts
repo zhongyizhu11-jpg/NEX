@@ -1694,6 +1694,8 @@ function publicAdminFlags(all: Record<string, string | null>) {
   return {
     telegramBotReady: telegramEnabled && telegramConfigured,
     ddnsEnabled: all.ddnsEnabled === "true" && ddnsProvider !== "disabled",
+    // 主机 DDNS「全部 IP」要按服务商说明能不能同名多值（shared/hostDdnsPlan）；只有服务商名，没有密钥
+    ddnsProvider,
     linkWizardEnabled: all.linkWizardEnabled === "true",
   };
 }

@@ -1,5 +1,13 @@
 ﻿import { appendPanelLog } from "./_core/panelLogger";
-import { getDdnsSettings, updateDdnsRecord } from "./ddns";
+import { getDdnsSettings, updateDdnsRecord, updateDdnsRecordValues } from "./ddns";
+import {
+  describeHostDdnsPlan,
+  hostDdnsPlanHasWork,
+  hostDdnsRecordTypeFor,
+  normalizeHostDdnsIpVersion,
+  planHostDdnsRecords,
+  type HostDdnsPlanSource,
+} from "../shared/hostDdnsPlan";
 import * as db from "./db";
 
 const HOST_DDNS_RETRY_BASE_MS = 60_000;
@@ -131,29 +139,66 @@ function finishHostDdnsUpdate(hostId: number, retryAt: number | null = null) {
   }
 }
 
-function normalizeRecordType(value: unknown) {
-  return String(value || "A").toUpperCase() === "AAAA" ? "AAAA" : "A";
-}
+export type HostDdnsWriter = {
+  updateRecord: typeof updateDdnsRecord;
+  updateValues: typeof updateDdnsRecordValues;
+};
 
-function normalizeIpVersion(value: unknown, recordType: string) {
-  if (value === "ipv6" || (!value && normalizeRecordType(recordType) === "AAAA")) return "ipv6";
-  return "ipv4";
-}
+const defaultHostDdnsWriter: HostDdnsWriter = { updateRecord: updateDdnsRecord, updateValues: updateDdnsRecordValues };
 
+// 最近一次读到的服务商：只给 scheduleHostDdnsUpdate 估「要不要真调服务商」用，真正执行时会重新读设置。
+let lastKnownDdnsProvider = "";
+
+/**
+ * 原来的单值目标（日志、错误提示还在用）：主记录类型和它的值。
+ * 记录要发哪些、发几个由 shared/hostDdnsPlan.planHostDdnsRecords 决定。
+ */
 export function hostDdnsTargetValue(host: any) {
-  const recordType = normalizeRecordType(host?.ddnsRecordType);
-  const ipVersion = normalizeIpVersion(host?.ddnsIpVersion, recordType);
-  const value = String(ipVersion === "ipv6" ? host?.ipv6 || "" : host?.ipv4 || "").trim();
+  const ipVersion = normalizeHostDdnsIpVersion(host?.ddnsIpVersion, host?.ddnsRecordType);
+  const recordType = hostDdnsRecordTypeFor(ipVersion);
+  const value = String(recordType === "AAAA" ? host?.ipv6 || "" : host?.ipv4 || "").trim();
   return { recordType, ipVersion, value };
+}
+
+/** 计划要读的主机栏：地址、DDNS 配置和上次发出去的签名。 */
+type HostDdnsHost = HostDdnsPlanSource & { lastDdnsValue?: unknown; lastDdnsError?: unknown };
+
+export function hostDdnsPlanFor(host: HostDdnsHost | null | undefined, provider: unknown = lastKnownDdnsProvider) {
+  return planHostDdnsRecords(host || {}, { provider, previous: host?.lastDdnsValue });
+}
+
+function hostDdnsCurrent(host: HostDdnsHost, plan: ReturnType<typeof planHostDdnsRecords>) {
+  return String(host?.lastDdnsValue || "") === plan.signature && !host?.lastDdnsError;
 }
 
 function hostNeedsDdnsUpdate(host: any) {
   const hostId = Number(host?.id || 0);
   const domain = String(host?.ddnsDomain || "").trim();
   if (!hostId || !host?.ddnsEnabled || !domain) return false;
-  const target = hostDdnsTargetValue(host);
-  if (!target.value) return false;
-  return String(host?.lastDdnsValue || "") !== target.value || !!host?.lastDdnsError;
+  const plan = hostDdnsPlanFor(host);
+  if (!hostDdnsPlanHasWork(plan)) return false;
+  return !hostDdnsCurrent(host, plan);
+}
+
+/**
+ * 把计划写到服务商。老配置（plan.legacy 且没有要清理的）就是原来那一次 updateDdnsRecord，参数一字不差。
+ * 多条记录按 A、AAAA 的次序挨个写；中间一条失败就整体算失败，下次重试从头再来（每一步都是幂等的）。
+ */
+export async function applyHostDdnsPlan(
+  plan: ReturnType<typeof planHostDdnsRecords>,
+  target: { domain: string; hostId: number },
+  writer: HostDdnsWriter = defaultHostDdnsWriter,
+) {
+  for (const record of plan.records) {
+    if (record.multiValue) {
+      await writer.updateValues({ domain: target.domain, recordType: record.recordType, values: record.values, groupId: -target.hostId });
+    } else {
+      await writer.updateRecord({ domain: target.domain, recordType: record.recordType, value: record.values[0], groupId: -target.hostId });
+    }
+  }
+  for (const recordType of plan.removals) {
+    await writer.updateValues({ domain: target.domain, recordType, values: [], groupId: -target.hostId });
+  }
 }
 
 async function retryHostDdnsUpdate(hostId: number, options: { force?: boolean } = {}) {
@@ -183,40 +228,41 @@ async function executeHostDdnsUpdate(
       return;
     }
 
-    const target = hostDdnsTargetValue(host);
-    if (!target.value) {
+    const settings = await getDdnsSettings();
+    lastKnownDdnsProvider = settings.provider;
+    const plan = hostDdnsPlanFor(host, settings.provider);
+    if (!hostDdnsPlanHasWork(plan)) {
       clearHostDdnsRetry(hostId);
-      await db.updateHost(hostId, { lastDdnsError: `No reported ${target.ipVersion.toUpperCase()} address` } as any);
+      const families = plan.missing.length ? plan.missing : [hostDdnsTargetValue(host).ipVersion];
+      await db.updateHost(hostId, { lastDdnsError: `No reported ${families.map((family) => family.toUpperCase()).join("/")} address` });
       return;
     }
-    if (!options.force && String(host?.lastDdnsValue || "") === target.value && !host?.lastDdnsError) {
+    if (!options.force && hostDdnsCurrent(host, plan)) {
       clearHostDdnsRetry(hostId);
       return;
     }
 
-    const settings = await getDdnsSettings();
     if (!settings.enabled || settings.provider === "disabled") {
       throw new Error("DDNS service is not enabled in system settings");
     }
-    await updateDdnsRecord({
-      domain,
-      recordType: target.recordType,
-      value: target.value,
-      groupId: -hostId,
-    });
+    await applyHostDdnsPlan(plan, { domain, hostId });
     await db.updateHost(hostId, {
-      lastDdnsValue: target.value,
+      lastDdnsValue: plan.signature,
       lastDdnsAt: new Date(),
       lastDdnsError: null,
     } as any);
     clearHostDdnsRetry(hostId);
-    appendPanelLog("info", `[HostDDNS] host=${hostId} ${target.recordType} ${domain} -> ${target.value} reason=${reason}`);
+    if (plan.legacy && plan.records.length === 1 && plan.removals.length === 0) {
+      appendPanelLog("info", `[HostDDNS] host=${hostId} ${plan.records[0].recordType} ${domain} -> ${plan.records[0].values[0]} reason=${reason}`);
+    } else {
+      appendPanelLog("info", `[HostDDNS] host=${hostId} ${domain} -> ${describeHostDdnsPlan(plan)} reason=${reason}${plan.notices.length ? ` note=${plan.notices.join(" ")}` : ""}`);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     retryAt = hostDdnsUpdates.recordFailure(hostId);
     await db.updateHost(hostId, { lastDdnsError: message } as any).catch(() => undefined);
     const domain = String(host?.ddnsDomain || "").trim().replace(/\.+$/, "").toLowerCase() || "-";
-    const value = host ? hostDdnsTargetValue(host).value || "-" : "-";
+    const value = host ? describeHostDdnsPlan(hostDdnsPlanFor(host)) : "-";
     appendPanelLog("warn", `[HostDDNS] host=${hostId} update failed domain=${domain} value=${value}: ${message}`);
   } finally {
     // Arm retries only after releasing the per-host in-flight guard. Otherwise
@@ -235,9 +281,8 @@ export function scheduleHostDdnsUpdate(
   if (options.force) hostDdnsRetryScheduler.replace(hostId, null);
   if (!hostDdnsUpdates.tryStart(hostId, options)) return false;
   const domain = String(host?.ddnsDomain || "").trim();
-  const target = hostDdnsTargetValue(host);
   const willAttemptProviderUpdate = options.force
-    ? !!host?.ddnsEnabled && !!domain && !!target.value
+    ? !!host?.ddnsEnabled && !!domain && hostDdnsPlanHasWork(hostDdnsPlanFor(host))
     : hostNeedsDdnsUpdate(host);
   void executeHostDdnsUpdate(hostId, () => host, reason, options);
   return willAttemptProviderUpdate;
@@ -248,6 +293,7 @@ export async function reconcileHostDdnsRecords(
   options: { force?: boolean } = {},
 ) {
   const settings = await getDdnsSettings();
+  lastKnownDdnsProvider = settings.provider;
   if (!settings.enabled || settings.provider === "disabled") return 0;
   const hosts = await db.getHosts();
   let queued = 0;
@@ -255,9 +301,9 @@ export async function reconcileHostDdnsRecords(
     const hostId = Number(host?.id || 0);
     const domain = String(host?.ddnsDomain || "").trim();
     if (!hostId || !host?.ddnsEnabled || !domain) continue;
-    const target = hostDdnsTargetValue(host);
-    if (!target.value) continue;
-    if (!options.force && String(host?.lastDdnsValue || "") === target.value && !host?.lastDdnsError) continue;
+    const plan = hostDdnsPlanFor(host, settings.provider);
+    if (!hostDdnsPlanHasWork(plan)) continue;
+    if (!options.force && hostDdnsCurrent(host, plan)) continue;
     if (!options.force && !hostDdnsUpdates.canReconcile(hostId)) continue;
     if (scheduleHostDdnsUpdate(host, reason, options)) queued += 1;
   }

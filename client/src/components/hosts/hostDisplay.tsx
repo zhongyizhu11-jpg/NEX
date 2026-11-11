@@ -1,4 +1,5 @@
 import { formatBytes } from "@shared/formatBytes";
+import { hostAddressRows, hostPrimaryAddressWarnings, type HostAddressRow, type HostPrimaryAddressSource } from "@shared/hostPublicAddresses";
 
 // 这里原来自带一份实现（全站共 7 份各不相同）。改成转发共享的那一份，
 // 现有的调用方（MyHostsSection 等）不用改导入。
@@ -108,6 +109,31 @@ export function hostAddressText(host: any) {
 export function hostPrimaryAddressText(host: any) {
   const rows = hostPrimaryAddressLines(host);
   return rows.map((row) => `${row.label} ${row.value}`).join("  /  ") || "-";
+}
+
+/** 一个地址后面的标记：「主」= 现在在用的那个，「出口」= Agent 出网用的，「未检测到」= 正在用但网卡上已经没有了。 */
+export function hostAddressRowTags(row: HostAddressRow): string[] {
+  const tags: string[] = [];
+  if (row.primary) tags.push(row.chosen ? "主（已选）" : "主");
+  if (row.egress) tags.push("出口");
+  if (!row.detected && !row.egress && row.primary) tags.push("未检测到");
+  return tags;
+}
+
+/**
+ * 多 IP 主机（Agent 2.2.253+ 报了网卡上的全部公网地址）：卡片 / 表格上主地址后面写「+N」，
+ * 悬停列出全部，主 IP 标出来。只有一个地址的主机 extra 是 0，什么都不多画。
+ */
+export function hostExtraAddressSummary(host: HostPrimaryAddressSource | null | undefined) {
+  const rows = hostAddressRows(host);
+  const extra = rows.filter((row) => !row.primary).length;
+  const title = rows
+    .map((row) => {
+      const tags = hostAddressRowTags(row);
+      return `${row.family === "ipv4" ? "IPv4" : "IPv6"} ${row.address}${tags.length ? `（${tags.join(" · ")}）` : ""}`;
+    })
+    .join("\n");
+  return { rows, extra, title, warnings: hostPrimaryAddressWarnings(host) };
 }
 
 /** 节点维护（2.3.496）：开着就从所有线路、转发组、入口组、出口组的候选里拿掉。 */

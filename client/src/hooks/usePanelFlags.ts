@@ -36,6 +36,7 @@ export function usePanelFlags(options: { enabled?: boolean } = {}) {
     agentVersion: info?.agentVersion ?? "",
     telegramBotReady: !!info?.adminFlags?.telegramBotReady,
     ddnsEnabled: !!info?.adminFlags?.ddnsEnabled,
+    ddnsProvider: String(info?.adminFlags?.ddnsProvider || ""),
     linkWizardEnabled: !!info?.adminFlags?.linkWizardEnabled,
   }), [info]);
   return {
