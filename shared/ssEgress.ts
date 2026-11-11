@@ -29,7 +29,7 @@
 
 import { parseProxyNodeLink } from "./proxyNode";
 import { isAgentVersionAtLeast } from "./version";
-import { VLESS_EGRESS_TCP_ONLY_MESSAGE, VLESS_EGRESS_TUNNEL_MESSAGE } from "./vlessEgress";
+import { VLESS_EGRESS_TCP_ONLY_MESSAGE, VLESS_EGRESS_TUNNEL_MESSAGE, VLESS_EGRESS_UDP_SUPPORTED } from "./vlessEgress";
 
 /** Agent 从这一版起会在写入 gost 配置前校验 Shadowsocks 出口节点。比它旧的 Agent 上，带出口的规则按停用下发。 */
 export const SS_EGRESS_AGENT_VERSION = "2.2.226";
@@ -386,8 +386,8 @@ export function ruleEgressColumnsOf(rule: any): RuleEgressColumns {
     egressType,
     egressInboundId: ruleEgressUsesInbound(egressType) ? Number(rule?.egressInboundId || 0) || null : null,
     egressConfigJson: ruleEgressUsesLink(egressType) ? (String(rule?.egressConfigJson || "") || null) : null,
-    // VLESS 出口只转 TCP，库里不会存成 UDP 走出口。
-    egressUdp: ruleEgressProtocolOf(egressType) === "shadowsocks" && truthy(rule?.egressUdp),
+    // VLESS 出口的 UDP 也走同一个桥接（shared/vlessEgress.ts）；总开关关掉时库里不会存成 UDP 走出口。
+    egressUdp: (ruleEgressProtocolOf(egressType) === "shadowsocks" || VLESS_EGRESS_UDP_SUPPORTED) && truthy(rule?.egressUdp),
   };
 }
 
@@ -441,14 +441,18 @@ export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
   if (egressProtocol === "vless") {
     /*
       VLESS 出口靠入口机上的 sing-box 桥接（shared/vlessEgress.ts），隧道出口机那一侧的本机转发目前只会接 Shadowsocks
-      链；只转 TCP（gost 的 socks5 UDP 和 sing-box 没验过互通）。其余几条和 Shadowsocks 出口一样。
+      链。UDP 经同一个桥接（socks5 UDP ASSOCIATE → xudp），协议和 egressUdp 要对得上的规矩和 Shadowsocks 一样；
+      不同的是不看入口机的运行时能力：这条路只用上游 gost 本来就有的 socks5 UDP，Agent 2.2.253 的门槛就够了。
     */
     if (Number(shape.tunnelId || 0) > 0) return VLESS_EGRESS_TUNNEL_MESSAGE;
     const vlessGroupMode = String(shape.forwardGroupMode ?? "").trim();
     if (vlessGroupMode && vlessGroupMode !== "port") return "转发链 / 转发组上的规则不能使用出口，请用端口转发或直连规则";
     if (truthy(shape.failoverEnabled)) return "使用出口的规则暂不支持线路组 / 主备线路";
-    if (String(shape.protocol ?? "both") !== "tcp" || truthy(shape.egressUdp)) return VLESS_EGRESS_TCP_ONLY_MESSAGE;
-    return null;
+    if (!VLESS_EGRESS_UDP_SUPPORTED) {
+      if (String(shape.protocol ?? "both") !== "tcp" || truthy(shape.egressUdp)) return VLESS_EGRESS_TCP_ONLY_MESSAGE;
+      return null;
+    }
+    return ruleEgressUdpConsistencyError(shape.protocol, shape.egressUdp);
   }
   // 走隧道时 SS 客户端跑在隧道的出口机上：入口 → 隧道 → 出口机 → SS 落地 → 目标（server/agentHeartbeatRoute 的 tunnelEgress）。
   if (Number(shape.tunnelId || 0) > 0 && !ssEgressTunnelModeSupported(shape.tunnelMode)) return "Nginx 隧道不能接 Shadowsocks 出口，请换 NEX 或 GOST 隧道";
@@ -462,7 +466,16 @@ export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
     if (wantsUdp || udp) return SS_EGRESS_UDP_UNSUPPORTED_MESSAGE;
     return null;
   }
-  // 界面上 UDP 走不走出口跟着协议（TCP+UDP 时走）；这几句给直接调接口、把两个字段写得对不上的。
+  return ruleEgressUdpConsistencyError(protocol, udp);
+}
+
+/**
+ * 界面上 UDP 走不走出口跟着协议（TCP+UDP 时走）；这几句给直接调接口、把两个字段写得对不上的。
+ * Shadowsocks、VLESS 两种出口共用：UDP 绝不能绕过出口直连目标。
+ */
+function ruleEgressUdpConsistencyError(protocolRaw: unknown, egressUdp: unknown): string | null {
+  const protocol = String(protocolRaw ?? "both");
+  const udp = truthy(egressUdp);
   if (protocol === "udp" && !udp) return "协议只有 UDP 时 UDP 必须走出口（egressUdp）";
   if (protocol === "both" && !udp) return "协议是 TCP+UDP 时 UDP 也要走出口（egressUdp），或者把协议改成 TCP（否则 UDP 会绕过出口直连目标）";
   if (protocol === "tcp" && udp) return "协议是 TCP，不需要 UDP 走出口";
@@ -527,8 +540,9 @@ export function ruleEgressSummaryText(egress: { type: unknown; landingHostName?:
   if (type === "ss_link") return `经 外部 SS 出口${egress?.udp === true ? "（含 UDP，需对端支持 UDP）" : ""}`;
   if (type === "vless_host") {
     const name = String(egress?.landingHostName || "").trim();
-    return `经 落地主机 ${name || "（已删除）"} VLESS 出口`;
+    return `经 落地主机 ${name || "（已删除）"} VLESS 出口${udp}`;
   }
-  if (type === "vless_link") return "经 外部 VLESS 出口";
+  // 和外部 SS 一样：对端（Xray / sing-box）收不收 xudp 面板查不到，写成「需对端支持」。
+  if (type === "vless_link") return `经 外部 VLESS 出口${egress?.udp === true ? "（含 UDP，需对端支持 UDP）" : ""}`;
   return "";
 }

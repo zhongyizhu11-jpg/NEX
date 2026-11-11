@@ -1,14 +1,14 @@
 /**
  * 规则编辑器里的「出口」一段：直接连接 / 落地主机 / 外部链接。落地主机上的入站可以是 Shadowsocks，也可以是
  * VLESS + REALITY + Vision（2.3.525）；外部链接粘 ss:// 或 vless://。具体存成哪种出口（ss_host / vless_host、
- * ss_link / vless_link）跟着选中的入站 / 粘的链接走，三个按钮不用变成五个。VLESS 出口只转 TCP、不接隧道，
- * 入口机 Agent 要 2.2.253 起（shared/vlessEgress.ts）。
+ * ss_link / vless_link）跟着选中的入站 / 粘的链接走，三个按钮不用变成五个。VLESS 出口不接隧道，入口机 Agent
+ * 要 2.2.253 起（shared/vlessEgress.ts）；它的 UDP（协议选 TCP+UDP）经同一个本机桥接走 xudp，不看下面说的运行时能力。
  *
  * 规则（能用哪些方法、UDP / SS2022 要入口机有什么能力、规则形态的限制）都在 shared/ssEgress.ts，
  * 和服务端同一份；这里只负责选和提示。最终以服务端校验为准。落地主机 / 入站的下拉和「一键创建」
  * 是和节点分流共用的落地选择器（proxy/LandingPicker.tsx）。
  *
- * UDP 走出口（规则协议选 TCP+UDP）和 SS2022 出口要每一台入口机都报了能力（Agent 2.2.227 起、gost 运行时
+ * UDP 走 Shadowsocks 出口（规则协议选 TCP+UDP）和 SS2022 出口要每一台入口机都报了能力（Agent 2.2.227 起、gost 运行时
  * 3.2.6-nex3 起）：撑不起时 TCP+UDP 选不了、SS2022 入站不可选，并写清楚是哪台机器、要升级什么。
  */
 
@@ -32,7 +32,7 @@ import {
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressType,
 } from "@shared/ssEgress";
-import { parseVlessEgressLink, VLESS_EGRESS_AGENT_VERSION } from "@shared/vlessEgress";
+import { parseVlessEgressLink, VLESS_EGRESS_AGENT_VERSION, VLESS_EGRESS_UDP_SUPPORTED } from "@shared/vlessEgress";
 
 export type RuleEgressFormValue = {
   egressType: RuleEgressType;
@@ -172,7 +172,13 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
     onChange({ egressType: type, egressUdp: false });
     if (type !== "none") onEgressEnabled(type);
   };
-  /** 选中的入站是 VLESS 时出口跟着变成 vless_host（反过来也一样）；UDP 只有 SS 能走。 */
+  /**
+   * 换了出口协议（SS ↔ VLESS）时 TCP+UDP 能不能留着：VLESS 的 UDP 只要 Agent 够新（上面另有提示），
+   * SS 的 UDP 还要入口机报了能力 —— 撑不起就退回 TCP，免得留下一个保存不了的组合。
+   */
+  const keepUdpFor = (type: RuleEgressType) => value.egressUdp
+    && (ruleEgressProtocolOf(type) === "vless" ? VLESS_EGRESS_UDP_SUPPORTED : SS_EGRESS_UDP_SUPPORTED && capabilities.udp);
+  /** 选中的入站是 VLESS 时出口跟着变成 vless_host（反过来也一样）。 */
   const pickInbound = (next: { hostId: number | null; inboundId: number | null }) => {
     const host = hosts.find((item) => Number(item.hostId) === Number(next.hostId));
     const inbound = host?.inbounds.find((item) => Number(item.id) === Number(next.inboundId));
@@ -180,12 +186,12 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
     onChange({
       egressHostId: next.hostId,
       egressInboundId: next.inboundId,
-      ...(type !== value.egressType ? { egressType: type, egressUdp: false } : {}),
+      ...(type !== value.egressType ? { egressType: type, egressUdp: keepUdpFor(type) } : {}),
     });
   };
   const changeLink = (link: string) => {
     const type = egressLinkType(link);
-    onChange({ egressLink: link, ...(type !== value.egressType ? { egressType: type, egressUdp: false, egressLinkMasked: "" } : {}) });
+    onChange({ egressLink: link, ...(type !== value.egressType ? { egressType: type, egressUdp: keepUdpFor(type), egressLinkMasked: "" } : {}) });
   };
 
   return (
@@ -242,7 +248,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
           {!(selectedHost && usableInbounds.length === 0) && (
             <p className="text-meta leading-5 text-muted-foreground">
               {vless
-                ? `${dialer}上起一个只听本机的 sing-box，经这个 VLESS Reality 入站让落地去连目标（只转 TCP）；入站换密钥、改端口后规则自动跟上。`
+                ? `${dialer}上起一个只听本机的 sing-box，经这个 VLESS Reality 入站让落地去连目标（TCP+UDP 时 UDP 也走它）；入站换密钥、改端口后规则自动跟上。`
                 : `${dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。`}
             </p>
           )}
@@ -290,7 +296,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
             <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.vlessReason}</p>
           )}
           <p className="text-meta leading-5 text-muted-foreground">
-            Shadowsocks 支持 {SS_EGRESS_METHODS.join(" / ")}，不支持带插件的链接；VLESS 只收 RAW/TCP + REALITY + xtls-rprx-vision（只转 TCP）。链接里的密码 / UUID 由面板加密保存，能接触到面板密钥的服务器管理员可以解出它。
+            Shadowsocks 支持 {SS_EGRESS_METHODS.join(" / ")}，不支持带插件的链接；VLESS 只收 RAW/TCP + REALITY + xtls-rprx-vision（UDP 经 XUDP）。链接里的密码 / UUID 由面板加密保存，能接触到面板密钥的服务器管理员可以解出它。
           </p>
         </div>
       )}
@@ -299,8 +305,16 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
         UDP 走不走出口由上面的「协议」决定（TCP+UDP 时走，TCP 时只转 TCP），这里不再单放一个勾，
         只在需要的时候说一句：选了 TCP+UDP 要落地开着 UDP；入口机撑不起时说清楚是哪台、要升级什么。
       */}
-      {vless && (
+      {vless && !VLESS_EGRESS_UDP_SUPPORTED && (
         <p data-testid="rule-egress-udp" className="text-meta leading-5 text-muted-foreground">VLESS Reality 出口只转发 TCP，协议只能选 TCP。</p>
+      )}
+      {vless && VLESS_EGRESS_UDP_SUPPORTED && value.egressUdp && (
+        // 外部链接的对端是不是 Xray / sing-box、开没开 UDP 面板查不到，和外部 SS 一样如实写「要对端支持」。
+        <p data-testid="rule-egress-udp" className="text-meta leading-5 text-muted-foreground">
+          {value.egressType === "vless_link"
+            ? "TCP+UDP：UDP 也经 VLESS（XUDP）从落地出去，要对端支持 XUDP。"
+            : "TCP+UDP：UDP 也经 VLESS（XUDP）从落地出去。"}
+        </p>
       )}
       {value.egressType !== "none" && !vless && SS_EGRESS_UDP_SUPPORTED && (() => {
         if (capabilities.loading) return null;

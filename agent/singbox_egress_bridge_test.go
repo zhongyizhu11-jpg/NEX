@@ -96,3 +96,46 @@ func TestManagedConfigValidationRunsBridgeCheck(t *testing.T) {
 		t.Fatal("managed config validation must reject a bridge listening on a public address")
 	}
 }
+
+// UDP 规则：同一个 socks 入站（UDP ASSOCIATE）、出站带 packet_encoding=xudp —— 面板生成的就是这个样子。
+func TestSingboxEgressBridgeAcceptsUDPRule(t *testing.T) {
+	cfg := singboxEgressBridgeSample()
+	cfg["outbounds"].([]any)[0].(map[string]any)["packet_encoding"] = "xudp"
+	if err := validateSingboxEgressBridgeConfig(singboxEgressBridgeConfigPath, encodeBridge(t, cfg)); err != nil {
+		t.Fatalf("expected UDP bridge config to be accepted, got %v", err)
+	}
+}
+
+// 只放行验过的那一种封装；UDP 也不能借机多开别的入站（direct / tunnel / mixed 之类）。
+func TestSingboxEgressBridgeRejectsUnverifiedUDPShapes(t *testing.T) {
+	cases := map[string]func(cfg map[string]any){
+		"packetaddr encoding": func(cfg map[string]any) {
+			cfg["outbounds"].([]any)[0].(map[string]any)["packet_encoding"] = "packetaddr"
+		},
+		"unknown encoding": func(cfg map[string]any) {
+			cfg["outbounds"].([]any)[0].(map[string]any)["packet_encoding"] = "XUDP "
+		},
+		"direct udp inbound": func(cfg map[string]any) {
+			cfg["inbounds"] = append(cfg["inbounds"].([]any), map[string]any{
+				"type": "direct", "tag": "bridge-7-udp", "listen": "127.0.0.1", "listen_port": 36008, "network": "udp",
+				"override_address": "198.51.100.1", "override_port": 53,
+			})
+			rules := cfg["route"].(map[string]any)["rules"].([]any)
+			rules[0].(map[string]any)["inbound"] = []any{"bridge-7", "bridge-7-udp"}
+		},
+		"mixed inbound": func(cfg map[string]any) {
+			cfg["inbounds"].([]any)[0].(map[string]any)["type"] = "mixed"
+		},
+	}
+	for name, mutate := range cases {
+		cfg := singboxEgressBridgeSample()
+		mutate(cfg)
+		err := validateSingboxEgressBridgeConfig(singboxEgressBridgeConfigPath, encodeBridge(t, cfg))
+		if err == nil {
+			t.Fatalf("%s: expected rejection", name)
+		}
+		if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "0b9c2f7e") {
+			t.Fatalf("%s: error must not leak credentials: %v", name, err)
+		}
+	}
+}

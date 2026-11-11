@@ -137,6 +137,7 @@ import {
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressState,
 } from "@shared/ssEgress";
+import { VLESS_EGRESS_UDP_SUPPORTED } from "@shared/vlessEgress";
 import {
   formatSniRuleEntry,
   parseSniNameJson,
@@ -4070,8 +4071,8 @@ function RulesContent() {
     if (ruleEgressUsesInbound(form.egress.egressType) && !form.egress.egressInboundId) return `请选择落地主机上的${egressVless ? " VLESS Reality " : " Shadowsocks "}入站`;
     if (ruleEgressUsesLink(form.egress.egressType) && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 或 VLESS Reality 链接";
     if (egressVless && !egressCapabilities.loading && !egressCapabilities.vless) return egressCapabilities.vlessReason || "入口主机的 Agent 需要升级才能用 VLESS Reality 出口";
-    // UDP 走出口要每台入口机都报了能力（服务端保存时同样会拦）。
-    if (form.egress.egressUdp && !egressCapabilities.loading && !egressCapabilities.udp) return egressCapabilities.udpReason || "入口主机还不支持 UDP 走出口";
+    // UDP 走 Shadowsocks 出口要每台入口机都报了能力（服务端保存时同样会拦）；VLESS 的 UDP 只看上面的 Agent 版本。
+    if (!egressVless && form.egress.egressUdp && !egressCapabilities.loading && !egressCapabilities.udp) return egressCapabilities.udpReason || "入口主机还不支持 UDP 走出口";
     return null;
   }, [egressActive, egressBlockedReason, form.egress, form.protocol, form.tunnelId, egressViaTunnel, selectedTunnel, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup, egressCapabilities]);
   const submitBlocker = useMemo<string | null>(
@@ -9258,7 +9259,13 @@ function RulesContent() {
               <SelectContent>
               <SelectItem value="tcp">TCP</SelectItem>
               {egressActive ? null : <SelectItem value="udp">UDP</SelectItem>}
-              <SelectItem value="both" disabled={egressActive && !form.egress.egressUdp && (!SS_EGRESS_UDP_SUPPORTED || ruleEgressProtocolOf(form.egress.egressType) === "vless" || (!egressCapabilities.loading && !egressCapabilities.udp))}>TCP+UDP</SelectItem>
+              <SelectItem
+                value="both"
+                disabled={egressActive && !form.egress.egressUdp && (ruleEgressProtocolOf(form.egress.egressType) === "vless"
+                  // VLESS 的 UDP 经本机桥接走 xudp，不看 ssEgressUdp 能力（Agent 版本不够时出口一段另有提示）。
+                  ? !VLESS_EGRESS_UDP_SUPPORTED
+                  : !SS_EGRESS_UDP_SUPPORTED || (!egressCapabilities.loading && !egressCapabilities.udp))}
+              >TCP+UDP</SelectItem>
               </SelectContent>
               </Select>
               </FormField>

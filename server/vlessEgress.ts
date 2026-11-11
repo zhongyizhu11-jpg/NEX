@@ -9,13 +9,14 @@
  *     挑好的端口再交给协议守卫的端口分配当作「已占用」（见心跳里 reservedProtocolGuardPorts）。
  *
  * gost 那一侧只是链上多一个 socks5 节点（server/ssEgress.ts 的 buildGostEgressChain），监听、计数、限速和
- * Shadowsocks 出口一模一样，都在入口的 gost 服务上。
+ * Shadowsocks 出口一模一样，都在入口的 gost 服务上。UDP 规则的 UDP 经同一个 socks 入站（UDP ASSOCIATE）进来，
+ * 出站加上 packet_encoding=xudp；sing-box 的 socks 入站本来就收 UDP ASSOCIATE，不需要另开入站、另分端口。
  */
 
 import crypto from "node:crypto";
 
 import type { GithubAcceleratorConfig } from "../shared/githubAccelerator";
-import { VLESS_EGRESS_FLOW, type VlessEgressEndpoint } from "../shared/vlessEgress";
+import { VLESS_EGRESS_FLOW, VLESS_EGRESS_UDP_PACKET_ENCODING, type VlessEgressEndpoint } from "../shared/vlessEgress";
 import * as db from "./db";
 import { ENV } from "./env";
 import { createCredentialCipher, type CredentialCipher } from "./ipChange/secrets";
@@ -181,10 +182,16 @@ export type VlessEgressBridge = {
   username: string;
   password: string;
   endpoint: VlessEgressEndpoint;
+  /** 这条规则的 UDP 也走出口（socks5 UDP ASSOCIATE 进、xudp 出）。 */
+  udp?: boolean;
 };
 
-/** 一条规则的 sing-box vless 出站（字段按 sing-box 1.14 的出站文档；REALITY 客户端必须开 uTLS）。 */
-export function buildVlessEgressOutbound(tag: string, endpoint: VlessEgressEndpoint): Record<string, unknown> {
+/**
+ * 一条规则的 sing-box vless 出站（字段按 sing-box 1.14 的出站文档；REALITY 客户端必须开 uTLS）。
+ * 带 UDP 的规则写明 packet_encoding=xudp：sing-box 1.14 不写时默认也是 xudp，但写死不随默认值变，而且 Agent 只收这一种
+ * （agent/singbox_egress_bridge.go）。只 TCP 的规则不写这一项，生成的配置和以前一字不差。
+ */
+export function buildVlessEgressOutbound(tag: string, endpoint: VlessEgressEndpoint, options: { udp?: boolean } = {}): Record<string, unknown> {
   return {
     type: "vless",
     tag,
@@ -192,6 +199,7 @@ export function buildVlessEgressOutbound(tag: string, endpoint: VlessEgressEndpo
     server_port: Number(endpoint.port),
     uuid: endpoint.uuid,
     flow: VLESS_EGRESS_FLOW,
+    ...(options.udp ? { packet_encoding: VLESS_EGRESS_UDP_PACKET_ENCODING } : {}),
     tls: {
       enabled: true,
       server_name: endpoint.serverName,
@@ -223,7 +231,7 @@ export function buildVlessEgressBridgeConfig(bridges: readonly VlessEgressBridge
       listen_port: bridge.port,
       users: [{ username: bridge.username, password: bridge.password }],
     })),
-    outbounds: sorted.map((bridge) => buildVlessEgressOutbound(`egress-${bridge.ruleId}`, bridge.endpoint)),
+    outbounds: sorted.map((bridge) => buildVlessEgressOutbound(`egress-${bridge.ruleId}`, bridge.endpoint, { udp: bridge.udp === true })),
     route: {
       rules: sorted.map((bridge) => ({ inbound: [`bridge-${bridge.ruleId}`], outbound: `egress-${bridge.ruleId}` })),
     },
@@ -331,6 +339,7 @@ export function collectVlessEgressBridges(rules: readonly unknown[], hostId: num
         shortId: String(runtime.shortId || ""),
         fingerprint: String(runtime.fingerprint || ""),
       },
+      ...(runtime.udp === true ? { udp: true } : {}),
     });
   }
   return Array.from(byRule.values());

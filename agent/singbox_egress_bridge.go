@@ -22,12 +22,19 @@ REALITY + Vision 出站，gost 的出口链上就是一个 socks5 节点。监�
     sing-box 没配 final 时拿第一个出站兜底，一条对不上的连接要是从入口机自己出去，规则就成了
     「显示在走落地，其实直连」，这是出口最不能出的错；
   - 每个入站都要有一条路由规则指到存在的出站。
+UDP 规则不另开入站：gost 经同一个 socks 入站做标准 UDP ASSOCIATE（sing-box 在 127.0.0.1 的
+随机端口上收数据报），出站带 packet_encoding=xudp。所以入站类型仍然只许 socks；出站的 packet_encoding 只许不写
+（只 TCP 的规则）或 xudp —— 端到端验过的只有 xudp（scripts/verify-vless-egress.mjs），packetaddr 这类 Xray 服务端
+不认的封装写进来只会换来「UDP 显示在走出口、其实一个包都回不来」。
 不合格就整份拒收（事务回滚到旧配置，动作报失败），返回的错误不含 UUID、密码。
 */
 
 const singboxEgressBridgeConfigPath = "/etc/forwardx/singbox/egress.json"
 
 const singboxEgressVisionFlow = "xtls-rprx-vision"
+
+// UDP 规则的出站封装（面板 shared/vlessEgress.ts 的 VLESS_EGRESS_UDP_PACKET_ENCODING）。
+const singboxEgressUDPPacketEncoding = "xudp"
 
 var (
 	singboxEgressUUIDPattern    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -46,13 +53,14 @@ type singboxEgressBridgeConfig struct {
 		} `json:"users"`
 	} `json:"inbounds"`
 	Outbounds []struct {
-		Type       string `json:"type"`
-		Tag        string `json:"tag"`
-		Server     string `json:"server"`
-		ServerPort int    `json:"server_port"`
-		UUID       string `json:"uuid"`
-		Flow       string `json:"flow"`
-		TLS        *struct {
+		Type           string `json:"type"`
+		Tag            string `json:"tag"`
+		Server         string `json:"server"`
+		ServerPort     int    `json:"server_port"`
+		UUID           string `json:"uuid"`
+		Flow           string `json:"flow"`
+		PacketEncoding string `json:"packet_encoding"`
+		TLS            *struct {
 			Enabled    bool   `json:"enabled"`
 			ServerName string `json:"server_name"`
 			Reality    *struct {
@@ -122,6 +130,9 @@ func validateSingboxEgressBridgeConfig(path string, data []byte) error {
 		outboundTags[tag] = true
 		if err := validateSingboxEgressVlessOutbound(outbound.Type, outbound.Server, outbound.ServerPort, outbound.UUID, outbound.Flow); err != nil {
 			return fmt.Errorf("egress bridge outbound %s: %w", tag, err)
+		}
+		if encoding := outbound.PacketEncoding; encoding != "" && encoding != singboxEgressUDPPacketEncoding {
+			return fmt.Errorf("egress bridge outbound %s: packet_encoding must be %s, got %q", tag, singboxEgressUDPPacketEncoding, encoding)
 		}
 		if outbound.TLS == nil || !outbound.TLS.Enabled || outbound.TLS.Reality == nil || !outbound.TLS.Reality.Enabled {
 			return fmt.Errorf("egress bridge outbound %s must use REALITY", tag)
