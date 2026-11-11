@@ -44,6 +44,7 @@ func initializePanelMigration(cfg Config) {
 }
 
 func recordPanelMigrationHeartbeatSuccess() {
+	recordPanelURLSwitchHeartbeatSuccess()
 	panelMigrationRuntime.Lock()
 	panelMigrationRuntime.failures = 0
 	panelMigrationRuntime.Unlock()
@@ -59,6 +60,8 @@ func recordPanelMigrationStreamConnection(connected bool) {
 }
 
 func recordPanelMigrationHeartbeatFailure(cfg Config, err error) {
+	// 刚验证切过去的面板地址紧接着连不上：看要不要切回原地址（panel_url_switch.go）。
+	recordPanelURLSwitchHeartbeatFailure()
 	panelMigrationRuntime.Lock()
 	if !panelMigrationRuntime.active {
 		panelMigrationRuntime.Unlock()

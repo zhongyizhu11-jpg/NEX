@@ -43,6 +43,7 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
   rules: ["rules.", "lineDiagnostics."],
   hosts: [
     "hosts.",
+    "hostAgent.",
     "agentTokens.",
     "lookingGlass.",
     "ipChange.",

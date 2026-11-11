@@ -113,6 +113,16 @@ curl -fsSL http://你的面板地址:9810/api/agent/install.sh | bash -s -- upgr
 
 > 如果面板地址变化导致 Agent 离线，重新执行带正确面板地址的安装或升级命令即可恢复连接。
 
+### 按主机使用不同的面板入口 {#per-host-panel-url}
+
+某些机器连不上「面板公开地址」时，可以在「编辑主机 → 其他配置 → Agent 连接与保护」给它单独填一个反代到同一面板的地址（见[主机管理 → Agent 面板连接地址](./hosts.md#agent-panel-url)）。Agent 2.2.253 起，收到新地址会先用自己的 Token 对 `/api/agent/panel-url-probe` 做一次认证探测，通了才切换并写进 `config.json`；探测不通就继续用原地址，日志里能看到 `panel URL ... failed verification, keep using ...`。
+
+填错了也不会把 Agent 弄丢：它一直留在原地址上，改正或关掉这一项即可。反代需要放行 `/api/sync`、`/api/stream`、`/api/agent/` 这几条路径。
+
+### 同一个 Token 装到另一台机器
+
+每个 Agent 有一个安装实例 ID（`/etc/forwardx/agent/installation.json`，第一次启动时生成，升级和同机重装保留）。同一个 Token 在另一台机器上安装，新机器接管这台主机，旧机器上的 Agent 停止同步、保留已有转发，日志里记一次 `agent installation superseded`；它重启后会再向面板确认一次，仍被接管就继续保持安静。详见[主机管理 → 同 Token 换机接管](./hosts.md#agent-takeover)。
+
 ---
 
 ## 卸载 Agent
@@ -130,6 +140,7 @@ curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/i
 | 用途 | 路径 |
 |------|------|
 | Agent 通讯配置 | `/etc/forwardx/agent/config.json` |
+| Agent 安装实例 ID | `/etc/forwardx/agent/installation.json`（同 Token 换机接管用，升级保留） |
 | Agent 日志 | `/var/log/forwardx-agent/agent-go.log` |
 | Agent 本地状态 | `/var/lib/forwardx-agent/` |
 | NEX FXP 运行时（Go 实现） | `/usr/local/bin/forwardx-fxp` |

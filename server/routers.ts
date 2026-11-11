@@ -34,6 +34,7 @@ import { netProfileRouter } from "./routers/netProfile";
 import { agentRuntimeRouter } from "./routers/agentRuntime";
 import { uiThemesRouter } from "./routers/uiThemes";
 import { dnsRecordsRouter } from "./routers/dnsRecords";
+import { hostAgentRouter } from "./routers/hostAgent";
 
 export const appRouter = router({
   system: systemRouter,
@@ -47,6 +48,8 @@ export const appRouter = router({
   dashboard: dashboardRouter,
   users: usersRouter,
   hosts: hostsRouter,
+  // 主机的 Agent 连接与保护（独立面板地址、流量阈值关机、本机资源告警、安装实例），见 routers/hostAgent.ts
+  hostAgent: hostAgentRouter,
   lookingGlass: lookingGlassRouter,
   lineDiagnostics: lineDiagnosticsRouter,
   nodePools: nodePoolsRouter,

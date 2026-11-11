@@ -105,11 +105,21 @@ const agentMaxPanelResponseBytes = 64 << 20
 var errUnauthenticatedPanelResponse = errors.New("panel response is not an authenticated envelope")
 
 func postOnceWithClientToPanelURL(client *http.Client, cfg Config, panelURL string, path string, payload any, out any) error {
+	// 已经被另一台机器接管（installation.go）：不再和面板通信，本机转发照常。
+	installationID := agentInstallationIDFor(cfg)
+	if agentInstallationBlocked() {
+		return errAgentSuperseded
+	}
 	startedAt := time.Now()
-	env, err := encrypt(map[string]any{
+	inner := map[string]any{
 		"path":    path,
 		"payload": payload,
-	}, cfg.Token)
+	}
+	// 安装实例 ID 放在加密信封里：面板据此识别「同 Token 换了机器」（installation.go）。旧面板不认这个字段，照旧忽略。
+	if installationID != "" {
+		inner["installationId"] = installationID
+	}
+	env, err := encrypt(inner, cfg.Token)
 	if err != nil {
 		return err
 	}
@@ -161,6 +171,11 @@ func postOnceWithClientToPanelURL(client *http.Client, cfg Config, panelURL stri
 		invalidateAgentAuthChallenges(panelURL, auth.challengeGeneration)
 	}
 	if res.StatusCode >= 300 {
+		// 只有验过 MAC 的回包能让 Agent 停止同步：明文 409 谁都能伪造。
+		if envelopeVerified && panelResponseSupersedesAgent(res.StatusCode, decodedBody) {
+			markAgentSuperseded()
+			return wrapAgentRequestAttemptError(errAgentSuperseded, auth, authResult, responseAuthenticated)
+		}
 		var migrated struct {
 			PanelURL     string        `json:"panelUrl"`
 			AgentUpgrade *agentUpgrade `json:"agentUpgrade"`
@@ -198,6 +213,7 @@ func postOnceWithClientToPanelURL(client *http.Client, cfg Config, panelURL stri
 	if err := json.Unmarshal(decodedBody, out); err != nil {
 		return wrapAgentRequestAttemptError(err, auth, authResult, responseAuthenticated)
 	}
+	noteAgentInstallationAccepted()
 	if elapsed := time.Since(startedAt); elapsed >= agentSlowRequestThreshold && shouldLogAgentReport("post-slow:"+path, agentReportLogInterval) {
 		logf("agent request slow path=%s duration=%s status=%d", path, elapsed.Round(time.Millisecond), res.StatusCode)
 	}
@@ -233,6 +249,10 @@ func logAgentCommError(scope string, err error) {
 	if err == nil {
 		return
 	}
+	// 被接管后每一轮都会短路成这个错误：接管时已经打过一次日志，这里不再刷屏。
+	if errors.Is(err, errAgentSuperseded) {
+		return
+	}
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "unknown"
@@ -251,6 +271,10 @@ func logAgentCommError(scope string, err error) {
 func isTransientAgentCommError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// 被接管后的短路错误按「暂时的」处理：调用方都会转给 logAgentCommError，而那里不再打印它。
+	if errors.Is(err, errAgentSuperseded) {
+		return true
 	}
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 	if msg == "" {

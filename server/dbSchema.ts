@@ -295,6 +295,19 @@ const tables: TableDef[] = [
       c("hostStatusNotifyEnabled", "bool", { notNull: true, default: true }),
       // 只放行白名单 IP 的机器：别的机器（包括它自己经公网 IP 绕回来）连不上是正常的，诊断和订阅自动隐藏不拿这个当故障。
       c("ipWhitelistOnly", "bool", { notNull: true, default: false }),
+      // ===== Agent 管理（主机独立面板地址 / 流量阈值关机 / 资源告警覆盖 / 同 Token 换机接管） =====
+      // 这台主机的 Agent 改连哪个面板地址（反代、不同线路）；关着或为空 = 跟随全局「面板公开地址」。
+      c("agentPanelUrlEnabled", "bool", { notNull: true, default: false }), c("agentPanelUrl", "text"),
+      // 流量阈值关机（默认关）：本周期用量到比例后让 Agent 关机。TriggeredAt + CycleMark 记「这个周期已经关过」，
+      // CycleMark 是授权时 host_traffic_counters.resetAt（流量重置一次换一个周期）。
+      c("trafficShutdownEnabled", "bool", { notNull: true, default: false }),
+      c("trafficShutdownThresholdPercent", "int", { notNull: true, default: 100 }),
+      c("trafficShutdownTriggeredAt", "epoch"), c("trafficShutdownCycleMark", "bigint"),
+      // 资源告警的本机覆盖（JSON，见 shared/resourceAlert.ts 的 HostResourceAlertOverride）；NULL = 跟随全局。
+      c("resourceAlertOverride", "text"),
+      // 同 Token 换机接管：当前管理这台主机的 Agent 安装实例，和已经被接管下线的实例（JSON 数组，有上限）。
+      c("agentInstallationId", "varchar", { length: 64 }), c("agentRetiredInstallationIds", "text"),
+      c("agentInstallationChangedAt", "epoch"),
       c("telegramTrafficAlertEnabled", "bool", { notNull: true, default: false }), c("trafficAlertThresholdPercent", "int", { notNull: true, default: 20 }),
       c("telegramRenewalReminderEnabled", "bool", { notNull: true, default: false }), c("renewalReminderDays", "int", { notNull: true, default: 3 }),
       c("trafficAutoReset", "bool", { notNull: true, default: false }), c("trafficResetDay", "int", { notNull: true, default: 1 }),

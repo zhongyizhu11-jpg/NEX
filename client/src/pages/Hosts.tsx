@@ -111,6 +111,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import HostAgentManagementSection from "@/components/hosts/HostAgentManagementSection";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { TableColumnResizeHandle, TableColumnSettingsMenu, tableColumnsMinWidth, useTableColumnSettings, type TableColumnMeta } from "@/components/TableColumnSettings";
@@ -4229,6 +4230,8 @@ function HostsContent() {
                           </p>
                         ) : null}
                       </div>
+                      {/* Agent 面板连接地址 / 流量阈值关机 / 本机资源告警 / 安装实例：单独保存，见 HostAgentManagementSection */}
+                      {editingId ? <HostAgentManagementSection hostId={Number(editingId)} /> : null}
                     </>
                   ) : (
                     <div className="rounded-md bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
