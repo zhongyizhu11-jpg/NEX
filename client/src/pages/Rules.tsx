@@ -131,6 +131,9 @@ import {
   ruleEgressStateTone,
   ruleEgressSummaryText,
   RULE_EGRESS_TYPE_LABELS,
+  ruleEgressProtocolOf,
+  ruleEgressUsesInbound,
+  ruleEgressUsesLink,
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressState,
 } from "@shared/ssEgress";
@@ -4045,7 +4048,7 @@ function RulesContent() {
     if (!isForwardGroupRouteMode || !selectedForwardGroup) return null;
     if (!ruleEgressSwitchesForwardType(form.egress.egressType, effectiveRouteForwardType)) return null;
     const label = FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType;
-    return `这个端口转发用的是 ${label}，${label} 不会 Shadowsocks：开了出口的这一条规则改用 gost 转发，端口、计数、限速照旧；其它规则不受影响，改回「直接连接」就恢复成 ${label}。`;
+    return `这个端口转发用的是 ${label}，${label} 不会 Shadowsocks / VLESS：开了出口的这一条规则改用 gost 转发，端口、计数、限速照旧；其它规则不受影响，改回「直接连接」就恢复成 ${label}。`;
   }, [isForwardGroupRouteMode, selectedForwardGroup, form.egress.egressType, effectiveRouteForwardType]);
   const egressCapabilities = useEgressEntryCapabilities(egressEntryHostIds, egressActive, egressViaTunnel ? "隧道出口机" : "入口主机");
   const egressBlocker = useMemo<string | null>(() => {
@@ -4058,14 +4061,19 @@ function RulesContent() {
       egressUdp: form.egress.egressUdp,
       forwardGroupMode: isForwardGroupRouteMode ? forwardGroupModeOf(selectedForwardGroup) : null,
       failoverEnabled: false,
+      // VLESS Reality 出口不接隧道（shared/ssEgress.ts）：走隧道时把隧道带上，让形态检查说清楚。
+      tunnelId: egressViaTunnel ? form.tunnelId : null,
+      tunnelMode: egressViaTunnel ? selectedTunnel?.mode : null,
     });
     if (shapeError) return shapeError;
-    if (form.egress.egressType === "ss_host" && !form.egress.egressInboundId) return "请选择落地主机上的 Shadowsocks 入站";
-    if (form.egress.egressType === "ss_link" && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 链接";
+    const egressVless = ruleEgressProtocolOf(form.egress.egressType) === "vless";
+    if (ruleEgressUsesInbound(form.egress.egressType) && !form.egress.egressInboundId) return `请选择落地主机上的${egressVless ? " VLESS Reality " : " Shadowsocks "}入站`;
+    if (ruleEgressUsesLink(form.egress.egressType) && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 或 VLESS Reality 链接";
+    if (egressVless && !egressCapabilities.loading && !egressCapabilities.vless) return egressCapabilities.vlessReason || "入口主机的 Agent 需要升级才能用 VLESS Reality 出口";
     // UDP 走出口要每台入口机都报了能力（服务端保存时同样会拦）。
     if (form.egress.egressUdp && !egressCapabilities.loading && !egressCapabilities.udp) return egressCapabilities.udpReason || "入口主机还不支持 UDP 走出口";
     return null;
-  }, [egressActive, egressBlockedReason, form.egress, form.protocol, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup, egressCapabilities]);
+  }, [egressActive, egressBlockedReason, form.egress, form.protocol, form.tunnelId, egressViaTunnel, selectedTunnel, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup, egressCapabilities]);
   const submitBlocker = useMemo<string | null>(
     () => (isSniEntryMode
       ? sniRuleFormBlocker(form, selectedTlsInbound)
@@ -4921,8 +4929,8 @@ function RulesContent() {
     const egressPayload = egressSectionVisible
       ? {
         egressType: form.egress.egressType,
-        egressInboundId: form.egress.egressType === "ss_host" ? form.egress.egressInboundId : null,
-        egressLink: form.egress.egressType === "ss_link" && form.egress.egressLink.trim() ? form.egress.egressLink.trim() : undefined,
+        egressInboundId: ruleEgressUsesInbound(form.egress.egressType) ? form.egress.egressInboundId : null,
+        egressLink: ruleEgressUsesLink(form.egress.egressType) && form.egress.egressLink.trim() ? form.egress.egressLink.trim() : undefined,
         egressUdp: form.egress.egressType !== "none" && form.egress.egressUdp,
       }
       : editingId ? { egressType: "none" as const } : {};
@@ -9250,7 +9258,7 @@ function RulesContent() {
               <SelectContent>
               <SelectItem value="tcp">TCP</SelectItem>
               {egressActive ? null : <SelectItem value="udp">UDP</SelectItem>}
-              <SelectItem value="both" disabled={egressActive && !form.egress.egressUdp && (!SS_EGRESS_UDP_SUPPORTED || (!egressCapabilities.loading && !egressCapabilities.udp))}>TCP+UDP</SelectItem>
+              <SelectItem value="both" disabled={egressActive && !form.egress.egressUdp && (!SS_EGRESS_UDP_SUPPORTED || ruleEgressProtocolOf(form.egress.egressType) === "vless" || (!egressCapabilities.loading && !egressCapabilities.udp))}>TCP+UDP</SelectItem>
               </SelectContent>
               </Select>
               </FormField>

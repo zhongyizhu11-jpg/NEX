@@ -277,6 +277,8 @@ func opsManagedServiceCandidates() []string {
 		add(item.service)
 	}
 	add("forwardx-singbox")
+	// VLESS 出口的本机桥接（singbox_egress_bridge.go）：「全部重启」也要带上它。
+	add("forwardx-singbox-egress")
 	matches, _ := filepath.Glob(managedServiceSignaturePath("*"))
 	for _, path := range matches {
 		base := filepath.Base(path)

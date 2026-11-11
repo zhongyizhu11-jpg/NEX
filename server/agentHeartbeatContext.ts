@@ -1,6 +1,6 @@
 import type * as db from "./db";
 import type { ForwardProtocolSettings } from "../shared/forwardTypes";
-import type { SsEgressRuntime } from "./ssEgress";
+import type { RuleEgressRuntime } from "./ssEgress";
 
 /*
   心跳处理函数里每次请求算一次、之后只读的那些值，打包成一个上下文交给拆出去的模块
@@ -18,8 +18,11 @@ export type HeartbeatTunnelRow = Awaited<ReturnType<typeof db.getTunnelsByHost>>
 /** 跳点、出口节点和别的没有行类型的值：同上，就是 db 层给的那个类型。 */
 export type HeartbeatRow = HeartbeatRuleRow;
 
-/** 走隧道、接 SS 出口的规则在出口机上要跑的那个本机 gost 转发（原来是心跳处理函数里的局部类型）。 */
-export type TunnelEgressHelper = { ruleId: number; tunnel: any; runtime: SsEgressRuntime; targetHost: string; targetPort: number; protocol: string; port: number };
+/**
+ * 走隧道、接 SS 出口的规则在出口机上要跑的那个本机 gost 转发（原来是心跳处理函数里的局部类型）。
+ * runtime 用的是出口的总类型，实际只会是 Shadowsocks：VLESS 出口在形态检查里就不让接隧道（shared/ssEgress.ts）。
+ */
+export type TunnelEgressHelper = { ruleId: number; tunnel: any; runtime: RuleEgressRuntime; targetHost: string; targetPort: number; protocol: string; port: number };
 
 export type HeartbeatRequestContext = {
   host: HeartbeatHostRow;

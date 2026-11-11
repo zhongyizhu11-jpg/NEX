@@ -50,6 +50,14 @@ import {
   validateInboundRoutingForSave,
 } from "../inboundRoutingRuntime";
 import { listLandingOptions } from "../landingOptions";
+import { isHostConsideredOnline } from "../hostHeartbeatPolicy";
+import { getRealityCheckRun, RealityCheckError, startRealityCheck } from "../ops/realityCheck";
+import {
+  realityDestCandidateTargets,
+  realityDestCheckTargetOf,
+  REALITY_DEST_CANDIDATE_LIST_VERSION,
+  type RealityDestCheckTarget,
+} from "../../shared/realityDestCheck";
 import {
   assertProxyInboundEgressCompatibleChange,
   assertProxyInboundNotUsedAsEgress,
@@ -641,6 +649,42 @@ export const proxyInboundsRouter = router({
   landingOptions: protectedProcedure.query(async ({ ctx }) => listLandingOptions(ctx.user)),
 
   /**
+   * REALITY 伪装目标检查（shared/realityDestCheck.ts）：让落地机的 Agent 去连这个握手目标（或者候选清单 v2 里的
+   * 那一批），看 TLS 1.3、X25519、h2、证书。能在这台主机上开落地节点的人才能查 —— 检查是从那台机器上发起的。
+   * Agent 只测公网地址，解析到内网的目标直接不测。
+   */
+  realityCheckStart: protectedProcedure
+    .input(z.object({
+      hostId: z.number().int().positive(),
+      serverName: z.string().trim().max(253).optional(),
+      realityDest: z.string().trim().max(300).optional(),
+      candidates: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await assertAllowed(ctx);
+      const host = await assertUsableHost(input.hostId, ctx);
+      let targets: RealityDestCheckTarget[];
+      if (input.candidates) {
+        targets = realityDestCandidateTargets();
+      } else {
+        const parsed = realityDestCheckTargetOf(input.serverName || DEFAULT_REALITY_SERVER_NAME, input.realityDest);
+        if (!parsed.ok) throw new Error(parsed.error);
+        targets = [parsed.target];
+      }
+      try {
+        const started = startRealityCheck({ ...host, isOnline: isHostConsideredOnline(host) }, { targets, requestedBy: Number(ctx.user.id) });
+        return { ...started, candidateListVersion: input.candidates ? REALITY_DEST_CANDIDATE_LIST_VERSION : null };
+      } catch (error) {
+        if (error instanceof RealityCheckError) throw new Error(error.message);
+        throw error;
+      }
+    }),
+
+  realityCheckResult: protectedProcedure
+    .input(z.object({ runId: z.string().trim().min(1).max(80) }))
+    .query(async ({ ctx, input }) => getRealityCheckRun(input.runId, ctx.user)),
+
+  /**
    * 规则编辑器问：这几台入口机现在能不能让 UDP 走出口、能不能用 SS2022 出口（看 Agent 上报的能力）。
    * 只回能力和给人看的原因；看不到的主机不回名字。保存时服务端还会再按同一套规则查一遍。
    */
@@ -704,8 +748,15 @@ export const proxyInboundsRouter = router({
         await assertInboundPortAllowed(ctx, host, port, input.id);
       }
 
-      // 正被转发规则当作 Shadowsocks 出口的入站：换协议 / 换成出口不支持的方法 / 换主机都会让那些规则失效，先拦下。
-      await assertProxyInboundEgressCompatibleChange(input.id, { protocol: input.protocol, method: input.method, hostId: input.hostId }, Number(row.hostId));
+      // 正被转发规则当作出口的入站：换协议 / 换成出口不支持的方法、传输、安全层、流控 / 换主机都会让那些规则失效，先拦下。
+      await assertProxyInboundEgressCompatibleChange(input.id, {
+        protocol: input.protocol,
+        method: input.method,
+        hostId: input.hostId,
+        transport: input.transport,
+        security: input.security,
+        flow: input.flow,
+      }, Number(row.hostId));
       const loaded = await db.loadProxyInbound(input.id);
       if (!loaded) throw new Error("落地节点不存在");
       const merged = mergeInbound(loaded, input);

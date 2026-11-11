@@ -18,6 +18,7 @@ import { ProxyNodeRow, proxyNodeMetaText, type ProxyNodeRowSpec } from "@/compon
 import { ProxyNodeShareDialog, type ProxyNodeShareTarget } from "@/components/proxy/ProxyNodeShareDialog";
 import { ProxyNodeQuotaDetail, ProxyNodeQuotaToggle } from "@/components/proxy/ProxyNodeQuotaCells";
 import { InboundRoutingEditor, inboundRoutesFromForm, inboundRoutesToForm, type InboundRouteForm } from "@/components/proxy/InboundRoutingEditor";
+import { RealityDestChecker } from "@/components/proxy/RealityDestChecker";
 import { MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { bytesFromGb, gbFromBytes, positiveIntFromInput } from "@shared/trafficGb";
 import { clipboardNeedsManualCopy, copyTextFromElement, copyTextToClipboard } from "@/lib/clipboard";
@@ -29,13 +30,14 @@ import {
   PROXY_INBOUND_SHADOWSOCKS_METHODS,
   PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD,
   isLegacyShadowsocksMethod,
+  proxyInboundProtocolLabel,
   proxyInboundSecurities,
   proxyInboundSupportsMultiUser,
   proxyInboundTransports,
   type ProxyInboundProtocol,
   type ProxyInboundSecurity,
 } from "@shared/proxyInbound";
-import { PROXY_NODE_PROTOCOL_LABELS, type ProxyNodeProtocol, type ProxyNodeTransport } from "@shared/proxyNode";
+import { type ProxyNodeTransport } from "@shared/proxyNode";
 import { groupProxyNodes, resolveProxyNodeGroupMode, type ProxyNodeGroupMode } from "@shared/proxyNodeGrouping";
 import {
   ChevronDown,
@@ -611,7 +613,7 @@ export default function ProxyInboundsSection({
     // 只放协议小标，和粘贴行一样。客户端兼容挪到 ⋯ 菜单（行里那枚小标在手机上会挤掉名字）。
     tag: (
       <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
-        {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
+        {proxyInboundProtocolLabel(row.protocol)}
       </Badge>
     ),
     muted: !row.isEnabled,
@@ -992,7 +994,7 @@ export default function ProxyInboundsSection({
                   <SelectContent>
                     {PROXY_INBOUND_PROTOCOLS.map((protocol) => (
                       <SelectItem key={protocol} value={protocol}>
-                        {PROXY_NODE_PROTOCOL_LABELS[protocol as ProxyNodeProtocol]}
+                        {proxyInboundProtocolLabel(protocol)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1121,6 +1123,14 @@ export default function ProxyInboundsSection({
                         placeholder="留空按握手域名的 443"
                       />
                     </div>
+                    {/* 从这台落地机去测握手目标：TLS 1.3 / X25519 / h2 / 证书，能用的点一下就填进上面的握手域名。 */}
+                    <RealityDestChecker
+                      hostId={Number(form.hostId || 0)}
+                      serverName={form.serverName}
+                      realityDest={form.realityDest}
+                      defaultServerName={optionsQuery.data?.defaultRealityServerName || "dl.google.com"}
+                      onPick={(name) => setForm((prev) => ({ ...prev, serverName: name, realityDest: "" }))}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -1309,7 +1319,7 @@ export default function ProxyInboundsSection({
               </div>
             ) : (
               <p data-fx-help="" className="text-xs text-muted-foreground">
-                {PROXY_NODE_PROTOCOL_LABELS[form.protocol as ProxyNodeProtocol]} 这个端口只能发一份凭据，谁拿到都一样。
+                {proxyInboundProtocolLabel(form.protocol)} 这个端口只能发一份凭据，谁拿到都一样。
                 想一人一份、能单独吊销，改用 VLESS / VMess / Trojan / Hysteria2 / TUIC / AnyTLS。
               </p>
             )}

@@ -136,7 +136,7 @@ export type TopologyRuleRow = {
   routePathKey?: unknown;
   routeHopIndex?: unknown;
   proxyNodeId?: unknown;
-  /** Shadowsocks 出口（2.3.445）：none | ss_host | ss_link；ss_host 时 egressInboundId 指向落地入站 */
+  /** 出口（2.3.445 / 2.3.525）：none | ss_host | ss_link | vless_host | vless_link；*_host 时 egressInboundId 指向落地入站 */
   egressType?: unknown;
   egressInboundId?: unknown;
 } & RouteGroupRule;
@@ -723,7 +723,8 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
         外部 SS 链接的服务器地址是加密存的，画不出那一跳，只在入口 → 目标这条边上标出来。
       */
       const egressType = text(rule.egressType);
-      const egressInbound = egressType === "ss_host" ? inboundById.get(positiveInt(rule.egressInboundId)) : undefined;
+      // vless_host（VLESS Reality 出口，2.3.525）和 ss_host 一样指向落地入站。
+      const egressInbound = egressType === "ss_host" || egressType === "vless_host" ? inboundById.get(positiveInt(rule.egressInboundId)) : undefined;
       const landing = egressInbound ? hostNode(positiveInt(egressInbound.hostId)) : null;
       for (const from of starts) {
         if (landing && landing !== from) {
@@ -733,7 +734,7 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
             status: lastStatus,
             protocol: "tcp",
             port: positiveInt(egressInbound?.port) || null,
-            label: "SS 出口",
+            label: egressType === "vless_host" ? "VLESS 出口" : "SS 出口",
           });
           const egressTarget = targetNode(rule.targetIp, rule.targetPort, landing);
           if (egressTarget) {
@@ -760,7 +761,7 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
           protocol,
           port: positiveInt(rule.targetPort) || null,
           latencyMs: input.ruleLatencyMs?.get(ruleId) ?? null,
-          ...(egressType === "ss_link" ? { label: "经外部 SS 出口" } : {}),
+          ...(egressType === "ss_link" ? { label: "经外部 SS 出口" } : egressType === "vless_link" ? { label: "经外部 VLESS 出口" } : {}),
         });
       }
     }

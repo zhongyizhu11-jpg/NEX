@@ -1455,7 +1455,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
         「出口配置失效」并按停用下发，用户重新粘贴一次链接即可。
       */
       row.egressInboundId = Number(source.egressInboundId || 0) > 0 ? mapId(maps, "proxy_inbounds", source.egressInboundId) || null : null;
-      if (row.egressType === "ss_host" && !row.egressInboundId) row.egressType = "none";
+      if ((row.egressType === "ss_host" || row.egressType === "vless_host") && !row.egressInboundId) row.egressType = "none";
       row.isRunning = false;
       row.pendingDelete = source.pendingDelete ?? false;
       return { row };

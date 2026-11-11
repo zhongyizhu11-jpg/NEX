@@ -864,7 +864,8 @@ async function getHostEgressDependentRules(hostId: number) {
   })
     .from(forwardRules)
     .innerJoin(proxyInbounds, eq(proxyInbounds.id, forwardRules.egressInboundId))
-    .where(and(eq(forwardRules.egressType, "ss_host"), eq(proxyInbounds.hostId, hostId)))
+    // ss_host 和 vless_host（VLESS Reality 出口）都指向落地入站。
+    .where(and(inArray(forwardRules.egressType, ["ss_host", "vless_host"]), eq(proxyInbounds.hostId, hostId)))
     .catch(() => [] as any[]);
   return (rows as any[])
     .filter((row) => Number(row.ruleHostId) !== hostId && !dbBool(row.pendingDelete) && !Number(row.forwardGroupRuleId || 0))

@@ -10,7 +10,7 @@
  *   - 落地入站被删 / 改时的保护：正在被当作出口的入站不能删、不能改成别的协议或不支持的方法。
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { forwardRules } from "../drizzle/schema";
 import { getHostEntryAddress } from "../shared/hostEntryAddress";
@@ -42,7 +42,28 @@ import {
   type RuleEgressType,
   type SsEgressEndpoint,
   RULE_EGRESS_RUNTIME_FORWARD_TYPE,
+  RULE_EGRESS_INBOUND_TYPES,
+  ruleEgressProtocolOf,
+  ruleEgressUsesInbound,
 } from "../shared/ssEgress";
+import {
+  canonicalRealityPublicKey,
+  isVlessEgressAgentSupported,
+  maskVlessEgressEndpoint,
+  parseVlessEgressLink,
+  vlessEgressAgentUpgradeMessage,
+  vlessEgressEndpointError,
+  vlessEgressInboundError,
+  VLESS_EGRESS_DEFAULT_FINGERPRINT,
+  type VlessEgressEndpoint,
+} from "../shared/vlessEgress";
+import {
+  decryptVlessEgressEndpoint,
+  encryptVlessEgressEndpoint,
+  pickVlessEgressInboundUuid,
+  vlessEgressBridgeCredentials,
+  type VlessEgressBridgePortAllocator,
+} from "./vlessEgress";
 
 export { NO_EGRESS_COLUMNS, ruleEgressColumnsOf, type RuleEgressColumns };
 import * as db from "./db";
@@ -54,6 +75,7 @@ import { createCredentialCipher, type CredentialCipher } from "./ipChange/secret
 import { restrictedForwardTargetClass, restrictedForwardTargetLabel } from "./ruleTargetPolicy";
 import { dbBool } from "./repositories/repositoryUtils";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import type { ProxyInboundUser } from "../shared/proxyInbound";
 
 /* ── 外部链接的加密 ─────────────────────────────────────────────────── */
 
@@ -229,9 +251,13 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
   if (viaTunnel && entryHostIds.length === 0) throw new Error("这条隧道还没有出口机，接不了 Shadowsocks 出口");
   const entryHosts = entryHostIds.length > 0 ? await db.getHostsByIds(entryHostIds) as any[] : [];
   // 新挂 / 换出口时入口机的 Agent 要够新（和共享 TLS 入站一样在保存时就说）；已经挂着的规则改别的不拦，下发时按停用处理。
+  const vless = ruleEgressProtocolOf(egressType) === "vless";
   const assertEntryAgents = () => {
     for (const host of entryHosts) {
-      if (!isSsEgressAgentSupported(String(host?.agentVersion || ""))) throw new Error(ssEgressAgentUpgradeMessage(host?.name));
+      if (vless) {
+        // VLESS 出口要入口机的 Agent 认得本机桥接（2.2.253 起，见 shared/vlessEgress.ts）。
+        if (!isVlessEgressAgentSupported(String(host?.agentVersion || ""))) throw new Error(vlessEgressAgentUpgradeMessage(host?.name));
+      } else if (!isSsEgressAgentSupported(String(host?.agentVersion || ""))) throw new Error(ssEgressAgentUpgradeMessage(host?.name));
     }
   };
   /*
@@ -246,6 +272,10 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
       if (error) throw new Error(error);
     }
   };
+
+  if (egressType === "vless_host" || egressType === "vless_link") {
+    return resolveVlessEgressColumns(input, context, { egressType, current, entryHosts, entryHostIds, assertEntryAgents });
+  }
 
   if (egressType === "ss_host") {
     const inboundId = Number(input.egressInboundId !== undefined ? input.egressInboundId : current.egressInboundId) || 0;
@@ -302,6 +332,66 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
 }
 
 /**
+ * VLESS Reality 出口那一半（shared/vlessEgress.ts）。和 SS 的区别：入站要是 VLESS + RAW/TCP + REALITY + Vision，
+ * 链接走严格解析，只转 TCP（形态检查已经在 ruleEgressShapeError 里拦了），Agent 门槛是 2.2.253。
+ */
+async function resolveVlessEgressColumns(
+  input: RuleEgressInput,
+  context: EgressSaveContext,
+  state: {
+    egressType: "vless_host" | "vless_link";
+    current: RuleEgressColumns;
+    entryHosts: readonly Parameters<typeof addressTokens>[0][];
+    entryHostIds: number[];
+    assertEntryAgents: () => void;
+  },
+): Promise<RuleEgressColumns> {
+  const { egressType, current, entryHosts, entryHostIds, assertEntryAgents } = state;
+  if (egressType === "vless_host") {
+    const inboundId = Number(input.egressInboundId !== undefined ? input.egressInboundId : current.egressInboundId) || 0;
+    if (!inboundId) throw new Error("请选择落地主机上的 VLESS Reality 入站");
+    const changed = inboundId !== Number(current.egressInboundId || 0) || current.egressType !== "vless_host";
+    const inbound = await db.getProxyInboundById(inboundId);
+    if (!inbound) throw new Error("所选落地入站不存在");
+    const inboundError = vlessEgressInboundError(inbound);
+    if (inboundError) throw new Error(`落地入站「${inbound.name}」不能做 VLESS 出口：${inboundError}`);
+    if (!dbBool(inbound.isEnabled, true)) throw new Error(`落地入站「${inbound.name}」已停用`);
+    await assertEgressInboundUsable(context.actor, inbound);
+    const users = await db.getProxyInboundUsers(inboundId).catch(() => []);
+    if (!pickVlessEgressInboundUuid(users)) throw new Error(`落地入站「${inbound.name}」还没有用户，连不上`);
+    const landingHost = await db.getHostById(Number(inbound.hostId));
+    if (!landingHost) throw new Error("落地主机不存在");
+    if (entryHostIds.includes(Number(landingHost.id))) throw new Error("落地主机不能是规则的入口主机自己：那样流量绕一圈还是从入口出去");
+    if (changed) assertEntryAgents();
+    if (changed && !isHostConsideredOnline(landingHost)) throw new Error(`落地主机「${landingHost.name}」当前离线，请等它上线后再选`);
+    if (!getHostEntryAddress(landingHost)) throw new Error(`落地主机「${landingHost.name}」还没有可用地址`);
+    await assertEgressTargetAllowed(context.actor, context.targetIp, landingHost);
+    return { egressType, egressInboundId: inboundId, egressConfigJson: null, egressUdp: false };
+  }
+  let stored = current.egressType === "vless_link" ? current.egressConfigJson : null;
+  let endpoint: VlessEgressEndpoint | null = null;
+  const link = typeof input.egressLink === "string" ? input.egressLink.trim() : "";
+  const keepExisting = !link || (stored && link === maskVlessEgressEndpoint(decryptVlessEgressEndpoint(stored)));
+  if (keepExisting) {
+    endpoint = stored ? decryptVlessEgressEndpoint(stored) : null;
+    if (!endpoint) throw new Error(stored ? "保存的出口链接已无法解密（面板密钥变过），请重新粘贴 vless:// 链接" : "请粘贴外部 VLESS Reality 链接");
+    const error = vlessEgressEndpointError(endpoint);
+    if (error) throw new Error(error);
+  } else {
+    const parsed = parseVlessEgressLink(link);
+    if (!parsed.ok) throw new Error(parsed.error);
+    endpoint = parsed.endpoint;
+    stored = encryptVlessEgressEndpoint(endpoint);
+  }
+  if (!keepExisting || current.egressType !== "vless_link") assertEntryAgents();
+  const server = endpoint.server.toLowerCase();
+  if (entryHosts.some((host) => addressTokens(host).has(server))) {
+    throw new Error("外部链接指向的是规则的入口主机自己，这会绕回入口，请换一条链接");
+  }
+  return { egressType, egressInboundId: null, egressConfigJson: stored, egressUdp: false };
+}
+
+/**
  * 目标是内网 / 环回地址时：拨目标的是落地。外部链接的落地不是面板的机器，碰不到谁的内网，放行；
  * 面板管的落地主机要是他自己的才行（和隧道出口的口径一致，见 server/ruleTargetPolicy.ts）。
  */
@@ -327,7 +417,8 @@ export async function getRulesUsingEgressInbound(inboundId: number) {
     forwardGroupId: forwardRules.forwardGroupId,
     forwardGroupRuleId: forwardRules.forwardGroupRuleId,
     tunnelId: forwardRules.tunnelId,
-  }).from(forwardRules).where(and(eq(forwardRules.egressType, "ss_host"), eq(forwardRules.egressInboundId, Number(inboundId))));
+    egressType: forwardRules.egressType,
+  }).from(forwardRules).where(and(inArray(forwardRules.egressType, [...RULE_EGRESS_INBOUND_TYPES]), eq(forwardRules.egressInboundId, Number(inboundId))));
   return (rows as any[]).filter((row) => !dbBool(row.pendingDelete));
 }
 
@@ -342,12 +433,47 @@ export async function assertProxyInboundNotUsedAsEgress(inboundId: number) {
   const rules = await getRulesUsingEgressInbound(inboundId);
   const visible = rules.filter((rule) => !Number(rule.forwardGroupRuleId || 0));
   if (visible.length === 0) return;
-  throw new Error(`这个落地入站正被 ${visible.length} 条转发规则当作 Shadowsocks 出口：${ruleListText(visible)}。请先把这些规则的出口改成其他方式，或删除这些规则`);
+  throw new Error(`这个落地入站正被 ${visible.length} 条转发规则当作${egressKindText(visible)}出口：${ruleListText(visible)}。请先把这些规则的出口改成其他方式，或删除这些规则`);
+}
+
+function egressKindText(rules: Awaited<ReturnType<typeof getRulesUsingEgressInbound>>) {
+  const kinds = new Set(rules.map((rule) => ruleEgressProtocolOf(rule.egressType)));
+  if (kinds.has("vless") && kinds.has("shadowsocks")) return " Shadowsocks / VLESS ";
+  return kinds.has("vless") ? " VLESS Reality " : " Shadowsocks ";
 }
 
 /** 改落地入站前：换协议、换成出口不支持的方法、换主机都会让依赖它的规则失效，拒绝。 */
-export async function assertProxyInboundEgressCompatibleChange(inboundId: number, next: { protocol?: unknown; method?: unknown; hostId?: unknown }, currentHostId: number) {
-  const rules = await getRulesUsingEgressInbound(inboundId);
+export async function assertProxyInboundEgressCompatibleChange(
+  inboundId: number,
+  next: { protocol?: unknown; method?: unknown; hostId?: unknown; transport?: unknown; security?: unknown; flow?: unknown },
+  currentHostId: number,
+) {
+  const allRules = await getRulesUsingEgressInbound(inboundId);
+  const visibleAll = allRules.filter((rule) => !Number(rule.forwardGroupRuleId || 0));
+  if (visibleAll.length === 0) return;
+  /*
+    当 VLESS 出口用的入站：改完还得是 VLESS + RAW/TCP + REALITY + Vision，也不能换主机。换密钥 / 换 UUID 不拦：
+    每次下发都从入站现取，规则自动跟上。改协议 / 安全层时面板会重新生成密钥，这里只看形态（公钥、握手域名按「会有」算）。
+  */
+  const vlessRules = visibleAll.filter((rule) => ruleEgressProtocolOf(rule.egressType) === "vless");
+  if (vlessRules.length > 0) {
+    const row = await db.getProxyInboundById(inboundId);
+    const shapeError = vlessEgressInboundError({
+      protocol: next.protocol ?? row?.protocol,
+      transport: next.transport ?? row?.transport,
+      security: next.security ?? row?.security,
+      flow: next.flow ?? row?.flow,
+      realityPublicKey: "A".repeat(43),
+      serverName: "placeholder.invalid",
+    });
+    const vlessReasons: string[] = [];
+    if (shapeError) vlessReasons.push(`改成这样（${shapeError}）`);
+    if (next.hostId !== undefined && Number(next.hostId) !== Number(currentHostId)) vlessReasons.push("换到别的主机");
+    if (vlessReasons.length > 0) {
+      throw new Error(`这个落地入站正被 ${vlessRules.filter((rule) => !Number(rule.forwardGroupRuleId || 0)).length} 条转发规则当作 VLESS Reality 出口（${ruleListText(vlessRules)}），不能${vlessReasons.join("、")}。请先改掉这些规则的出口`);
+    }
+  }
+  const rules = allRules.filter((rule) => ruleEgressProtocolOf(rule.egressType) !== "vless");
   const visible = rules.filter((rule) => !Number(rule.forwardGroupRuleId || 0));
   if (visible.length === 0) return;
   const reasons: string[] = [];
@@ -415,7 +541,8 @@ export async function listEgressLandingOptions(actor: Actor) {
     ...host,
     hostName: name,
     online: isOnline,
-    inbounds: inbounds.map(({ unlock: _unlock, unlockCheckedAt: _checkedAt, ...inbound }) => inbound),
+    // 旧接口只认 Shadowsocks：VLESS 入站不给它（它会拿 method 当加密方式显示）。
+    inbounds: inbounds.filter((inbound) => inbound.protocol === "shadowsocks").map(({ unlock: _unlock, unlockCheckedAt: _checkedAt, protocol: _protocol, ...inbound }) => inbound),
   }));
 }
 
@@ -464,6 +591,9 @@ export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonl
       ss2022: capabilities.ss2022,
       udpMessage: capabilities.udp ? null : ssEgressUdpUpgradeMessage(canSee ? host : null),
       ss2022Message: capabilities.ss2022 ? null : ssEgress2022UpgradeMessage(canSee ? host : null),
+      // VLESS Reality 出口只看 Agent 版本（2.2.253 起认得本机 sing-box 桥接）。
+      vless: isVlessEgressAgentSupported(String(host?.agentVersion || "")),
+      vlessMessage: isVlessEgressAgentSupported(String(host?.agentVersion || "")) ? null : vlessEgressAgentUpgradeMessage(canSee ? host?.name : null),
     };
   });
 }
@@ -471,6 +601,8 @@ export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonl
 /* ── 下发：运行视图和 gost 出口链 ────────────────────────────────────── */
 
 export type SsEgressRuntime = {
+  /** 老代码里没有这个字段：缺省就是 Shadowsocks。 */
+  kind?: "ss";
   server: string;
   port: number;
   method: string;
@@ -478,21 +610,54 @@ export type SsEgressRuntime = {
   udp: boolean;
 };
 
+/**
+ * VLESS Reality 出口：gost 链上是本机 127.0.0.1:bridgePort 的 socks5（带凭据），sing-box 桥接再经 vless 出去
+ * （server/vlessEgress.ts）。只转 TCP，udp 恒为 false。
+ */
+export type VlessEgressRuntime = {
+  kind: "vless";
+  server: string;
+  port: number;
+  uuid: string;
+  serverName: string;
+  publicKey: string;
+  shortId: string;
+  fingerprint: string;
+  udp: false;
+  bridgePort: number;
+  bridgeUsername: string;
+  bridgePassword: string;
+};
+
+export type RuleEgressRuntime = SsEgressRuntime | VlessEgressRuntime;
+
 export type EgressRuntimeContext = {
   inboundById: Map<number, any>;
   hostById: Map<number, any>;
+  /** VLESS 出口用的落地入站上的用户（拿 UUID）；只为 vless_host 规则查。 */
+  usersByInboundId?: Map<number, Array<{ uuid?: unknown; sharedUserId?: unknown }>>;
 };
 
 /** 心跳里一次把这批规则要的落地入站和落地主机查完。 */
 export async function loadEgressRuntimeContext(rules: readonly any[], previous?: EgressRuntimeContext): Promise<EgressRuntimeContext> {
   const context: EgressRuntimeContext = previous || { inboundById: new Map(), hostById: new Map() };
   const inboundIds = Array.from(new Set(rules
-    .filter((rule) => normalizeRuleEgressType(rule?.egressType) === "ss_host")
+    .filter((rule) => ruleEgressUsesInbound(rule?.egressType))
     .map((rule) => Number(rule.egressInboundId || 0))
     .filter((id) => id > 0 && !context.inboundById.has(id))));
   for (const id of inboundIds) {
     const inbound = await db.getProxyInboundById(id).catch(() => undefined);
     context.inboundById.set(id, inbound || null);
+  }
+  const vlessInboundIds = Array.from(new Set(rules
+    .filter((rule) => normalizeRuleEgressType(rule?.egressType) === "vless_host")
+    .map((rule) => Number(rule.egressInboundId || 0))
+    .filter((id) => id > 0 && !context.usersByInboundId?.has(id))));
+  if (vlessInboundIds.length > 0) {
+    const usersByInboundId = context.usersByInboundId || new Map();
+    context.usersByInboundId = usersByInboundId;
+    const users = await db.getProxyInboundUsersByInbounds(vlessInboundIds).catch(() => new Map<number, ProxyInboundUser[]>());
+    for (const id of vlessInboundIds) usersByInboundId.set(id, users.get(id) || []);
   }
   const hostIds = Array.from(new Set(Array.from(context.inboundById.values())
     .filter(Boolean)
@@ -506,10 +671,12 @@ export async function loadEgressRuntimeContext(rules: readonly any[], previous?:
 
 export type RuleEgressEvaluation = {
   state: RuleEgressState;
-  runtime: SsEgressRuntime | null;
+  runtime: RuleEgressRuntime | null;
   landingHost: any | null;
   inbound: any | null;
   endpoint: SsEgressEndpoint | null;
+  /** VLESS 出口的端点（endpoint 是 SS 的那一份，两者只会有一个）。 */
+  vlessEndpoint?: VlessEgressEndpoint | null;
   message: string;
 };
 
@@ -528,11 +695,17 @@ export type RuleEgressEntryOptions = {
   /** 走隧道的规则：隧道模式。这时上面的「入口机」指的是隧道的出口机（真正连 SS 落地的那台）。 */
   tunnelMode?: unknown;
   context: EgressRuntimeContext;
+  /**
+   * 心跳里这台入口机的桥接端口分配器（server/vlessEgress.ts）。只在真正下发时给；列表显示、诊断不给，
+   * 这时 VLESS 规则照样算状态，只是 runtime 里的桥接端口是 0。
+   */
+  vlessBridgePorts?: VlessEgressBridgePortAllocator;
 };
 
 export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): RuleEgressEvaluation | null {
   const type = normalizeRuleEgressType(rule?.egressType);
   if (type === "none") return null;
+  if (type === "vless_host" || type === "vless_link") return evaluateVlessRuleEgress(rule, type, options);
   const base = { runtime: null, landingHost: null, inbound: null, endpoint: null } as const;
   const shapeError = ruleEgressShapeError({
     egressType: type,
@@ -608,6 +781,83 @@ export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): 
 }
 
 /**
+ * VLESS Reality 出口的状态。顺序和 SS 那份一样：先看出口本身（入站在不在、能不能做出口、链接解不解得开），
+ * 再看规则形态，最后看入口机的 Agent 够不够新（2.2.253）。
+ */
+function evaluateVlessRuleEgress(rule: Parameters<typeof evaluateRuleEgress>[0], type: "vless_host" | "vless_link", options: RuleEgressEntryOptions): RuleEgressEvaluation {
+  const base = { runtime: null, landingHost: null, inbound: null, endpoint: null, vlessEndpoint: null } as const;
+  const shapeError = ruleEgressShapeError({
+    egressType: type,
+    forwardType: rule.forwardType,
+    protocol: rule.protocol,
+    egressUdp: rule.egressUdp,
+    tunnelId: rule.tunnelId,
+    tunnelMode: options.tunnelMode,
+    failoverEnabled: rule.failoverEnabled,
+    tlsInboundId: rule.tlsInboundId,
+  });
+  let landingHost: RuleEgressEvaluation["landingHost"] = null;
+  let inbound: RuleEgressEvaluation["inbound"] = null;
+  let endpoint: VlessEgressEndpoint | null = null;
+  if (type === "vless_host") {
+    inbound = options.context.inboundById.get(Number(rule.egressInboundId || 0)) || null;
+    if (!inbound) return { ...base, state: "inbound_missing", message: "出口用的落地入站已被删除" };
+    landingHost = options.context.hostById.get(Number(inbound.hostId)) || null;
+    if (!landingHost) return { ...base, inbound, state: "inbound_missing", message: "落地主机已被删除" };
+    const inboundError = vlessEgressInboundError(inbound);
+    if (inboundError) return { ...base, inbound, landingHost, state: "inbound_unsupported", message: inboundError };
+    if (!dbBool(inbound.isEnabled, true)) return { ...base, inbound, landingHost, state: "inbound_disabled", message: `落地入站「${inbound.name}」已停用` };
+    if (Number(landingHost.id) === Number(options.entryHostId)) return { ...base, inbound, landingHost, state: "self_loop", message: "落地主机就是入口主机" };
+    const server = getHostEntryAddress(landingHost);
+    if (!server) return { ...base, inbound, landingHost, state: "config_invalid", message: "落地主机没有可用地址" };
+    const uuid = pickVlessEgressInboundUuid(options.context.usersByInboundId?.get(Number(inbound.id)) || []);
+    if (!uuid) return { ...base, inbound, landingHost, state: "config_invalid", message: `落地入站「${inbound.name}」没有用户` };
+    endpoint = {
+      server,
+      port: Number(inbound.port),
+      uuid,
+      serverName: String(inbound.serverName || ""),
+      publicKey: canonicalRealityPublicKey(inbound.realityPublicKey),
+      shortId: String(inbound.realityShortId || "").toLowerCase(),
+      fingerprint: VLESS_EGRESS_DEFAULT_FINGERPRINT,
+    };
+  } else {
+    endpoint = decryptVlessEgressEndpoint(rule.egressConfigJson);
+    if (!endpoint) return { ...base, state: "config_invalid", message: "出口链接无法解密，请重新粘贴" };
+  }
+  const endpointError = vlessEgressEndpointError(endpoint);
+  if (endpointError) return { ...base, inbound, landingHost, vlessEndpoint: endpoint, state: "config_invalid", message: endpointError };
+  if (shapeError) return { ...base, inbound, landingHost, vlessEndpoint: endpoint, state: "shape_invalid", message: shapeError };
+  if (!isVlessEgressAgentSupported(options.entryAgentVersion)) {
+    return { ...base, inbound, landingHost, vlessEndpoint: endpoint, state: "agent_upgrade", message: vlessEgressAgentUpgradeMessage(options.entryHostName) };
+  }
+  const bridgePort = options.vlessBridgePorts ? options.vlessBridgePorts.portFor(Number(rule.id)) : 0;
+  if (options.vlessBridgePorts && !bridgePort) {
+    return { ...base, inbound, landingHost, vlessEndpoint: endpoint, state: "config_invalid", message: "入口机上找不到空闲的本机桥接端口" };
+  }
+  const credentials = vlessEgressBridgeCredentials(Number(rule.id), endpoint.uuid);
+  const runtime: VlessEgressRuntime = {
+    kind: "vless",
+    server: endpoint.server,
+    port: endpoint.port,
+    uuid: endpoint.uuid,
+    serverName: endpoint.serverName,
+    publicKey: endpoint.publicKey,
+    shortId: endpoint.shortId,
+    fingerprint: endpoint.fingerprint || VLESS_EGRESS_DEFAULT_FINGERPRINT,
+    udp: false,
+    bridgePort,
+    bridgeUsername: credentials.username,
+    bridgePassword: credentials.password,
+  };
+  const paused = !dbBool(rule.isEnabled);
+  if (landingHost && !isHostConsideredOnline(landingHost)) {
+    return { runtime, landingHost, inbound, endpoint: null, vlessEndpoint: endpoint, state: paused ? "paused" : "landing_offline", message: `落地主机「${landingHost.name}」离线` };
+  }
+  return { runtime, landingHost, inbound, endpoint: null, vlessEndpoint: endpoint, state: paused ? "paused" : "running", message: "" };
+}
+
+/**
  * 规则在这台 Agent 上的运行视图（和共享 TLS 入站的 sniRuleRuntimeView 同一个思路）：
  *   - 出口失效 / Agent 太旧 → 按停用下发，已经起着的监听走正常的停用流程撤掉，绝不退回直连
  *     （退回直连会让流量换一个出口 IP，用户以为在走落地，其实没有）；
@@ -641,9 +891,12 @@ export function ruleEgressRuntimeView<T extends Record<string, any>>(rule: T, op
   return view as T;
 }
 
-export function ruleEgressRuntime(rule: any): SsEgressRuntime | null {
+export function ruleEgressRuntime(rule: any): RuleEgressRuntime | null {
   const runtime = rule?.egressRuntime;
-  return runtime && runtime.server && runtime.port ? runtime as SsEgressRuntime : null;
+  if (!runtime || !runtime.server || !runtime.port) return null;
+  // VLESS 出口没分到桥接端口就当没有（运行视图已经按停用下发，这里再兜一道，不让 gost 链指向 127.0.0.1:0）。
+  if (runtime.kind === "vless" && !(Number(runtime.bridgePort) > 0)) return null;
+  return runtime as RuleEgressRuntime;
 }
 
 export function gostEgressChainName(ruleId: number, proto: "tcp" | "udp") {
@@ -655,7 +908,30 @@ export function gostEgressChainName(ruleId: number, proto: "tcp" | "udp") {
  * 否则 SSH、SMTP 这类「服务端先说话」的协议会一直等不到落地去连目标）；UDP 用 ssu 连接器 +
  * udp 拨号器（ssu 配 tcp 拨号器走的是 UDP-over-TCP，gost 这一版那条路没初始化，会直接崩）。
  */
-export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runtime: SsEgressRuntime) {
+export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runtime: RuleEgressRuntime) {
+  if (runtime.kind === "vless") {
+    /*
+      VLESS 出口：链上一跳是本机 sing-box 桥接的 socks5（server/vlessEgress.ts）。notls：gost 的 socks5 连接器默认还会
+      提议它自己的 TLS 扩展方法，sing-box 不认，关掉只用用户名密码。socks5 有真正的 CONNECT 应答（sing-box 连上落地
+      之后才回成功），不像 ss 连接器那样要 nodelay。
+    */
+    return {
+      name: gostEgressChainName(ruleId, proto),
+      hops: [{
+        name: `hop-egress-${Number(ruleId)}-${proto}`,
+        nodes: [{
+          name: `egress-${Number(ruleId)}-${proto}`,
+          addr: `127.0.0.1:${Number(runtime.bridgePort)}`,
+          connector: {
+            type: "socks5",
+            auth: { username: runtime.bridgeUsername, password: runtime.bridgePassword },
+            metadata: { notls: true },
+          },
+          dialer: { type: "tcp" },
+        }],
+      }],
+    };
+  }
   const host = runtime.server.includes(":") ? `[${runtime.server}]` : runtime.server;
   const auth = { username: normalizeSsMethod(runtime.method), password: canonicalSsEgressPassword(runtime.method, runtime.password) };
   return {
@@ -747,8 +1023,11 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
           inboundName: worst.inbound ? String(worst.inbound.name || "") : null,
           landingHostId: worst.landingHost ? Number(worst.landingHost.id) : null,
           landingHostName: worst.landingHost ? String(worst.landingHost.name || "") : null,
-          masked: worst.endpoint ? maskSsEgressEndpoint(worst.endpoint) : "",
-          method: worst.endpoint ? normalizeSsMethod(worst.endpoint.method) : "",
+          masked: worst.endpoint
+            ? maskSsEgressEndpoint(worst.endpoint)
+            : worst.vlessEndpoint ? maskVlessEgressEndpoint(worst.vlessEndpoint) : "",
+          method: worst.endpoint ? normalizeSsMethod(worst.endpoint.method) : worst.vlessEndpoint ? "vless-reality" : "",
+          protocol: ruleEgressProtocolOf(rule.egressType),
           // 只有真的下发了 UDP 出口才算「含 UDP」；勾了但入口机撑不起时 state 是 udp_runtime_upgrade。
           udp: worst.runtime?.udp === true,
           udpConfigured: dbBool(rule.egressUdp),
