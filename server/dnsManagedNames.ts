@@ -21,6 +21,9 @@ import { getAllSettings } from "./repositories/settingsRepository";
 
   不看 DDNS 当前是不是启用、服务商是不是 DNSPod：临时关掉 DDNS 期间改掉的记录，一打开就会被
   覆盖，宁可多挡一些。
+
+  按名字算、不看线路：组的分线路解析（server/forwardGroupDdnsLines.ts）写在电信 / 联通等线路上的
+  记录和默认线路的同名，一样只读 —— 手改一条线路的记录，下一轮同步同样会被改回去。
 */
 
 export type DnsManagedOwnerKind = "host" | "forwardGroup" | "ruleDomain" | "ruleDomainPending" | "ruleDomainSuffix" | "landingPool";

@@ -691,6 +691,9 @@ const tables: TableDef[] = [
       c("bandwidthAggregationStrategy", "varchar", { length: 32, notNull: true, default: "capacity" }),
       c("bandwidthAggregationSlots", "int", { notNull: true, default: 8 }),
       c("bandwidthAggregationMinMembers", "int", { notNull: true, default: 1 }),
+      // 分线路解析（shared/ddnsLines.ts）：线路成员全挂时回落到默认线路还是删掉线路记录；
+      // ddnsLineState 是面板在每条非默认线路上写了什么、服务商记录 ID（运行状态）。
+      c("ddnsLineFallback", "varchar", { length: 16, notNull: true, default: "default" }), c("ddnsLineState", "text"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("activeMemberId", "int"), c("lastDdnsValue", "text"),
       // 成员跟着哪个节点池（2.3.497）：设了就由 server/nodePoolGroups.ts 按池里的机器同步主机成员
       c("poolId", "int"),
@@ -708,6 +711,8 @@ const tables: TableDef[] = [
       // Declared uplink of this front VPS in Mbps (0 = unknown) and its manual
       // aggregation weight (0 = derive the weight from the strategy).
       c("bandwidthMbps", "int", { notNull: true, default: 0 }), c("aggregationWeight", "int", { notNull: true, default: 0 }),
+      // 分到的运营商线路（JSON [{id,name}]，shared/ddnsLines.ts）；null = 只在默认线路。
+      c("ddnsLines", "text"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("healthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }),
       // 线路按时间段启用（shared/memberSchedule.ts）：可用时段，和「是时段让它停的」标记。
       c("activeSchedule", "text"), c("scheduleSuspended", "bool", { notNull: true, default: false }),

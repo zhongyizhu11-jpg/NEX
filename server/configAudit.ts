@@ -27,6 +27,8 @@ const VOLATILE_KEYS = new Set([
   "createdAt", "updatedAt", "lastHeartbeat", "isOnline", "isRunning", "lastLatencyMs",
   "lastTestAt", "lastTestStatus", "lastTestMessage", "lastError", "trafficUsed",
   "lastDdnsValue", "lastDdnsAt", "lastDdnsError", "geoUpdatedAt", "mimicCheckedAt",
+  // 分线路解析每条线路此刻发布的值和服务商记录 ID：和 lastDdnsValue 一样是运行状态。
+  "ddnsLineState",
   "mimicMessage", "mimicStatus", "mimicRuntimeStatus", "mimicRuntimeMessage",
   "mimicRuntimeCheckedAt", "agentRecoveryStartedAt", "agentRecoveryCompletedAt",
   "agentRecoveryExpected", "agentRecoveryReady", "agentLastReceivedRevision",

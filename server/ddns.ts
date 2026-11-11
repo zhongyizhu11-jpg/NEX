@@ -1187,3 +1187,15 @@ export async function ddnsRootDomain(): Promise<{ root: string | null; reason: s
     return { root: null, reason: error instanceof Error ? error.message : String(error) };
   }
 }
+
+// 分线路解析（server/ddnsLineRecords.ts）按线路写记录时复用的几样，和默认线路同一套规则：
+// TTL 规整、主域名拆分、按值对账、免费套餐 TTL 下限重试、同名同类型记录的锁。
+export {
+  ddnsRecordLockKey,
+  normalizeDnsName as normalizeDdnsName,
+  parseTtl as parseDdnsTtl,
+  planDdnsValueChanges,
+  splitDnsName as splitDdnsName,
+  uniqueDdnsValues,
+  withProviderMinTtl,
+};
