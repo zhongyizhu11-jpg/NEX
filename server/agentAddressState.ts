@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { isPrivateOrReservedAddress } from "../shared/ipAddress";
 import { normalizeAgentAddress } from "./agentInputValidation";
+import { hostChosenPrimaryAddress } from "../shared/hostPublicAddresses";
 
 export type AgentReportedAddress = {
   ip: string;
@@ -46,9 +47,13 @@ export function mergeAgentReportedAddress(body: any, existingHost?: any, observe
     const ipv6 = normalizeAgentAddress(existingHost?.ipv6) || null;
     return { ip: normalizeAgentAddress(existingHost?.ip) || ipv4 || ipv6 || "unknown", ipv4, ipv6 };
   }
-  const safeIpv4 = normalizeAgentAddress(body?.ipv4);
-  const safeIpv6 = normalizeAgentAddress(body?.ipv6);
-  const safeIp = normalizeAgentAddress(body?.ip);
+  // 管理员挑过主 IP（shared/hostPublicAddresses）：用挑的那个代替 Agent 这次报的出口地址；没挑过照旧
+  const chosenIpv4 = hostChosenPrimaryAddress(existingHost, "ipv4");
+  const chosenIpv6 = hostChosenPrimaryAddress(existingHost, "ipv6");
+  const safeIpv4 = chosenIpv4 || normalizeAgentAddress(body?.ipv4);
+  const safeIpv6 = chosenIpv6 || normalizeAgentAddress(body?.ipv6);
+  // ip 栏：Agent 报的是「有 v4 用 v4，否则 v6」；只挑了主 IPv6、又没有 v4 时它也得跟着换
+  const safeIp = !safeIpv4 && chosenIpv6 ? chosenIpv6 : normalizeAgentAddress(body?.ip);
   const previousIpv4 = normalizeAgentAddress(existingHost?.ipv4);
   const previousIpv6 = normalizeAgentAddress(existingHost?.ipv6);
   const previousIp = normalizeAgentAddress(existingHost?.ip);

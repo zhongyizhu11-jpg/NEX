@@ -166,6 +166,8 @@ func refreshPublicIPs() {
 		}
 		ipv6Ch <- ipv6
 	}()
+	// 网卡上的全部公网地址跟出口 IP 同一个节奏刷新（public_addresses.go），不用另起定时器
+	refreshPublicAddressList()
 	ipv4 := <-ipv4Ch
 	ipv6 := <-ipv6Ch
 	publicIPMu.Lock()

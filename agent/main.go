@@ -308,6 +308,7 @@ type heartbeatStaticSnapshot struct {
 	IPv6                    string
 	PrivateIPv4             string
 	DefaultNetworkInterface string
+	PublicAddresses         string // 网卡上全部公网地址的签名（public_addresses.go）：变了就提前报一次静态信息
 	CPUInfo                 string
 	MemoryTotal             uint64
 	SwapTotal               uint64
@@ -1053,6 +1054,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		IPv6:                    ipv6,
 		PrivateIPv4:             localPrivateIPv4(),
 		DefaultNetworkInterface: defaultNetworkInterface(),
+		PublicAddresses:         publicAddressListSignature(),
 		CPUInfo:                 cpuInfo(),
 		MemoryTotal:             memoryTotal,
 		SwapTotal:               swapTotal,
@@ -1135,6 +1137,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	if (!compactEnabled || shouldReportStatic) && ipv6 != "" {
 		payload["ipv6"] = ipv6
 	}
+	addPublicAddressReport(payload, shouldReportStatic, ipv4, ipv6)
 	if compactEnabled && shouldReportStatic {
 		payload["cpuInfo"] = currentStatic.CPUInfo
 		payload["agentVersion"] = Version

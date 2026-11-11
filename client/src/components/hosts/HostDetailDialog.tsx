@@ -10,7 +10,7 @@ import { HealthBadge } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatCpuPercent, hostGeoTooltip, hostInMaintenance, hostRegionText } from "./hostDisplay";
+import { formatCpuPercent, hostAddressRowTags, hostExtraAddressSummary, hostGeoTooltip, hostInMaintenance, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
 import HostNetTuneSection from "./HostNetTuneSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
@@ -121,6 +121,7 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
   if (!host) return null;
 
   const name = String(host.name || "-").trim() || "-";
+  const extraAddresses = hostExtraAddressSummary(host);
   const os = hostOsOf(host);
   const measureMode = normalizeHostTrafficMeasureMode(host.trafficMeasureMode);
 
@@ -171,6 +172,26 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             ) : (
               <Row label="地址" value={host.ip && host.ip !== "unknown" ? <span className="font-mono">{host.ip}</span> : "—"} />
             )}
+            {/* 多 IP 主机：网卡上检测到的全部公网地址，主 IP、出口 IP 标出来（Agent 2.2.253+） */}
+            {extraAddresses.extra > 0 ? (
+              <div className="space-y-0.5" data-host-detail-addresses="">
+                <span className="text-meta text-muted-foreground">全部公网 IP</span>
+                {extraAddresses.rows.map((row) => {
+                  const tags = hostAddressRowTags(row);
+                  return (
+                    <div key={`${row.family}-${row.address}`} className="flex min-w-0 items-baseline justify-between gap-3 text-secondary-type">
+                      <span className="min-w-0 break-all font-mono">{row.address}</span>
+                      <span className={`shrink-0 text-meta ${row.primary ? "text-foreground" : "text-muted-foreground"}`}>
+                        {[row.family === "ipv4" ? "IPv4" : "IPv6", ...tags].join(" · ")}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {extraAddresses.warnings.map((warning) => (
+              <p key={warning} className="text-meta text-[var(--fx-warn-text)]">{warning}</p>
+            ))}
             {host.observedIp && host.exitIpMismatch ? (
               <Row
                 label="出口 IP"

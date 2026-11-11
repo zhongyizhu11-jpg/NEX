@@ -82,6 +82,9 @@ const baseSchema = z.object({
   failoverTargets: z.array(failoverTargetSchema).max(10).optional(),
   domain: z.string().max(255).nullable().optional(),
   recordType: z.enum(["A", "AAAA", "CNAME"]).default("A"),
+  // 双栈 DDNS：A 组同时发 AAAA、AAAA 组同时发 A（跟着同一批成员，见 server/forwardGroupDualStackDdns.ts）
+  // 没传（老客户端、脚本）= 新建时关、编辑时保持原样
+  ddnsDualStack: z.boolean().optional(),
   failoverSeconds: z.number().int().min(10).max(3600).default(60),
   recoverSeconds: z.number().int().min(10).max(3600).default(120),
   rateLimitMbps: z.number().int().min(0).max(1_000_000).optional().default(0),

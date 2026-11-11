@@ -357,6 +357,8 @@ export const hosts = table("hosts", {
   ddnsDomain: text("ddnsDomain"),
   ddnsRecordType: varchar("ddnsRecordType", { length: 8 }).notNull().default("A"),
   ddnsIpVersion: varchar("ddnsIpVersion", { length: 8 }).notNull().default("ipv4"),
+  /** 主机 DDNS 发哪些值：primary = 只发主 IP（原来的行为），all = 检测到的全部地址（shared/hostDdnsPlan） */
+  ddnsValueMode: varchar("ddnsValueMode", { length: 8 }).notNull().default("primary"),
   lastDdnsValue: text("lastDdnsValue"),
   lastDdnsAt: epoch("lastDdnsAt"),
   lastDdnsError: text("lastDdnsError"),
@@ -383,6 +385,13 @@ export const hosts = table("hosts", {
     心跳上报的地址不再覆盖。
   */
   addressManual: boolean("addressManual").notNull().default(false),
+  /*
+    Agent 2.2.253 起上报的网卡全部公网地址（JSON，shared/hostPublicAddresses）。老 Agent 不报，一直为空。
+    primaryIpv4 / primaryIpv6 是管理员挑的主 IP：空 = 没挑过，照旧用 Agent 上报的那一个。
+  */
+  detectedAddresses: text("detectedAddresses"),
+  primaryIpv4: text("primaryIpv4"),
+  primaryIpv6: text("primaryIpv6"),
   // ===== 端口区间限制 =====
   portRangeStart: int("portRangeStart"),  // 允许转发的起始端口，null = 不限制
   portRangeEnd: int("portRangeEnd"),      // 允许转发的结束端口，null = 不限制
@@ -1064,6 +1073,8 @@ export const forwardGroups = table("forward_groups", {
   chinaHealthCheckMethod: varchar("chinaHealthCheckMethod", { length: 16 }).notNull().default("tcp"),
   telegramSwitchNotifyEnabled: boolean("telegramSwitchNotifyEnabled").notNull().default(false),
   ddnsAutoResolveEnabled: boolean("ddnsAutoResolveEnabled").notNull().default(true),
+  /** A / AAAA 组同时发另一族（双栈）：成员挑选照旧按主记录类型，另一族跟着同一批成员走（forwardGroupDualStackDdns） */
+  ddnsDualStack: boolean("ddnsDualStack").notNull().default(false),
   autoFailback: boolean("autoFailback").notNull().default(true),
   // Multi-front-VPS bandwidth aggregation for entry groups. Disabled by default
   // so existing groups keep their equal-share publishing behaviour.

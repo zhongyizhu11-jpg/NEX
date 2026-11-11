@@ -115,6 +115,7 @@ import {
   socatServiceNameForPort,
 } from "./forwardRuntimeConfigs";
 import { handleHostAddressChanged, hostIngressAddress } from "./hostAddressRuntime";
+import { syncHostDetectedAddressesSafely } from "./hostPublicAddressSync";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
 import {
@@ -666,6 +667,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 地址单独写、带条件：用户刚好在这次心跳期间手改了地址时不盖掉它（见 applyAgentReportedHostAddress）
     const addressApplied = addressChanged && await db.applyAgentReportedHostAddress(host.id, reportedAddress);
     if (addressApplied) Object.assign(host as any, reportedAddress);
+    // Agent 2.2.253+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
+    await syncHostDetectedAddressesSafely(host, req.body);
     if (fxpVersionChanged) {
       appendPanelLog(
         "info",

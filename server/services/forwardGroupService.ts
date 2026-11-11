@@ -9,6 +9,7 @@ import { normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../shared/forwardTypes";
 import { normalizeExitGroupStrategy, type ExitGroupStrategy } from "../../shared/exitStrategy";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
+import { forwardGroupMirrorRecordType, forwardGroupSupportsDualStack } from "../forwardGroupDualStackDdns";
 import {
   normalizeForwardGroupHealthCheckMethod,
   type ForwardGroupHealthCheckMethod,
@@ -63,6 +64,8 @@ export type ForwardGroupInput = {
   failoverTargets?: Array<{ targetIp?: string; targetPort?: number }>;
   domain?: string | null;
   recordType?: "A" | "AAAA" | "CNAME";
+  /** A / AAAA 组同时发另一族（双栈，server/forwardGroupDualStackDdns.ts）。默认关。 */
+  ddnsDualStack?: boolean;
   failoverSeconds: number;
   recoverSeconds: number;
   rateLimitMbps?: number;
@@ -271,6 +274,7 @@ async function normalizeForwardGroupInput(input: ForwardGroupInput, userId?: num
     failoverTargets: null,
     domain,
     recordType,
+    ddnsDualStack: forwardGroupSupportsDualStack(groupMode, recordType) && !!input.ddnsDualStack,
     rateLimitMbps: runtimeConfigSupported ? Math.max(0, Math.floor(Number(input.rateLimitMbps) || 0)) : 0,
     trafficMultiplier: runtimeConfigSupported ? normalizeTrafficMultiplier(input.trafficMultiplier) : 100,
     failoverSeconds: input.failoverSeconds,
@@ -315,6 +319,10 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
   const existing = await db.getForwardGroupById(id) as any;
   if (!existing) throw new Error("转发资源不存在");
   const normalized = await normalizeForwardGroupInput(input);
+  if (input.ddnsDualStack === undefined) {
+    const keep = existing.ddnsDualStack === true || existing.ddnsDualStack === 1;
+    normalized.data.ddnsDualStack = keep && forwardGroupSupportsDualStack(normalized.data.groupMode, normalized.data.recordType);
+  }
   const desiredEnabled = !!normalized.data.isEnabled;
   const enabledChanged = !!existing.isEnabled !== desiredEnabled;
   const memberPriorityChanged = memberPrioritySignature((existing?.members || []) as ForwardGroupMemberRequest[])
@@ -337,6 +345,9 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
   ].join("|");
   const aggregationChanged = normalized.data.groupMode === "entry"
     && aggregationSignature(existing) !== aggregationSignature(normalized.data);
+  // 双栈开关 / 主记录类型变了：副记录要重发（或清掉），不能等成员健康变化才同步
+  const previousMirrorType = forwardGroupMirrorRecordType(existing);
+  const dualStackChanged = previousMirrorType !== forwardGroupMirrorRecordType(normalized.data);
   const exitStrategyChanged = normalized.data.groupMode === "exit"
     && normalizeExitGroupStrategy(existing?.exitStrategy) !== normalizeExitGroupStrategy(normalized.data.exitStrategy);
   const shouldResetChinaHealth = !normalized.data.chinaHealthCheckEnabled
@@ -356,6 +367,12 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
       });
     }
     if (shouldResetChinaHealth) await db.resetForwardGroupChinaHealth(id);
+    // 关了双栈（或主记录换了族）：旧的副记录不会再跟着切换，清掉（失败只记日志，不挡保存）
+    if (dualStackChanged && previousMirrorType && previousMirrorType !== normalized.data.recordType) {
+      await db.clearForwardGroupMirrorDdns(existing).catch((error: unknown) => {
+        console.warn(`[ForwardGroup] clearing dual-stack DDNS records failed group=${id}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
   };
   if (normalized.data.groupMode === "chain" && !enabledChanged) {
     await db.withForwardGroupSyncTransaction(
@@ -381,7 +398,7 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
   if (normalized.data.groupMode === "chain" || normalized.data.groupMode === "port") {
     if (!membersChanged) await db.syncForwardGroupRules(id, { preserveRuntime: true });
   } else if (normalized.data.groupMode === "entry" || normalized.data.groupMode === "exit") {
-    if (!membersChanged) await db.runForwardGroupFailover(id, { manual: true, forceSync: aggregationChanged });
+    if (!membersChanged) await db.runForwardGroupFailover(id, { manual: true, forceSync: aggregationChanged || dualStackChanged });
     if (!membersChanged && entryDomainChanged) {
       await db.refreshForwardGroupReferences(id, { reason: "entry-group-domain-updated" });
     } else if (!membersChanged && exitStrategyChanged) {
@@ -390,7 +407,7 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
   } else {
     await db.runForwardGroupFailover(id, {
       forcePriority: memberPriorityChanged,
-      forceSync: memberPriorityChanged,
+      forceSync: memberPriorityChanged || dualStackChanged,
       manual: true,
     });
   }

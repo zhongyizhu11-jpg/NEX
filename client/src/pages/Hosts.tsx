@@ -54,6 +54,7 @@ import {
   formatUptime,
   hostAddressText,
   hostPrimaryAddressText,
+  hostExtraAddressSummary,
   HostRegionBadge,
   hostRegionText,
   isAgentUpgradeTimedOut,
@@ -63,6 +64,17 @@ import {
 } from "@/components/hosts/hostDisplay";
 import { HostOsAvatar } from "@/components/hosts/HostOsBadge";
 import { parseHostOs } from "@shared/hostOs";
+import { hostChosenPrimaryAddress } from "@shared/hostPublicAddresses";
+import { HostPrimaryAddressPicker } from "@/components/hosts/HostPrimaryAddressPicker";
+import {
+  ddnsProviderSupportsMultipleValues,
+  hostDdnsProviderValueModeNote,
+  hostDdnsRecordTypeFor,
+  normalizeHostDdnsIpVersion,
+  normalizeHostDdnsValueMode,
+  type HostDdnsIpVersion,
+  type HostDdnsValueMode,
+} from "@shared/hostDdnsPlan";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -605,8 +617,15 @@ type HostFormData = {
   trafficAutoReset: boolean;
   trafficResetDay: number;
   ddnsEnabled: boolean;
-  ddnsIpVersion: "ipv4" | "ipv6";
+  ddnsIpVersion: HostDdnsIpVersion;
+  /** 仅主 IP / 全部 IP（shared/hostDdnsPlan） */
+  ddnsValueMode: HostDdnsValueMode;
   ddnsDomain: string;
+  /** 主 IPv4 / IPv6（空 = 不挑，用 Agent 上报的），*Initial 是打开编辑框时的值，只有改了才提交 */
+  primaryIpv4: string;
+  primaryIpv4Initial: string;
+  primaryIpv6: string;
+  primaryIpv6Initial: string;
   blockHttp: boolean;
   blockSocks: boolean;
   blockTls: boolean;
@@ -649,7 +668,12 @@ const defaultFormData: HostFormData = {
   trafficResetDay: 1,
   ddnsEnabled: false,
   ddnsIpVersion: "ipv4",
+  ddnsValueMode: "primary",
   ddnsDomain: "",
+  primaryIpv4: "",
+  primaryIpv4Initial: "",
+  primaryIpv6: "",
+  primaryIpv6Initial: "",
   blockHttp: false,
   blockSocks: false,
   blockTls: false,
@@ -717,10 +741,6 @@ function formatTrafficCorrectionGbInput(bytes: number) {
   return String(Number(gb.toFixed(6)));
 }
 
-function normalizeHostDdnsIpVersion(value: unknown, recordType?: unknown): "ipv4" | "ipv6" {
-  if (value === "ipv6" || (!value && String(recordType || "").toUpperCase() === "AAAA")) return "ipv6";
-  return "ipv4";
-}
 
 function formatTrafficLimitGbInput(value: unknown) {
   const bytes = Number(value || 0);
@@ -1391,6 +1411,7 @@ const HostTableRow = memo(function HostTableRow({
   const agentNeedsUpdate = isAgentVersionBehind(host.agentVersion, latestAgentVersion);
   const remainingDays = formatHostRemainingDays(host.purchasedAt, host.stoppedAt);
   const primaryAddressText = hostPrimaryAddressText(host);
+  const extraAddresses = hostExtraAddressSummary(host);
   const hostOs = parseHostOs(host.osInfo);
   const uptimeText = latestMetric?.uptime == null ? "--" : formatUptime(latestMetric.uptime);
   const uptimeTitle = formatHostUptimeTitle(latestMetric?.uptime, uptimeText);
@@ -1436,8 +1457,10 @@ const HostTableRow = memo(function HostTableRow({
               <HostListStatusBadge host={host} />
               <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle}>{host.name}</span>
             </div>
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={primaryAddressText}>
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={extraAddresses.extra > 0 ? extraAddresses.title : primaryAddressText}>
               <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
+              {extraAddresses.extra > 0 ? <span className="shrink-0">+{extraAddresses.extra}</span> : null}
+              {extraAddresses.warnings.length > 0 ? <span className="shrink-0 text-[var(--fx-warn-text)]" title={extraAddresses.warnings.join("\n")}>主 IP 需确认</span> : null}
               <HostRegionBadge host={host} compact />
             </div>
           </div>
@@ -2276,7 +2299,12 @@ function HostsContent() {
       trafficResetDay: clampMonthlyResetDay(host.trafficResetDay || 1),
       ddnsEnabled: !!host.ddnsEnabled,
       ddnsIpVersion: normalizeHostDdnsIpVersion(host.ddnsIpVersion, host.ddnsRecordType),
+      ddnsValueMode: normalizeHostDdnsValueMode(host.ddnsValueMode),
       ddnsDomain: host.ddnsDomain || "",
+      primaryIpv4: hostChosenPrimaryAddress(host, "ipv4"),
+      primaryIpv4Initial: hostChosenPrimaryAddress(host, "ipv4"),
+      primaryIpv6: hostChosenPrimaryAddress(host, "ipv6"),
+      primaryIpv6Initial: hostChosenPrimaryAddress(host, "ipv6"),
       blockHttp: !!host.blockHttp,
       blockSocks: !!host.blockSocks,
       blockTls: !!host.blockTls,
@@ -2391,7 +2419,8 @@ function HostsContent() {
           ddnsEnabled: form.ddnsEnabled,
           ddnsDomain: form.ddnsDomain.trim(),
           ddnsIpVersion: form.ddnsIpVersion,
-          ddnsRecordType: (form.ddnsIpVersion === "ipv6" ? "AAAA" : "A") as "A" | "AAAA",
+          ddnsRecordType: hostDdnsRecordTypeFor(form.ddnsIpVersion),
+          ddnsValueMode: form.ddnsValueMode,
         }
       : {};
     const protocolPolicyPayload = user?.role === "admin"
@@ -2416,6 +2445,8 @@ function HostsContent() {
         entryIp: entry || null,
         tunnelEntryIp: tunnelEntry || null,
         ...(detectedAddressChanged ? { detectedAddress: detectedAddress } : {}),
+        ...(form.primaryIpv4 !== form.primaryIpv4Initial ? { primaryIpv4: form.primaryIpv4 || null } : {}),
+        ...(form.primaryIpv6 !== form.primaryIpv6Initial ? { primaryIpv6: form.primaryIpv6 || null } : {}),
         portRangeStart: ps ?? null,
         portRangeEnd: pe ?? null,
         portAllowlist: customPorts.normalized || null,
@@ -3531,6 +3562,16 @@ function HostsContent() {
                       </p>
                     </FormField>
                   </div>
+                  {editingId && editingHostRow ? (
+                    <div className="mt-2.5">
+                      <HostPrimaryAddressPicker
+                        host={editingHostRow}
+                        primaryIpv4={form.primaryIpv4}
+                        primaryIpv6={form.primaryIpv6}
+                        onChange={(family, value) => setForm({ ...form, ...(family === "ipv4" ? { primaryIpv4: value } : { primaryIpv6: value }) })}
+                      />
+                    </div>
+                  ) : null}
                   <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
                     <FormField className="space-y-1">
                       <Label className="text-sm">入口 IP / 域名</Label>
@@ -4035,7 +4076,7 @@ function HostsContent() {
                             onCheckedChange={(checked) => setForm({ ...form, ddnsEnabled: checked })}
                           />
                         </FormField>
-                        <div className="grid min-w-0 gap-2.5 sm:grid-cols-[8rem_minmax(0,1fr)]">
+                        <div className="grid min-w-0 gap-2.5 sm:grid-cols-[8rem_7rem_minmax(0,1fr)]">
                           <Select
                             value={form.ddnsIpVersion}
                             disabled={!ddnsProviderEnabled}
@@ -4047,6 +4088,21 @@ function HostsContent() {
                             <SelectContent>
                               <SelectItem value="ipv4">IPv4 / A</SelectItem>
                               <SelectItem value="ipv6">IPv6 / AAAA</SelectItem>
+                              <SelectItem value="dual">双栈 / A + AAAA</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {/* 仅主 IP（老配置默认）/ 全部 IP：检测到的每个地址各发一条同名记录（shared/hostDdnsPlan） */}
+                          <Select
+                            value={form.ddnsValueMode}
+                            disabled={!ddnsProviderEnabled}
+                            onValueChange={(value) => setForm({ ...form, ddnsValueMode: normalizeHostDdnsValueMode(value) })}
+                          >
+                            <SelectTrigger aria-label="DDNS 记录值" className="h-8 min-w-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="primary">仅主 IP</SelectItem>
+                              <SelectItem value="all">全部 IP</SelectItem>
                             </SelectContent>
                           </Select>
                           <Input
@@ -4058,8 +4114,17 @@ function HostsContent() {
                           />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          IP 变了自动更新解析。
+                          IP 变了自动更新解析。{form.ddnsIpVersion === "dual" ? "双栈：A 发 IPv4、AAAA 发 IPv6，哪一族没有地址就先不动那一族。" : ""}
                         </p>
+                        {form.ddnsValueMode === "all" ? (
+                          <p
+                            className={`text-xs ${ddnsProviderSupportsMultipleValues(panelFlags.ddnsProvider) ? "text-muted-foreground" : "text-[var(--fx-warn-text)]"}`}
+                            data-host-ddns-value-mode-note=""
+                          >
+                            全部 IP：Agent 检测到的每个公网地址各一条同名记录，主 IP 排第一；旧 Agent 没报列表时只发主 IP。
+                            {hostDdnsProviderValueModeNote(panelFlags.ddnsProvider)}
+                          </p>
+                        ) : null}
                       </div>
                     </>
                   ) : (
