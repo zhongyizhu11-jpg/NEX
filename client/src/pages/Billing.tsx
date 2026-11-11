@@ -25,6 +25,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import AdminReferralPanel from "@/components/referral/AdminReferralPanel";
+import { BillingExportButton } from "@/components/billing/BillingExportButton";
 import { trpc } from "@/lib/trpc";
 import { CreditCard, Download, Eye, EyeOff, Gift, Package, ReceiptText, Shuffle, TicketPercent, Trash2, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState, type ElementType } from "react";
@@ -580,6 +581,12 @@ export default function Billing() {
                     {showCancelledSubscriptions ? <EyeOff className="mr-2 h-3.5 w-3.5" /> : <Eye className="mr-2 h-3.5 w-3.5" />}
                     {showCancelledSubscriptions ? "隐藏已取消" : "查看已取消"}
                   </Button>
+                  {/* 导出跟着右边选的用户走：选了谁导谁，「全部用户」导全部（上限见 server/billingExport.ts） */}
+                  <BillingExportButton
+                    userId={ledgerUserId === "all" ? null : Number(ledgerUserId)}
+                    includeCancelledSubscriptions={showCancelledSubscriptions}
+                    label={ledgerUserId === "all" ? "导出全部" : "导出该用户"}
+                  />
                   <Select value={ledgerUserId} onValueChange={setLedgerUserId}>
                     <SelectTrigger aria-label="按用户筛选账单" className="w-full sm:w-56">
                       <SelectValue placeholder="筛选用户" />

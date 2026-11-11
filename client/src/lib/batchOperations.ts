@@ -1,3 +1,5 @@
+import { isRuleBatchPortConflictError } from "../../../shared/ruleBatchJobs";
+
 export type BatchOperationResult<T, R> =
   | { item: T; status: "fulfilled"; value: R }
   | { item: T; status: "rejected"; reason: unknown };
@@ -34,9 +36,9 @@ export function batchOperationErrorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason || "未知错误");
 }
 
+/** 判断写在 shared/ruleBatchJobs.ts：服务端的批量复制任务也要用同一条规则。 */
 export function isBatchPortConflictError(reason: unknown) {
-  const message = batchOperationErrorMessage(reason);
-  return /(?:端口.*(?:占用|冲突|正在被.*分配)|(?:源|入口|监听|套餐)端口.*(?:必须|仅限|不在|超出).*?(?:范围|区间|允许|内)|(?:source|entry|listener|plan) port.*?(?:range|allowed)|(?:port|entry agent port).*?(?:already (?:used|in use)|being allocated)|EADDRINUSE)/i.test(message);
+  return isRuleBatchPortConflictError(batchOperationErrorMessage(reason));
 }
 
 export function chunkBatchItems<T>(items: readonly T[], sizeValue: number): T[][] {

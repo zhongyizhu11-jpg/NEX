@@ -90,6 +90,7 @@ import {
   type RuleVisualStatusSnapshot,
 } from "@/lib/ruleStatusCache";
 import { batchOperationErrorMessage, chunkBatchItems, isBatchPortConflictError, runBatchOperations } from "@/lib/batchOperations";
+import { useRuleBatchJobSubmit } from "@/components/rules/useRuleBatchJobSubmit";
 import {
   RULE_TRANSFER_FILE_KIND,
   RULE_TRANSFER_FILE_VERSION,
@@ -228,6 +229,9 @@ import {
   Check,
   Folder,
   FolderCog,
+  Pause,
+  Play,
+  RotateCw,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -433,7 +437,8 @@ type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleCategoryCounts = Record<RuleCategory, number>;
 type RuleTransferScopeType = Exclude<RuleCategory, "all">;
 type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
-type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group";
+// state：批量启用 / 暂停 / 重启（上游 2.3.292），和删除、复制一样交给服务端任务（RuleBatchJobWidget 看进度）
+type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group" | "state";
 type BatchEditFormData = Pick<RuleFormData, "routeMode" | "forwardType" | "tunnelId" | "forwardGroupId" | "targetIp" | "targetPort">;
 
 const RULE_CATEGORIES = ["all", "local", "tunnel", "chain", "group"] as const;
@@ -3281,6 +3286,7 @@ function RulesContent() {
   const batchCreateMutation = trpc.rules.create.useMutation();
   const batchUpdateMutation = trpc.rules.update.useMutation();
   const batchDeleteMutation = trpc.rules.deleteBatch.useMutation();
+  const ruleBatchJob = useRuleBatchJobSubmit();
 
   const importCreateMutation = trpc.rules.create.useMutation();
 
@@ -4554,21 +4560,6 @@ function RulesContent() {
     return payload;
   };
 
-  const createBatchCopyRule = async (rule: any, targetType: RuleTransferScopeType, resource: any) => {
-    const sourcePort = Number(rule.sourcePort || 0);
-    try {
-      await batchCreateMutation.mutateAsync(buildBatchCopyRulePayload(rule, targetType, resource, sourcePort) as any);
-      return { copied: true, skipped: false };
-    } catch (error: any) {
-      if (copyConflictStrategy === "error" || !isBatchPortConflictError(error)) throw error;
-      if (copyConflictStrategy === "auto") {
-        await batchCreateMutation.mutateAsync(buildBatchCopyRulePayload(rule, targetType, resource, 0) as any);
-        return { copied: true, skipped: false };
-      }
-      return { copied: false, skipped: true };
-    }
-  };
-
   const updateBatchRuleTarget = async (rule: any) => {
     const sourcePort = Number(rule.sourcePort || 0);
     try {
@@ -4619,41 +4610,21 @@ function RulesContent() {
     const targetSummary = targetNames.length <= 3
       ? targetNames.join("、")
       : `${targetNames.slice(0, 3).join("、")} 等 ${targetNames.length} 个目标`;
-    setCopyWorking(true);
-    let copied = 0;
-    let skipped = 0;
-    try {
-      const jobs: Array<{ resource: any; rule: any }> = selectedTargets.flatMap((resource: any) => (
-        copySelectedRules.map((rule: any) => ({ resource, rule }))
-      ));
-      const results = await runBatchOperations(jobs, 6, ({ resource, rule }) => (
-        createBatchCopyRule(rule, targetType, resource)
-      ));
-      for (const result of results) {
-        if (result.status === "rejected") continue;
-        if (result.value.copied) copied += 1;
-        if (result.value.skipped) skipped += 1;
-      }
-      await Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-        utils.rules.trafficSummary.invalidate(),
-      ]);
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length > 0) {
-        toast.error(`批量复制完成：成功 ${copied} 条，跳过 ${skipped} 条，失败 ${failures.length} 条。${batchOperationErrorMessage(failures[0].reason)}`);
-      } else {
-        toast.success(`已复制 ${copied} 条规则到 ${targetSummary}${skipped ? "，跳过 " + skipped + " 条" : ""}`);
-        if (copied > 0) setShowCopyDialog(false);
-      }
-    } catch (error: any) {
-      toast.error("批量复制处理失败：" + (error?.message || "请检查目标配置"));
-    } finally {
-      setCopyWorking(false);
-    }
+    /*
+      批量复制交给服务端任务（上游 2.3.290）：每条副本的参数在这里按原来的规则拼好，服务端逐条调 rules.create，
+      端口冲突按所选策略换端口或跳过。提交即返回，进度、失败明细、重试失败项都在右下角的小窗里。
+    */
+    const copyItems = selectedTargets.flatMap((resource: any) => copySelectedRules.map((rule: any) => ({
+      label: `${String(rule.name || `规则 #${rule.id}`)} → ${getTransferResourceLabel(targetType, resource)}`.slice(0, 160),
+      input: buildBatchCopyRulePayload(rule, targetType, resource, Number(rule.sourcePort || 0)) as Record<string, unknown>,
+    })));
+    const submitted = await ruleBatchJob.submit({
+      operation: "copy",
+      title: `复制 ${copySelectedRules.length} 条规则到 ${targetSummary}`.slice(0, 80),
+      copyItems,
+      conflictStrategy: copyConflictStrategy,
+    });
+    if (submitted) setShowCopyDialog(false);
   };
 
   const handleBatchEditRules = async () => {
@@ -4730,6 +4701,12 @@ function RulesContent() {
     toast.success(`已导出 ${copySelectedRules.length} 条规则${partCount > 1 ? `，共 ${partCount} 个文件` : ""}`);
   };
 
+  /** 批量删除 / 启用 / 暂停 / 重启都交给服务端任务：提交即返回，进度见右下角的小窗。 */
+  const batchRuleLabels = (rules: any[]) => Object.fromEntries(rules.map((rule: any) => [
+    String(rule.id),
+    String(rule.name || `规则 #${rule.id}`).slice(0, 160),
+  ]));
+
   const handleBatchDeleteRules = async () => {
     if (copySelectedRules.length === 0) {
       toast.error("请选择要删除的规则");
@@ -4737,51 +4714,40 @@ function RulesContent() {
     }
     if (!(await confirmDialog({
       title: "删除转发规则",
-      description: `确认删除选中的 ${copySelectedRules.length} 条转发规则？`,
+      description: `确认删除选中的 ${copySelectedRules.length} 条转发规则？删除在后台逐条进行，可以随时停止剩下的。`,
       confirmText: "删除",
       tone: "destructive",
     }))) return;
-    setCopyWorking(true);
-    try {
-      const requestedIds = Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id))));
-      const chunkResults = await runBatchOperations(chunkBatchItems(requestedIds, 500), 2, (ids) => (
-        batchDeleteMutation.mutateAsync({ ids })
-      ));
-      const deletedIdList: number[] = [];
-      const failures: Array<{ id: number; error: string }> = [];
-      for (const chunkResult of chunkResults) {
-        if (chunkResult.status === "fulfilled") {
-          deletedIdList.push(...(chunkResult.value.deletedIds || []).map(Number));
-          failures.push(...(chunkResult.value.failures || []).map((failure) => ({
-            id: Number(failure.id),
-            error: String(failure.error || "删除失败"),
-          })));
-          continue;
-        }
-        const error = batchOperationErrorMessage(chunkResult.reason);
-        failures.push(...chunkResult.item.map((id) => ({ id: Number(id), error })));
-      }
-      const deletedIds = new Set(deletedIdList);
-      invalidateRuleProbeStatuses(deletedIdList);
-      setCopyRuleIds((prev) => prev.filter((id) => !deletedIds.has(Number(id))));
-      await Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-        utils.rules.trafficSummary.invalidate(),
-      ]);
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      if (failures.length > 0) {
-        toast.error(`批量删除完成：成功 ${deletedIdList.length} 条，失败 ${failures.length} 条。${failures[0]?.error || "请稍后重试"}`);
-      } else {
-        toast.success("已删除 " + deletedIdList.length + " 条规则");
-      }
-    } catch (error: any) {
-      toast.error("批量删除失败：" + (error?.message || "请稍后重试"));
-    } finally {
-      setCopyWorking(false);
+    const requestedIds = Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id))));
+    const submitted = await ruleBatchJob.submit({
+      operation: "delete",
+      ruleIds: requestedIds,
+      ruleLabels: batchRuleLabels(copySelectedRules),
+      conflictStrategy: "error",
+    });
+    if (submitted) {
+      setCopyRuleIds([]);
+      setShowCopyDialog(false);
     }
+  };
+
+  const handleBatchStateRules = async (operation: "enable" | "pause" | "restart") => {
+    if (copySelectedRules.length === 0) {
+      toast.error("请选择规则");
+      return;
+    }
+    if (operation === "restart" && !(await confirmDialog({
+      title: "重启转发规则",
+      description: `按当前配置把选中的 ${copySelectedRules.length} 条规则重新下发给 Agent。已暂停的规则保持暂停，流量统计不受影响。`,
+      confirmText: "重启",
+    }))) return;
+    const submitted = await ruleBatchJob.submit({
+      operation,
+      ruleIds: Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id)))),
+      ruleLabels: batchRuleLabels(copySelectedRules),
+      conflictStrategy: "error",
+    });
+    if (submitted) setShowCopyDialog(false);
   };
 
   const handleConfirmResetTraffic = () => {
@@ -5020,10 +4986,12 @@ function RulesContent() {
       searchQuery: copyRuleSearch,
     };
     const groupMode = copyManageMode === "group";
+    // 启停 / 重启和调整分组一样不搬家：共享 TLS 入站上的规则也能勾。
+    const keepsResource = groupMode || copyManageMode === "state";
     return transferSourceRules
       // 共享 TLS 入站上的规则不参与批量复制 / 迁移：它们没有自己的端口，搬到别的资源上就不是同一条规则了。
       // 调整分组只是贴标签，这些规则照样能分组。
-      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && (groupMode || (!(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))))
+      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && (keepsResource || (!(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))))
       .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters))
       .filter((rule) => matchesPersonalRuleGroup(rule.personalGroupIds, copyRulePersonalGroup))
       .filter((rule) => !groupMode || canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
@@ -5035,7 +5003,8 @@ function RulesContent() {
       return transferSourceRules.filter((rule) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
         && canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
     }
-    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0));
+    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
+      && (copyManageMode === "state" || !(Number(rule.tlsInboundId || 0) > 0)));
   }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleIds, transferSourceRules]);
   const copyTargetResources = useMemo(() => {
     if (copyTargetScopeType === "local") return availablePortForwardGroups;
@@ -5074,8 +5043,9 @@ function RulesContent() {
     return copyTargetResources.filter((resource: any) => selected.has(Number(resource.id)));
   }, [copyTargetResourceIds, copyTargetResources]);
   const copyTargetScopeLabel = ruleTransferScopeLabels[copyTargetScopeType];
-  const copyActionPending = copyWorking || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending || moveToPersonalGroupsMutation.isPending;
+  const copyActionPending = copyWorking || ruleBatchJob.isPending || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending || moveToPersonalGroupsMutation.isPending;
   const isBatchGroupMode = copyManageMode === "group";
+  const isBatchStateMode = copyManageMode === "state";
   const isBatchEditMode = copyManageMode === "edit";
   const isBatchCopyMode = copyManageMode === "copy";
   const isBatchExportMode = copyManageMode === "export";
@@ -5088,6 +5058,8 @@ function RulesContent() {
     && filteredCopyTargetResources.every((resource: any) => copyTargetResourceIds.includes(Number(resource.id)));
   const batchFlowHintLabel = isBatchGroupMode
     ? batchGroupMode === "add" ? "加入右侧分组" : "移出右侧分组"
+    : isBatchStateMode
+    ? "启停或重启所选"
     : isBatchEditMode
     ? "按右侧设置处理"
     : isBatchExportMode
@@ -5239,6 +5211,26 @@ function RulesContent() {
       setCopyWorking(false);
     }
   };
+  // 启停 / 重启（上游 2.3.292）：右侧只说明三种操作分别做什么，按钮在底部。
+  const batchStatePanel = (
+    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Label>启停 / 重启</Label>
+        <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+          <span>已选</span>
+          <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedBatchRuleCount}</span>
+        </div>
+      </div>
+      <ul className="space-y-2 text-xs leading-5 text-muted-foreground">
+        <li><span className="font-medium text-foreground">启用</span>：和单条打开开关一样检查端口、套餐与授权，通过的才启用。</li>
+        <li><span className="font-medium text-foreground">暂停</span>：停止转发，规则和统计都保留。</li>
+        <li><span className="font-medium text-foreground">重启</span>：启用中的规则按当前配置重新下发给 Agent；已暂停的保持暂停，流量统计不清零。</li>
+      </ul>
+      <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        提交后在右下角看进度，可停止剩余或只重试失败项；同一批规则正在处理时不会重复提交。
+      </div>
+    </div>
+  );
   const batchGroupPanel = (
     <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -9511,11 +9503,11 @@ function RulesContent() {
               <ClipboardCopy className="h-5 w-5" />
               批量管理转发规则
             </DialogTitle>
-            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出、删除或调整分组。</DialogDescription>
+            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出、删除、调整分组或启停 / 重启。删除、复制、启停和重启在服务端后台执行。</DialogDescription>
           </DialogHeader>
           <div className="max-h-[72svh] space-y-4 overflow-y-auto pr-1">
             <div className={segmentedControlClassName}>
-              <div className="grid grid-cols-2 gap-1 sm:grid-cols-5">
+              <div className="grid grid-cols-2 gap-1 sm:grid-cols-6">
                 <button
                   type="button"
                   className={routeModeOptionClass(isBatchCopyMode, copyActionPending)}
@@ -9565,6 +9557,16 @@ function RulesContent() {
                 >
                   <Folder className="h-4 w-4 shrink-0" />
                   <span className="truncate">调整分组</span>
+                </button>
+                <button
+                  type="button"
+                  className={routeModeOptionClass(isBatchStateMode, copyActionPending)}
+                  aria-pressed={isBatchStateMode}
+                  onClick={() => switchCopyManageMode("state")}
+                  disabled={copyActionPending || !transferSourceRules.length}
+                >
+                  <Play className="h-4 w-4 shrink-0" />
+                  <span className="truncate">启停 / 重启</span>
                 </button>
               </div>
             </div>
@@ -9835,7 +9837,7 @@ function RulesContent() {
               </div>
 
               <div className="space-y-3">
-                {isBatchGroupMode ? batchGroupPanel : isBatchExportMode ? (
+                {isBatchGroupMode ? batchGroupPanel : isBatchStateMode ? batchStatePanel : isBatchExportMode ? (
                 <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="space-y-1">
@@ -10175,6 +10177,8 @@ function RulesContent() {
             <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
               {isBatchGroupMode
                 ? "调整分组只改你自己的分组归属，不会重启、停用或修改任何转发规则。"
+                : isBatchStateMode
+                ? "启用、暂停、重启逐条走和单条操作一样的权限检查，在服务端后台执行；任务只保存在面板内存中，面板重启后进度不保留。"
                 : isBatchExportMode
                 ? "批量导出会按左侧当前选中的规则生成 JSON 文件，不会受右侧资源范围限制。"
                 : isBatchEditMode
@@ -10204,6 +10208,22 @@ function RulesContent() {
                   <Button type="button" onClick={handleBatchGroupRules} disabled={selectedBatchRuleCount === 0 || batchGroupTargetIds.length === 0 || copyActionPending}>
                     {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Folder className="mr-2 h-4 w-4" />}
                     {batchGroupMode === "add" ? "加入分组" : "移出分组"}（{selectedBatchRuleCount} 条）
+                  </Button>
+                </div>
+              </>
+            ) : isBatchStateMode ? (
+              <>
+                <div className="text-xs text-muted-foreground sm:max-w-[16rem]">重启会按当前配置重新下发，已暂停的保持暂停。</div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
+                  <Button type="button" variant="outline" onClick={() => { void handleBatchStateRules("pause"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
+                    <Pause className="mr-2 h-4 w-4" />暂停所选
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => { void handleBatchStateRules("restart"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
+                    <RotateCw className="mr-2 h-4 w-4" />重启所选
+                  </Button>
+                  <Button type="button" onClick={() => { void handleBatchStateRules("enable"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
+                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}启用所选（{selectedBatchRuleCount} 条）
                   </Button>
                 </div>
               </>

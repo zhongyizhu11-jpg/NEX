@@ -33,6 +33,8 @@ export const LARGE_BODY_TRPC_PROCEDURES = new Set([
   "system.updateSettings",
   // 主题压缩包（base64，上限见 shared/uiThemePackage.ts 的 UI_THEME_LIMITS.archiveBytes）
   "uiThemes.installFromUpload",
+  // 规则批量复制交给服务端任务时，一次带着最多 5000 条新规则的参数（shared/ruleBatchJobs.ts）
+  "rules.batchJobStart",
 ]);
 
 /** tRPC 请求路径（相对 /api/trpc 或带前缀都行）里的过程名。 */

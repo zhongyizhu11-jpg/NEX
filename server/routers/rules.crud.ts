@@ -1519,7 +1519,12 @@ export async function toggleForwardRuleForActor(
   actor: { id: number; role: string },
   ruleId: number,
   isEnabled: boolean,
-  options: { reasonPrefix?: string } = {},
+  /*
+    restartOnly：「重启」（上游 2.3.292）。重启 = 对启用中的规则把启用那一整套检查和写库再走一遍
+    （端口、套餐、授权都重新核一次，isRunning 置回 false），再把配置推给相关 Agent；暂停的规则原样跳过、
+    保持暂停。流量统计不动。判断「是不是启用中」放在规则锁里：并发的暂停不会被重启顶回启用。
+  */
+  options: { reasonPrefix?: string; restartOnly?: boolean } = {},
 ) {
   return withKeyedTaskLock(`rule:${ruleId}`, async () => {
     let sourcePortReservation: HostPortReservation | null = null;
@@ -1532,6 +1537,7 @@ export async function toggleForwardRuleForActor(
       assertRuleWritable(actor, rule);
       if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接开关");
       if (Number((rule as any).routeParentRuleId || 0) > 0) throw new Error("线路组的中转规则由面板维护，不能直接开关");
+      if (options.restartOnly && !dbBool((rule as { isEnabled?: unknown }).isEnabled)) return { success: true, rule, skipped: true };
       if ((rule as any).isForwardGroupTemplate) {
         if (actor.role !== "admin") {
           const groupId = Number((rule as any).forwardGroupId || 0);
@@ -1581,6 +1587,14 @@ export async function toggleForwardRuleForActor(
         }
         await db.syncForwardGroupRules(Number((rule as any).forwardGroupId));
         await db.runForwardGroupFailover(Number((rule as any).forwardGroupId));
+        if (options.restartOnly) {
+          // 转发组模板自己不跑在 Agent 上：重启是把组里每条启用着的成员规则重新推给它们的入口机。
+          const children = await db.getForwardGroupChildRulesForTemplate(ruleId);
+          for (const child of children as Array<{ isEnabled?: unknown; pendingDelete?: unknown; hostId?: unknown }>) {
+            if (!dbBool(child.isEnabled) || dbBool(child.pendingDelete)) continue;
+            pushAgentRefresh(Number(child.hostId), "forward-rule-restarted", { urgent: true });
+          }
+        }
         return { success: true, rule };
       }
 
@@ -3884,5 +3898,12 @@ export const crudRulesRouter = router({
     }),
   toggle: protectedProcedure
     .input(z.object({ id: z.number(), isEnabled: z.boolean() }))
-    .mutation(async ({ input, ctx }) => toggleForwardRuleForActor(ctx.user, input.id, input.isEnabled))
+    .mutation(async ({ input, ctx }) => toggleForwardRuleForActor(ctx.user, input.id, input.isEnabled)),
+  /** 重启一条规则：启用中的按当前配置重新下发，暂停的跳过（skipped: true），见 toggleForwardRuleForActor。 */
+  restart: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => toggleForwardRuleForActor(ctx.user, input.id, true, {
+      restartOnly: true,
+      reasonPrefix: "forward-rule-restart",
+    })),
 });

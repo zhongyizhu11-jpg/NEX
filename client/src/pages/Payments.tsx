@@ -8,6 +8,8 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { isPaymentOrderDeletable } from "@shared/paymentOrderDeletion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,6 +47,7 @@ import {
   ExternalLink,
   RefreshCw,
   ShieldCheck,
+  Trash2,
   WalletCards,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -272,6 +275,7 @@ function CallbackItem({ label, value }: { label: string; value: string }) {
 
 export default function Payments() {
   const utils = trpc.useUtils();
+  const confirmDialog = useConfirmDialog();
   const { data: config, isLoading } = trpc.payment.getConfig.useQuery(undefined, { placeholderData: (previousData) => previousData });
   const { data: stats, isLoading: statsLoading } = trpc.payment.stats.useQuery(undefined, { refetchInterval: 30_000, placeholderData: (previousData) => previousData });
   const {
@@ -429,6 +433,50 @@ export default function Payments() {
     },
     onError: (error) => toast.error(error.message || "创建订单失败"),
   });
+
+  /*
+    删除未支付订单（上游 2.3.298）：只有没付过款的（待支付 / 已过期 / 已取消 / 失败）能勾、能删。
+    这里按列表里的状态先挑一遍，服务端锁住订单行后再判一次 —— 列表是几秒前的，期间可能刚好付了款。
+  */
+  const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
+  const deletableOrderIds = useMemo<number[]>(
+    () => ((orders || []) as Array<{ id: number | string; status?: string | null; paidAt?: unknown }>)
+      .filter((order) => isPaymentOrderDeletable(order)).map((order) => Number(order.id)),
+    [orders],
+  );
+  useEffect(() => {
+    // 列表刷新后，已经不在 / 不能删的订单从勾选里拿掉
+    const allowed = new Set(deletableOrderIds);
+    setSelectedOrderIds((current) => (current.every((id) => allowed.has(id)) ? current : current.filter((id) => allowed.has(id))));
+  }, [deletableOrderIds]);
+  const deleteOrders = trpc.payment.deleteOrders.useMutation({
+    onSuccess: (result) => {
+      void utils.payment.listOrders.invalidate();
+      void utils.payment.stats.invalidate();
+      const deletedIds = new Set(result.deleted.map((item) => Number(item.id)));
+      setSelectedOrderIds((current) => current.filter((id) => !deletedIds.has(id)));
+      if (result.skipped.length > 0) {
+        toast.error(`已删除 ${result.deleted.length} 笔，${result.skipped.length} 笔未删除：${result.skipped[0].reason}`);
+      } else {
+        toast.success(`已删除 ${result.deleted.length} 笔未支付订单`);
+      }
+    },
+    onError: (error) => toast.error(error.message || "删除订单失败"),
+  });
+  const confirmDeleteOrders = async (ids: number[]) => {
+    if (ids.length === 0) return;
+    const ok = await confirmDialog({
+      title: "删除未支付订单",
+      description: `确认删除 ${ids.length} 笔未支付订单？占用的套餐库存和折扣码会退回；删除后客户若仍完成付款，实付金额会自动转入其余额。`,
+      confirmText: "删除",
+      tone: "destructive",
+    });
+    if (ok) deleteOrders.mutate({ ids });
+  };
+  const toggleOrderSelected = (id: number, checked: boolean) => {
+    setSelectedOrderIds((current) => (checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)));
+  };
+  const allDeletableSelected = deletableOrderIds.length > 0 && deletableOrderIds.every((id) => selectedOrderIds.includes(id));
 
   const save = () => {
     if (form.maxAmount > 0 && form.maxAmount < form.minAmount) {
@@ -853,9 +901,21 @@ export default function Payments() {
         )}
 
         <Card>
-          <CardHeader>
-            <CardTitle>订单记录</CardTitle>
-            <CardDescription>套餐订单和测试订单。</CardDescription>
+          <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>订单记录</CardTitle>
+              <CardDescription>套餐订单和测试订单。未支付的订单可以删除，已支付的不能删。</CardDescription>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              disabled={selectedOrderIds.length === 0 || deleteOrders.isPending}
+              onClick={() => { void confirmDeleteOrders(selectedOrderIds); }}
+            >
+              <Trash2 className="mr-2 h-3.5 w-3.5" />
+              删除所选{selectedOrderIds.length > 0 ? `（${selectedOrderIds.length}）` : ""}
+            </Button>
           </CardHeader>
           <CardContent>
             {ordersLoading ? (
@@ -888,6 +948,21 @@ export default function Payments() {
                     <MobileInfoRow label="创建时间">{formatDate(order.createdAt)}</MobileInfoRow>
                     <MobileInfoRow label="支付时间">{formatDate(order.paidAt)}</MobileInfoRow>
                   </div>
+                  {isPaymentOrderDeletable(order) && (
+                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/40 pt-3">
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Checkbox
+                          aria-label={`选择订单 ${order.outTradeNo}`}
+                          checked={selectedOrderIds.includes(Number(order.id))}
+                          onCheckedChange={(checked) => toggleOrderSelected(Number(order.id), checked === true)}
+                        />
+                        选择
+                      </label>
+                      <Button type="button" size="sm" variant="ghost" className="text-destructive" disabled={deleteOrders.isPending} onClick={() => { void confirmDeleteOrders([Number(order.id)]); }}>
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />删除
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
               {/* 「暂无支付订单」会让人以为客户没付。读失败时说这句最要命。 */}
@@ -909,6 +984,14 @@ export default function Payments() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        aria-label="全选未支付订单"
+                        disabled={deletableOrderIds.length === 0}
+                        checked={allDeletableSelected}
+                        onCheckedChange={(checked) => setSelectedOrderIds(checked === true ? deletableOrderIds : [])}
+                      />
+                    </TableHead>
                     <TableHead>订单号</TableHead>
                     <TableHead>用户</TableHead>
                     <TableHead>通道</TableHead>
@@ -917,11 +1000,21 @@ export default function Payments() {
                     <TableHead>网关流水</TableHead>
                     <TableHead>创建时间</TableHead>
                     <TableHead>支付时间</TableHead>
+                    <TableHead className="w-16 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {(orders || []).map((order: any) => (
                     <TableRow key={order.id}>
+                      <TableCell>
+                        {isPaymentOrderDeletable(order) ? (
+                          <Checkbox
+                            aria-label={`选择订单 ${order.outTradeNo}`}
+                            checked={selectedOrderIds.includes(Number(order.id))}
+                            onCheckedChange={(checked) => toggleOrderSelected(Number(order.id), checked === true)}
+                          />
+                        ) : null}
+                      </TableCell>
                       <TableCell className="font-mono text-xs">{order.outTradeNo}</TableCell>
                       <TableCell>{order.name || order.username || `#${order.userId}`}</TableCell>
                       <TableCell>
@@ -935,11 +1028,26 @@ export default function Payments() {
                       <TableCell className="font-mono text-xs">{order.tradeNo || "-"}</TableCell>
                       <TableCell>{formatDate(order.createdAt)}</TableCell>
                       <TableCell>{formatDate(order.paidAt)}</TableCell>
+                      <TableCell className="text-right">
+                        {isPaymentOrderDeletable(order) ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-destructive"
+                            aria-label={`删除订单 ${order.outTradeNo}`}
+                            disabled={deleteOrders.isPending}
+                            onClick={() => { void confirmDeleteOrders([Number(order.id)]); }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {(orders || []).length === 0 && (ordersError ? (
                     <DataTableErrorRow
-                      colSpan={8}
+                      colSpan={10}
                       label="支付订单"
                       error={ordersError}
                       retrying={ordersFetching}
@@ -947,7 +1055,7 @@ export default function Payments() {
                     />
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                      <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                         暂无支付订单
                       </TableCell>
                     </TableRow>

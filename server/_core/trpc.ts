@@ -87,6 +87,15 @@ const rejectWhileDatabaseUnavailable = t.middleware(async opts => {
  */
 const rateLimitedScope = new AsyncLocalStorage<true>();
 
+/**
+ * 在「外层请求已经算过一次额度」的范围里跑 fn：里面 createCaller 调的过程不再重复计数。
+ * 给脱离了原请求的后台调用用，比如规则批量任务（server/routers/rules.batchJobs.ts）——
+ * 提交那一下已经限过流，后面逐条执行的几千次调用不该把这个人的额度吃光。
+ */
+export function runAsNestedProcedureCall<T>(fn: () => Promise<T>): Promise<T> {
+  return rateLimitedScope.run(true, fn);
+}
+
 const enforceApiRateLimit = t.middleware(opts => {
   const { ctx } = opts;
   if (!ctx.req || rateLimitedScope.getStore()) return opts.next();

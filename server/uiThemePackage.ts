@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import zlib from "node:zlib";
+import { crc32, writeZipArchive } from "./zipArchive";
 import {
   UI_THEME_LIMITS,
   isSafeUiThemePath,
@@ -52,22 +53,8 @@ function decodeText(bytes: Buffer, what: string) {
   }
 }
 
-/* ── CRC32：ZIP 每个文件都带一个，读的时候核对、写的时候算。不用 zlib.crc32（Node 22.2 才有）。 ── */
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-export function crc32(bytes: Uint8Array) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i += 1) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
+/* ── CRC32 和写 ZIP 挪到了 server/zipArchive.ts（账单 Excel 导出也要用），这里照旧导出 crc32。 ── */
+export { crc32 };
 
 /* ── 读压缩包 ─────────────────────────────────────────────────────────── */
 
@@ -230,58 +217,14 @@ export function readUiThemeArchive(buffer: Buffer): ArchiveFiles {
   return stripWrapperDirectory(files);
 }
 
-/* ── 写 ZIP（只存不压）：开发模板、导出已装的主题都用它。主题包都很小，不值得为了压缩引依赖。 ── */
+/* ── 写 ZIP（只存不压）：开发模板、导出已装的主题都用它。主题包都很小，不值得压。 ── */
 
 export function writeZip(files: Record<string, string | Buffer>): Buffer {
-  const locals: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
-  // 固定成 1980-01-01：同样的内容打出来的包逐字节相同
-  const dosTime = 0;
-  const dosDate = (0 << 9) | (1 << 5) | 1;
-  for (const [name, value] of Object.entries(files)) {
+  // 主题包的条目名比 ZIP 本身的规矩更严：只收安全路径（见 shared/uiThemePackage.ts）
+  for (const name of Object.keys(files)) {
     if (!isSafeUiThemePath(name)) throw new Error(`invalid zip entry name: ${name}`);
-    const nameBytes = Buffer.from(name, "utf8");
-    const content = typeof value === "string" ? Buffer.from(value, "utf8") : value;
-    const checksum = crc32(content);
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0x0800, 6); // 文件名是 UTF-8
-    local.writeUInt16LE(0, 8);
-    local.writeUInt16LE(dosTime, 10);
-    local.writeUInt16LE(dosDate, 12);
-    local.writeUInt32LE(checksum, 14);
-    local.writeUInt32LE(content.length, 18);
-    local.writeUInt32LE(content.length, 22);
-    local.writeUInt16LE(nameBytes.length, 26);
-    local.writeUInt16LE(0, 28);
-    locals.push(local, nameBytes, content);
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(0x0314, 4); // Unix，2.0
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(0, 10);
-    central.writeUInt16LE(dosTime, 12);
-    central.writeUInt16LE(dosDate, 14);
-    central.writeUInt32LE(checksum, 16);
-    central.writeUInt32LE(content.length, 20);
-    central.writeUInt32LE(content.length, 24);
-    central.writeUInt16LE(nameBytes.length, 28);
-    central.writeUInt32LE(((0x8000 | 0o644) << 16) >>> 0, 38);
-    central.writeUInt32LE(offset, 42);
-    centrals.push(central, nameBytes);
-    offset += 30 + nameBytes.length + content.length;
   }
-  const directory = Buffer.concat(centrals);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(Object.keys(files).length, 8);
-  end.writeUInt16LE(Object.keys(files).length, 10);
-  end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, directory, end]);
+  return writeZipArchive(files);
 }
 
 /* ── 样式 ─────────────────────────────────────────────────────────────── */
