@@ -575,7 +575,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  chmod 755 "/etc/init.d/$SERVICE_NAME"',
     '}',
     '',
-    '# 没引号的 heredoc：$SERVICE_NAME、$GO_AGENT_BIN 这些在生成时展开，服务脚本运行时才该算的（PIDFILE、$1、$! ……）要写成 \\$。',
+    '# 没引号的 heredoc：SERVICE_NAME 和 GO_AGENT_BIN 这些在生成时展开；服务脚本运行时才该算的 PIDFILE、位置参数、后台 pid 等要写成 \\$ 转义。',
     'write_agent_sysv_service() {',
     '  cat > "/etc/init.d/$SERVICE_NAME" << EOF',
     '#!/bin/sh',
