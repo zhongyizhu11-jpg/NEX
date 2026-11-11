@@ -40,6 +40,8 @@ const EPHEMERAL_SETTING_PREFIXES = [
   "autoRenew:",
   // 订阅拉取事件的通知去重（server/proxySubNotify.ts）。
   "proxySubNotify:",
+  // 异地备份定时任务「这个小时由我来跑」的标记（server/ops/offsiteBackupLogic.ts 的 offsiteBackupClaimKey）。
+  "opsBackupRun:",
 ] as const;
 
 /**

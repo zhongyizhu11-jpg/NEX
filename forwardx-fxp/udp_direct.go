@@ -984,6 +984,7 @@ func serveExitUDPDirect(conn *net.UDPConn, cfg config) error {
 		return sessions[udpRuleSessionKey{ruleID: ruleID, sessionID: sessionID}] != nil
 	})
 	defer fec.close()
+	carrierKey := lossCarrierListenKey(cfg.ListenHost, udpListenPort(cfg))
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
 	reader := newFXPUDPBatchReader(conn, true, true)
@@ -1004,7 +1005,12 @@ func serveExitUDPDirect(conn *net.UDPConn, cfg config) error {
 			return err
 		}
 		header, err := parseFXPUDPHeader(buf[:n])
-		if err != nil || header.packetType != fxpUDPTypeData {
+		if err != nil {
+			// 认不出的包：可能是同一个端口上抗丢包承载的（见 loss_carrier_listen.go）。
+			lossCarrierDeliver(carrierKey, conn, buf[:n], fxpUDPNormalizeAddrPort(peerAddrPort))
+			continue
+		}
+		if header.packetType != fxpUDPTypeData {
 			continue
 		}
 		header.tunnelID = cfg.TunnelID
@@ -1545,6 +1551,7 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		return sessionsByUpstream[udpRuleSessionKey{ruleID: ruleID, sessionID: sessionID}] != nil
 	})
 	defer fec.close()
+	carrierKey := lossCarrierListenKey(cfg.ListenHost, udpListenPort(cfg))
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
 	reader := newFXPUDPBatchReader(conn, true, true)
@@ -1565,6 +1572,8 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 			return err
 		}
 		if !fxpUDPHasMagic(buf[:n]) {
+			// 不是 UDP 直连的包：可能是同一个端口上抗丢包承载的（见 loss_carrier_listen.go）。
+			lossCarrierDeliver(carrierKey, conn, buf[:n], fxpUDPNormalizeAddrPort(addr))
 			continue
 		}
 		sessionID, ok := fxpUDPSessionID(buf[:n])

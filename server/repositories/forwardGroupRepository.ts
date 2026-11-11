@@ -1,4 +1,6 @@
+import { normalizeSourcePortEnd } from "../../shared/portRange";
 import { isIP } from "node:net";
+import { ROUTE_POLICY_RULE_FIELDS } from "../../shared/routePolicyFields";
 import { groupModeSupportsMemberSchedule, resolveMemberScheduleState, serializeMemberSchedule } from "../../shared/memberSchedule";
 import { NO_EGRESS_COLUMNS, ruleEgressColumnsOf } from "../../shared/ssEgress";
 import { forwardGroupModeOf } from "../../shared/forwardTypes";
@@ -67,6 +69,7 @@ import {
   getTunnelHops,
   getTunnels,
   isPortUsedOnHost,
+  findUsedPortInRangeOnHost,
   reconcileForwardRuleTunnelExits,
   reserveTunnelExitPort,
   resetForwardRulesByTunnel,
@@ -266,6 +269,7 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
   const numberKeys = [
     "hostId",
     "sourcePort",
+    "sourcePortEnd",
     "targetPort",
     "tunnelId",
     "tunnelExitPort",
@@ -324,26 +328,13 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
 
 /** 线路组的调度设置：Agent 能在同一个调度器上原地换（agent/failover_proxy.go startFailoverProxyLocked）。 */
 const CHILD_ROUTE_POLICY_KEYS = [
-  "failoverStrategy",
+  // 调度参数只有一份清单（shared/routePolicyFields）：加了新参数这里自动跟上，不用记得再抄一遍
+  ...ROUTE_POLICY_RULE_FIELDS,
+  // 路径：子规则各有各的拨号地址，但换路径同样是 Agent 能原地换的
   "failoverTargets",
   "failoverProbeTarget",
-  "failoverSchedule",
-  "failoverMinHoldSeconds",
-  "failoverPinnedIndex",
-  "failoverPinnedUntil",
-  "failoverPreferFastest",
-  "failoverSeconds",
-  "recoverSeconds",
-  "autoFailback",
-  "routeMode",
   "routePaths",
   "routeLines",
-  "routeDelivery",
-  "routeSwitchMode",
-  "routeFailureThreshold",
-  "routeScoreMargin",
-  "routeScoreHoldSeconds",
-  "routePrewarmSeconds",
 ] as const;
 
 /**
@@ -2419,7 +2410,10 @@ async function existingChildRule(templateRuleId: number, memberId: number, hostI
   return rows[0];
 }
 
-async function isPortUsedOnHostForGroupChild(hostId: number, sourcePort: number, ignoreRuleIds: number[], protocol?: unknown) {
+async function isPortUsedOnHostForGroupChild(hostId: number, sourcePort: number, ignoreRuleIds: number[], protocol?: unknown, sourcePortEnd?: unknown) {
+  // 端口段模板：段里任何一个端口被占都算（一次取齐这台机器的占用，不逐个端口查）。
+  const end = normalizeSourcePortEnd(sourcePort, sourcePortEnd);
+  if (end) return (await findUsedPortInRangeOnHost(hostId, sourcePort, end, ignoreRuleIds, protocol)) !== null;
   return isPortUsedOnHost(hostId, sourcePort, ignoreRuleIds, protocol, undefined, false);
 }
 
@@ -2446,10 +2440,13 @@ async function entryPortPolicyForMember(member: any): Promise<{ hostId: number; 
   };
 }
 
-async function assertEntryPortAllowed(member: any, sourcePort: number) {
+async function assertEntryPortAllowed(member: any, sourcePort: number, sourcePortEnd?: unknown) {
   const entry = await entryPortPolicyForMember(member);
-  if (!isPortAllowedByPolicy(sourcePort, entry.policy)) {
-    throw new Error(portPolicyErrorMessage(entry.policy, "入口端口"));
+  const end = normalizeSourcePortEnd(sourcePort, sourcePortEnd) ?? sourcePort;
+  for (let port = sourcePort; port <= end; port += 1) {
+    if (!isPortAllowedByPolicy(port, entry.policy)) {
+      throw new Error(portPolicyErrorMessage(entry.policy, "入口端口"));
+    }
   }
 }
 
@@ -3261,7 +3258,7 @@ async function ensureMemberRuleForTemplate(
 
   const hostId = await memberEntryHostId(member);
   if (!hostId) throw new Error("Forward group member has no valid entry agent");
-  await assertEntryPortAllowed(member, Number(templateRule.sourcePort));
+  await assertEntryPortAllowed(member, Number(templateRule.sourcePort), templateRule.sourcePortEnd);
   const sourcePort = Number(templateRule.sourcePort);
   // 子规则实际监听的主机：隧道成员挂了入口组时不只入口机。
   const listenHostIds = Array.from(new Set([hostId, ...await memberListenHostIds(member)]));
@@ -3294,6 +3291,7 @@ async function ensureMemberRuleForTemplate(
         sourcePort,
         [Number(templateRule.id), Number(existing?.id || 0)].filter(Boolean),
         templateRule.protocol,
+        templateRule.sourcePortEnd,
       );
       if (used) {
         usedHostId = listenHostId;
@@ -3422,6 +3420,8 @@ async function ensureMemberRuleForTemplate(
     forwardGroupMemberId: Number(member.id),
     isForwardGroupTemplate: false,
     sourcePort: Number(templateRule.sourcePort),
+    // 端口段（shared/portRange.ts）：「端口转发」资源的每台成员主机上一条同样的段规则。
+    sourcePortEnd: normalizeSourcePortEnd(templateRule.sourcePort, templateRule.sourcePortEnd),
     targetIp: templateRule.targetIp,
     targetPort: Number(templateRule.targetPort),
     telegramErrorNotifyEnabled: dbBool((templateRule as any).telegramErrorNotifyEnabled),
@@ -4287,7 +4287,7 @@ export async function replaceForwardGroupMembers(
         for (const template of templates) {
           const child = found ? await existingChildRule(Number(template.id), Number(found.id)) : undefined;
           const ignoreRuleIds = [Number(template.id), Number(child?.id || 0), ...removedChildIds].filter((id) => id > 0);
-          if (await isPortUsedOnHostForGroupChild(hostId, Number(template.sourcePort), ignoreRuleIds, template.protocol)) {
+          if (await isPortUsedOnHostForGroupChild(hostId, Number(template.sourcePort), ignoreRuleIds, template.protocol, template.sourcePortEnd)) {
             const host = await getHostById(hostId) as any;
             throw new Error(`成员主机「${host?.name || hostId}」上端口 ${template.sourcePort} 已被占用，无法为规则「${template.name || template.id}」建立转发，请先更换端口或移除占用`);
           }

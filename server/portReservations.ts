@@ -146,6 +146,26 @@ export function combineHostPortReservations(items: HostPortReservation[]): HostP
 }
 
 /**
+ * 端口段规则（shared/portRange.ts）：段里每个端口都占住，任何一个占不到就把这次占到的全放掉。
+ * 合成的预留 port 记段的第一个端口，release() 一起放。
+ */
+export function tryReserveHostPortRange(hostIdValue: unknown, startValue: unknown, endValue: unknown, protocolValue: unknown): HostPortReservation | null {
+  const start = normalizedPort(startValue);
+  const end = normalizedPort(endValue);
+  if (!start || !end || end < start) return null;
+  const acquired: HostPortReservation[] = [];
+  for (let port = start; port <= end; port += 1) {
+    const reservation = tryReserveHostPort(hostIdValue, port, protocolValue);
+    if (!reservation) {
+      releaseHostPortReservations(acquired);
+      return null;
+    }
+    acquired.push(reservation);
+  }
+  return combineHostPortReservations(acquired);
+}
+
+/**
  * 同一个端口要在几台主机上同时监听（挂了入口组的隧道上的规则：入口机和组里每台启用的主机）：
  * 每台都占住并查一遍，任何一台占不到或已被使用就把这次占到的全部放掉、返回 null。
  * 只占一台的话，另一个请求可以同时在组里的其他主机上建同端口的规则，两边都通过检查。

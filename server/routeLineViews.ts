@@ -2,6 +2,7 @@ import * as db from "./db";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 import { dbBool } from "./repositories/repositoryUtils";
 import { getRouteStatus, routeLatencyIntoHost, routeTrippedNodeIds } from "./routeGroupStats";
+import { routeSpecDriftOf, routeStatusSubject } from "./routeStatusView";
 import { describeRouteIssue, describeRouteReason, routeEventMillis, routeGroupOf, splitRouteReason, unwrapRelayDownReason, type RoutePath } from "../shared/routeGroup";
 import { parseRouteLines } from "../shared/routeLines";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
@@ -111,6 +112,13 @@ export async function lineWorkspace(actor: { id: number; role: string }, hours =
     if (dbBool(host.maintenanceMode)) recent.push({ tone: "warn", text: `${name} 维护中`, action: `${through} 条线路避开`, at: nowMs, ruleId: 0 });
     else if (tripped.has(id)) recent.push({ tone: "down", text: `${name} 熔断`, action: `${through} 条线路避开`, at: nowMs, ruleId: 0 });
     else if (!dbBool(host.isOnline)) recent.push({ tone: "down", text: `${name} 离线`, action: `${through} 条线路避开`, at: nowMs, ruleId: 0 });
+  }
+  // 机器上跑的和面板配的对不上（Agent 2.2.253 起随心跳报规格）：看着一切正常、实际没按配置走，比离线更该先看。
+  for (const rule of rules) {
+    const subject = await routeStatusSubject(rule, nowMs).catch(() => rule);
+    const drift = routeSpecDriftOf(rule, subject, getRouteStatus(Number(subject.id), nowMs).agent, nowMs);
+    if (!drift) continue;
+    recent.push({ tone: "down", text: `${String(rule.name || `规则 ${rule.id}`)} 机器上的配置和面板不一致`, action: drift.fields.map((field) => field.label).join("、"), at: drift.reportedAt, ruleId: Number(rule.id) });
   }
   const seen = new Set<string>();
   const eventRows: LineAlertRow[] = [];

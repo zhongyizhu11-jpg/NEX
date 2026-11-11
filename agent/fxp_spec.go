@@ -226,6 +226,11 @@ func fxpServerSignature(spec fxpSpec) string {
 	if spec.MultipathReplicate {
 		parts = append(parts, "replicate")
 	}
+	// 抗丢包传输也只在打开时进签名：没开的隧道签名不变，升级不重启 FXP。开关它 FXP 热更新就够
+	// （按配置指纹自己开关 UDP 承载监听）。
+	if spec.LossTolerant {
+		parts = append(parts, "loss-tolerant")
+	}
 	for _, leg := range spec.MultipathLegs {
 		parts = append(parts, strings.TrimSpace(leg.Host), strconv.Itoa(leg.Port), strings.TrimSpace(leg.Key))
 		// 带宽只在写了时进签名：没写的隧道签名和旧版一样，升级不重启 FXP。

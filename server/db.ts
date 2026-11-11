@@ -375,6 +375,41 @@ export async function clearFailoverPinZeroArtifactsOnce() {
   return cleared;
 }
 
+/*
+  面板升级后的第一次启动：把每个转发组的模板重新同步到子规则一遍。
+
+  子规则上的线路组设置是组同步时从模板带过去的（shared/routePolicyFields）。新版本让它多带了什么（2.3.523 补上
+  人工指定、时段表那几样），已有的子规则要等下一次有人动这个组才补得上 —— 2.3.523 发出去以后，用户得自己去
+  每条线路上点一下才生效。这里按版本号记一笔，版本变了就全部同步一次；设置没变的子规则同步是空操作（不写库、
+  不重启转发），只改了调度设置的原地热更新。有哪个组同步失败就不记版本，下次启动再来。
+*/
+export async function syncForwardGroupRulesAfterUpgrade(version: string) {
+  const marker = "forward-group-rules-synced-version";
+  if ((await getSetting(marker)) === version) return { groups: 0, failed: 0, skipped: true };
+  const q = quoteIdentifier;
+  const rows = await queryRaw<{ forwardGroupId: number | string | null }>(
+    `SELECT DISTINCT ${q("forwardGroupId")} AS ${q("forwardGroupId")}
+       FROM ${q("forward_rules")}
+      WHERE ${q("isForwardGroupTemplate")} = ${boolLiteral(true)}
+        AND ${q("pendingDelete")} = ${boolLiteral(false)}
+        AND ${q("forwardGroupId")} IS NOT NULL`,
+  );
+  const groupIds = Array.from(new Set(rows.map((row) => Number(row.forwardGroupId)).filter((id) => Number.isInteger(id) && id > 0)));
+  // 动态引入：转发组仓库依赖一大圈 repository，而 db.ts 是它们的汇总出口，静态引入会绕成环。
+  const { syncForwardGroupRules } = await import("./repositories/forwardGroupRepository");
+  let failed = 0;
+  for (const groupId of groupIds) {
+    try {
+      await syncForwardGroupRules(groupId);
+    } catch (error) {
+      failed += 1;
+      console.warn(`[Database] Forward-group resync after upgrade failed group=${groupId}:`, error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (failed === 0) await setSetting(marker, version);
+  return { groups: groupIds.length, failed, skipped: false };
+}
+
 // 2.3.366–2.3.369 stored the Agent's millisecond switch time as seconds. MySQL
 // and PostgreSQL rejected those writes (the epoch column is a 32-bit integer),
 // so only SQLite holds such rows — dated tens of thousands of years ahead.
@@ -481,6 +516,13 @@ export async function initDatabase() {
       }
     }).catch((error) => {
       console.warn("[Database] Route relay rule repair skipped:", error instanceof Error ? error.message : String(error));
+    }));
+    // 升级后的第一次启动：模板的线路组设置重新带到每条子规则（见 syncForwardGroupRulesAfterUpgrade）。
+    // 放在关系修复、中继修复之后：那时模板和子规则的指针已经是对的。
+    await runInitializationStep("resync-forward-groups-after-upgrade", () => import("../shared/versions").then(({ APP_VERSION }) => syncForwardGroupRulesAfterUpgrade(APP_VERSION)).then((result) => {
+      if (!result.skipped && result.groups > 0) console.log(`[Database] Forward-group rules resynced after upgrade groups=${result.groups} failed=${result.failed}`);
+    }).catch((error) => {
+      console.warn("[Database] Forward-group resync after upgrade skipped:", error instanceof Error ? error.message : String(error));
     }));
     // Run the compatibility scan after relationship repairs so valid template
     // pointers are visible and retired/orphaned children are excluded. This

@@ -202,6 +202,7 @@ type TunnelForm = {
   linkDownMbps: number;
   /** 抗丢包：UDP 直连额外发纠错包（FXP 2.2.131 起），默认关。 */
   udpFec: boolean;
+  lossTolerant: boolean;
   kernelPassthrough: boolean;
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
@@ -361,6 +362,7 @@ const defaultForm: TunnelForm = {
   linkDownMbps: 0,
   linkShapingStatus: [],
   udpFec: false,
+  lossTolerant: false,
   kernelPassthrough: false,
   loadBalanceEnabled: false,
   loadBalanceStrategy: "round_robin",
@@ -2755,6 +2757,7 @@ function TunnelsContent() {
       linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkDownMbps) : 0,
       linkShapingStatus: Array.isArray((tunnel as any).linkShapingStatus) ? (tunnel as any).linkShapingStatus : [],
       udpFec: transportTuningSupported && !!(tunnel as any).udpFec,
+      lossTolerant: transportTuningSupported && !!tunnel.lossTolerant,
       kernelPassthrough: transportTuningSupported && !!(tunnel as any).kernelPassthrough,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
       loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"].includes(String(tunnel.loadBalanceStrategy || ""))
@@ -3174,6 +3177,8 @@ function TunnelsContent() {
       linkUpMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkUpMbps) : 0,
       linkDownMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkDownMbps) : 0,
       udpFec: transportTuningSupported && submitForm.udpFec,
+      // 抗丢包传输只有 V1：V2 外层已经是 WireGuard 的 UDP。
+      lossTolerant: transportTuningSupported && submitForm.forwardxVersion === "v1" && submitForm.lossTolerant,
       kernelPassthrough: transportTuningSupported && submitForm.kernelPassthrough,
       entryGroupId: submitForm.entryGroupId || null,
       exitGroupId: submitForm.exitGroupId || null,
@@ -3292,6 +3297,7 @@ function TunnelsContent() {
       linkUpMbps: transportTuningSupported ? prev.linkUpMbps : 0,
       linkDownMbps: transportTuningSupported ? prev.linkDownMbps : 0,
       udpFec: transportTuningSupported ? prev.udpFec : false,
+      lossTolerant: transportTuningSupported ? prev.lossTolerant : false,
       kernelPassthrough: transportTuningSupported ? prev.kernelPassthrough : false,
     }));
   };
@@ -3566,7 +3572,7 @@ function TunnelsContent() {
     const transportTuningSupported = isTunnelTransportTuningSupported(form.mode);
     if (!proxySupported && !transportTuningSupported) return null;
     const proxyAnyEnabled = form.proxyProtocolReceive || form.proxyProtocolSend || form.proxyProtocolExitReceive || form.proxyProtocolExitSend;
-    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.kernelPassthrough || form.linkShapingMode !== "off" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
+    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.lossTolerant || form.kernelPassthrough || form.linkShapingMode !== "off" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
     const shouldCollapseAdvanced = proxySupported && transportTuningSupported;
     const renderLinkMbpsInput = (label: string, field: "linkUpMbps" | "linkDownMbps") => (
       <label className="flex min-h-10 items-center justify-between gap-2">
@@ -3716,6 +3722,13 @@ function TunnelsContent() {
             form.udpFec,
             (udpFec) => setForm((prev) => ({ ...prev, udpFec })),
             "只作用于 UDP（游戏、语音、QUIC）：每 5 个包多发 1 个纠错包，丢了几个能当场还原，不用等重传。多耗约 20% 流量，包很稀时最多翻倍。隧道上的机器都要 FXP 2.2.131 起才有效果；有旧版本时照常通，只是不纠错。",
+          )}
+          {form.forwardxVersion === "v1" && renderTransportSwitch(
+            "抗丢包传输",
+            "丢包明显的跨境线路开，多耗带宽和 CPU",
+            form.lossTolerant,
+            (lossTolerant) => setForm((prev) => ({ ...prev, lossTolerant })),
+            "隧道里的 TCP 改走 UDP（KCP 加纠错包），丢包时不降速。多耗约 30%~50% 流量、几倍 CPU。出口和中转要放行与隧道端口同号的 UDP 端口；连不上就报错，不会悄悄退回 TCP。隧道上的机器都要升级。",
           )}
           {renderTransportSwitch(
             "内核直通",

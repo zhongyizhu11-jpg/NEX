@@ -50,6 +50,7 @@ import { runPanelEventsDailyMaintenance } from "./ops/eventHooks";
 import { startStatusAvailabilityJob } from "./ops/statusAvailabilityJob";
 import { startOffsiteBackupJob } from "./ops/offsiteBackupJob";
 import { startUnlockScheduleJob } from "./ops/unlock";
+import { startTrafficAnomalyJob } from "./ops/trafficAnomaly";
 import { applyLinkShapingDefaultOffOnce } from "./linkShapingDefaultOff";
 import { runProxySubSourceSync } from "./proxySubSourceSync";
 import { loadProxySubSettings } from "./proxySubSettings";
@@ -365,6 +366,8 @@ export const FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS = 7 * 24;
 export async function runTcpingCleanup() {
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["host_metrics", () => db.cleanOldHostMetrics(72)],
+    // 95 计费的 5 分钟桶留 40 天（server/hostRateBuckets.ts）。
+    ["host_rate_buckets", () => import("./hostRateBuckets").then((m) => m.cleanOldHostRateBuckets())],
     ["traffic_stats", () => db.cleanOldTrafficStats(72)],
     ["traffic_stat_buckets", () => db.cleanOldTrafficStatBuckets(72)],
     ["tcping_stats", () => db.cleanOldTcpingStats(72)],
@@ -1231,6 +1234,8 @@ export function startScheduler() {
   startStatusAvailabilityJob();
   startOffsiteBackupJob();
   startUnlockScheduleJob();
+  // 流量异常检测（默认关）：开着时每分钟看一次；启动时先收回上次留下的临时限速。
+  startTrafficAnomalyJob();
   // 链路整形改成默认关：把还停在旧默认值「自动」的隧道关掉一次（见 server/linkShapingDefaultOff.ts）。
   void applyLinkShapingDefaultOffOnce().catch((error) => {
     console.warn("[LinkShaping] default-off migration skipped:", error instanceof Error ? error.message : String(error));

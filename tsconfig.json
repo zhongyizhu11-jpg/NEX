@@ -25,6 +25,7 @@
     "server/**/*",
     "scripts/**/*",
     "shared/**/*",
-    "drizzle/**/*"
+    "drizzle/**/*",
+    "e2e/**/*"
   ]
 }

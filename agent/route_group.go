@@ -666,6 +666,35 @@ type failoverTargetStatsReport struct {
 	UDPLatencyMs int   `json:"udpLatencyMs,omitempty"`
 }
 
+/*
+此刻真正在按什么跑（2.2.253 起，面板拿它做「期望 vs 实际」对账）。
+
+2.3.522 线上「切到备用 1 还是走主线路」：钉子存在面板上的模板里，机器跑的那条从没拿到过，而面板照着模板写
+「人工指定」—— 只看面板永远发现不了。所以让机器自己说它在按什么跑：面板按用户配好的那份比对，对不上就在
+线路详情里标红、列出差异。
+
+人工指定报的是**此刻生效**的那条（到期了就是 null，和面板 readFailoverPin 的读法一致）；时段表报规整后的；
+别的字段都是 normalizeFailoverSpec 之后的值。路径的拨号地址在 targets[].target 里，不重复报。
+*/
+type failoverSpecReport struct {
+	PinnedIndex      *int              `json:"pinnedIndex"`
+	PinnedUntil      int64             `json:"pinnedUntil,omitempty"`
+	Schedule         *failoverSchedule `json:"schedule,omitempty"`
+	MinHoldSeconds   int               `json:"minHoldSeconds"`
+	PreferFastest    bool              `json:"preferFastest"`
+	Strategy         string            `json:"strategy"`
+	Delivery         string            `json:"delivery,omitempty"`
+	FailoverSeconds  int               `json:"failoverSeconds"`
+	RecoverSeconds   int               `json:"recoverSeconds"`
+	AutoFailback     bool              `json:"autoFailback"`
+	FailureThreshold int               `json:"failureThreshold"`
+	ScoreMargin      int               `json:"scoreMargin"`
+	ScoreHoldSeconds int               `json:"scoreHoldSeconds"`
+	PrewarmSeconds   int               `json:"prewarmSeconds"`
+	SwitchMode       string            `json:"switchMode"`
+	TargetCount      int               `json:"targetCount"`
+}
+
 type failoverStatsReport struct {
 	RuleID      int    `json:"ruleId"`
 	SourcePort  int    `json:"sourcePort"`
@@ -678,6 +707,33 @@ type failoverStatsReport struct {
 	// 最近 10 分钟连进来的客户端连接：拨通了一条路径的、一条都没拨通的（TCP；UDP 会话不算）。
 	InboundOK     int `json:"inboundOk,omitempty"`
 	InboundFailed int `json:"inboundFailed,omitempty"`
+	// 此刻生效的规格（见 failoverSpecReport）。
+	Spec *failoverSpecReport `json:"spec,omitempty"`
+}
+
+func (p *failoverProxy) specReportLocked(now time.Time) *failoverSpecReport {
+	report := &failoverSpecReport{
+		Schedule:         normalizeFailoverSchedule(p.spec.Schedule),
+		MinHoldSeconds:   p.spec.MinHoldSeconds,
+		PreferFastest:    p.spec.PreferFastest,
+		Strategy:         p.spec.Strategy,
+		Delivery:         p.spec.Delivery,
+		FailoverSeconds:  p.spec.FailoverSeconds,
+		RecoverSeconds:   p.spec.RecoverSeconds,
+		AutoFailback:     p.spec.AutoFailback,
+		FailureThreshold: p.spec.FailureThreshold,
+		ScoreMargin:      p.spec.ScoreMargin,
+		ScoreHoldSeconds: p.spec.ScoreHoldSeconds,
+		PrewarmSeconds:   p.spec.PrewarmSeconds,
+		SwitchMode:       p.spec.SwitchMode,
+		TargetCount:      len(p.spec.Targets),
+	}
+	if index := p.pinnedIndexAt(now); index >= 0 {
+		pinned := index
+		report.PinnedIndex = &pinned
+		report.PinnedUntil = p.spec.PinnedUntil
+	}
+	return report
 }
 
 // routeInboundWindowMinutes 分钟一格，滚动着记。连接再多也只占这几格，不存样本。
@@ -773,6 +829,7 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 		report.Targets = append(report.Targets, item)
 	}
 	report.InboundOK, report.InboundFailed = p.inbound.summary(time.Now())
+	report.Spec = p.specReportLocked(time.Now())
 	return report
 }
 

@@ -102,6 +102,11 @@ export function getRuleLiveRates(ruleIds: readonly number[], nowMs = Date.now())
   return result;
 }
 
+/** 此刻所有有速率的规则（流量异常检测一分钟扫一遍，见 server/ops/trafficAnomaly.ts）。 */
+export function listRuleLiveRates(nowMs = Date.now()): Map<number, RuleLiveRate> {
+  return getRuleLiveRates(Array.from(samplesByRule.keys()), nowMs);
+}
+
 export function resetRuleLiveRatesForTest() {
   samplesByRule.clear();
 }

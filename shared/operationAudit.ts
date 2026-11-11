@@ -204,6 +204,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   "ops.sessions": "登录设备",
   "ops.firewall": "防火墙",
   "ops.webhooks": "Webhook",
+  "ops.eventWebhooks": "事件推送",
   "ops.digest": "日报",
   "ops.hostSecurity": "安全巡检",
   "ops.agentRelay": "Agent 中转",
@@ -212,7 +213,9 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   "ops.offsiteBackup": "异地备份",
   "ops.quotaPolicy": "额度策略",
   "ops.resourceAlert": "资源告警",
+  "ops.trafficAnomaly": "流量异常",
   "ops.audit": "操作审计",
+  "ops.metricsExport": "指标导出",
 };
 
 export function operationAuditModuleLabel(module: string): string {

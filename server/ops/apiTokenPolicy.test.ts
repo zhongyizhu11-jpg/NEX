@@ -48,6 +48,10 @@ test("令牌碰不到夺号、整库带走、装插件这几类过程，读写�
     "ops.profiling.captureCpu",
     "ops.profiling.captureHeap",
     "ops.profiling.remove",
+    "ops.metricsExport.get",
+    "ops.metricsExport.update",
+    "ops.metricsExport.revealToken",
+    "ops.metricsExport.resetToken",
   ];
   for (const procedure of paths) {
     for (const scope of ["read", "full"] as const) {

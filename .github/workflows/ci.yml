@@ -164,6 +164,61 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           "$(go env GOPATH)/bin/staticcheck" -checks "SA*" ./...
 
+  # 面板 + 真 Agent 联调（e2e/）：面板跑在 runner 上，入口 / 两台中转 Agent 和落地跑在 docker compose 里，
+  # 按用户会做的事走一遍（主备、人工指定、交回、按时段、中转挂了自动切 / 回来切回、重新下发），每一步用
+  # 真流量核对走的是哪台中转，并核对期望 vs 实际对账没有差异。Agent 从这次构建的面板装，所以测的是这次的 Agent。
+  e2e:
+    name: E2E (panel + agents)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache-dependency-path: |
+            agent/go.sum
+            forwardx-fxp/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build panel
+        run: pnpm build
+
+      # 装机脚本要的 Agent / FXP / gost 二进制（面板从 dist/agent 发给容器里的 Agent）；gost 用官方成品，省下自编的几分钟。
+      - name: Build agent assets
+        run: GOCACHE="$(go env GOCACHE)" NEX_GOST_SOURCE=upstream bash scripts/build-agent-release.sh
+
+      - name: Panel + agents scenario
+        run: bash e2e/run.sh
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: e2e/out
+          if-no-files-found: ignore
+          retention-days: 7
+
   verify:
     name: verify
     if: always()
@@ -172,6 +227,7 @@ jobs:
       - panel-tests
       - build
       - go
+      - e2e
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

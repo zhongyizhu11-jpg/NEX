@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.252"
+var Version = "2.2.254"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -435,41 +435,44 @@ type selfTestResp struct {
 }
 
 type action struct {
-	TunnelID                  int                 `json:"tunnelId"`
-	StatusType                string              `json:"statusType"`
-	RuleID                    int                 `json:"ruleId"`
-	PluginID                  string              `json:"pluginId,omitempty"`
-	IssuedAt                  int64               `json:"issuedAt,omitempty"`
-	ConfigRevision            int64               `json:"configRevision,omitempty"`
-	ConfigHash                string              `json:"configHash,omitempty"`
-	KnownRunning              bool                `json:"knownRunning,omitempty"`
-	Op                        string              `json:"op"`
-	ForwardType               string              `json:"forwardType"`
-	RuntimeBackendForwardType string              `json:"runtimeBackendForwardType,omitempty"`
-	SourcePort                int                 `json:"sourcePort"`
-	TargetIP                  string              `json:"targetIp"`
-	TargetPort                int                 `json:"targetPort"`
-	Protocol                  string              `json:"protocol"`
-	PreCommands               []string            `json:"preCommands"`
-	ServiceName               string              `json:"svcName"`
-	ServiceNameExtra          string              `json:"svcNameExtra"`
-	Unit                      string              `json:"unit"`
-	UnitExtra                 string              `json:"unitExtra"`
-	Commands                  []string            `json:"commands"`
-	RemovalCommands           []string            `json:"removalCommands,omitempty"`
-	RemovalToken              string              `json:"removalToken,omitempty"`
-	ManagedConfigs            []managedConfigSpec `json:"managedConfigs,omitempty"`
-	RollbackCommands          []string            `json:"rollbackCommands,omitempty"`
-	PostCommands              []string            `json:"postCommands"`
-	Fxp                       *fxpSpec            `json:"fxp,omitempty"`
-	FXPEntryGroup             *fxpSpec            `json:"-"`
-	WireGuard                 *wireGuardSpec      `json:"wireGuard,omitempty"`
-	Failover                  *failoverSpec       `json:"failover,omitempty"`
-	ReportStatus              *bool               `json:"reportStatus,omitempty"`
-	FailureMessage            string              `json:"failureMessage,omitempty"`
-	ForceRuntimeSync          bool                `json:"forceRuntimeSync,omitempty"`
-	RequiresMimicEnvironment  bool                `json:"requiresMimicEnvironment,omitempty"`
-	HandoffOnly               bool                `json:"-"`
+	TunnelID                  int    `json:"tunnelId"`
+	StatusType                string `json:"statusType"`
+	RuleID                    int    `json:"ruleId"`
+	PluginID                  string `json:"pluginId,omitempty"`
+	IssuedAt                  int64  `json:"issuedAt,omitempty"`
+	ConfigRevision            int64  `json:"configRevision,omitempty"`
+	ConfigHash                string `json:"configHash,omitempty"`
+	KnownRunning              bool   `json:"knownRunning,omitempty"`
+	Op                        string `json:"op"`
+	ForwardType               string `json:"forwardType"`
+	RuntimeBackendForwardType string `json:"runtimeBackendForwardType,omitempty"`
+	SourcePort                int    `json:"sourcePort"`
+	// 端口段规则（面板 shared/portRange.ts）的最后一个入口端口；单端口不带（0）。只有
+	// iptables / nftables 会有，目标段从 TargetPort 起、同样长。
+	SourcePortEnd            int                 `json:"sourcePortEnd,omitempty"`
+	TargetIP                 string              `json:"targetIp"`
+	TargetPort               int                 `json:"targetPort"`
+	Protocol                 string              `json:"protocol"`
+	PreCommands              []string            `json:"preCommands"`
+	ServiceName              string              `json:"svcName"`
+	ServiceNameExtra         string              `json:"svcNameExtra"`
+	Unit                     string              `json:"unit"`
+	UnitExtra                string              `json:"unitExtra"`
+	Commands                 []string            `json:"commands"`
+	RemovalCommands          []string            `json:"removalCommands,omitempty"`
+	RemovalToken             string              `json:"removalToken,omitempty"`
+	ManagedConfigs           []managedConfigSpec `json:"managedConfigs,omitempty"`
+	RollbackCommands         []string            `json:"rollbackCommands,omitempty"`
+	PostCommands             []string            `json:"postCommands"`
+	Fxp                      *fxpSpec            `json:"fxp,omitempty"`
+	FXPEntryGroup            *fxpSpec            `json:"-"`
+	WireGuard                *wireGuardSpec      `json:"wireGuard,omitempty"`
+	Failover                 *failoverSpec       `json:"failover,omitempty"`
+	ReportStatus             *bool               `json:"reportStatus,omitempty"`
+	FailureMessage           string              `json:"failureMessage,omitempty"`
+	ForceRuntimeSync         bool                `json:"forceRuntimeSync,omitempty"`
+	RequiresMimicEnvironment bool                `json:"requiresMimicEnvironment,omitempty"`
+	HandoffOnly              bool                `json:"-"`
 
 	// 普通端口转发的单 IP 接入限制快照（port_access_limits.go），只出现在
 	// forwardType=port-access-limit-sync 的运行时动作里。
@@ -492,15 +495,17 @@ type desiredActionRecord struct {
 }
 
 type runningRule struct {
-	RuleID      int                     `json:"ruleId"`
-	TunnelID    int                     `json:"tunnelId,omitempty"`
-	SourcePort  int                     `json:"sourcePort"`
-	TargetIP    string                  `json:"targetIp"`
-	TargetPort  int                     `json:"targetPort"`
-	Protocol    string                  `json:"protocol"`
-	ForwardType string                  `json:"forwardType"`
-	Failover    *failoverSpec           `json:"failover,omitempty"`
-	GroupHealth *forwardGroupHealthSpec `json:"forwardGroupHealth,omitempty"`
+	RuleID     int `json:"ruleId"`
+	TunnelID   int `json:"tunnelId,omitempty"`
+	SourcePort int `json:"sourcePort"`
+	// 端口段的最后一个入口端口（见 action.SourcePortEnd）；计数链、就绪检查、快速转发按它看整段。
+	SourcePortEnd int                     `json:"sourcePortEnd,omitempty"`
+	TargetIP      string                  `json:"targetIp"`
+	TargetPort    int                     `json:"targetPort"`
+	Protocol      string                  `json:"protocol"`
+	ForwardType   string                  `json:"forwardType"`
+	Failover      *failoverSpec           `json:"failover,omitempty"`
+	GroupHealth   *forwardGroupHealthSpec `json:"forwardGroupHealth,omitempty"`
 	// 只跑线路组的调度器（2.2.199 起）：NEX 隧道的出口机上没有这条规则自己的进程，出口的
 	// FXP 拨本机的调度器。它不占规则端口 —— SourcePort 是调度器自己的监听端口，只当标识用；
 	// 不写端口状态、不装计数链、不算进要保留的端口，流量照旧在入口计。
@@ -768,7 +773,10 @@ type fxpSpec struct {
 	EgressMbps     int    `json:"egressMbps,omitempty"`
 	EgressHintMbps int    `json:"egressHintMbps,omitempty"`
 	// UDPFEC 是隧道的「抗丢包」开关（见 forwardx-fxp/udp_fec.go），原样交给 FXP。
-	UDPFEC           bool   `json:"udpFec,omitempty"`
+	UDPFEC bool `json:"udpFec,omitempty"`
+	// LossTolerant 是隧道的「抗丢包传输」（见 forwardx-fxp/loss_carrier.go），原样交给 FXP：
+	// 入口 / 中转到下一跳改走 UDP 上的 KCP + 纠错，出口 / 中转在和 TCP 监听同号的 UDP 端口上接。
+	LossTolerant     bool   `json:"lossTolerant,omitempty"`
 	PanelURL         string `json:"panelUrl,omitempty"`
 	Token            string `json:"token,omitempty"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`

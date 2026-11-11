@@ -42,6 +42,8 @@ type Outcome = {
   scheduled: Step;
   structural: Step;
   paused: { error: string | null; templateKeys: string[]; childKeys: string[]; childPaused: boolean[]; running: boolean };
+  drift: { fields: Array<[string, string, string]> };
+  driftMatched: unknown;
   events: {
     template: Array<{ kind: string; toLabel: string | null; reason: string | null }>;
     viaRouter: Array<{ kind: string; reason: string | null; entryHostName: string | null }>;
@@ -243,6 +245,36 @@ function runScenario(): Outcome {
       running: Number(pausedChild?.isRunning) === 1,
     };
 
+    // —— 期望 vs 实际对账：机器报它在按什么跑，面板按模板比 ——
+    // 模板再钉一次备用 1；机器像 2.3.522 的老样子报「没钉」→ 红条；报对了 → 没有红条。
+    await markChildrenRunning();
+    await caller.update({ id: 300, failoverPinnedIndex: 1, failoverPinnedUntil: now + 7200 });
+    const driftChild = await childState(300);
+    // 改完配置 20 秒内不比（机器还没来得及报新的）：把改动时间往前拨
+    await exec('UPDATE forward_rules SET "updatedAt" = ? WHERE id IN (300, ?)', [now - 120, driftChild.id]);
+    const heartbeatStats = async (spec, withEvent) => {
+      const response = await fetch("http://127.0.0.1:" + server.address().port + "/api/agent/heartbeat", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer tok1" },
+        body: JSON.stringify({
+          agentVersion: AGENT_VERSION, uptime: 1000, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true,
+          failoverStats: [{ ruleId: driftChild.id, sourcePort: 17000, strategy: "fallback", activeIndex: 0, activeSince: Date.now() - 60_000, prewarmIndex: -1,
+            targets: [{ index: 0, target: "198.51.100.20:1", healthy: true, score: 95, latencyMs: 2 }, { index: 1, target: "198.51.100.30:1", healthy: true, score: 93, latencyMs: 3 }], spec }],
+          // 评分半分钟才收一次；带一条不入库的事件（issue 不在入库名单里）让这一次照收
+          ...(withEvent ? { failoverEvents: [{ ruleId: driftChild.id, kind: "issue", reason: "test", at: Date.now() }] } : {}),
+        }),
+      });
+      if (response.status !== 200) throw new Error("心跳没通: " + response.status);
+    };
+    // 模板 300 没填的几项按缺省：连续失败 3 次、评分持续 180 秒（ROUTE_GUARD_DEFAULTS）
+    const baseSpec = { minHoldSeconds: 60, preferFastest: true, strategy: "fallback", delivery: "hot", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 3, scoreMargin: 10, scoreHoldSeconds: 180, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 };
+    await heartbeatStats({ ...baseSpec, pinnedIndex: null }, false);
+    const driftStatus = await caller.routeStatus({ ruleId: 300 });
+    const drift = { fields: (driftStatus?.drift?.fields || []).map((field) => [field.key, field.expected, field.actual]) };
+    await heartbeatStats({ ...baseSpec, pinnedIndex: 1, pinnedUntil: (now + 7200) * 1000 }, true);
+    const matchedStatus = await caller.routeStatus({ ruleId: 300 });
+    const driftMatched = matchedStatus?.drift ?? null;
+
     const templateEvents = (await runtime.queryRaw(
       'SELECT kind, "toLabel", reason FROM forward_rule_route_events WHERE "ruleId" = ? ORDER BY id',
       [300],
@@ -254,7 +286,7 @@ function runScenario(): Outcome {
     const viaRouter = (await caller.routeEvents({ ruleId: 300, limit: 20 })).map((row) => ({ kind: row.kind, reason: row.reason, entryHostName: row.entryHostName ?? null }));
 
     server.close();
-    console.log("OUTCOME " + JSON.stringify({ now, initial, pinned, pinnedSecondEntry, pinnedMain, unpinned, scheduled, structural, paused, events: { template: templateEvents, viaRouter } }));
+    console.log("OUTCOME " + JSON.stringify({ now, initial, pinned, pinnedSecondEntry, pinnedMain, unpinned, scheduled, structural, paused, drift, driftMatched, events: { template: templateEvents, viaRouter } }));
     await runtime.closeDatabase();
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
@@ -341,6 +373,15 @@ test("没带中转的模板：子规则也照抄路径（同一套 key），暂�
   assert.deepEqual(paused.childKeys, paused.templateKeys, "子规则的路径和模板对不上：暂停、权重、质量历史都按 key 走");
   assert.deepEqual(paused.childPaused, [false, true], "暂停没带到子规则：界面写着暂停，机器照样往这条上发新连接");
   assert.equal(paused.running, true, "暂停一条线路不该重启转发");
+});
+
+test("期望 vs 实际对账：模板钉在备用 1、机器报没钉 → 红条写「人工指定 面板 备用 1 / 机器 没有」；机器报对了就没有红条", () => {
+  // 2.3.522 线上那种：面板存了、机器没拿到。以前只看面板永远发现不了，现在机器自己说它在按什么跑。
+  assert.equal(outcome.drift.fields.length, 1, `差异应当只有钉子一项：${JSON.stringify(outcome.drift.fields)}`);
+  assert.equal(outcome.drift.fields[0][0], "pin");
+  assert.match(outcome.drift.fields[0][1], /^备用 1 · 到 /);
+  assert.equal(outcome.drift.fields[0][2], "没有");
+  assert.equal(outcome.driftMatched, null, "机器报的和面板一致，不该再标红");
 });
 
 test("模板上的「切到这条 / 交回自动」记进切换记录", () => {
