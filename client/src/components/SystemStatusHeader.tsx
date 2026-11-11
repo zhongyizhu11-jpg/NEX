@@ -41,6 +41,12 @@ type Props = {
   onRetry?: () => void;
   /** 「查看需要关注」按钮：有异常时跳到下面那块列表 */
   onOpenAttention?: () => void;
+  /**
+   * 「需要关注」那块列表就紧挨在下面、而且这个结论就写在它的标题上（首页默认布局，2026-11）：
+   * 这时不再单画结论那一行 —— 原来「4 处需要关注 · 查看」和下面的「需要关注」是同一件事说两遍。
+   * 没有要处理的事（「运行正常」）、还在读、读不到时照旧画。
+   */
+  attentionListedBelow?: boolean;
 };
 
 /**
@@ -50,7 +56,7 @@ type Props = {
  * 不能在下面列表里挂着琥珀色的同时写「运行正常」；都没有才说正常。
  * 「还没接入」的主机两边都不算：那是一步没做完，不是出了事，它只进下面的列表。
  */
-function headline(health: SystemHealth) {
+export function systemHealthHeadline(health: SystemHealth) {
   const issues = Math.max(0, Number(health.issues) || 0);
   if (issues > 0) return { text: `${issues} 处需要关注`, tone: "warn" as const };
   const degraded = health.attention
@@ -71,9 +77,9 @@ function headline(health: SystemHealth) {
  * 那种不画框的统计行，结论是一行字：绿点「运行正常」，或者琥珀点「N 处需要关注」加
  * 一个「查看」。哪几处出了事，下面「需要关注」逐条列，这里不再解释。
  */
-export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, onOpenAttention }: Props) {
+export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, onOpenAttention, attentionListedBelow = false }: Props) {
   const empty = !!health && health.hosts.total === 0 && health.links.total === 0 && health.forwards.total === 0;
-  const verdict = health && !empty ? headline(health) : null;
+  const verdict = health && !empty ? systemHealthHeadline(health) : null;
   const linkDegraded = Math.max(0, Number(health?.links.degraded) || 0);
   const forwardPaused = Math.max(0, Number(health?.forwards.paused) || 0);
   /*
@@ -145,9 +151,12 @@ export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, 
     ? (isAdmin ? "先接入主机，再配置线路，最后创建转发规则。" : "获得可用线路后，就可以创建转发规则。需要资源权限时请联系管理员。")
     : null;
 
+  const hideVerdict = attentionListedBelow && !!verdict && verdict.tone !== "healthy";
+
   return (
     <section className="system-health fx-overview-card fx-card-face flex min-w-0 flex-col" aria-label="运行状态">
       <SummaryStrip items={items} loading={!!loading && !health} ariaLabel="主机、线路、转发、连接数量" embedded />
+      {hideVerdict ? null : (
       <div
         className="system-health-verdict flex min-w-0 items-center gap-3 rounded-[var(--fx-radius-card)] border border-[var(--fx-stroke-weak)] px-3.5 py-2.5"
         data-tone={verdictTone}
@@ -174,6 +183,7 @@ export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, 
           </Button>
         ) : null}
       </div>
+      )}
     </section>
   );
 }

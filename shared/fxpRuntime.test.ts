@@ -7,6 +7,7 @@ import {
   fxpRuntimeIssueMessage,
   fxpRuntimeStatus,
   hostNeedsAgentUpgrade,
+  hostUpgradeReason,
 } from "./fxpRuntime";
 import { compareVersions } from "./version";
 import { AGENT_VERSION, FXP_MIN_WIRE_VERSION, FXP_RUNTIME_VERSION } from "./versions";
@@ -77,4 +78,30 @@ test("Agent 落后照旧算可升级；没上报 Agent 版本的不算", () => {
   assert.equal(hostNeedsAgentUpgrade({ agentVersion: "2.2.100", fxpVersion: FXP_RUNTIME_VERSION }, AGENT_VERSION), true);
   assert.equal(hostNeedsAgentUpgrade({ agentVersion: AGENT_VERSION, fxpVersion: FXP_RUNTIME_VERSION }, AGENT_VERSION), false);
   assert.equal(hostNeedsAgentUpgrade({ agentVersion: "", fxpVersion: "legacy-v2" }, AGENT_VERSION), false);
+});
+
+test("「可升级」说清是哪一件事：Agent 已是最新时写 FXP 的原因，不再笼统写可升级", () => {
+  assert.equal(hostUpgradeReason({ agentVersion: AGENT_VERSION, fxpVersion: FXP_RUNTIME_VERSION }, AGENT_VERSION), null);
+  const missing = hostUpgradeReason({ agentVersion: AGENT_VERSION, fxpVersion: "missing" }, AGENT_VERSION);
+  assert.equal(missing?.kind, "fxp");
+  assert.equal(missing?.label, "缺 FXP 运行时");
+  assert.match(missing!.detail, new RegExp(`Agent 已是最新（${AGENT_VERSION}）`));
+  assert.equal(hostUpgradeReason({ agentVersion: AGENT_VERSION, fxpVersion: "legacy-v2" }, AGENT_VERSION)?.label, "FXP 过旧");
+  assert.equal(hostUpgradeReason({ agentVersion: AGENT_VERSION, fxpVersion: "legacy" }, AGENT_VERSION)?.label, "FXP 可升级");
+  assert.equal(hostUpgradeReason({ agentVersion: AGENT_VERSION, fxpVersion: "" }, AGENT_VERSION)?.label, "FXP 未上报");
+  const agent = hostUpgradeReason({ agentVersion: "2.2.100", fxpVersion: "missing" }, AGENT_VERSION);
+  assert.equal(agent?.kind, "agent");
+  assert.equal(agent?.label, `Agent 有新版本 ${AGENT_VERSION}`);
+  assert.equal(agent?.short, "Agent 有新版本");
+  assert.equal(missing?.short, "缺 FXP 运行时");
+  assert.match(agent!.detail, /一并装上/);
+  // 和 hostNeedsAgentUpgrade 是同一把尺子：有原因才算可升级
+  for (const host of [
+    { agentVersion: AGENT_VERSION, fxpVersion: "missing" },
+    { agentVersion: AGENT_VERSION, fxpVersion: FXP_RUNTIME_VERSION },
+    { agentVersion: "2.2.100", fxpVersion: FXP_RUNTIME_VERSION },
+    { agentVersion: "", fxpVersion: "missing" },
+  ]) {
+    assert.equal(!!hostUpgradeReason(host, AGENT_VERSION), hostNeedsAgentUpgrade(host, AGENT_VERSION), JSON.stringify(host));
+  }
 });

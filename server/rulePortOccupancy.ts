@@ -157,9 +157,39 @@ export function displayRuleIdForRow(rule: RuleRow | null | undefined) {
 /** 归类和中文原因在 ruleRuntimeFailureText.ts（事件时间线、规则异常提醒也用它）；这里沿用老名字导出。 */
 export { classifyRuleRuntimeFailure };
 
+/*
+  其余认不出来的失败原因（「managed runtime listener not ready …」、运行时没装、进程起来就退出……）：
+  以前直接丢掉，规则卡上只剩一颗灰点、说不出为什么（2026-11 走查）。现在原样留一条 runtime：
+  短标签按原文大致归一下类（运行时没装 / 监听没起来 / 启动失败），管理员看到 Agent 报的原文，
+  租户看到短标签和一句「找管理员」。原文怎么写由 Agent 定，这里不翻译、不改写。
+*/
+const RUNTIME_MISSING_PATTERN = /not installed|executable file not found|command not found|no such file or directory|runtime (?:is )?missing|binary (?:is )?missing|未安装|没装|缺少/i;
+const LISTENER_NOT_READY_PATTERN = /listeners? not ready|not listening|listen(?:er)? (?:is )?not (?:ready|up)|监听没起来|监听未就绪|没有在监听/i;
+
+export function ruleRuntimeFailureLabel(message: unknown) {
+  const text = cleanText(message, 300);
+  if (RUNTIME_MISSING_PATTERN.test(text)) return "运行时没装";
+  if (LISTENER_NOT_READY_PATTERN.test(text)) return "监听没起来";
+  return "启动失败";
+}
+
+function describeOtherRuntimeFailure(message: unknown, port: number): Omit<StoredFailure, "hostId" | "at"> | null {
+  const text = cleanText(message, 300);
+  if (!text) return null;
+  const label = ruleRuntimeFailureLabel(text);
+  return {
+    kind: "runtime",
+    port,
+    label,
+    admin: `${label}：${text}`,
+    user: `${label}：转发没有起来，请联系管理员查看 Agent 报的原因`,
+  };
+}
+
 /**
- * 规则状态回执（agentStatusRoutes.applyAgentRuleStatus）：报运行就清掉这台主机上的失败；报没运行且原因认得出来
- * 就记下。认不出的原因不动已有记录 —— 同一次失败后面跟着的通用回执不该把具体原因冲掉。
+ * 规则状态回执（agentStatusRoutes.applyAgentRuleStatus）：报运行就清掉这台主机上的失败；报没运行就把原因记下
+ * （认得出的记成 bind / kernel，别的记成 runtime）。认不出的原因不冲掉已有的具体原因 —— 同一次失败后面跟着的
+ * 通用回执不该把「端口被 nginx 占了」换成一句笼统的话。
  */
 export function recordRuleRuntimeStatus(input: { rule: RuleRow; hostId: number; isRunning: boolean; message?: unknown } & RuleRuntimeFailureOptions, now = Date.now()) {
   const hostId = positiveInt(input.hostId);
@@ -171,8 +201,14 @@ export function recordRuleRuntimeStatus(input: { rule: RuleRow; hostId: number; 
     return;
   }
   const port = positiveInt(input.rule?.sourcePort, 65535);
-  const failure = classifyRuleRuntimeFailure(input.message, port, { agentVersion: input.agentVersion });
+  const classified = classifyRuleRuntimeFailure(input.message, port, { agentVersion: input.agentVersion });
+  const failure = classified || describeOtherRuntimeFailure(input.message, port);
   if (!failure) return;
+  if (!classified) {
+    // 认不出的原因不冲掉已有的具体原因（端口被占、内核转发）：同一次失败后面常跟着一条笼统的回执
+    const existing = ruleFailures.get(displayRuleId)?.get(hostId);
+    if (existing && existing.kind !== "runtime" && now - existing.at <= RULE_FAILURE_TTL_MS) return;
+  }
   let perHost = ruleFailures.get(displayRuleId);
   if (!perHost) {
     perHost = new Map();

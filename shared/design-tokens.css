@@ -119,27 +119,32 @@
   /* 压在 --fx-accent 上的字（「主」徽标、强调色实底按钮）。强调色深色下是浅蓝，白字看不见，所以分开定 */
   --fx-on-accent: #ffffff;
   /*
-    主色控件（主按钮、选中的分段项、选中的分类 chip、开关的开、复选的勾、进度条、侧栏选中项）
-    **全部是一道天蓝渐变**：照 kfchost 主按钮量到的 `135deg rgba(140,207,255,.96) → rgba(86,170,242,.92)`，
-    白字，一圈 `rgba(143,194,235,.66)` 的线。真机反馈第一轮圈了实心皇家蓝太重，第二轮说淡底也不要，
-    要的是渐变 —— 那就渐变。--fx-primary-fill 是渐变的终点色，铺在渐变底下兜底。
-    进度条和默认徽标不直接铺这道渐变：它们的调用方会传状态色（绿 / 黄 / 红），一张不透明的
-    渐变图会把状态色盖掉。那两处用「底色 + 一层白色高光」（--fx-primary-sheen）：底色是
-    --fx-primary-fill 时和渐变几乎一样，换成状态色时高光照旧、颜色照旧看得见。
+    主色控件（主按钮、选中的分段项、选中的分类 chip、开关的开、复选的勾、进度条）。
+
+    2.3.375 起这里是一道浅天蓝渐变（照 kfchost 主按钮量的 #8ccfff → #56aaf2）配白字，实测白字只有
+    1.7～2.5:1，「添加主机」「新建规则」几个字在亮屏上发虚（2026-11 走查标出来，用户认了改法）。
+    现在是**实色**深蓝 #155ec4（白字 6.1:1），悬停再深一档 #124fa6（7.8:1）。
+    仍写成两端同色的 linear-gradient：调用方是 `background-image: var(--fx-primary-gradient)`，
+    换成纯色值那一行就失效了；主题包 / 配色预设照旧可以给真正的渐变。
+    --fx-primary-fill 是同一个色，铺在底下兜底。侧栏选中项不再铺这块实色，见 workspace.css。
+    进度条和默认徽标不直接铺这道「渐变」：它们的调用方会传状态色（绿 / 黄 / 红），一张不透明的
+    背景图会把状态色盖掉。那两处用「底色 + 一层白色高光」（--fx-primary-sheen）。
+    shared/primaryContrast.test.ts 守着：白字压在这几个色上都 ≥ 4.5:1。
   */
-  --fx-primary-gradient: linear-gradient(135deg, #8ccfff 0%, #56aaf2 100%);
-  --fx-primary-gradient-hover: linear-gradient(135deg, #7cc6fc 0%, #449ded 100%);
-  --fx-primary-sheen: linear-gradient(135deg, rgb(255 255 255 / 36%) 0%, rgb(255 255 255 / 0%) 100%);
-  --fx-primary-fill: #56aaf2;
-  --fx-primary-fill-hover: #449ded;
+  --fx-primary-gradient: linear-gradient(135deg, #155ec4 0%, #155ec4 100%);
+  --fx-primary-gradient-hover: linear-gradient(135deg, #124fa6 0%, #124fa6 100%);
+  --fx-primary-sheen: linear-gradient(135deg, rgb(255 255 255 / 24%) 0%, rgb(255 255 255 / 0%) 100%);
+  --fx-primary-fill: #155ec4;
+  --fx-primary-fill-hover: #124fa6;
   --fx-primary-text: #ffffff;
-  --fx-primary-stroke: rgb(143 194 235 / 66%);
-  --fx-primary-shadow: 0 8px 18px -10px rgb(86 170 242 / 70%);
+  --fx-primary-stroke: rgb(21 94 196 / 60%);
+  --fx-primary-shadow: 0 8px 18px -10px rgb(21 94 196 / 55%);
   /*
     小图标格（IconTile）的几档底色：iOS「设置」那种圆角方块。sky 就是主色渐变，其余是固定色相，
     是身份不是状态（主机 / 线路 / 转发各一档），不会因为出事变色。
   */
-  --fx-tile-sky: var(--fx-primary-gradient);
+  /* 图标格是装饰，不跟主色改成深蓝：照旧是原来那道浅天蓝，和旁边几格同一个深浅 */
+  --fx-tile-sky: linear-gradient(135deg, #8ccfff 0%, #56aaf2 100%);
   --fx-tile-violet: linear-gradient(135deg, #a78bfa 0%, #7c6cf6 100%);
   --fx-tile-teal: linear-gradient(135deg, #5eead4 0%, #22b8cf 100%);
   --fx-tile-orange: linear-gradient(135deg, #fdba74 0%, #f5923e 100%);
@@ -493,15 +498,16 @@
   --fx-accent-fill: #0e72bc;   /* 参考站深色主按钮 oklch(0.54 0.142 248.5)：炭灰上不刺 */
   --fx-accent-fill-foreground: #ffffff;
   --fx-on-accent: #0d1722;
-  --fx-primary-gradient: linear-gradient(135deg, #5fb0f5 0%, #2f86d6 100%);
-  --fx-primary-gradient-hover: linear-gradient(135deg, #6ebaf8 0%, #3b93e2 100%);
-  --fx-primary-sheen: linear-gradient(135deg, rgb(255 255 255 / 30%) 0%, rgb(255 255 255 / 0%) 100%);
-  --fx-primary-fill: #2f86d6;
-  --fx-primary-fill-hover: #3b93e2;
+  /* 深色同理：原来 #5fb0f5 → #2f86d6 配白字 2.3～3.8:1，现在实色 #1765cc（5.6:1），悬停 #1b6ad6（5.2:1） */
+  --fx-primary-gradient: linear-gradient(135deg, #1765cc 0%, #1765cc 100%);
+  --fx-primary-gradient-hover: linear-gradient(135deg, #1b6ad6 0%, #1b6ad6 100%);
+  --fx-primary-sheen: linear-gradient(135deg, rgb(255 255 255 / 20%) 0%, rgb(255 255 255 / 0%) 100%);
+  --fx-primary-fill: #1765cc;
+  --fx-primary-fill-hover: #1b6ad6;
   --fx-primary-text: #ffffff;
   --fx-primary-stroke: rgb(102 182 255 / 40%);
-  --fx-primary-shadow: 0 8px 18px -10px rgb(47 134 214 / 80%);
-  --fx-tile-sky: var(--fx-primary-gradient);
+  --fx-primary-shadow: 0 8px 18px -10px rgb(23 101 204 / 80%);
+  --fx-tile-sky: linear-gradient(135deg, #5fb0f5 0%, #2f86d6 100%);
   --fx-tile-violet: linear-gradient(135deg, #8b78f0 0%, #6558e0 100%);
   --fx-tile-teal: linear-gradient(135deg, #3fd1bd 0%, #1899b3 100%);
   --fx-tile-orange: linear-gradient(135deg, #f7a35a 0%, #e07a24 100%);

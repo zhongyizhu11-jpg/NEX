@@ -87,6 +87,16 @@
 .workspace-layout [data-sidebar="menu-button"]:hover { color: var(--fx-text); background: var(--fx-hover); }
 .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-primary-gradient); color: var(--fx-primary-text); font-weight: 600; box-shadow: none; }
 .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-primary-text); }
+/*
+  经典（<html> 上没有 data-ui-theme）的选中项：淡底 + 深蓝字，不再是一块实色胶囊（2026-11 走查）。
+  侧栏一列里只有这一项是实色，太抢；而原来那道浅天蓝渐变配白字只有 1.7:1。
+  浅色字用主色（#155ec4，压在 11% 的淡底上 5.4:1），深色下主色偏暗，字换成强调色（#66b6ff，5.5:1）。
+  主题包 / 珍珠 / 液态玻璃都带着 data-ui-theme，不受这两行影响。
+*/
+html:not([data-ui-theme]) .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: color-mix(in srgb, var(--fx-primary-fill) 11%, transparent); color: var(--fx-primary-fill); }
+html:not([data-ui-theme]) .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-primary-fill); }
+html.dark:not([data-ui-theme]) .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-accent-soft); color: var(--fx-accent); }
+html.dark:not([data-ui-theme]) .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-accent); }
 .workspace-layout [data-sidebar="group-label"] { opacity: 1; color: var(--fx-text-muted); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-layout [data-mobile-header] { background: var(--fx-surface); border-color: var(--fx-stroke-weak); box-shadow: 0 1px 4px rgb(0 0 0 / 4%); }
 /*
@@ -588,7 +598,7 @@
     要左右滑，左边还压着一个滚动箭头。换成数字之后五项一屏放得下。
   */
   .workspace-tabs .workspace-tab { border: 0; border-radius: var(--fx-radius); gap: 3px; font-size: 14px; font-weight: 500; min-height: 34px; padding: 0 7px; }
-  /* 选中项：天蓝渐变 + 白字（全站主色控件同一道渐变，见令牌 --fx-primary-gradient） */
+  /* 选中项：主色实底 + 白字（全站主色控件同一个令牌 --fx-primary-gradient，白字 ≥ 4.5:1） */
   .workspace-tabs .workspace-tab[data-state="active"] {
     background: var(--fx-primary-gradient); color: var(--fx-primary-text); font-weight: 600;
     box-shadow: none;

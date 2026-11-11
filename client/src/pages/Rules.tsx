@@ -302,6 +302,7 @@ import {
 } from "@/features/rules/ruleFlow";
 import {
   preferLastKnownForwardRuleVisualStatus,
+  resolveForwardRuleNotRunningReason,
   resolveForwardRuleVisualStatus,
   resolveForwardRuleStopReason,
 } from "@/lib/forwardRuleStatus";
@@ -1011,6 +1012,16 @@ function deriveRuleView({
   // 线路组一律写在地址行左边那枚（择优 · 2 条 / 主备 · 主线路），右端的标签照旧是延迟 / 状态：
   // 以前择优、切换中会顶掉右端的延迟，两种线路组的卡就长得不一样（用户 2026-11-03 对比图）。
   let tag: ReactNode = null;
+  /*
+    灰点（没在运行、也没停用）的规则：名字后面跟一枚标签写原因 —— Agent 报的失败原因（「监听没起来」「运行时没装」），
+    或者还在等什么（「等待 Agent 应用」）；悬停看原文。以前灰点旁边什么都没有，只能去日志里找（2026-11 走查）。
+    放在名字那一行、紧挨着灰点：地址行右端那一格放不下这几个字，会把地址挤到第二行、整张卡变高。
+    窄的时候标签先缩（「等待 Ag…」，悬停看全文），名字后缩。
+  */
+  const notRunning = supported ? resolveForwardRuleNotRunningReason(visual, rule?.portWarnings) : null;
+  const notRunningTag = notRunning
+    ? <span className="fx-rule-tag min-w-[4.5em] shrink-[4]" data-tone={notRunning.tone} title={notRunning.detail} data-rule-not-running="">{notRunning.label}</span>
+    : null;
   if (visual.state === "error") {
     tag = <span className="fx-rule-tag" data-tone="down" title={visual.title}>{visual.title}</span>;
   } else if (visual.state === "disabled") {
@@ -1061,7 +1072,8 @@ function deriveRuleView({
     ui.renderSniRuleBadge(rule),
     ui.renderEgressBadge(rule),
     ui.renderKernelForwardWarningBadge(rule),
-    ui.renderPortWarningBadge(rule),
+    // 原因已经写在地址行右端那枚标签上了（见上面 notRunning），红色徽标不再重复一遍
+    notRunning?.fromWarning ? null : ui.renderPortWarningBadge(rule),
     rule?.tunnelId ? ui.renderTunnelFxpIssueBadge(rule) : null,
     ui.renderSubscriptionBadge(rule),
     !supported ? (
@@ -1074,7 +1086,7 @@ function deriveRuleView({
   return {
     ui, compact, compactLayout, visual, supported, protocolKey, category, health, tone, toneColor,
     entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries, entriesExpanded,
-    subtitle, big, dailyBytes, hasLineRows, linesExpanded, tag, failoverAside, alerts,
+    subtitle, big, dailyBytes, hasLineRows, linesExpanded, tag, notRunningTag, failoverAside, alerts,
   };
 }
 
@@ -1083,7 +1095,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
   const {
     ui, compact, visual, supported, tone, toneColor,
     entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries, entriesExpanded,
-    subtitle, big, dailyBytes, linesExpanded, tag, failoverAside, alerts,
+    subtitle, big, dailyBytes, linesExpanded, tag, notRunningTag, failoverAside, alerts,
   } = deriveRuleView(props);
   return (
     <Card
@@ -1112,6 +1124,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
                 ) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
               </span>
               <span className="truncate" title={rule.name} data-no-translate="">{rule.name}</span>
+              {notRunningTag}
               {ui.renderSubscriptionMark(rule)}
             </div>
             {/* 链路 · 工具 · 协议和分组标签同一行（上游 2.3.287）；还是这一个 .fx-rule-sub，精简布局的网格认的是它 */}
@@ -1284,7 +1297,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
   const {
     ui, visual, supported, tone, toneColor, category,
     entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries,
-    subtitle, big, dailyBytes, linesExpanded, tag, failoverAside, alerts,
+    subtitle, big, dailyBytes, linesExpanded, tag, notRunningTag, failoverAside, alerts,
   } = deriveRuleView(props);
   const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
   const notes = [
@@ -1318,6 +1331,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
           <div className="fx-ds-rule-name">
             <span className="fx-ds-rule-kind" data-kind={category}>{desktopRuleTypeLabels[category as RuleGroupType] || "转发"}</span>
             <span className="truncate" title={rule.name} data-no-translate="">{rule.name}</span>
+            {notRunningTag}
             {ui.renderSubscriptionMark(rule)}
             <RuleCardGroupChips names={props.personalGroupNames} />
           </div>
@@ -5867,18 +5881,29 @@ function RulesContent() {
   const hasActiveRuleFilter = hasActiveUserFilter || filterResource !== "all" || ruleCategory !== "all" || ruleSearchQuery.trim().length > 0 || personalGroupFilter !== null;
   const rulesHeaderLoading = isLoading || !rules || !scopedRulesReady || !filteredRulesPrimed;
   const dailyTrafficTotalsLoading = rulesHeaderLoading || !secondaryQueriesReady || ruleListSummaryLoading;
-  const [stableRulePageMeta, setStableRulePageMeta] = useState({ activeItems: 0, totalItems: 0, scopeTotalItems: 0 });
+  const [stableRulePageMeta, setStableRulePageMeta] = useState({ activeItems: 0, totalItems: 0, scopeTotalItems: 0, runningItems: 0, stalledItems: 0, pausedItems: 0 });
   useEffect(() => {
     if (!rulePageQuery.data || rulePageQuery.isPlaceholderData) return;
     setStableRulePageMeta({
       activeItems: Math.max(0, Number(rulePageQuery.data.activeItems) || 0),
       totalItems: Math.max(0, Number(rulePageQuery.data.totalItems) || 0),
       scopeTotalItems: Math.max(0, Number(rulePageQuery.data.scopeTotalItems) || 0),
+      runningItems: Math.max(0, Number(rulePageQuery.data.runningItems) || 0),
+      stalledItems: Math.max(0, Number(rulePageQuery.data.stalledItems) || 0),
+      pausedItems: Math.max(0, Number(rulePageQuery.data.pausedItems) || 0),
     });
   }, [rulePageQuery.data, rulePageQuery.isPlaceholderData]);
   const rulePageMeta = rulePageQuery.data ?? stableRulePageMeta;
   const ruleScopeTotal = Math.max(0, Number(rulePageMeta.scopeTotalItems) || 0);
   const activeCount = Math.max(0, Number(rulePageMeta.activeItems) || 0);
+  /*
+    页头那一行状态点按「在不在跑」数，和首页同一口径（服务端 forwardRuleStatusCountsSql）：
+    运行中 = 启用且在跑；未运行 = 启用但没在跑（灰点那几条）；已暂停 = 主人被暂停转发；已停用 = 开关关着。
+    以前写「运行 N」，N 其实是启用的条数（首页说 4 条没在跑，这里却写运行 7）。
+  */
+  const runningRuleCount = Math.max(0, Number(rulePageMeta.runningItems) || 0);
+  const stalledRuleCount = Math.max(0, Number(rulePageMeta.stalledItems) || 0);
+  const pausedRuleCount = Math.max(0, Number(rulePageMeta.pausedItems) || 0);
   const filteredRuleTotal = Math.max(0, Number(rulePageMeta.totalItems) || 0);
   const rulePagination = useServerPagination(isRuleGlobeView ? [] : orderedFilteredRules, filteredRuleTotal, rulePageRequest, {
     pageSize: rulePageSize,
@@ -7266,6 +7291,22 @@ function RulesContent() {
     return renderResolvedStatusDot(visual);
   };
 
+  /** 表格里灰点的规则：名字下面一行写为什么没在运行（和卡片地址行右端那枚同一句），悬停看原文。 */
+  const renderNotRunningReason = (rule: { id?: unknown; portWarnings?: unknown }) => {
+    const visual = ruleVisualStatuses.get(Number(rule.id))?.display || resolveRuleVisualStatus(rule);
+    const reason = resolveForwardRuleNotRunningReason(visual, rule?.portWarnings);
+    if (!reason) return null;
+    return (
+      <span
+        className={cn("mt-0.5 block truncate text-[11px] leading-4", reason.tone === "down" ? "text-[var(--fx-down-text)]" : "text-muted-foreground")}
+        title={reason.detail}
+        data-rule-not-running=""
+      >
+        {reason.label}
+      </span>
+    );
+  };
+
   /** 共享 TLS 入站规则卡片上那枚：「SNI：a.com、b.com @ 主机:443」，入站停用 / Agent 太旧时换成原因。 */
   /** 规则主人看到的那枚「管理员管理」：说明为什么编辑、开关、删除都不在。 */
   const renderAdminManagedBadge = (rule: any) => (
@@ -8271,6 +8312,7 @@ function RulesContent() {
               ) : (
                 <span className="block truncate text-[11px] leading-4 text-muted-foreground" title={subtitle}>{subtitle}</span>
               )}
+              {supported ? renderNotRunningReason(rule) : null}
               {!supported && (
                 <span className="mt-1 block text-[11px] text-destructive">
                   {protocolUnsupportedLabel(protocolKey)} 当前不支持
@@ -8670,7 +8712,7 @@ function RulesContent() {
       */}
       <WorkspaceHeader title="转发规则" status={
           /*
-            页头（第三轮样稿）：标题下一行「5 / 5 已启用」，再一行状态点「● 运行 5 · ● 停用 0」；
+            页头（第三轮样稿）：标题下一行「5 / 5 已启用」，再一行状态点「● 运行中 3 · ● 未运行 2 · ● 已停用 0」；
             标题右边一条近 24H 的小走势，走势下面是这 24 小时的进出总数。
             原来页头下面还有一条三格的累计 / 24H 统计带，手机第一屏为此让出 130px。
           */
@@ -8685,8 +8727,10 @@ function RulesContent() {
           </span>
       } chips={
           <HeaderStatusChips items={[
-            { key: "running", label: "运行", count: activeCount, tone: "healthy" },
-            { key: "disabled", label: "停用", count: Math.max(0, filteredRuleTotal - activeCount), tone: "off" },
+            { key: "running", label: "运行中", count: runningRuleCount, tone: "healthy" },
+            { key: "stalled", label: "未运行", count: stalledRuleCount, tone: "warn" },
+            { key: "paused", label: "已暂停", count: pausedRuleCount, tone: "warn", onlyWhenPresent: true },
+            { key: "disabled", label: "已停用", count: Math.max(0, filteredRuleTotal - activeCount), tone: "off" },
           ]} />
       } chipsAside={overflowInHeader ? undefined : ruleOverflowMenu("ghost")} aside={
           <HeaderSpark values={dailySpark.values} title="近 24 小时流量走势" caption={<>

@@ -165,6 +165,14 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             />
             <Row label="Agent" value={host.agentVersion ? `v${host.agentVersion}` : "—"} />
             <Row label="FXP" value={<span title={fxpRuntimeBadgeTitle(host)}>{fxpRuntimeDetailText(host)}</span>} />
+            {/* 能升级时说清是哪件事（缺 FXP 运行时 / Agent 有新版本），和列表卡片注脚同一句 */}
+            {props.upgradeReason ? (
+              <div className="min-w-0" data-host-upgrade={props.upgradeReason.kind}>
+                <Row label="可升级" value={<span className="text-[var(--fx-warn-text)]" title={props.upgradeReason.detail}>{props.upgradeReason.label}</span>} />
+                {/* 完整说明单独一行、能换行：Row 的值是单行截断的，这句放进去只剩半句 */}
+                <p className="mt-0.5 text-right text-[11px] leading-4 text-muted-foreground">{props.upgradeReason.detail}</p>
+              </div>
+            ) : null}
             {/* 地址：v4、v6 各一行，都没上报就写登记的 IP。出口 IP 和登记的不符只在不符时提一句。 */}
             {host.ipv4 || host.ipv6 ? (
               <>

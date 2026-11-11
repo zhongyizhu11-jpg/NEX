@@ -6,7 +6,8 @@ import {
   type HostEgressShapingMode,
   HOST_EGRESS_MBPS_MAX,
 } from "@/components/hosts/hostEgressShaping";
-import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
+import { readStoredViewMode, viewModeDevice, writeStoredViewMode } from "@/lib/viewModeStorage";
+import { useUiPreferences } from "@/hooks/useUiPreferences";
 import { describeHostFlowOffload } from "@/components/hosts/hostFlowOffload";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { FormField } from "@/components/ui/form-field";
@@ -49,7 +50,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import OpsHostsMenuItems from "@/features/ops/slots/HostsMenuItems";
 import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRuntimeBadge";
 import { formatHostLoadAverage } from "@shared/hostLoadAverage";
-import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
+import { hostNeedsAgentUpgrade, hostUpgradeReason } from "@shared/fxpRuntime";
 import HostGroupManager, { compareHostGroupDisplayOrder, type HostGroupView, type HostGroupViewMode } from "@/components/hosts/HostGroupManager";
 import HostProbeServiceManager, { type HostProbeServiceViewMode } from "@/components/hosts/HostProbeServiceManager";
 import {
@@ -1261,6 +1262,11 @@ function HostCardItemView({
   sortableClassName,
 }: HostCardItemProps) {
   const metrics = useMemo(() => (metricRow ? [metricRow] : null), [metricRow]);
+  // 注脚里写「缺 FXP 运行时」/「Agent 有新版本 x」而不是笼统的「可升级」；按 host 记住，卡片的 memo 不被一个新对象打穿
+  const upgradeReason = useMemo(
+    () => (isAdmin && latestAgentVersion ? hostUpgradeReason(host, latestAgentVersion) : null),
+    [host, isAdmin, latestAgentVersion],
+  );
   /*
     紧凑模式换成 Summary 卡：列表只看状态，点进去才看数据。
 
@@ -1276,6 +1282,7 @@ function HostCardItemView({
         traffic={traffic}
         canUpgrade={isAdmin}
         upgradeAvailable={isAdmin && !!latestAgentVersion && hostNeedsAgentUpgrade(host, latestAgentVersion)}
+        upgradeReason={upgradeReason}
         resetTrafficPending={resetTrafficPending}
         onOpenDetail={actions.openDetail}
         onEdit={actions.edit}
@@ -1352,6 +1359,10 @@ function HostDsItemView({
   sortableClassName,
 }: Omit<HostCardItemProps, "compact">) {
   const metrics = useMemo(() => (metricRow ? [metricRow] : null), [metricRow]);
+  const upgradeReason = useMemo(
+    () => (isAdmin && latestAgentVersion ? hostUpgradeReason(host, latestAgentVersion) : null),
+    [host, isAdmin, latestAgentVersion],
+  );
   return (
     <HostDsRow
       host={host}
@@ -1359,6 +1370,7 @@ function HostDsItemView({
       traffic={traffic}
       canUpgrade={isAdmin}
       upgradeAvailable={isAdmin && !!latestAgentVersion && hostNeedsAgentUpgrade(host, latestAgentVersion)}
+      upgradeReason={upgradeReason}
       resetTrafficPending={resetTrafficPending}
       onOpenDetail={actions.openDetail}
       onEdit={actions.edit}
@@ -1536,7 +1548,7 @@ const HostTableRow = memo(function HostTableRow({
           <div className="flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
             {hostOs.label ? <span className="truncate" title={hostOs.full}>{hostOs.label}</span> : <span>--</span>}
             {host.agentVersion && <span className="font-mono" title="Agent 版本">v{host.agentVersion}</span>}
-            {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]">新版本</span>}
+            {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]" title={hostUpgradeReason(host, latestAgentVersion)?.detail}>新版本</span>}
             <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
             {host.agentUpgradeRequested && (
               <span className={agentUpgradeTimedOut ? "text-destructive" : "text-primary"}>{agentUpgradeTimedOut ? "升级失败" : "升级中"}</span>
@@ -1629,7 +1641,7 @@ const HostTableRow = memo(function HostTableRow({
                   </span>
                 )}
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[11px] leading-none text-[var(--fx-warn-text)]">
+                  <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[11px] leading-none text-[var(--fx-warn-text)]" title={hostUpgradeReason(host, latestAgentVersion)?.detail}>
                     新版本
                   </Badge>
                 )}
@@ -1752,6 +1764,20 @@ function HostsContent() {
   // 「深空」主题：卡片 / 表格都画成一台一行（地图两种照旧）
   const deepspaceRows = useUiTheme() === "deepspace";
   const [preferredViewMode, setViewMode] = useState<HostViewMode>(() => getStoredHostViewMode());
+  /*
+    选的视图还按账号记一份（users.uiPreferences 的 views.hosts，手机 / 电脑各一份，2026-11）：换浏览器、换电脑
+    进来还是上次那个视图。本地那份照旧先用（首屏不等 auth.me），账号里有、而且和本地不一样时换成账号的。
+  */
+  const { preferences: uiPreferences, update: updateUiPreferences } = useUiPreferences();
+  const accountHostViewMode = uiPreferences.views?.hosts?.[viewModeDevice()] as HostViewMode | undefined;
+  const adoptedAccountHostViewRef = useRef(false);
+  useEffect(() => {
+    if (adoptedAccountHostViewRef.current || !user) return;
+    adoptedAccountHostViewRef.current = true;
+    if (!accountHostViewMode) return;
+    setViewMode(accountHostViewMode);
+    storeHostViewMode(accountHostViewMode);
+  }, [accountHostViewMode, user]);
   /*
     地图在 md 以下本来就藏着（切换按钮也藏着），可桌面上记住的「地图」带到手机上，
     就是在看不见的地方跑一个 3D 地球、列表却是空的。手机上按精简卡片显示，记住的选择不动。
@@ -2237,6 +2263,7 @@ function HostsContent() {
       return mode;
     });
     storeHostViewMode(mode);
+    if (mode !== preferredViewMode) void updateUiPreferences({ view: { id: "hosts", device: viewModeDevice(), mode } }, "视图偏好保存失败");
   };
 
   const handleTokenViewModeChange = (mode: AgentTokenViewMode) => {
@@ -3390,6 +3417,7 @@ function HostsContent() {
         metrics={detailHostMetrics}
         traffic={detailHost ? hostTrafficById.get(Number(detailHost.id)) : null}
         canUpgrade={user?.role === "admin"}
+        upgradeReason={user?.role === "admin" && liveDetailHost && latestAgentVersion ? hostUpgradeReason(liveDetailHost, latestAgentVersion) : null}
         resetTrafficPending={!!detailHost && resetTrafficHostId === detailHost.id && resetHostTrafficMutation.isPending}
         onEdit={(host: any) => openEdit(liveDetailHost || host)}
         onDelete={(id) => deleteMutation.mutate({ id })}

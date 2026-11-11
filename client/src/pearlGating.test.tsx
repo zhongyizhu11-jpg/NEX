@@ -61,16 +61,17 @@ test("外壳：珍珠顶栏只在珍珠下挂；经典顶栏、底部标签栏�
   assert.match(source, /<PearlNavMarker collapsed=\{isDesktopCollapsed \|\| isMobile\} \/>/);
 });
 
-test("首页：日期铭牌和系统在线只在珍珠下；统计卡在珍珠下排到地图前面，别的主题顺序不变", () => {
+test("首页：日期铭牌和系统在线只在珍珠下；默认布局所有主题都是 数字 → 需要关注 → 地图（2026-11）", () => {
   const source = strip(fs.readFileSync(path.join(ROOT, "pages/Home.tsx"), "utf8"));
   const badges = [...source.matchAll(/<PearlHeaderBadges\b/g)];
   assert.equal(badges.length, 1);
   assert.match(source, /actions=\{pearl \? <PearlHeaderBadges \/> : undefined\}/);
-  const before = source.indexOf("{pearl ? statusHeader : null}");
+  const status = source.indexOf("{renderStatusHeader(attentionListed)}");
   // 深空分支（更靠前）自己也有一张地图；这里只看默认那条 return 里的顺序
-  const map = source.indexOf("<NetworkMapSlot", before);
-  const after = source.indexOf("{pearl ? null : statusHeader}");
-  assert.ok(before > 0 && before < map && map < after, "非珍珠：地图 → 运行状态；珍珠：运行状态 → 地图");
+  const attention = source.indexOf("<AttentionSection", status);
+  const map = source.indexOf("<NetworkMapSlot", status);
+  assert.ok(status > 0 && status < attention && attention < map, "数字 → 需要关注 → 地图");
+  assert.match(source.slice(map, source.indexOf("/>", map)), /collapsible/);
 });
 
 test("侧栏标记：不是珍珠就什么都不渲染", () => {

@@ -131,7 +131,7 @@ export function HostDsRow(props: Props) {
         {trafficExcluded ? (
           <span className="fx-ds-host-tag" data-tone="warn" title={hostTrafficFailoverTitle(host)}>组调度暂停</span>
         ) : null}
-        {upgrade && !offline ? <span className="fx-ds-host-tag" data-tone="warn" title={`Agent v${agentVersion}`}>可升级</span> : null}
+        {upgrade && !offline ? <span className="fx-ds-host-tag" data-tone="warn" title={props.upgradeReason?.detail || `Agent v${agentVersion}`}>{props.upgradeReason?.short || "可升级"}</span> : null}
         {!offline && !upgrade && !maintenance && !trafficExcluded ? (
           <span className="fx-ds-host-version">{agentVersion || "—"}</span>
         ) : null}

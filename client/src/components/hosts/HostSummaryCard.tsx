@@ -2,6 +2,7 @@ import { Activity, ArrowRightLeft, Coins, Download, Gauge, Pencil, RotateCcw, Tr
 import type { HostReplaceTarget } from "./HostReplaceDialog";
 
 import { formatBytes } from "@shared/formatBytes";
+import type { HostUpgradeReason } from "@shared/fxpRuntime";
 import { EntityActions, type EntityAction } from "@/components/entity/EntityActions";
 import {
   EntityBody,
@@ -53,8 +54,13 @@ export type HostSummaryCardProps = {
   metrics?: any[] | null;
   traffic?: { bytesIn?: number | null; bytesOut?: number | null } | null;
   canUpgrade: boolean;
-  /** 这台的 Agent 比面板带的版本旧（由列表页比出来）：注脚里标一句「可升级」 */
+  /** 这台的 Agent 比面板带的版本旧、或 FXP 运行时缺了 / 旧了（由列表页比出来）：注脚里标一句 */
   upgradeAvailable?: boolean;
+  /**
+   * 为什么能升级（shared/fxpRuntime.ts 的 hostUpgradeReason）：注脚里写它的 short（「缺 FXP 运行时」
+   * 「Agent 有新版本」），悬停是完整说明（带版本号）。不传就照旧写「可升级」。
+   */
+  upgradeReason?: HostUpgradeReason | null;
   resetTrafficPending?: boolean;
   onOpenDetail: (host: any) => void;
   onEdit: (host: any) => void;
@@ -390,7 +396,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         ) : null}
         subtitle={
           <>
-            {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
+            {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句原因（缺 FXP / Agent 有新版本）。 */}
             {/* 运营商 / ASN 不另占一行，悬停时给（和地区、组织一起） */}
             <span title={hostGeoTooltip(host) || undefined}>{[region, address].filter(Boolean).join(" · ")}</span>
             {/* 维护中（2.3.496）：从所有线路和组的候选里拿掉了，排最前 */}
@@ -407,10 +413,11 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
                 <span className="text-[var(--fx-warn-text)]" title={hostTrafficFailoverTitle(host)} data-host-traffic-failover="">组调度已暂停</span>
               </>
             ) : null}
+            {/* 写原因，不再笼统写「可升级」：Agent 已是最新、只是缺 FXP 的机器以前也挂着它（2026-11 走查） */}
             {agentVersion && props.upgradeAvailable ? (
               <>
                 {region || address || hostTrafficExcluded(host) || hostInMaintenance(host) ? " · " : ""}
-                <span className="text-[var(--fx-warn-text)]">可升级</span>
+                <span className="text-[var(--fx-warn-text)]" title={props.upgradeReason?.detail} data-host-upgrade={props.upgradeReason?.kind}>{props.upgradeReason?.short || "可升级"}</span>
               </>
             ) : null}
           </>
