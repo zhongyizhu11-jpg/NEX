@@ -61,3 +61,12 @@ export function generateProxyInboundPsk(bytes = 16): string {
 export function generateProxyInboundUuid(): string {
   return crypto.randomUUID();
 }
+
+/**
+ * Mieru 的用户名。mita 的用户表整台机器共用、不分端口，用户名必须在整台机器上唯一，
+ * 所以用随机串而不是人名；「nex」开头方便在 mita 的日志里认出是面板发的。
+ * 64 位随机，同一台机器上撞车的概率可以忽略（buildMitaHostPlan 撞了也只跳过那一个）。
+ */
+export function generateMieruUsername(): string {
+  return `nex${crypto.randomBytes(8).toString("hex")}`;
+}

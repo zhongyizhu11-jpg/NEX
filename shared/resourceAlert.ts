@@ -35,7 +35,23 @@ export type ResourceAlertConfig = {
   crashAlert: boolean;
   /** 隧道探测 10 分钟内丢包率达到多少（%）告警，0 = 不报。 */
   lossPercent: number;
+  /** 对哪些主机生效：全部 / 只看 scopeHostIds / 除了 scopeHostIds（上游 2.3.290）。 */
+  scope: ResourceAlertScope;
+  scopeHostIds: number[];
+  /** 除了管理员，再通知主机的所属用户（Telegram、邮件按他自己的设置）。 */
+  notifyOwner: boolean;
 };
+
+export type ResourceAlertScope = "all" | "include" | "exclude";
+
+export const RESOURCE_ALERT_SCOPE_OPTIONS: ReadonlyArray<{ value: ResourceAlertScope; label: string }> = [
+  { value: "all", label: "全部主机" },
+  { value: "include", label: "指定主机" },
+  { value: "exclude", label: "排除主机" },
+];
+
+/** 指定 / 排除的主机最多记这么多个（设置是一行字符串）。 */
+export const RESOURCE_ALERT_SCOPE_MAX_HOSTS = 2000;
 
 export const DEFAULT_RESOURCE_ALERT_CONFIG: ResourceAlertConfig = {
   enabled: false,
@@ -48,6 +64,9 @@ export const DEFAULT_RESOURCE_ALERT_CONFIG: ResourceAlertConfig = {
   oomAlert: true,
   crashAlert: true,
   lossPercent: 20,
+  scope: "all",
+  scopeHostIds: [],
+  notifyOwner: false,
 };
 
 export const RESOURCE_ALERT_SUSTAIN_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
@@ -84,6 +103,119 @@ export function normalizeResourceAlertConfig(raw: Partial<Record<keyof ResourceA
     oomAlert: source.oomAlert === undefined ? d.oomAlert : source.oomAlert === true || source.oomAlert === "true",
     crashAlert: source.crashAlert === undefined ? d.crashAlert : source.crashAlert === true || source.crashAlert === "true",
     lossPercent: clampInt(source.lossPercent, 0, 100, d.lossPercent),
+    scope: normalizeResourceAlertScope(source.scope),
+    scopeHostIds: normalizeResourceAlertHostIds(source.scopeHostIds),
+    notifyOwner: source.notifyOwner === true || source.notifyOwner === "true",
+  };
+}
+
+export function normalizeResourceAlertScope(value: unknown): ResourceAlertScope {
+  return value === "include" || value === "exclude" ? value : "all";
+}
+
+/** 主机 id 列表：数组或设置里存的 JSON 字符串都认；去重、只留正整数。 */
+export function normalizeResourceAlertHostIds(value: unknown): number[] {
+  let raw: unknown = value;
+  if (typeof value === "string") {
+    try {
+      raw = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  const ids = new Set<number>();
+  for (const item of raw) {
+    const id = Number(item);
+    if (Number.isInteger(id) && id > 0) ids.add(id);
+    if (ids.size >= RESOURCE_ALERT_SCOPE_MAX_HOSTS) break;
+  }
+  return [...ids].sort((a, b) => a - b);
+}
+
+// ---------------- 按主机覆盖（上游 2.3.287） ----------------
+
+/**
+ * 某台主机自己的资源告警设置，存在 hosts.resourceAlertOverride（JSON）。
+ *
+ * - mode：inherit 跟随全局的「对哪些主机生效」；on 不管范围怎么选都看这台；off 这台一律不报。
+ *   全局的「启用资源告警」仍然是总开关 —— 关着的时候哪台都不报，和以前一样。
+ * - 三项阈值：null = 用全局的值；0 = 这台不报这一项；否则 50–100（和全局同一个范围）。
+ *
+ * 全部是 inherit + null 的覆盖等于没有覆盖，规整时直接变成 null，存库时存 NULL。
+ */
+export type HostResourceAlertMode = "inherit" | "on" | "off";
+
+export type HostResourceAlertOverride = {
+  mode: HostResourceAlertMode;
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  diskPercent: number | null;
+};
+
+export const HOST_RESOURCE_ALERT_MODE_OPTIONS: ReadonlyArray<{ value: HostResourceAlertMode; label: string }> = [
+  { value: "inherit", label: "跟随全局" },
+  { value: "on", label: "始终监控" },
+  { value: "off", label: "不监控" },
+];
+
+function normalizeOverrideThreshold(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return normalizeThreshold(n, 0);
+}
+
+export function normalizeHostResourceAlertOverride(raw: unknown): HostResourceAlertOverride | null {
+  let source: unknown = raw;
+  if (typeof raw === "string") {
+    if (!raw.trim()) return null;
+    try {
+      source = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const value = source as Record<string, unknown>;
+  const mode: HostResourceAlertMode = value.mode === "on" || value.mode === "off" ? value.mode : "inherit";
+  const override: HostResourceAlertOverride = {
+    mode,
+    cpuPercent: normalizeOverrideThreshold(value.cpuPercent),
+    memoryPercent: normalizeOverrideThreshold(value.memoryPercent),
+    diskPercent: normalizeOverrideThreshold(value.diskPercent),
+  };
+  if (override.mode === "inherit" && override.cpuPercent === null && override.memoryPercent === null && override.diskPercent === null) return null;
+  return override;
+}
+
+/** 这台主机在不在资源告警的范围里（总开关另算）。 */
+export function isHostInResourceAlertScope(config: ResourceAlertConfig, hostId: number, override: HostResourceAlertOverride | null | undefined) {
+  if (override?.mode === "off") return false;
+  if (override?.mode === "on") return true;
+  const id = Number(hostId);
+  if (config.scope === "include") return config.scopeHostIds.includes(id);
+  if (config.scope === "exclude") return !config.scopeHostIds.includes(id);
+  return true;
+}
+
+/**
+ * 这台主机实际用的那一份设置。没有覆盖、范围是「全部主机」时原样返回全局设置（和以前一模一样）；
+ * 不在范围里时返回 enabled = false 的一份 —— evaluateResourceAlertSample 会把它正在告警的项清掉、不报恢复。
+ */
+export function resolveHostResourceAlertConfig(
+  config: ResourceAlertConfig,
+  hostId: number,
+  override: HostResourceAlertOverride | null | undefined,
+): ResourceAlertConfig {
+  if (!config.enabled) return config;
+  if (!isHostInResourceAlertScope(config, hostId, override)) return { ...config, enabled: false };
+  if (!override) return config;
+  return {
+    ...config,
+    cpuPercent: override.cpuPercent ?? config.cpuPercent,
+    memoryPercent: override.memoryPercent ?? config.memoryPercent,
+    diskPercent: override.diskPercent ?? config.diskPercent,
   };
 }
 

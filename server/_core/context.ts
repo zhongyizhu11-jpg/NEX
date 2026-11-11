@@ -18,8 +18,11 @@ import {
 import { DEV_ADMIN_USERNAME, isDevPanelMode } from "../devPanel";
 import { getActiveAuthSession, revokeAuthSession, touchAuthSession } from "../repositories/sessionRepository";
 import { withKeyedTaskLock } from "../keyedTaskLock";
-import { resolveApiTokenRequest } from "../ops/apiTokens";
+import { neutralizeCookies, resolveApiTokenRequest } from "../ops/apiTokens";
 import type { ApiTokenContext } from "../ops/apiTokenPolicy";
+import { readImpersonationTokenFromHeader, resolveImpersonation } from "../ops/impersonation";
+import type { ImpersonationContext } from "../ops/impersonationPolicy";
+import { IMPERSONATION_ENDED_MESSAGE } from "../../shared/userImpersonation";
 import { noteSessionClient } from "../ops/sessionDevices";
 import { TRPCError } from "@trpc/server";
 import { databaseHealth, describeDatabaseError } from "../databaseHealthState";
@@ -41,6 +44,11 @@ export interface TrpcContext {
   authFailureReason: "session_replaced" | "account_disabled" | null;
   /** 这个请求是用个人 API 令牌（nex_…）认证的；见 server/ops/apiTokens.ts。 */
   apiToken?: ApiTokenContext | null;
+  /**
+   * 这个请求来自管理员「进入用户后台」的代入窗口（nxu_… 令牌）：user 是被代入的普通用户，
+   * 这里记着真正在操作的管理员。见 server/ops/impersonation.ts。
+   */
+  impersonation?: ImpersonationContext | null;
 }
 
 type TokenSource = "cookie" | "bearer";
@@ -184,6 +192,31 @@ async function resolveSessionFromToken(req: Request, res: Response, token: strin
   }
 }
 
+/**
+ * 代入窗口的请求（Authorization: Bearer nxu_…）。令牌有效就返回「目标用户 + 代入标记」的上下文；
+ * 无效一律抛 401「代入已结束」—— 绝不落回 cookie 或开发面板的管理员身份：
+ * 代入窗口里的请求要么是那个用户，要么什么都不是。
+ */
+async function resolveImpersonationRequest(req: Request, res: Response, token: string): Promise<TrpcContext> {
+  // 代入请求不写也不清 cookie：浏览器里那枚 cookie 是管理员自己的登录，
+  // 后面任何一处「账号停用就清 cookie」之类的逻辑都不该碰到它。
+  neutralizeCookies(res);
+  res.setHeader?.("Cache-Control", "no-store");
+  let resolved: Awaited<ReturnType<typeof resolveImpersonation>>;
+  try {
+    resolved = await resolveImpersonation(token, { allowMultiDevice: allowMultiDeviceLogin, devPanel: isDevPanelMode() });
+  } catch (error) {
+    if (describeDatabaseError(error) || databaseHealth.isUnavailable()) {
+      databaseHealth.unavailable(error);
+      throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
+    }
+    // 别的错误也不是「令牌无效」的证据：失败关闭，但不让页面以为代入结束了。
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "用户身份验证暂时失败，请稍后重试", cause: error });
+  }
+  if (!resolved) throw new TRPCError({ code: "UNAUTHORIZED", message: IMPERSONATION_ENDED_MESSAGE });
+  return { req, res, user: resolved.user, authSession: null, authFailureReason: null, impersonation: resolved.impersonation };
+}
+
 export async function createContext({ req, res }: CreateExpressContextOptions): Promise<TrpcContext> {
   if (databaseHealth.isUnavailable()) {
     throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
@@ -191,6 +224,10 @@ export async function createContext({ req, res }: CreateExpressContextOptions): 
   let user: User | null = null;
   let authSession: AuthSession | null = null;
   let authFailureReason: TrpcContext["authFailureReason"] = null;
+
+  // 管理员代入用户后台的窗口。必须排在开发面板的「一律当管理员」和 cookie 之前。
+  const impersonationToken = readImpersonationTokenFromHeader(req.headers.authorization);
+  if (impersonationToken) return resolveImpersonationRequest(req, res, impersonationToken);
 
   // 个人 API 令牌（Authorization: Bearer nex_…）：不走会话，也不写 cookie。
   const apiTokenAuth = await resolveApiTokenRequest(req, res);

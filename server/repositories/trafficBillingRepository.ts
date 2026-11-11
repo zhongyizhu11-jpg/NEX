@@ -16,6 +16,8 @@ import {
 } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, quoteDbIdentifier, withDatabaseTransaction } from "../dbRuntime";
 import { getSetting, setSetting } from "./settingsRepository";
+import { getTrafficStockUsage } from "./productStockRepository";
+import { MAX_PRODUCT_STOCK } from "../../shared/productStock";
 import { formatTrafficMultiplier, normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { countEnabledForwardRulesByUserIds, getBillingRelevantRulesByHostIds, getBillingRelevantRulesByUserId } from "./forwardRuleRepository";
 
@@ -470,7 +472,19 @@ export function trafficBillingSnapshotResourceState(
   };
 }
 
-export async function listTrafficBillingConfigs() {
+/** 库存总量 / 每账号规则上限：非负整数，超出上界按上界算；没传（undefined）表示这次不改。 */
+function normalizeStockInput(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  const number = Math.floor(Number(value));
+  if (!Number.isFinite(number) || number <= 0) return 0;
+  return Math.min(MAX_PRODUCT_STOCK, number);
+}
+
+/**
+ * @param viewerUserId 传了就顺带算出「这个人自己在各资源上建了几条规则」（商店里要用：
+ *   他已经占着席位的话，售罄对他不构成限制）。
+ */
+export async function listTrafficBillingConfigs(viewerUserId?: number) {
   const db = await getDb();
   if (!db) return [];
   const configs = await db.select().from(trafficBillingConfigs).orderBy(desc(trafficBillingConfigs.updatedAt));
@@ -511,8 +525,12 @@ export async function listTrafficBillingConfigs() {
   const hostNames = new Map(hostRows.map((host: any) => [Number(host.id), host.name]));
   const tunnelById = new Map<number, any>(tunnelRows.map((tunnel: any) => [Number(tunnel.id), tunnel]));
   const forwardGroupById = new Map<number, any>(forwardGroupRows.map((group: any) => [Number(group.id), group]));
+  // 账号库存的占用数不落库，每次按现有规则现算（见 productStockRepository 开头的说明）。
+  const stockUsage = configs.length > 0 ? await getTrafficStockUsage(viewerUserId) : null;
   return configs.map((config: any) => ({
     ...config,
+    stockUsed: stockUsage?.usedByConfigId.get(Number(config.id)) || 0,
+    currentUserRuleCount: stockUsage?.viewerRulesByConfigId.get(Number(config.id)) || 0,
     pricePerGbMilliCents: configPriceMilliCents(config),
     ...(() => {
       const resourceId = Number(config.resourceId);
@@ -693,6 +711,9 @@ export async function upsertTrafficBillingConfig(data: InsertTrafficBillingConfi
     pricePerGbCents: Math.floor(pricePerGbMilliCents / MILLI_CENTS_PER_CENT),
     pricePerGbMilliCents,
     multiplier,
+    // 没传就不进 payload：只配单价的入口（主机管理里的计费弹窗）不会把已设的库存冲回不限。
+    ...(normalizeStockInput(data.stockLimit) !== undefined ? { stockLimit: normalizeStockInput(data.stockLimit) } : {}),
+    ...(normalizeStockInput(data.maxRulesPerUser) !== undefined ? { maxRulesPerUser: normalizeStockInput(data.maxRulesPerUser) } : {}),
     updatedAt: nowDate(),
   };
   if (id > 0) {

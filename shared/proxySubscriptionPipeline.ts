@@ -5,7 +5,7 @@
  *     → 令牌作用域过滤
  *     → 条目处理器（命名模板、旗帜、前缀、改名、去重、排序、字段覆盖）
  *     → 组装文档（去重名、自动组、地区组、模板里的自定义组、分类组、预设规则）
- *     → 自定义规则（全局前置 / 用户 / 令牌 / 全局后置）插进规则列表
+ *     → 自定义规则（全局前置 / 模板 / 用户 / 令牌 / 全局后置）插进规则列表
  *     → 信息节点
  *     → 渲染（格式 + 模板开头 + 客户端能力门控 + 可调参数）
  *
@@ -23,6 +23,7 @@ import {
 } from "./proxySubscription";
 import {
   buildProxySubscriptionDocument,
+  PROXY_SUBSCRIPTION_SKIP_LABELS,
   type ProxyNodeTemplateRow,
   type ProxySubCustomGroup,
   type ProxySubscriptionDocument,
@@ -36,6 +37,7 @@ import { renderProxySubTemplatePrelude, PROXY_SUB_BUILTIN_PRELUDES, proxySubTemp
 import { resolveTriState, type ProxySubTokenOptions, type ProxySubTokenScope } from "./proxySubTokenScope";
 import type { ProxyNode } from "./proxyNode";
 import type { ProxySubUnlockStatusMap } from "./proxySubUnlock";
+import type { ProxySubIpVersion } from "./proxySubIpVersion";
 
 export type ProxySubPipelineInput = {
   plan: ProxySubscriptionPlan;
@@ -46,8 +48,8 @@ export type ProxySubPipelineInput = {
   settings: ProxySubSettings;
   /** 用户级自定义规则文本（管理员给这个用户写的）。 */
   userCustomRules?: string;
-  /** 选中的模板；没有就用内置的开头部分。 */
-  template?: Pick<ProxySubTemplate, "prelude" | "customGroups"> | null;
+  /** 选中的模板；没有就用内置的开头部分。customRules / modules 老调用方可能不带。 */
+  template?: (Pick<ProxySubTemplate, "prelude" | "customGroups"> & Partial<Pick<ProxySubTemplate, "customRules" | "modules">>) | null;
   /** 信息节点要显示的数字；不传 = 不插信息节点。 */
   info?: ProxySubInfoNodeInput | null;
   /** 模板占位符要用的值。 */
@@ -58,6 +60,8 @@ export type ProxySubPipelineInput = {
   unlockStatuses?: ProxySubUnlockStatusMap | null;
   /** 拉订阅的访客在哪（服务端用离线库查的）；只有「按访客就近」排序用，见 shared/proxySubGeo.ts。 */
   visitor?: ProxySubVisitorGeo | null;
+  /** 地址上的 ipVersion=4 / 6：每条节点只用这一种真实地址，没有的跳过（shared/proxySubIpVersion.ts）。 */
+  ipVersion?: ProxySubIpVersion | null;
 };
 
 export type ProxySubPipelineDocument = {
@@ -67,7 +71,7 @@ export type ProxySubPipelineDocument = {
   infoNodes: ProxyNode[];
   customGroups: ProxySubCustomGroup[];
   /** 自定义规则里解析失败的行（三处合在一起）。 */
-  customRuleErrors: Array<{ scope: "global-prepend" | "user" | "token" | "global-append"; line: number; message: string }>;
+  customRuleErrors: Array<{ scope: "global-prepend" | "template" | "user" | "token" | "global-append"; line: number; message: string }>;
 };
 
 /** 自定义规则插在哪：前置的排在预设规则前面（命中即止），后置的排在 MATCH 前面。 */
@@ -80,7 +84,7 @@ function spliceCustomRules(rules: readonly ProxyRouteRule[], prepend: readonly P
 
 /** 第一步到第五步：出文档。渲染拆开是为了预览界面只要文档不要正文。 */
 export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): ProxySubPipelineDocument {
-  const plan = runProxySubEntryProcessors(input.plan, { scope: input.scope, options: input.options, settings: input.settings, visitor: input.visitor });
+  const plan = runProxySubEntryProcessors(input.plan, { scope: input.scope, options: input.options, settings: input.settings, visitor: input.visitor, ipVersion: input.ipVersion });
   const customGroups = input.template?.customGroups || [];
   const document = buildProxySubscriptionDocument(plan, input.templates, {
     mainGroupName: PROXY_SUBSCRIPTION_GROUP_NAME,
@@ -110,8 +114,13 @@ export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): Pro
       for (const error of parsed.errors) customRuleErrors.push({ scope, line: error.line, message: error.message });
       return customRulesToRouteRules(parsed.rules, { mainGroupName: PROXY_SUBSCRIPTION_GROUP_NAME, knownTargets });
     };
+    /*
+      模板里的规则紧跟全局前置：模板和全局一样是管理员配的站点级东西。插在用户 / 令牌之前
+      而不是之后，是沿用原来「越靠站点级越先命中」的顺序；没写模板规则的订阅命中结果不变。
+    */
     const prepend = [
       ...convert(input.settings.customRulesPrepend, "global-prepend"),
+      ...convert(input.template?.customRules || "", "template"),
       ...convert(input.userCustomRules || "", "user"),
       ...convert(input.options.customRules, "token"),
     ];
@@ -133,7 +142,7 @@ export type ProxySubRenderInput = {
   profileUrl: string;
   client: DetectedProxyClient | null;
   settings: ProxySubSettings;
-  template?: Pick<ProxySubTemplate, "prelude"> | null;
+  template?: (Pick<ProxySubTemplate, "prelude"> & Partial<Pick<ProxySubTemplate, "modules">>) | null;
   vars: ProxySubPipelineInput["vars"] & { expireDate: string; dataLeft: string };
   /** 节点订阅（没带 rules）时不用模板的开头部分：那种订阅本来就只有节点。 */
   weightedLoadBalance: boolean;
@@ -184,7 +193,19 @@ export function renderProxySubPipeline(input: ProxySubRenderInput): string {
     prelude,
     infoNodes: input.built.infoNodes,
     client: input.client || undefined,
+    // 按 IPv4 / IPv6 输出时跳过的节点：能写注释的格式在文件头写一句（和「格式不支持」的跳过同一处）。
+    extraNotices: proxySubAddressFamilyNotices(input.built.plan),
+    // 模块 / 插件只进规则订阅（完整配置）；节点订阅是裸节点行 / 只有 proxies，放不下。Loon 和 Egern 渲染它们。
+    modules: wantPrelude ? (input.template?.modules || []) : [],
   });
+}
+
+/** plan.skipped 里因为地址族跳过的那几条，变成文件头的注释行。 */
+export function proxySubAddressFamilyNotices(plan: Pick<ProxySubscriptionPlan, "skipped">): string[] {
+  const lines = plan.skipped
+    .filter((item) => item.reason === "no-ipv4-address" || item.reason === "no-ipv6-address")
+    .map((item) => `# 已跳过节点「${item.nodeName || item.ruleName}」：${PROXY_SUBSCRIPTION_SKIP_LABELS[item.reason]}`);
+  return lines.length > 0 ? [...lines, "# 去掉地址上的 ipVersion 参数即可恢复：那样会按域名 / 首选地址输出。"] : [];
 }
 
 /** 模板占位符里的「剩余流量」「到期日」。 */

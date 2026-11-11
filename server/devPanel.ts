@@ -602,6 +602,12 @@ async function seedHostMetrics(hostIds: number[]) {
       uptime: item.uptime,
       tcpConnections: item.tcpConnections,
       udpConnections: item.udpConnections,
+      // 1 / 5 / 15 分钟负载，库里存乘 100 的整数；最后一台是离线主机，不带
+      ...(item.uptime > 0 ? {
+        loadAvg1: Math.round(item.cpuUsage * 4 + 12),
+        loadAvg5: Math.round(item.cpuUsage * 3 + 18),
+        loadAvg15: Math.round(item.cpuUsage * 2 + 21),
+      } : {}),
       recordedAt: nowDate(),
     });
     await insertAndGetId("host_traffic_counters", {
@@ -2048,6 +2054,39 @@ async function seedProbeServices(adminId: number, hostIds: number[]) {
           recordedAt,
         });
       }
+    }
+  }
+
+  // URL 连接检测（method = "http"）：一条服务，偶尔回 503，界面上能看到「状态码不符」和延迟曲线。
+  const httpServiceId = await insertAndGetId("host_probe_services", {
+    userId: adminId,
+    name: "Status API",
+    method: "http",
+    targetIp: "https://status.dev.forwardx.local/healthz",
+    targetPort: null,
+    httpTimeoutSeconds: 5,
+    httpExpectedStatus: "200-399",
+    httpSkipTlsVerify: false,
+    hostScope: "all",
+    intervalSeconds: 60,
+    isEnabled: true,
+    createdAt: nowDate(),
+    updatedAt: nowDate(),
+  });
+  for (const [hostIndex, hostId] of hostIds.entries()) {
+    for (let step = 47; step >= 0; step -= 1) {
+      const failed = hostIndex === 1 && step % 16 === 0;
+      await insertAndGetId("host_probe_service_stats", {
+        serviceId: httpServiceId,
+        hostId,
+        latencyMs: failed ? null : Math.max(1, Math.round(120 + (hostBias[hostIndex] || 0) + Math.sin((step + hostIndex) / 4) * 25)),
+        isTimeout: failed,
+        probeCount: 1,
+        probeSuccesses: failed ? 0 : 1,
+        failure: failed ? "http_status" : null,
+        httpStatus: failed ? 503 : 200,
+        recordedAt: new Date(now - step * 15 * 60 * 1000),
+      });
     }
   }
 }

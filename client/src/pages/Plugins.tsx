@@ -1978,7 +1978,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                   </div>
                   <div
                     className="prose prose-sm max-w-none text-sm leading-6 dark:prose-invert"
-                    dangerouslySetInnerHTML={renderPluginPageHtml(selectedPageContent, selectedPage?.contentType)}
+                    data-no-translate="" dangerouslySetInnerHTML={renderPluginPageHtml(selectedPageContent, selectedPage?.contentType)}
                   />
                 </div>
               )}
@@ -2316,7 +2316,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                   <div className="rounded-xl border border-border/40 bg-muted/20 p-4">
                     <div
                       className="prose prose-sm max-w-none text-sm leading-7 text-muted-foreground dark:prose-invert prose-p:my-2 prose-ul:my-2 prose-li:my-1 prose-code:rounded prose-code:bg-background/70 prose-code:px-1 prose-code:py-0.5 prose-code:text-foreground prose-strong:text-foreground"
-                      dangerouslySetInnerHTML={renderPluginPageHtml(buildStoreDetailMarkdown(storeDetailItem), "markdown")}
+                      data-no-translate="" dangerouslySetInnerHTML={renderPluginPageHtml(buildStoreDetailMarkdown(storeDetailItem), "markdown")}
                     />
                   </div>
                   {Array.isArray(storeDetailItem.tags) && storeDetailItem.tags.length > 0 && (
@@ -2729,7 +2729,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                             </div>
                             <div
                               className="prose prose-sm max-w-none text-sm leading-6 dark:prose-invert"
-                              dangerouslySetInnerHTML={renderPluginPageHtml(selectedPageContent, selectedPage?.contentType)}
+                              data-no-translate="" dangerouslySetInnerHTML={renderPluginPageHtml(selectedPageContent, selectedPage?.contentType)}
                             />
                           </div>
                         </>

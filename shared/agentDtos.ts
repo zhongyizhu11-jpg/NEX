@@ -79,7 +79,11 @@ export type AgentHostProbeServiceResult = {
   isTimeout?: boolean;
   probeCount?: number;
   probeSuccesses?: number;
-  method?: "tcping" | "ping" | string;
+  method?: "tcping" | "ping" | "http" | string;
+  /** 探不通时是哪一种不通（shared/hostProbeService）；Agent 2.2.236 起带，URL 连接检测多 http_status / tls 两种。 */
+  failure?: string;
+  /** URL 连接检测拿到的 HTTP 状态码（Agent 2.2.255 起）；没拿到响应就不带。 */
+  httpStatus?: number;
 };
 export type AgentForwardGroupLatencyResult = AgentProbeCounter & {
   groupId: number;

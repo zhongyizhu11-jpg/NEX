@@ -137,6 +137,19 @@ export const PROXY_CLIENT_TARGETS: readonly ProxyClientTarget[] = [
     profileImport: { buildImportUrl: (url) => `surge:///install-config?url=${q(url)}` },
   },
   {
+    id: "egern",
+    label: "Egern",
+    shortLabel: "Egern",
+    // 只标 iOS：别的平台上有没有、认不认这个 scheme 没核实，宁可少一格也不摆一个点不动的按钮。
+    platforms: ["ios"],
+    format: "egern",
+    // 官方 URL Scheme 文档：egern:/subscriptions/new?url=…（单斜杠）。加的是订阅（节点进默认的外部组），
+    // 正好对应节点订阅那份只有 proxies 的 YAML。
+    buildImportUrl: (url) => `egern:/subscriptions/new?url=${q(url)}`,
+    // 完整配置没有文档里的导入 scheme，走手动；配置里带 auto_update，导进去之后会自己更新。
+    profileImport: { manualHint: "在 Egern 的配置文件列表里选「从 URL 添加」，粘贴这条地址，之后切到这份配置" },
+  },
+  {
     id: "quantumultx",
     label: "Quantumult X",
     shortLabel: "QuantumultX",
@@ -320,7 +333,7 @@ export const PROXY_SUBSCRIPTION_KIND_LABELS: Record<ProxySubscriptionKind, strin
 
 export const PROXY_SUBSCRIPTION_KIND_HINTS: Record<ProxySubscriptionKind, string> = {
   nodes: "只有节点，分流规则由你在客户端里自己配。所有客户端都适用。",
-  rules: "一份完整配置：节点、策略组（自动选路、负载均衡）和分流规则一起给，导入后不用再设置。Clash、sing-box、Surge、Loon、Quantumult X、Shadowrocket 都有；Shadowrocket 的节点仍来自节点订阅。",
+  rules: "一份完整配置：节点、策略组（自动选路、负载均衡）和分流规则一起给，导入后不用再设置。Clash、sing-box、Surge、Loon、Quantumult X、Shadowrocket、Egern 都有；Shadowrocket 的节点仍来自节点订阅。",
 };
 
 /**
@@ -368,11 +381,14 @@ export function buildProxySubscriptionUrl(options: {
   pinFormat?: boolean;
   /** 给了就拼成短链 /s/<别名>（内容和 /api/sub/<令牌> 一样），不给就用令牌。 */
   alias?: string;
+  /** 只要 IPv4 / 只要 IPv6（shared/proxySubIpVersion.ts）。不给 = 照旧按域名 / 首选地址。 */
+  ipVersion?: "4" | "6" | null;
 }): string {
   const params = new URLSearchParams();
   if (options.format !== "base64" || options.pinFormat) params.set("format", options.format);
   // rules=1 表示按订阅链接上配置的预设来，具体档位不暴露在地址里。
   if (options.kind === "rules") params.set("rules", "1");
+  if (options.ipVersion === "4" || options.ipVersion === "6") params.set("ipVersion", options.ipVersion);
   const query = params.toString();
   const path = options.alias ? `/s/${options.alias}` : `/api/sub/${options.token}`;
   return `${options.origin.replace(/\/+$/, "")}${path}${query ? `?${query}` : ""}`;

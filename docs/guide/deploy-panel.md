@@ -68,6 +68,25 @@ sudo bash /opt/forwardx-panel/scripts/install-panel-local.sh reset-admin
 
 如果自定义过容器名，请将命令中的 `forwardx-panel` 替换为实际容器名；也可以先进入容器，再运行 `node dist/reset-admin-password.js`。
 
+## SSH 管理命令 fwxm
+
+用一键脚本安装或升级面板后，SSH 里可以直接用 `fwxm` 管理面板，不需要打开网页（2.3.525 起）：
+
+```bash
+fwxm                 # 交互菜单
+fwxm status          # 运行状态
+fwxm logs            # 跟踪面板日志（Ctrl+C 退出）
+fwxm restart         # 重启面板
+fwxm address         # 按本机 IP 和端口拼出访问地址
+fwxm upgrade         # 升级到最新发布版，保留数据和配置
+fwxm reset-admin     # 重置管理员密码
+fwxm uninstall       # 卸载（会再确认是否删数据）
+```
+
+同一台机器上还装了 Agent 时，`fwxm` 默认管 Agent，面板的命令前面加 `panel`，例如 `fwxm panel status`；不带参数运行会先问要管理哪一个。非 root 用户在前面加 `sudo`。
+
+Docker 部署的 `fwxm upgrade` 和 `fwxm uninstall` 会按部署目录 `.env` 里的 GitHub 加速站下载安装脚本再执行；本地部署直接用部署目录里的脚本。手动部署的面板没有这个命令。
+
 ## Docker 手动部署
 
 如果你不想使用一键脚本，也可以手动创建 Docker Compose。下面以 `/opt/forwardx-docker` 为例。

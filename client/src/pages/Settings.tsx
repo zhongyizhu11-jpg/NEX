@@ -1,4 +1,5 @@
 import { resolveSiteTitle } from "@shared/brand";
+import { AUTH_CAPTCHA_MODE_LABELS, AUTH_CAPTCHA_MODES, normalizeAuthCaptchaMode, type AuthCaptchaMode } from "@shared/authCaptchaMode";
 import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { FormField } from "@/components/ui/form-field";
@@ -36,6 +37,10 @@ import { EntityActions } from "@/components/entity/EntityActions";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
+import { UiThemeManagerCard } from "@/components/settings/UiThemeManagerCard";
+import { UiThemeSwatch } from "@/components/settings/UiThemeSwatch";
+import { useUiThemeOptions } from "@/hooks/useUiThemeOptions";
+import { setInstalledUiThemes, uiThemeListKey } from "@/lib/installedUiThemes";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { pollingInterval } from "@/lib/polling";
 import { mobileAuth } from "@/lib/mobileAuth";
@@ -43,7 +48,7 @@ import { trpc } from "@/lib/trpc";
 import { getPanelUpgradeProgress, PANEL_UPGRADE_REFRESH_DELAY_SECONDS } from "@/lib/panelUpgrade";
 import { compressImageFile, imageDataUrlSize } from "@/lib/imageUpload";
 import { downloadTextFile, type TextDownloadFile } from "@/lib/fileDownload";
-import { applyPersonalizationSurface, applyPersonalizationTheme, setUiThemeOverride } from "@/lib/personalizationTheme";
+import { applyPersonalizationSurface, applyPersonalizationTheme, setPersonalizationPreview, setUiThemeOverride } from "@/lib/personalizationTheme";
 import { cn } from "@/lib/utils";
 import {
   FORWARD_PROTOCOL_LABELS,
@@ -117,6 +122,8 @@ import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSectio
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import GoogleLoginSettingsCard from "@/components/settings/GoogleLoginSettingsCard";
 import DiscordSettingsCard from "@/components/settings/DiscordSettingsCard";
+import DnspodRecordsCard from "@/components/settings/DnspodRecordsCard";
+import OidcLoginSettingsCard from "@/components/settings/OidcLoginSettingsCard";
 import PanelProfilingCard from "@/components/settings/PanelProfilingCard";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
@@ -132,7 +139,6 @@ import {
   BUILTIN_WALLPAPERS,
   DEFAULT_PERSONALIZATION_BACKGROUND,
   PERSONALIZATION_CARD_STYLES,
-  PERSONALIZATION_UI_THEMES,
   PERSONALIZATION_PAGE_TINTS,
   PERSONALIZATION_THEME_PRESETS,
   isHexColor,
@@ -143,8 +149,8 @@ import {
   LIQUID_GLASS_PHOTO_SOURCES,
   LIQUID_GLASS_LAYOUTS,
   type LiquidGlassConfig,
-  normalizePersonalizationUiTheme,
   normalizePersonalizationPageTint,
+  normalizePersonalizationUiTheme,
   personalizationSwatchGradient,
   clampBackgroundBlur,
   clampBackgroundOpacity,
@@ -845,7 +851,7 @@ function SettingsContent() {
   );
 }
 
-/** 日志时间：「09-23 12:51:27」。日志只保留 24 小时，年份和上下午都是多余的。 */
+/** 日志时间：「09-23 12:51:27」。日志只保留三天（今天和前两天），年份和上下午都是多余的。 */
 function formatLogTime(value: string | number | Date) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
@@ -955,7 +961,7 @@ function PanelLogsSection() {
                 <FileText className="h-4 w-4 text-primary" />
                 面板日志
               </CardTitle>
-              <CardDescription>最近 24 小时运行日志。</CardDescription>
+              <CardDescription>今天和前两天的运行日志（按北京时间零点切）。</CardDescription>
             </div>
             {/*
               原来这里并排五样：一个「导出级别」选择框、导出、刷新、生成支持包、一个红色实心的
@@ -997,7 +1003,7 @@ function PanelLogsSection() {
                   onSelect: () => {
                     void confirmDialog({
                       title: "清空面板日志",
-                      description: "最近 24 小时的面板日志会全部删除，删除后无法恢复。需要留底的话先导出。",
+                      description: "最近三天的面板日志会全部删除，删除后无法恢复。需要留底的话先导出。",
                       confirmText: "清空",
                       tone: "destructive",
                     }).then((confirmed) => {
@@ -1041,7 +1047,7 @@ function PanelLogsSection() {
                   <div key={entry.id} className="grid gap-x-2 sm:grid-cols-[112px_48px_1fr]">
                     {/*
                       原来是 toLocaleString()：英文系统上是「9/23/2026, 12:51:27 PM」，150px 的列放不下，
-                      每一条都折成两行，一屏只剩一半的日志。日志只看最近 24 小时，年份不用写；
+                      每一条都折成两行，一屏只剩一半的日志。日志只看最近三天，年份不用写；
                       固定成「09-23 12:51:27」，完整时间悬停看。
                     */}
                     <span className="whitespace-nowrap text-muted-foreground" title={new Date(entry.createdAt).toLocaleString()}>
@@ -3265,6 +3271,8 @@ function PersonalizationSettingsSection() {
   const [savedCardStyle, setSavedCardStyle] = useState<string>("edge");
   const [uiTheme, setUiTheme] = useState<string>("classic");
   const [savedUiTheme, setSavedUiTheme] = useState<string>("classic");
+  /* 能选的主题：内置的三套 + 装着的主题包（下面「主题管理」里装 / 卸，名单跟着变） */
+  const uiThemeOptions = useUiThemeOptions();
   /* 这台设备在顶栏调色盘里给自己选的主题；有它时页面显示的是它，不是下面存的站点默认 */
   const uiThemeOverride = useUiThemeOverride();
   const [liquidGlass, setLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
@@ -3299,7 +3307,8 @@ function PersonalizationSettingsSection() {
     const nextCardStyle = normalizePersonalizationCardStyle((settings as any).personalizationCardStyle);
     setCardStyle(nextCardStyle);
     setSavedCardStyle(nextCardStyle);
-    const nextUiTheme = normalizePersonalizationUiTheme((settings as any).personalizationUiTheme);
+    // 服务端已经按「内置 + 已安装的主题包」核对过这个值，这里不再用只认内置的那份名单过一遍
+    const nextUiTheme = String(settings.personalizationUiTheme || "classic");
     setUiTheme(nextUiTheme);
     setSavedUiTheme(nextUiTheme);
     const nextLiquidGlass = normalizeLiquidGlassConfig((settings as any).personalizationLiquidGlass);
@@ -3335,12 +3344,31 @@ function PersonalizationSettingsSection() {
   useEffect(() => {
     if (settingsRef.current) loadPersonalizationFromSettings(settingsRef.current);
   }, [personalizationSnapshot, loadPersonalizationFromSettings]);
-  const settingsUiTheme = settings ? normalizePersonalizationUiTheme((settings as any).personalizationUiTheme) : null;
+  const settingsUiTheme = settings ? String(settings.personalizationUiTheme || "classic") : null;
   useEffect(() => {
     if (!settingsUiTheme) return;
     setUiTheme(settingsUiTheme);
     setSavedUiTheme(settingsUiTheme);
   }, [settingsUiTheme]);
+  /*
+    getSettings 带着的「已安装主题包」名单：和上面的站点默认是同一次请求里的，拿它当准。
+    · 写进浏览器这头的名单（lib/installedUiThemes），上面的 uiThemeOptions、顶栏调色盘马上就有它们，
+      不用等 publicInfo 下一次刷新；
+    · 试看着的那套主题包刚被卸载了：回到存着的站点默认（它也没了就是经典）。只按这份名单判断 ——
+      用 uiThemeOptions 判断的话，设置先到、名单后到的那一下会把一个装着的主题误当成「没了」。
+  */
+  const settingsInstalledUiThemeKey = uiThemeListKey(settings?.installedUiThemes);
+  useEffect(() => {
+    if (settingsInstalledUiThemeKey === null) return;
+    setInstalledUiThemes(settingsRef.current?.installedUiThemes);
+  }, [settingsInstalledUiThemeKey]);
+  useEffect(() => {
+    if (settingsInstalledUiThemeKey === null) return;
+    const installedIds = settingsInstalledUiThemeKey.split(",").map((item) => item.split("@")[0]).filter(Boolean);
+    const known = (id: string) => normalizePersonalizationUiTheme(id, installedIds) === id;
+    if (known(uiTheme)) return;
+    setUiTheme(known(savedUiTheme) ? savedUiTheme : "classic");
+  }, [settingsInstalledUiThemeKey, uiTheme, savedUiTheme]);
 
   const updateSettingsMutation = trpc.system.updateSettings.useMutation({
     onSuccess: async () => {
@@ -3647,11 +3675,14 @@ function PersonalizationSettingsSection() {
     const changed = personalizationTheme !== saved.theme || pageTint !== saved.pageTint || cardStyle !== saved.cardStyle || uiTheme !== saved.uiTheme;
     if (!changed && !previewTouchedRef.current) return;
     previewTouchedRef.current = changed;
+    // 记成「试看中」：PersonalizationLayer 之后再重挂（深浅色、淡入改了 class）也挂这一份，不会把它改回存着的
+    setPersonalizationPreview(changed ? { theme: personalizationTheme, pageTint, cardStyle, uiTheme } : null);
     applyPersonalizationTheme(personalizationTheme);
     // 试看的是站点默认那一套：绕过顶栏给自己选的；什么都没改时回到平常的规矩
     applyPersonalizationSurface({ pageTint, cardStyle, uiTheme, ignoreOverride: changed });
   }, [settings, personalizationTheme, pageTint, cardStyle, uiTheme, savedPersonalizationTheme, savedPageTint, savedCardStyle, savedUiTheme]);
   useEffect(() => () => {
+    setPersonalizationPreview(null);
     if (!previewTouchedRef.current) return;
     const saved = savedLookRef.current;
     applyPersonalizationTheme(saved.theme);
@@ -3791,7 +3822,7 @@ function PersonalizationSettingsSection() {
     return <DataSectionLoading label="正在加载个性化配置" minHeight="min-h-[220px]" />;
   }
 
-  const previewUiTheme = PERSONALIZATION_UI_THEMES.find((theme) => theme.id === uiTheme) || PERSONALIZATION_UI_THEMES[0];
+  const previewUiTheme = uiThemeOptions.find((theme) => theme.id === uiTheme) || uiThemeOptions[0];
 
   return (
     <div className="space-y-4">
@@ -3813,7 +3844,7 @@ function PersonalizationSettingsSection() {
           </span>
           <b className="fx-brand-preview-name">{siteTitleInput.trim() || "NEX"}</b>
           <span className="fx-brand-preview-meta">
-            <UiThemeDot id={previewUiTheme.id} />
+            <UiThemeDot theme={previewUiTheme} />
             {previewUiTheme.name}
             {uiThemeDirty ? <em>试看中，未保存</em> : null}
           </span>
@@ -3999,7 +4030,7 @@ function PersonalizationSettingsSection() {
               界面主题
             </CardTitle>
             <CardDescription>
-              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；顶栏的调色盘和这里是同一个设置，在那里换也会存到这里。App 要更新到新版本才会跟着变。
+              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；顶栏的调色盘和这里是同一个设置，在那里换也会存到这里。这里列的是面板自带的三套和已经安装的主题包，更多主题在下面的「主题管理」里安装。
             </CardDescription>
           </div>
           <Button
@@ -4017,7 +4048,7 @@ function PersonalizationSettingsSection() {
           {uiThemeOverride && uiThemeOverride !== savedUiTheme ? (
             <div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)] bg-[var(--fx-warn-soft)] px-3 py-2.5 text-xs leading-5 text-[var(--fx-warn-text)] sm:flex-row sm:items-center sm:justify-between">
               <span>
-                这台设备在顶栏调色盘里选了「{PERSONALIZATION_UI_THEMES.find((theme) => theme.id === uiThemeOverride)?.name || uiThemeOverride}」，它盖过了这里的站点默认，所以你现在看到的是它。在这里保存主题，这台设备会自动改回跟随站点默认。
+                这台设备在顶栏调色盘里选了「{uiThemeOptions.find((theme) => theme.id === uiThemeOverride)?.name || uiThemeOverride}」，它盖过了这里的站点默认，所以你现在看到的是它。在这里保存主题，这台设备会自动改回跟随站点默认。
               </span>
               <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setUiThemeOverride(null)}>
                 跟随站点默认
@@ -4025,7 +4056,7 @@ function PersonalizationSettingsSection() {
             </div>
           ) : null}
           <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-3">
-            {PERSONALIZATION_UI_THEMES.map((theme) => {
+            {uiThemeOptions.map((theme) => {
               const active = uiTheme === theme.id;
               const deviceActive = (uiThemeOverride || savedUiTheme) === theme.id;
               return (
@@ -4040,9 +4071,7 @@ function PersonalizationSettingsSection() {
                     active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
                   )}
                 >
-                  <span className="fx-uitheme-swatch" data-theme={theme.id} aria-hidden="true">
-                    <i /><i /><b />
-                  </span>
+                  <UiThemeSwatch id={theme.id} preview={theme.preview} builtin={theme.builtin} />
                   <span className="flex items-center justify-between gap-2">
                     <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{theme.name}</span>
                     {active ? <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" /> : null}
@@ -4057,6 +4086,9 @@ function PersonalizationSettingsSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 主题管理：装 / 更新 / 卸载主题包（官方主题库、上传、链接）。装好的出现在上面那张卡片里。 */}
+      <UiThemeManagerCard />
 
       {/* 布局密度：站点默认（standard / compact），每个账号可以在个人资料里覆盖。点了就存，不走上面的保存条。 */}
       <LayoutDefaultCard />
@@ -4918,6 +4950,9 @@ function SystemInfoSection() {
   const [panelSslCountdown, setPanelSslCountdown] = useState(5);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [authCaptchaEnabled, setAuthCaptchaEnabled] = useState(true);
+  const [authCaptchaMode, setAuthCaptchaMode] = useState<AuthCaptchaMode>("click");
+  const [telegramLoginEnabled, setTelegramLoginEnabled] = useState(true);
+  const [passwordResetEnabled, setPasswordResetEnabled] = useState(true);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [lookingGlassUserEnabled, setLookingGlassUserEnabled] = useState(true);
   const [forwardProtocols, setForwardProtocols] = useState<ForwardProtocolSettings>(() => normalizeForwardProtocolSettings());
@@ -4995,6 +5030,9 @@ function SystemInfoSection() {
       setPanelSslKeyPemSaved(!!settings.panelSsl?.keyPemConfigured);
       setRegistrationEnabled(settings.registrationEnabled ?? true);
       setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
+      setAuthCaptchaMode(normalizeAuthCaptchaMode(settings.authCaptchaMode));
+      setTelegramLoginEnabled(settings.telegramLoginEnabled !== false);
+      setPasswordResetEnabled(settings.passwordResetEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
@@ -5297,10 +5335,12 @@ function SystemInfoSection() {
   };
 
   const handleSaveRegistration = () => {
-    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled }, {
+    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled, authCaptchaMode, telegramLoginEnabled, passwordResetEnabled }, {
       onSuccess: () => {
+        void utils.system.publicInfo.invalidate();
         void utils.auth.emailConfig.invalidate();
         void utils.auth.needsCaptcha.invalidate();
+        void utils.auth.passwordResetOptions.invalidate();
       },
     });
   };
@@ -5526,7 +5566,7 @@ function SystemInfoSection() {
     { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
     { id: "portAccessLimits", label: "接入限制", dirty: !!settings && portAccessLimitsEnabled !== !!(settings as any).portAccessLimitsEnabled, save: handleSavePortAccessLimits },
     { id: "linkWizard", label: "新建向导", dirty: !!settings && linkWizardEnabled !== !!(settings as any).linkWizardEnabled, save: handleSaveLinkWizard },
-    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true)), save: handleSaveRegistration },
+    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true) || authCaptchaMode !== normalizeAuthCaptchaMode(settings.authCaptchaMode) || telegramLoginEnabled !== (settings.telegramLoginEnabled !== false) || passwordResetEnabled !== (settings.passwordResetEnabled ?? true)), save: handleSaveRegistration },
     { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
     { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
     {
@@ -6203,10 +6243,10 @@ function SystemInfoSection() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <UserPlus className="h-4 w-4 text-primary" />
-              用户注册
+              注册与登录
             </CardTitle>
             <CardDescription>
-              控制新用户自助注册。
+              控制新用户自助注册，以及登录页的人机验证、找回密码和 Telegram 登录。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -6223,10 +6263,43 @@ function SystemInfoSection() {
                 description="默认开启。只走 HTTP、浏览器跑不了验证组件时可以关掉；关掉后密码校验、登录失败限流和双重验证照旧。"
                 control={<Checkbox aria-label="登录 / 注册人机验证" checked={authCaptchaEnabled} onCheckedChange={setAuthCaptchaEnabled} />}
               />
+              {/*
+                验证方式（上游 2.3.286）：服务端只认选中的那一种，另一种的答案按验证失败算、挑战也不发
+                （server/authCaptchaMode.ts）。登录、注册、忘记密码三处都跟着它。
+              */}
+              <SettingRow
+                label="人机验证方式"
+                description={authCaptchaMode === "image"
+                  ? "图片验证码：看图填字符，不依赖浏览器跑验证脚本，老浏览器、只走 HTTP 的环境也能用。"
+                  : "点击验证：点一下，浏览器在后台算一小段工作量证明，不用看图打字。"}
+                control={(
+                  <SegmentedControl<AuthCaptchaMode>
+                    ariaLabel="人机验证方式"
+                    className="grid grid-cols-2 gap-1"
+                    optionClassName="px-2.5"
+                    disabled={!authCaptchaEnabled}
+                    value={authCaptchaMode}
+                    options={AUTH_CAPTCHA_MODES.map((value) => ({ value, label: AUTH_CAPTCHA_MODE_LABELS[value] }))}
+                    onChange={setAuthCaptchaMode}
+                  />
+                )}
+              />
+              <SettingRow
+                asLabel
+                label="Telegram 登录"
+                description="默认开启。关掉后登录页不再显示 Telegram 登录，机器人发的网页登录链接、WebApp 自动登录、App 里的 Telegram 登录都不能用；机器人通知和账号绑定照旧。"
+                control={<Checkbox aria-label="Telegram 登录" checked={telegramLoginEnabled} onCheckedChange={setTelegramLoginEnabled} />}
+              />
+              <SettingRow
+                asLabel
+                label="登录页「忘记密码」"
+                description="默认开启。用户填用户名或邮箱，一次性重置链接发到他已验证的邮箱、已绑定的 Telegram / Discord（30 分钟有效）。需要先配好面板公开访问地址和至少一个发送渠道；账号没有找回方式时，页面提示联系管理员。"
+                control={<Checkbox aria-label="登录页忘记密码" checked={passwordResetEnabled} onCheckedChange={setPasswordResetEnabled} />}
+              />
             </SettingList>
             <div className="flex justify-end">
               <Button data-dock-save onClick={handleSaveRegistration} disabled={isSavingSetting("registration")}>
-                保存注册设置
+                保存注册与登录设置
               </Button>
             </div>
           </CardContent>
@@ -6261,6 +6334,8 @@ function SystemInfoSection() {
       </div>
 
       <GoogleLoginSettingsCard />
+
+      <OidcLoginSettingsCard />
 
       <DiscordSettingsCard />
 
@@ -6529,6 +6604,9 @@ function SystemInfoSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 记录管理用的是已保存的腾讯云凭据，所以按已保存的服务商判断，不看表单里还没存的选择 */}
+      {settings?.ddns?.provider === "tencentcloud" && <DnspodRecordsCard />}
 
       <Card className="border-border bg-card">
         <CardHeader>

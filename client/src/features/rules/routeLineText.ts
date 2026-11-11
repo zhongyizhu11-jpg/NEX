@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
 import { describeRouteIssue, normalizeRouteDelivery, routeSwitchWithinSeconds, type RouteMode } from "@shared/routeGroup";
 import type { RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
@@ -145,7 +146,7 @@ export function routeLineSubtitle(status: RouteStatus | null, mode: RouteMode) {
 /** 时:分:秒（按给的时区）。 */
 export function lineClockText(ms: number, timeZone?: string) {
   try {
-    return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone }).format(new Date(ms));
+    return new Intl.DateTimeFormat(getFormatLocale(), { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone }).format(new Date(ms));
   } catch {
     return new Date(ms).toTimeString().slice(0, 8);
   }

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { CollapsibleSection, Row } from "./HostDetailDialog";
+import HostIpIntelPanel from "./HostIpIntelPanel";
 import { hostGeoTooltip, hostNetworkText, hostRegionText } from "./hostDisplay";
 
 /*
@@ -25,6 +27,7 @@ import { hostGeoTooltip, hostNetworkText, hostRegionText } from "./hostDisplay";
   主机侧检测（双栈、25 端口、DNSBL）要 Agent 2.2.226：每 6 小时测一次，管理员可以点「重新检测」。
   更旧的 Agent 只能从面板服务器查 DNSBL —— 那是面板的解析器在查，不是主机的。
   运营商 / ASN 跟地区一起由定位服务给（主机行上的 geoAsn / geoIsp / geoOrg），不需要 Agent。
+  下面的「IP 信息」（原生 / 广播、IP 类型、风险）是 Agent 2.2.255 起的另一块，见 HostIpIntelPanel。
 */
 
 type Tone = "good" | "warn" | "bad" | "muted";
@@ -62,7 +65,7 @@ const SMTP_TONE: Record<Smtp25Status, Tone> = { open: "good", blocked: "warn", t
 function formatChecked(sec: number | null | undefined) {
   if (!sec) return "—";
   const date = new Date(sec * 1000);
-  return `${formatAgo(Date.now() - date.getTime())} · ${date.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+  return `${formatAgo(Date.now() - date.getTime())} · ${date.toLocaleString(getFormatLocale(), { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function FamilyValue({ check, fallback }: { check: NetProfileReport["ipv4"] | null | undefined; fallback: string }) {
@@ -226,6 +229,7 @@ function HostNetProfileBody({ host, canManage }: { host: any; canManage: boolean
       {!data && query.isLoading ? <p className="text-meta text-muted-foreground">读取中…</p> : null}
       {data?.timedOut ? <p className="text-meta text-[var(--fx-warn-text)]">上次「重新检测」Agent 一直没回结果，可能离线了。</p> : null}
       {profile ? <RawDetails profile={profile} /> : null}
+      <HostIpIntelPanel hostId={hostId} canManage={canManage} />
       {canManage ? (
         <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
           <Button

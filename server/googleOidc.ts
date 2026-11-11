@@ -22,8 +22,31 @@
     发起时记下当时的配置指纹（客户端 ID / 密钥 / 回调地址的哈希），回调时配置已经变了就不认这次登录。
 */
 import crypto from "node:crypto";
-import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import type { GoogleLoginMode } from "../shared/googleLogin";
+import {
+  JwksKeyStore,
+  OAUTH_RESPONSE_MAX_BYTES,
+  OAuthStateStore,
+  parseCompactJws,
+  parseJsonObject,
+  readCappedResponseText,
+  timingSafeEqualText,
+  verifyJwsSignature,
+  type FetchLike,
+  type OAuthStateEntry,
+  type OAuthStateInput,
+} from "./oauthPrimitives";
+
+// 这几样原来就定义在这里，后来抽到 server/oauthPrimitives.ts 和通用 OIDC 共用；原名照旧导出，旧的 import 不用改。
+export {
+  createPkcePair,
+  jwksMaxAgeMs,
+  randomUrlToken,
+  readCappedResponseText,
+  sha256Base64Url,
+  timingSafeEqualText,
+  type FetchLike,
+} from "./oauthPrimitives";
 
 export const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -36,7 +59,7 @@ export const GOOGLE_STATE_MAX_ENTRIES = 10_000;
 export const GOOGLE_CLOCK_SKEW_SECONDS = 60;
 const GOOGLE_HTTP_TIMEOUT_MS = 10_000;
 /** Google 的 token / JWKS 响应只有几 KB；多出来的不读，免得被一个异常的大响应拖住。 */
-export const GOOGLE_RESPONSE_MAX_BYTES = 128 * 1024;
+export const GOOGLE_RESPONSE_MAX_BYTES = OAUTH_RESPONSE_MAX_BYTES;
 /** 同时在换票的回调数上限：到了就直接拒绝，不排队（排队只会攒一堆挂着的登录请求）。 */
 export const GOOGLE_MAX_CONCURRENT_EXCHANGES = 32;
 
@@ -46,20 +69,6 @@ export class GoogleOidcError extends Error {
     super(message);
     this.name = "GoogleOidcError";
   }
-}
-
-export function randomUrlToken(bytes = 32) {
-  return crypto.randomBytes(bytes).toString("base64url");
-}
-
-export function sha256Base64Url(value: string) {
-  return crypto.createHash("sha256").update(value).digest("base64url");
-}
-
-/** RFC 7636：verifier 是 43~128 个 unreserved 字符；32 字节随机数 base64url 后正好 43 个。 */
-export function createPkcePair() {
-  const verifier = randomUrlToken(32);
-  return { verifier, challenge: sha256Base64Url(verifier), method: "S256" as const };
 }
 
 /**
@@ -72,131 +81,17 @@ export function googleConfigFingerprint(config: { clientId: string; clientSecret
     .digest("base64url");
 }
 
-/** 读响应正文，最多 maxBytes 字节（按实际读到的算，不信 Content-Length）；超了抛错并丢掉剩下的。 */
-export async function readCappedResponseText(response: Response, maxBytes = GOOGLE_RESPONSE_MAX_BYTES) {
-  const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error("response too large");
-  }
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new Error("response too large");
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
-}
-
 async function readCappedJson(response: Response) {
-  const text = await readCappedResponseText(response);
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-export function timingSafeEqualText(a: string, b: string) {
-  const left = Buffer.from(String(a));
-  const right = Buffer.from(String(b));
-  if (left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
+  return parseJsonObject(await readCappedResponseText(response, GOOGLE_RESPONSE_MAX_BYTES));
 }
 
 // ---------- state 存储 ----------
 
-export type GoogleAuthStateEntry = {
-  mode: GoogleLoginMode;
-  /** 登录成功后跳回的相对路径（已经过 sanitizeRedirectPath）。 */
-  redirectPath: string;
-  codeVerifier: string;
-  nonce: string;
-  /** 浏览器绑定 cookie 的 sha256。 */
-  bindingHash: string;
-  /** 绑定模式：发起时登录着的用户；回调时必须还是这个人。 */
-  userId: number | null;
-  /** App 模式：对应的 App 登录流程。 */
-  appFlowId: string | null;
-  /** 从邀请链接进来时的邀请码（已过 sanitizeGoogleInviteCode），只在 Google 注册新账号时用。 */
-  inviteCode?: string | null;
-  /** 发起时的配置指纹（googleConfigFingerprint）；回调时配置变了就不认。 */
-  configHash?: string | null;
-  createdAt: number;
-  expiresAt: number;
-};
+// 规则见 server/oauthPrimitives.ts 的 OAuthStateStore（和通用 OIDC 登录共用）。
+export type GoogleAuthStateEntry = OAuthStateEntry<GoogleLoginMode>;
+export type GoogleAuthStateInput = OAuthStateInput<GoogleLoginMode>;
 
-export type GoogleAuthStateInput = Omit<GoogleAuthStateEntry, "createdAt" | "expiresAt" | "codeVerifier" | "nonce" | "bindingHash"> & {
-  binding: string;
-};
-
-export class GoogleAuthStateStore {
-  private readonly entries = new Map<string, GoogleAuthStateEntry>();
-
-  constructor(
-    private readonly options: { ttlMs?: number; maxEntries?: number; now?: () => number } = {},
-  ) {}
-
-  private now() {
-    return (this.options.now || Date.now)();
-  }
-
-  get size() {
-    return this.entries.size;
-  }
-
-  prune() {
-    const now = this.now();
-    return pruneMapEntries(this.entries, (entry) => entry.expiresAt <= now);
-  }
-
-  /** 发起一次登录：返回 state、给 Google 的 code_challenge 和 nonce。 */
-  create(input: GoogleAuthStateInput) {
-    this.prune();
-    const now = this.now();
-    const state = randomUrlToken(32);
-    const pkce = createPkcePair();
-    const nonce = randomUrlToken(32);
-    const entry: GoogleAuthStateEntry = {
-      mode: input.mode,
-      redirectPath: input.redirectPath,
-      userId: input.userId,
-      appFlowId: input.appFlowId,
-      inviteCode: input.inviteCode ?? null,
-      configHash: input.configHash ?? null,
-      codeVerifier: pkce.verifier,
-      nonce,
-      bindingHash: sha256Base64Url(input.binding),
-      createdAt: now,
-      expiresAt: now + (this.options.ttlMs ?? GOOGLE_STATE_TTL_MS),
-    };
-    setBoundedMapValue(this.entries, state, entry, this.options.maxEntries ?? GOOGLE_STATE_MAX_ENTRIES);
-    return { state, codeChallenge: pkce.challenge, nonce, entry };
-  }
-
-  /**
-   * 取出并作废。不管后面成不成功，一个 state 只能用一次；过期、cookie 对不上一律 null。
-   * 先删后判：哪怕 cookie 不对，这个 state 也废了（拿着它反复试 cookie 没有意义）。
-   */
-  consume(state: unknown, binding: unknown): GoogleAuthStateEntry | null {
-    if (typeof state !== "string" || state.length < 16 || state.length > 128) return null;
-    const entry = this.entries.get(state);
-    if (!entry) return null;
-    this.entries.delete(state);
-    if (entry.expiresAt <= this.now()) return null;
-    if (typeof binding !== "string" || !binding) return null;
-    if (!timingSafeEqualText(sha256Base64Url(binding), entry.bindingHash)) return null;
-    return entry;
-  }
-}
+export class GoogleAuthStateStore extends OAuthStateStore<GoogleLoginMode> {}
 
 export function buildGoogleAuthorizationUrl(input: {
   clientId: string;
@@ -223,8 +118,6 @@ export function buildGoogleAuthorizationUrl(input: {
 }
 
 // ---------- 换票 ----------
-
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 let activeExchanges = 0;
 
@@ -287,83 +180,39 @@ async function exchangeGoogleAuthorizationCodeUnbounded(input: {
 
 // ---------- JWKS ----------
 
-type Jwk = { kid?: string; kty?: string; alg?: string; use?: string; n?: string; e?: string };
-
-const JWKS_DEFAULT_MAX_AGE_MS = 60 * 60 * 1000;
-const JWKS_MIN_MAX_AGE_MS = 5 * 60 * 1000;
-const JWKS_MAX_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const JWKS_FORCED_REFRESH_INTERVAL_MS = 60 * 1000;
-
-export function jwksMaxAgeMs(cacheControl: string | null | undefined) {
-  const match = String(cacheControl || "").match(/max-age=(\d+)/i);
-  if (!match) return JWKS_DEFAULT_MAX_AGE_MS;
-  const ms = Number(match[1]) * 1000;
-  return Math.min(JWKS_MAX_MAX_AGE_MS, Math.max(JWKS_MIN_MAX_AGE_MS, ms));
-}
-
 export class GoogleJwksCache {
-  private keys = new Map<string, crypto.KeyObject>();
-  private expiresAt = 0;
-  private lastFetchAt = 0;
-  private inflight: Promise<void> | null = null;
+  private readonly store: JwksKeyStore;
 
-  constructor(private readonly options: { url?: string; fetchImpl?: FetchLike; now?: () => number } = {}) {}
-
-  private now() {
-    return (this.options.now || Date.now)();
-  }
-
-  private async refresh() {
-    if (this.inflight) return this.inflight;
-    this.inflight = (async () => {
-      this.lastFetchAt = this.now();
-      let response: Response;
-      try {
-        response = await (this.options.fetchImpl || fetch)(this.options.url || GOOGLE_JWKS_URL, {
-          headers: { Accept: "application/json" },
-          redirect: "error",
-          signal: AbortSignal.timeout(GOOGLE_HTTP_TIMEOUT_MS),
-        });
-      } catch (error) {
-        throw new GoogleOidcError("token_invalid", `jwks unreachable: ${error instanceof Error ? error.name : "error"}`);
-      }
-      if (!response.ok) throw new GoogleOidcError("token_invalid", `jwks http_${response.status}`);
-      let data: any = null;
-      try {
-        data = await readCappedJson(response);
-      } catch {
-        throw new GoogleOidcError("token_invalid", "jwks response too large");
-      }
-      const next = new Map<string, crypto.KeyObject>();
-      for (const jwk of Array.isArray(data?.keys) ? (data.keys as Jwk[]) : []) {
-        if (!jwk?.kid || jwk.kty !== "RSA" || !jwk.n || !jwk.e) continue;
-        if (jwk.alg && jwk.alg !== "RS256") continue;
-        if (jwk.use && jwk.use !== "sig") continue;
+  constructor(private readonly options: { url?: string; fetchImpl?: FetchLike; now?: () => number } = {}) {
+    // 缓存、强刷节奏、JWK 导入都在 server/oauthPrimitives.ts 的 JwksKeyStore；Google 只用 RS256。
+    this.store = new JwksKeyStore({
+      allowedAlgs: ["RS256"],
+      now: options.now,
+      error: (message) => new GoogleOidcError("token_invalid", message),
+      load: async () => {
+        let response: Response;
         try {
-          next.set(jwk.kid, crypto.createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" }));
-        } catch {
-          // 坏的一把钥匙跳过，别的照用
+          response = await (this.options.fetchImpl || fetch)(this.options.url || GOOGLE_JWKS_URL, {
+            headers: { Accept: "application/json" },
+            redirect: "error",
+            signal: AbortSignal.timeout(GOOGLE_HTTP_TIMEOUT_MS),
+          });
+        } catch (error) {
+          throw new GoogleOidcError("token_invalid", `jwks unreachable: ${error instanceof Error ? error.name : "error"}`);
         }
-      }
-      if (!next.size) throw new GoogleOidcError("token_invalid", "jwks has no usable keys");
-      this.keys = next;
-      this.expiresAt = this.now() + jwksMaxAgeMs(response.headers.get("cache-control"));
-    })().finally(() => {
-      this.inflight = null;
+        if (!response.ok) throw new GoogleOidcError("token_invalid", `jwks http_${response.status}`);
+        try {
+          return { data: await readCappedJson(response), cacheControl: response.headers.get("cache-control") };
+        } catch {
+          throw new GoogleOidcError("token_invalid", "jwks response too large");
+        }
+      },
     });
-    return this.inflight;
   }
 
   /** 按 kid 取公钥。缓存过期就刷新；遇到不认识的 kid（Google 换钥了）最多一分钟强刷一次。 */
   async getKey(kid: string) {
-    if (!this.keys.size || this.now() >= this.expiresAt) await this.refresh();
-    let key = this.keys.get(kid);
-    if (!key && this.now() - this.lastFetchAt >= JWKS_FORCED_REFRESH_INTERVAL_MS) {
-      await this.refresh();
-      key = this.keys.get(kid);
-    }
-    if (!key) throw new GoogleOidcError("token_invalid", "unknown signing key");
-    return key;
+    return this.store.getKey(kid, "RS256");
   }
 }
 
@@ -380,16 +229,6 @@ export type GoogleIdTokenClaims = {
   exp: number;
 };
 
-function decodeJsonSegment(segment: string) {
-  try {
-    const text = Buffer.from(segment, "base64url").toString("utf8");
-    const value = JSON.parse(text);
-    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * 校验 Google 的 ID Token，通过才返回我们要用的几项声明。任何一项不对都抛 GoogleOidcError。
  * now 是秒；测试里可以拨钟。
@@ -402,21 +241,17 @@ export async function verifyGoogleIdToken(idToken: string, options: {
   clockSkewSeconds?: number;
 }): Promise<GoogleIdTokenClaims> {
   const invalid = (why: string) => new GoogleOidcError("token_invalid", `id_token ${why}`);
-  const parts = String(idToken || "").split(".");
-  if (parts.length !== 3 || parts.some((part) => !part || !/^[A-Za-z0-9_-]+$/.test(part))) throw invalid("malformed");
-  const header = decodeJsonSegment(parts[0]);
-  const payload = decodeJsonSegment(parts[1]);
-  if (!header || !payload) throw invalid("malformed");
+  const jws = parseCompactJws(idToken);
+  if (!jws) throw invalid("malformed");
+  const { header, payload } = jws;
   // 只认 RS256：不接受 none / HS256 之类（防「拿公钥当 HMAC 密钥」那一类混淆）。
   if (header.alg !== "RS256") throw invalid("alg");
   if (typeof header.kid !== "string" || !header.kid) throw invalid("kid");
 
   const key = await options.jwks.getKey(header.kid);
-  const signature = Buffer.from(parts[2], "base64url");
-  const signedOk = crypto.verify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), key, signature);
-  if (!signedOk) throw invalid("signature");
+  if (!verifyJwsSignature("RS256", key, jws.signingInput, jws.signature)) throw invalid("signature");
 
-  if (!GOOGLE_ISSUERS.includes(payload.iss)) throw invalid("iss");
+  if (!(GOOGLE_ISSUERS as readonly unknown[]).includes(payload.iss)) throw invalid("iss");
   const aud = payload.aud;
   if (typeof aud === "string") {
     if (aud !== options.clientId) throw invalid("aud");

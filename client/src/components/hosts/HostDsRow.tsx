@@ -6,6 +6,7 @@ import { hostTrafficExcluded } from "@shared/hostTrafficPolicy";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { StatusDot } from "@/components/network/StatusDot";
 import { formatCpuPercent, hostGeoTooltip, hostInMaintenance } from "./hostDisplay";
+import { hostLoadAverageTooltip } from "@shared/hostLoadAverage";
 import {
   deriveHostSummaryView,
   hostOfflineAgo,
@@ -25,7 +26,7 @@ import {
  *
  *   电脑（≥768px）是一张真表：状态 / 主机 / 系统 / 地区·地址 / CPU / 内存 / 磁盘 / 网速 / 转发 / 版本 / ···
  *
- * 同一份 DOM，两种排法全在 theme-deepspace.css 的 grid-template-areas 里。
+ * 同一份 DOM，两种排法全在 themes/official/deepspace/theme.css 的 grid-template-areas 里。
  * 要画的数和 Summary 卡同一份推导（deriveHostSummaryView / useHostEntityActions），
  * 两种画法口径不会走岔。别的主题不渲染这个组件。
  */
@@ -43,10 +44,10 @@ function usageTone(value: number | null): "warn" | "down" | undefined {
   return undefined;
 }
 
-function Gauge({ area, label, value, text }: { area: string; label: string; value: number | null; text: string }) {
+function Gauge({ area, label, value, text, detail }: { area: string; label: string; value: number | null; text: string; detail?: string | null }) {
   const tone = usageTone(value);
   return (
-    <span className="fx-ds-host-gauge" data-area={area} title={`${label} ${text}`}>
+    <span className="fx-ds-host-gauge" data-area={area} title={[`${label} ${text}`, detail].filter(Boolean).join("\n")}>
       <i>{label}</i>
       <b data-tone={tone}>{text}</b>
       <span className="fx-ds-host-bar" aria-hidden="true">
@@ -109,7 +110,8 @@ export function HostDsRow(props: Props) {
         {[region, address].filter(Boolean).join(" · ") || "—"}
       </span>
       <span className="fx-ds-host-gauges">
-        <Gauge area="cpu" label="CPU" value={cpu} text={cpu === null ? "—" : formatCpuPercent(cpu, vitals.isOnline)} />
+        {/* 一台一行放不下第四个数：1 / 5 / 15 分钟负载悬停 CPU 看 */}
+        <Gauge area="cpu" label="CPU" value={cpu} text={cpu === null ? "—" : formatCpuPercent(cpu, vitals.isOnline)} detail={offline ? null : hostLoadAverageTooltip(vitals)} />
         <Gauge area="mem" label="MEM" value={memory} text={pct(memory)} />
         <Gauge area="dsk" label="DSK" value={disk} text={pct(disk)} />
       </span>

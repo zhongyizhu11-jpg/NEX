@@ -11,6 +11,16 @@
  * 规则端口就是规则行的 sourcePort：面板在这台主机上挑一个空闲端口给它，只在回环上听。
  * 这样计数（按端口装的 nft 计数器）、限速（守卫 / gost 的限速器）、状态上报和普通规则
  * 走的是同一套，按规则计费不需要另起一份。
+ *
+ * 转送规则（Agent 2.2.255 起）把「规则自己的入口」换成别的东西，其余不变：
+ *
+ *   经隧道：  主机:443 ─SNI─▶ 127.0.0.1:<规则端口>（这条隧道规则在入口机上的入口：FXP / gost / nginx）
+ *                                 └─▶ 隧道 ─▶ 出口 ─▶ 目标
+ *   转发链：  主机:443 ─SNI─▶ 127.0.0.1:<规则端口>（链的第一跳子规则）─▶ 中转 ─▶ … ─▶ 目标
+ *   转发组：  每台成员机:443 ─SNI─▶ 127.0.0.1:<规则端口>（这台成员上的子规则）─▶ 目标
+ *
+ * 隧道入口、子规则只听回环（心跳里按 isSniRuntimeRule 判断），所以它们的限速、计数、配额照旧
+ * 是这条规则的。组的每台成员机用自己身上同端口的入站（见 server/sniGroupChildren.ts）。
  */
 
 import { domainToASCII } from "node:url";
@@ -21,7 +31,7 @@ import { requireHostUseAccess } from "./routers/helpers";
 import { reserveAvailableHostPortOnHosts, type HostPortReservation } from "./portReservations";
 import { pickAvailablePort, portPolicyFrom } from "../shared/portPolicy";
 import {
-  isTlsInboundAgentSupported,
+  isSniRouteAgentSupported,
   normalizeSniAllowlist,
   normalizeSniNameList,
   normalizeTlsInboundHandshakeTimeout,
@@ -29,12 +39,15 @@ import {
   normalizeTlsInboundProxyProtocol,
   normalizeTlsInboundUnknownSniAction,
   parseSniNameJson,
+  pickMemberTlsInbound,
   sniNamesOutsideAllowlist,
-  tlsInboundAgentUpgradeMessage,
+  sniRouteAgentUpgradeMessage,
   TLS_INBOUND_MAX_PER_HOST,
   TLS_INBOUND_SNI_CONFLICT_MESSAGE,
+  type SniRuleRouteKind,
   type TlsInboundSettings,
 } from "../shared/tlsInbound";
+import { forwardGroupModeOf } from "../shared/forwardTypes";
 import type { TlsInboundRow } from "./repositories/tlsInboundRepository";
 
 /** node:url 的 IDNA。失败时回空串，上层报「域名格式无效」。 */
@@ -187,6 +200,8 @@ export async function validateSniRuleNames(options: {
   inbound: TlsInboundRow;
   names: unknown;
   excludeRuleId?: number;
+  /** 转发资源上的模板：它在各台入口机上的子规则占着的名字也算它自己的。 */
+  excludeRuleIds?: readonly number[];
 }) {
   const normalized = normalizeServerSniNameList(options.names);
   if (!normalized.ok) throw new Error(normalized.error);
@@ -194,22 +209,91 @@ export async function validateSniRuleNames(options: {
   if (outside.length > 0) {
     throw new Error(`以下 SNI 不在这个入站的白名单内：${outside.slice(0, 5).join("、")}`);
   }
-  const owners = await db.findSniNameOwners(options.inbound.id, normalized.names, Number(options.excludeRuleId || 0));
+  const alsoExcluded = new Set((options.excludeRuleIds || []).map(Number));
+  const owners = (await db.findSniNameOwners(options.inbound.id, normalized.names, Number(options.excludeRuleId || 0)))
+    .filter((owner) => !alsoExcluded.has(owner.ruleId));
   if (owners.length > 0) {
     throw new Error(`${TLS_INBOUND_SNI_CONFLICT_MESSAGE}：${owners.map((owner) => owner.name).slice(0, 5).join("、")}`);
   }
   return normalized.names;
 }
 
-/** 入站本身能不能挂新规则 / 启用规则：要启用着、Agent 版本够。 */
-export async function requireTlsInboundRunnable(inbound: TlsInboundRow) {
+/** 入站本身能不能挂新规则 / 启用规则：要启用着、Agent 版本够（转送规则要更新的版本）。 */
+export async function requireTlsInboundRunnable(inbound: TlsInboundRow, options: { routeKind?: SniRuleRouteKind } = {}) {
   const host = await db.getHostById(inbound.hostId);
   if (!host) throw new Error("入站所在的主机不存在");
   if (!inbound.isEnabled) throw new Error(`共享 TLS 入站「${inbound.name}」已停用`);
-  if (!isTlsInboundAgentSupported(String((host as any).agentVersion || ""))) {
-    throw new Error(tlsInboundAgentUpgradeMessage((host as any).name));
+  const routeKind = options.routeKind || "direct";
+  if (!isSniRouteAgentSupported(routeKind, String(host.agentVersion || ""))) {
+    throw new Error(sniRouteAgentUpgradeMessage(routeKind, host.name));
   }
   return host;
+}
+
+/**
+ * 经隧道的 SNI 规则对隧道的要求：入站就在隧道的入口机上；隧道没挂入口组（挂了的话，组里别的入口机
+ * 也会替规则监听，可它们身上没有这张 SNI 表 —— 这一版不支持，见文档）。
+ */
+export function assertSniTunnelUsable(
+  tunnel: { isEnabled?: unknown; entryHostId?: unknown; entryGroupId?: unknown } | null | undefined,
+  inbound: TlsInboundRow,
+) {
+  if (!tunnel) throw new Error("隧道不存在");
+  if (Number(tunnel.isEnabled) === 0 || tunnel.isEnabled === false) throw new Error("所选隧道已停用");
+  if (Number(tunnel.entryHostId || 0) !== Number(inbound.hostId)) {
+    throw new Error("共享 TLS 入站必须在隧道的入口主机上，请选这条隧道入口机上的入站");
+  }
+  if (Number(tunnel.entryGroupId || 0) > 0) {
+    throw new Error("挂了入口组的隧道暂不支持共享 TLS 入站，请改用转发组 / 端口转发资源，或选一条单入口的隧道");
+  }
+}
+
+/**
+ * 转发组上的 SNI 规则支持哪几种组：转发链、端口转发资源、主机型转发组（DDNS 故障转移）。
+ * 隧道型转发组（成员是隧道）暂不支持。
+ */
+export function sniGroupUnsupportedReason(group: { groupMode?: unknown; groupType?: unknown; members?: unknown } | null | undefined): string | null {
+  if (!group) return "转发组不存在";
+  const mode = forwardGroupModeOf(group);
+  if (mode === "entry" || mode === "exit") return "入口组 / 出口组不能直接挂规则，请选挂着它的端口转发资源或转发链";
+  if (String(group.groupType || "host") === "tunnel" && mode !== "chain" && mode !== "port") {
+    return "隧道型转发组暂不支持共享 TLS 入站";
+  }
+  const members = (Array.isArray(group.members) ? group.members : []) as Array<{ memberType?: unknown } | null>;
+  if (members.some((member) => member?.memberType === "tunnel")) return "成员里有隧道的转发组暂不支持共享 TLS 入站";
+  return null;
+}
+
+/**
+ * 组里每台入口机上同端口的入站：名字必须在它的白名单里、没被别人占（excludeRuleIds 是这条规则
+ * 自己和它的子规则）。缺入站的机器不算错（那台不下发、DDNS 不切过去），只是回给调用方提示。
+ */
+export async function validateSniNamesOnGroupHosts(options: {
+  anchor: TlsInboundRow;
+  names: readonly string[];
+  hostIds: readonly number[];
+  excludeRuleIds?: readonly number[];
+}) {
+  const exclude = new Set((options.excludeRuleIds || []).map(Number));
+  const inbounds = await db.listTlsInboundsByHostIds(options.hostIds);
+  const missingHostIds: number[] = [];
+  for (const hostId of options.hostIds) {
+    const member = pickMemberTlsInbound(options.anchor, Number(hostId), inbounds);
+    if (!member) {
+      missingHostIds.push(Number(hostId));
+      continue;
+    }
+    const host = await db.getHostById(Number(hostId));
+    const label = String(host?.name || hostId);
+    const outside = sniNamesOutsideAllowlist(options.names, member.allowedSni);
+    if (outside.length > 0) throw new Error(`入口主机「${label}」上的共享 TLS 入站白名单不包含：${outside.slice(0, 5).join("、")}`);
+    if (member.id === options.anchor.id) continue;
+    const owners = (await db.findSniNameOwners(member.id, options.names)).filter((owner) => !exclude.has(owner.ruleId));
+    if (owners.length > 0) {
+      throw new Error(`入口主机「${label}」上：${TLS_INBOUND_SNI_CONFLICT_MESSAGE}：${owners.map((owner) => owner.name).slice(0, 5).join("、")}`);
+    }
+  }
+  return { missingHostIds };
 }
 
 /** 规则的目标不能绕回入站自己（也不能指向自己的回环端口），否则就是死循环。 */
@@ -230,12 +314,24 @@ export function assertSniRuleTargetNotLoop(options: { host: any; inboundPort: nu
 
 /** 给 SNI 规则在主机上分一个回环端口并占住（和普通规则共用端口占用表，所以谁也不会撞上它）。 */
 export async function reserveSniBackendPort(hostId: number, excludeRuleIds: number[] = []): Promise<HostPortReservation | null> {
+  return reserveSniBackendPortOnHosts([hostId], excludeRuleIds);
+}
+
+/**
+ * 转发组上的 SNI 规则：每台入口机上的子规则用同一个回环端口（子规则照抄模板的 sourcePort），
+ * 所以要挑一个在每台入口机上都空着的。
+ */
+export async function reserveSniBackendPortOnHosts(hostIds: readonly number[], excludeRuleIds: number[] = []): Promise<HostPortReservation | null> {
+  const ids = Array.from(new Set(hostIds.map(Number).filter((id) => id > 0)));
+  if (ids.length === 0) return null;
   return reserveAvailableHostPortOnHosts({
-    hostIds: [hostId],
+    hostIds: ids,
     protocol: "tcp",
     findPort: async (reservedPorts) => {
-      const used = await db.getUsedPortsOnHost(hostId, excludeRuleIds, "both", undefined, false);
-      for (const port of reservedPorts) used.add(Number(port));
+      const used = new Set<number>(reservedPorts.map(Number));
+      for (const hostId of ids) {
+        for (const port of await db.getUsedPortsOnHost(hostId, excludeRuleIds, "both", undefined, false)) used.add(Number(port));
+      }
       return pickAvailablePort(portPolicyFrom(null), used, SNI_BACKEND_PORT_RANGE);
     },
     isUsed: (listenHostId, port) => db.isPortUsedOnHost(listenHostId, port, excludeRuleIds, "both", undefined, false),
@@ -244,4 +340,44 @@ export async function reserveSniBackendPort(hostId: number, excludeRuleIds: numb
 
 export function isSniRule(rule: any) {
   return Number(rule?.tlsInboundId || 0) > 0;
+}
+
+/**
+ * 规则编辑框用：当前用户能经哪些隧道 / 转发资源用上哪台主机的入站（主机 id → 隧道 id、转发组 id）。
+ * 只列这一版支持的：单入口、启用着的隧道；转发链、端口转发资源、主机型转发组（见 sniGroupUnsupportedReason）。
+ * 只是给界面筛选用，建规则时服务端照样按隧道 / 转发组的权限再查一遍。
+ */
+export async function routedTlsInboundUse(actor: { id: number; role: string }) {
+  const scope = actor.role === "admin" ? null : await getLinkAccessScope(actor);
+  const tunnelIdsAllowed = scope ? (scope.useTunnelIds || scope.tunnelIds) : null;
+  const groupIdsAllowed = scope ? (scope.useGroupIds || scope.groupIds) : null;
+  const byHost = new Map<number, { tunnelIds: number[]; forwardGroupIds: number[] }>();
+  const slot = (hostId: number) => {
+    let entry = byHost.get(hostId);
+    if (!entry) {
+      entry = { tunnelIds: [], forwardGroupIds: [] };
+      byHost.set(hostId, entry);
+    }
+    return entry;
+  };
+  for (const tunnel of await db.getTunnels()) {
+    if (tunnelIdsAllowed && !tunnelIdsAllowed.has(Number(tunnel.id))) continue;
+    if (!(tunnel.isEnabled === true || Number(tunnel.isEnabled) === 1) || Number(tunnel.entryGroupId || 0) > 0) continue;
+    const hostId = Number(tunnel.entryHostId || 0);
+    if (hostId > 0) slot(hostId).tunnelIds.push(Number(tunnel.id));
+  }
+  const groups = groupIdsAllowed
+    ? (groupIdsAllowed.size > 0 ? await db.getForwardGroups(undefined, { ids: Array.from(groupIdsAllowed) }) : [])
+    : await db.getForwardGroups();
+  for (const group of groups) {
+    if (sniGroupUnsupportedReason(group) || !(group.isEnabled === true || Number(group.isEnabled) === 1)) continue;
+    let hostIds: number[] = [];
+    try {
+      hostIds = (await db.getForwardGroupRuleEntryHostIds(Number(group.id))).map(Number);
+    } catch {
+      continue;
+    }
+    for (const hostId of hostIds) slot(hostId).forwardGroupIds.push(Number(group.id));
+  }
+  return byHost;
 }

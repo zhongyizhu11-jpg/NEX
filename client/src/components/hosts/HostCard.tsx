@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import type { HostReplaceTarget } from "./HostReplaceDialog";
 import { Button } from "@/components/ui/button";
@@ -44,12 +45,14 @@ import { parseHostOs } from "@shared/hostOs";
 import { HostOsGlyph } from "./HostOsBadge";
 import { FxpRuntimeBadge } from "./FxpRuntimeBadge";
 import { hostEgressShapingCardText } from "./hostEgressShaping";
+import { formatHostLoadAverage } from "@shared/hostLoadAverage";
 import {
   formatBytes,
   formatCpuPercent,
   formatUptime,
   HostRegionBadge,
   hostPrimaryAddressText,
+  hostExtraAddressSummary,
   isAgentUpgradeTimedOut,
   isAgentVersionBehind,
   metricUsageProgressClass,
@@ -389,7 +392,7 @@ export default function HostCard({
     数字照留（掉线前跑到哪儿是有用的线索，抹掉更糟），只把名字改对。
   */
   const lastReportedText = latestMetric?.recordedAt
-    ? new Date(latestMetric.recordedAt).toLocaleString("zh-CN", { hour12: false })
+    ? new Date(latestMetric.recordedAt).toLocaleString(getFormatLocale(), { hour12: false })
     : "";
   const currentTrafficLabel = isOnline ? "当前" : "最后一次";
   const currentTrafficTitle = [
@@ -457,6 +460,8 @@ export default function HostCard({
   const osInfoText = compactHostOsInfo(host.osInfo);
   const hostOs = parseHostOs(host.osInfo);
   const cpuUsageLabel = formatCpuPercent(latestMetric?.cpuUsage ?? 0, isOnline);
+  // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）：离线、老 Agent 没报都是 null，什么都不多画
+  const loadAverageText = isOnline ? formatHostLoadAverage(latestMetric) : null;
   const remainingTimeClass = remainingTimeLabel === "已到期"
     ? "border-destructive/30 bg-destructive/10 text-destructive"
     : remainingTimeLabel === "不足1天"
@@ -491,7 +496,11 @@ export default function HostCard({
       value: cpuUsage,
       valueLabel: cpuUsageLabel,
       progressClass: metricUsageProgressClass(cpuUsage, isOnline),
-      tooltip: host.cpuInfo ? `CPU 使用率 ${cpuUsageLabel}\n${host.cpuInfo}` : `CPU 使用率 ${cpuUsageLabel}`,
+      tooltip: [
+        `CPU 使用率 ${cpuUsageLabel}`,
+        loadAverageText ? `负载（1 / 5 / 15 分钟）：${loadAverageText}` : "",
+        host.cpuInfo ? String(host.cpuInfo) : "",
+      ].filter(Boolean).join("\n"),
     },
     {
       key: "memory",
@@ -524,13 +533,25 @@ export default function HostCard({
     },
   ];
 
+  const extraAddresses = hostExtraAddressSummary(host);
   const addressRegionBlock = (regionCompact = false) => (
     <div className={`mt-0.5 min-w-0 space-y-1 ${isOnline ? "" : "opacity-70 grayscale"}`}>
       <p className="min-w-0 truncate font-mono text-xs leading-5" title={hostPrimaryAddressText(host)}>
         <span className="mr-1.5 text-muted-foreground">地址</span>
         {/* 排障第一件事就是复制这个地址，所以它要从 select-guard 里单独放出来。 */}
         <span className="selectable">{hostPrimaryAddressText(host)}</span>
+        {/* 多 IP 主机：悬停看网卡上的全部公网地址，主 IP 标出来（shared/hostPublicAddresses） */}
+        {extraAddresses.extra > 0 ? (
+          <span className="ml-1.5 text-muted-foreground" title={extraAddresses.title} data-host-extra-addresses="">
+            +{extraAddresses.extra} 个 IP
+          </span>
+        ) : null}
       </p>
+      {extraAddresses.warnings.length > 0 ? (
+        <p className="min-w-0 truncate text-xs leading-5" title={extraAddresses.warnings.join("\n")}>
+          <span className="rounded bg-[var(--fx-warn-soft)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--fx-warn-text)]">主 IP 需确认</span>
+        </p>
+      ) : null}
       {/*
         出口 IP 核对：面板每次心跳看到的对端地址，和登记的 IP 不是同一个。落地的 IP 被机房换了、
         机器上多了一层代理、手填的地址早就不是这台机器 —— 都是「以为在走 A，其实在走 B」。
@@ -647,7 +668,7 @@ export default function HostCard({
                   className={`h-2 w-2 shrink-0 rounded-full ${isOnline ? "bg-[var(--fx-healthy)] shadow-[0_0_0_3px_var(--fx-healthy-soft)]" : "bg-[var(--fx-down)] shadow-[0_0_0_3px_var(--fx-down-soft)]"}`}
                   title={isOnline ? "在线" : "离线"}
                 />
-                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
+                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName} data-no-translate="">{hostName}</span>
                 <span
                   className={`shrink-0 rounded-[5px] border px-1.5 py-0.5 font-mono text-[10.5px] font-normal leading-none text-muted-foreground ${
                     isOnline ? "border-[var(--fx-stroke-base)]" : "border-[var(--fx-stroke-weak)]"
@@ -680,7 +701,7 @@ export default function HostCard({
                   className={`h-2 w-2 shrink-0 rounded-full ${isOnline ? "bg-[var(--fx-healthy)] shadow-[0_0_0_3px_var(--fx-healthy-soft)]" : "bg-[var(--fx-down)] shadow-[0_0_0_3px_var(--fx-down-soft)]"}`}
                   title={isOnline ? "在线" : "离线"}
                 />
-                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
+                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName} data-no-translate="">{hostName}</span>
                 <span
                   className={`shrink-0 rounded-[5px] border px-1.5 py-0.5 font-mono text-[10.5px] font-normal leading-none text-muted-foreground ${
                     isOnline ? "border-[var(--fx-stroke-base)]" : "border-[var(--fx-stroke-weak)]"
@@ -763,6 +784,12 @@ export default function HostCard({
               <p className="truncate text-[11px] text-muted-foreground" title={host.cpuInfo || ""}>
                 {host.cpuInfo || "未上报 CPU 型号"}
               </p>
+              {loadAverageText ? (
+                <p className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟），不是百分比：到 CPU 核数才算满">
+                  <span>负载</span>
+                  <span className="font-medium tabular-nums text-foreground">{loadAverageText}</span>
+                </p>
+              ) : null}
               <Progress value={latestMetric.cpuUsage ?? 0} className={metricUsageProgressClass(latestMetric.cpuUsage, isOnline)} />
             </div>
             <TooltipProvider delayDuration={120}>

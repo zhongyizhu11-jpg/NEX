@@ -125,8 +125,12 @@ const RULES: readonly Rule[] = [
   // QX 的 UA 里域名部分是 URL 编码的 "Quantumult%20X"。
   { family: "quantumultx", pattern: /quantumult/i, version: v("quantumult(?:%20| )?x[/ ]v?([0-9.]+)"), target: "quantumultx" },
   { family: "surfboard", pattern: /surfboard/i, version: v("surfboard[/ ]v?([0-9.]+)"), target: "surge" },
-  // Egern 读 Surge 格式。
-  { family: "egern", pattern: /egern/i, version: v("egern[/ ]v?([0-9.]+)"), target: "surge" },
+  /*
+    Egern 给它自己的 YAML（shared/proxySubEgern.ts）。以前给的是 Surge 格式（它也读得懂），
+    但那里面写不了模块、VLESS / REALITY 也没位置，所以改成原生格式（有意改的默认，已有的 Egern 订阅下次更新就拿到 YAML）。
+    还想要 Surge 格式的，地址上加 ?target=surge（或 /surge 路径）照旧拿得到 —— 显式格式优先于 UA。
+  */
+  { family: "egern", pattern: /egern/i, version: v("egern[/ ]v?([0-9.]+)"), target: "egern" },
   { family: "surge", pattern: /surge/i, version: v("surge(?: ios| mac|ios|mac)?[/ ]v?([0-9.]+)"), target: "surge" },
   { family: "loon", pattern: /loon/i, version: v("loon[/ ]v?([0-9.]+)"), target: "loon" },
   // v2rayNG 必须排在 v2rayN 前面：两者都含 "v2rayN"。
@@ -216,13 +220,14 @@ export function detectProxyClient(userAgent: unknown, flag?: unknown): DetectedP
  * 版本依据：Xboard 的 protocolRequirements（hysteria2 / ECH 的最低版本），
  * mihomo 的 release notes（anytls 1.19.0、xhttp 1.19.2），sing-box 的（anytls 1.12，xhttp 无）。
  */
-export type ProxyClientCapability = "vless" | "hysteria2" | "tuic" | "anytls" | "reality" | "xhttp" | "httpupgrade";
+export type ProxyClientCapability = "vless" | "hysteria2" | "tuic" | "anytls" | "mieru" | "reality" | "xhttp" | "httpupgrade";
 
 const CAPABILITY_NAMES: Record<ProxyClientCapability, string> = {
   vless: "VLESS",
   hysteria2: "Hysteria2",
   tuic: "TUIC",
   anytls: "AnyTLS",
+  mieru: "Mieru",
   reality: "REALITY",
   xhttp: "XHTTP 传输",
   httpupgrade: "HTTPUpgrade 传输",
@@ -235,7 +240,12 @@ const CAPABILITY_NAMES: Record<ProxyClientCapability, string> = {
  * 「这家客户端读不读得懂」—— 同一份 Clash YAML，mihomo 读得懂，原版 Clash 读到 vless 就整份拒绝。
  */
 const FAMILY_UNSUPPORTED: Partial<Record<ProxyClientFamilyId, readonly ProxyClientCapability[]>> = {
-  "clash-premium": ["vless", "hysteria2", "anytls", "reality", "xhttp", "httpupgrade"],
+  "clash-premium": ["vless", "hysteria2", "anytls", "mieru", "reality", "xhttp", "httpupgrade"],
+  /*
+    Stash 也吃 Clash YAML，但它的协议表里没有 Mieru。Clash 系客户端读到不认识的 type 是整份配置
+    拒绝加载，所以 Clash 订阅里的 Mieru 只发给 mihomo 系。
+  */
+  stash: ["mieru"],
 };
 
 export function clientFamilyUnsupportedReason(client: Pick<DetectedProxyClient, "family" | "label">, capability: ProxyClientCapability): string {
@@ -245,7 +255,8 @@ export function clientFamilyUnsupportedReason(client: Pick<DetectedProxyClient, 
 }
 
 const MINIMUM_VERSIONS: Partial<Record<ProxyClientFamilyId, Partial<Record<ProxyClientCapability, string>>>> = {
-  mihomo: { anytls: "1.19.0", xhttp: "1.19.2" },
+  // Mieru 进 mihomo 是 1.19.0（和 AnyTLS 同一版，mieru 项目文档里的第三方客户端说明也是这个版本起）。
+  mihomo: { anytls: "1.19.0", mieru: "1.19.0", xhttp: "1.19.2" },
   v2rayng: { hysteria2: "1.9.5", anytls: "1.9.40" },
   v2rayn: { hysteria2: "6.31", anytls: "7.5" },
   singbox: { anytls: "1.12.0" },

@@ -12,6 +12,8 @@ import { CollapsibleSection } from "./HostDetailDialog";
   主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）：默认折叠，展开是和订阅页节点菜单「出口检测」
   同一副面板（ExitHostPanel：站点连通四格 + 解锁网格，hosts.exitQuality），下面只有两个按钮：
   按 IPv4 / IPv6 出口手动检测一次（只给管理员）。不定期跑 —— 每一次都要从主机去请求十来个第三方站点。
+  网络画像测到双栈都能出站时多一个「检测双栈」：IPv4、IPv6 各排一次，面板里按页签分开看，
+  地区和主机所在地比着上色（UnlockRegionGrid）。
 
   结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
   每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。
@@ -108,6 +110,18 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
               </Button>
             );
           })}
+          {data.dualStack ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs"
+              disabled={!data.online || data.pending.length > 0 || start.isPending}
+              title="网络画像测到这台机器 IPv4、IPv6 都能出站：两个出口各测一轮，结果分页签看"
+              onClick={() => start.mutate({ hostId, family: "both" })}
+            >
+              {data.pending.length > 1 ? "检测中…" : "检测双栈"}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </>

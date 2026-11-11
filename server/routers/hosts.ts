@@ -2,6 +2,22 @@ import { protectedProcedure, adminProcedure, publicProcedure, router } from "../
 import { getHostProbeServiceHourlySeries, HOST_PROBE_RAW_MAX_HOURS } from "../repositories/hostProbeHourlyRepository";
 import { invalidateAgentStableHeartbeatPlan } from "../agentHeartbeatGate";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES } from "../../shared/probeFamily";
+import {
+  checkHostProbeHttpUrl,
+  HOST_PROBE_HTTP_EXPECTED_STATUS_MAX_LENGTH,
+  HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS,
+  HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS,
+  HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS,
+  HOST_PROBE_HTTP_URL_MAX_LENGTH,
+  HOST_PROBE_METHODS,
+  hostProbeHttpUrlHostname,
+  normalizeHostProbeFailure,
+  normalizeHostProbeHttpStatus,
+  normalizeHostProbeMethod,
+  parseHostProbeHttpExpectedStatus,
+} from "../../shared/hostProbeService";
+import { loadAverageFromStored } from "../../shared/hostLoadAverage";
+import { PROBE_CARRIERS } from "../../shared/probeCarrier";
 import { githubRepoParts } from "@shared/githubAccelerator";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -38,6 +54,8 @@ import { hostEgressShaping, normalizeHostEgressShapingMode, TUNNEL_LINK_MBPS_MAX
 import { hostEgressShapingStatusView } from "../tunnelLinkShapingView";
 import { withHostObservedAddress } from "../hostObservedAddress";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
+import { hostPrimaryAddressPatch } from "@shared/hostPublicAddresses";
+import { hostDdnsRecordTypeFor, normalizeHostDdnsIpVersion, normalizeHostDdnsValueMode, parseHostDdnsSignature } from "@shared/hostDdnsPlan";
 import { wakeAgentExt } from "../ops/agentExt";
 import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
 import { hostUnlockProcedures } from "./hostUnlock";
@@ -106,28 +124,55 @@ const hostBillingCycleMonthsSchema = z.union([
   z.literal(1), z.literal(3), z.literal(6), z.literal(12), z.literal(24), z.literal(36),
 ]);
 const hostExpiryActionSchema = z.enum(["none", "extend_cycle"]);
-const hostDdnsIpVersionSchema = z.enum(["ipv4", "ipv6"]);
+// dual = A + AAAA 双栈（shared/hostDdnsPlan）；值模式 primary 只发主 IP（老配置默认），all 发检测到的全部地址
+const hostDdnsIpVersionSchema = z.enum(["ipv4", "ipv6", "dual"]);
+const hostDdnsValueModeSchema = z.enum(["primary", "all"]);
+/** 主 IP 选择（shared/hostPublicAddresses）：null / 空串 = 不挑，照旧用 Agent 上报的那一个 */
+const hostPrimaryAddressSchema = z.string().trim().max(64).nullable().optional();
 const hostDdnsRecordTypeSchema = z.enum(["A", "AAAA"]);
 const hostDdnsDomainSchema = z.string().trim().max(253).nullable().optional();
 const pageRequestSchema = z.object({
   page: z.number().int().positive().default(1),
   pageSize: z.number().int().min(1).max(100).default(12),
 });
-const hostProbeTargetSchema = z.string().trim().min(1).max(253).refine(isValidHostOrIp, "Invalid target IP or host");
 const hostProbeIdsSchema = z.array(z.number().int().positive()).max(500).optional();
-const hostProbeServiceInputSchema = z.object({
+const hostProbeServiceFieldsSchema = z.object({
   name: z.string().trim().min(1).max(128),
-  method: z.enum(["tcping", "ping"]),
-  targetIp: hostProbeTargetSchema,
+  method: z.enum(HOST_PROBE_METHODS),
+  // Ping / TCPing 是 IP 或域名（最长 253）；URL 连接检测是完整 URL（最长 2048）。两种的校验在下面的 superRefine。
+  targetIp: z.string().trim().min(1).max(HOST_PROBE_HTTP_URL_MAX_LENGTH),
   targetPort: z.number().int().min(1).max(65535).nullable().optional(),
   // 目标是域名时按哪一族解析（Agent 2.2.226 起生效，老 Agent 照旧 auto）
   addressFamily: z.enum(PROBE_ADDRESS_FAMILIES).default("auto"),
+  // 下面三项只有 URL 连接检测用（Agent 2.2.255 起）：超时秒数、预期状态码、要不要忽略证书错误
+  httpTimeoutSeconds: z.number().int().min(HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS).max(HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS).default(HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS),
+  httpExpectedStatus: z.string().trim().max(HOST_PROBE_HTTP_EXPECTED_STATUS_MAX_LENGTH).default(""),
+  httpSkipTlsVerify: z.boolean().default(false),
+  // 三网视图的运营商标签（shared/probeCarrier.ts）；不传 = 不改
+  carrier: z.enum(PROBE_CARRIERS).nullable().optional(),
   hostScope: z.enum(["all", "exclude", "specific"]).default("all"),
   hostIds: hostProbeIdsSchema,
   excludeHostIds: hostProbeIdsSchema,
   intervalSeconds: z.number().int().min(5).max(86400).default(30),
   isEnabled: z.boolean().optional(),
 });
+// 目标怎么校验取决于方式，所以放在整个对象上；创建和更新（多一个 id）两份 schema 共用这一个函数。
+function refineHostProbeServiceInput(input: z.infer<typeof hostProbeServiceFieldsSchema>, ctx: z.RefinementCtx) {
+  if (input.method === "http") {
+    const url = checkHostProbeHttpUrl(input.targetIp);
+    if (!url.ok) ctx.addIssue({ code: "custom", path: ["targetIp"], message: url.error });
+    const status = parseHostProbeHttpExpectedStatus(input.httpExpectedStatus);
+    if (!status.ok) ctx.addIssue({ code: "custom", path: ["httpExpectedStatus"], message: status.error });
+    return;
+  }
+  if (input.targetIp.length > 253 || !isValidHostOrIp(input.targetIp)) {
+    ctx.addIssue({ code: "custom", path: ["targetIp"], message: "Invalid target IP or host" });
+  }
+}
+const hostProbeServiceInputSchema = hostProbeServiceFieldsSchema.superRefine(refineHostProbeServiceInput);
+const hostProbeServiceUpdateSchema = hostProbeServiceFieldsSchema
+  .extend({ id: z.number().int().positive() })
+  .superRefine(refineHostProbeServiceInput);
 const hostGroupInputSchema = z.object({
   name: z.string().trim().min(1).max(128),
   hostIds: z.array(z.number().int().positive()).max(500).optional(),
@@ -141,10 +186,13 @@ function normalizeHostProbeServiceInput(input: z.infer<typeof hostProbeServiceIn
   const hostIds = Array.from(new Set((input.hostIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   const excludeHostIds = Array.from(new Set((input.excludeHostIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   if (input.hostScope === "specific" && hostIds.length === 0) throw new Error("请选择需要运行服务的主机");
+  const expectedStatus = parseHostProbeHttpExpectedStatus(input.method === "http" ? input.httpExpectedStatus : "");
   return {
     ...input,
-    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.targetIp),
+    // 地址族看的是「目标是不是 IP」：URL 连接检测看 URL 里的主机名
+    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.method === "http" ? hostProbeHttpUrlHostname(input.targetIp) : input.targetIp),
     targetPort: input.method === "tcping" ? Number(input.targetPort) : null,
+    httpExpectedStatus: expectedStatus.ok ? expectedStatus.normalized : "",
     hostIds: input.hostScope === "specific" ? hostIds : [],
     excludeHostIds: input.hostScope === "exclude" ? excludeHostIds : [],
     intervalSeconds: Math.max(5, Number(input.intervalSeconds) || 30),
@@ -227,23 +275,15 @@ function normalizeHostExpiryAction(value: unknown) {
   return value === "extend_cycle" ? "extend_cycle" : "none";
 }
 
-function normalizeHostDdnsIpVersion(value: unknown, recordType?: string) {
-  if (value === "ipv6" || (!value && String(recordType || "").toUpperCase() === "AAAA")) return "ipv6";
-  return "ipv4";
-}
-
-function normalizeHostDdnsRecordType(ipVersion: unknown) {
-  return ipVersion === "ipv6" ? "AAAA" : "A";
-}
-
 function normalizeHostDdnsPayload(input: {
   ddnsEnabled?: boolean;
   ddnsDomain?: string | null;
   ddnsRecordType?: "A" | "AAAA";
-  ddnsIpVersion?: "ipv4" | "ipv6";
+  ddnsIpVersion?: "ipv4" | "ipv6" | "dual";
+  ddnsValueMode?: "primary" | "all";
 }) {
   const ipVersion = normalizeHostDdnsIpVersion(input.ddnsIpVersion, input.ddnsRecordType);
-  const recordType = normalizeHostDdnsRecordType(ipVersion);
+  const recordType = hostDdnsRecordTypeFor(ipVersion);
   const domain = String(input.ddnsDomain || "").trim().replace(/\.+$/, "").toLowerCase();
   if (input.ddnsEnabled && !domain) throw new Error("开启 DDNS 服务需要填写域名");
   return {
@@ -251,6 +291,7 @@ function normalizeHostDdnsPayload(input: {
     ddnsDomain: domain || null,
     ddnsRecordType: recordType,
     ddnsIpVersion: ipVersion,
+    ddnsValueMode: normalizeHostDdnsValueMode(input.ddnsValueMode),
   };
 }
 
@@ -588,6 +629,10 @@ function compactHostMetricSummary(row: any) {
     uptime: row?.uptime ?? null,
     tcpConnections: row?.tcpConnections ?? null,
     udpConnections: row?.udpConnections ?? null,
+    // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）；没报是 null，界面上什么都不多画
+    load1: row?.load1 ?? null,
+    load5: row?.load5 ?? null,
+    load15: row?.load15 ?? null,
     recordedAt: row?.recordedAt || null,
   };
 }
@@ -679,10 +724,13 @@ function compactPublicProbeService(service: any, latest?: any) {
   return {
     id: Number(service?.id || 0),
     name: String(service?.name || ""),
-    method: service?.method === "ping" ? "ping" : "tcping",
+    // 公开页只给方式，不给目标：URL 连接检测的地址（可能带密钥）不出现在这份响应里
+    method: normalizeHostProbeMethod(service?.method),
     latest: latest ? {
       latencyMs: latest.latencyMs == null ? null : Number(latest.latencyMs),
       isTimeout: latestCounts ? latestCounts.probeSuccesses <= 0 : !!latest.isTimeout,
+      failure: normalizeHostProbeFailure(latest.failure),
+      httpStatus: normalizeHostProbeHttpStatus(latest.httpStatus),
       // Keep packet-level counters in the public monitor response so a
       // partial-loss ping (for example 4/5 replies) is not collapsed into a
       // binary success when the detail page builds its statistics.
@@ -1241,10 +1289,16 @@ export const hostsRouter = router({
     probeServices: protectedProcedure.query(async ({ ctx }) => {
       const isAdmin = ctx.user.role === "admin";
       const services = await db.getHostProbeServices(isAdmin ? undefined : ctx.user.id);
-      const latestById = await db.getLatestHostProbeServiceStats(services.map((service: any) => Number(service.id)));
+      const [latestById, upgradeHostsById] = await Promise.all([
+        db.getLatestHostProbeServiceStats(services.map((service: { id: unknown }) => Number(service.id))),
+        // 主机名单只给管理员（服务也只有管理员能建）
+        isAdmin ? db.getHostProbeAgentUpgradeHosts(services) : Promise.resolve(new Map<number, Array<{ id: number; name: string; agentVersion: string }>>()),
+      ]);
       return services.map((service: any) => ({
         ...service,
         latest: latestById.get(Number(service.id)) || null,
+        // URL 连接检测：范围内 Agent 版本不够、所以这条没下发给它的主机；界面上写「需要升级 Agent」
+        agentUpgradeHosts: upgradeHostsById.get(Number(service.id)) || [],
       }));
     }),
     probeServiceSeries: protectedProcedure
@@ -1271,7 +1325,7 @@ export const hostsRouter = router({
         return { id };
       }),
     updateProbeService: adminProcedure
-      .input(hostProbeServiceInputSchema.extend({ id: z.number().int().positive() }))
+      .input(hostProbeServiceUpdateSchema)
       .mutation(async ({ input }) => {
         const service = await db.getHostProbeServiceById(input.id);
         if (!service) throw new Error("服务不存在");
@@ -1402,6 +1456,7 @@ export const hostsRouter = router({
         ddnsDomain: hostDdnsDomainSchema,
         ddnsRecordType: hostDdnsRecordTypeSchema.optional(),
         ddnsIpVersion: hostDdnsIpVersionSchema.optional(),
+        ddnsValueMode: hostDdnsValueModeSchema.optional(),
         blockHttp: z.boolean().optional(),
         blockSocks: z.boolean().optional(),
         blockTls: z.boolean().optional(),
@@ -1437,7 +1492,7 @@ export const hostsRouter = router({
         }
         const ddnsConfig = ctx.user.role === "admin"
           ? normalizeHostDdnsPayload(input)
-          : { ddnsEnabled: false, ddnsDomain: null, ddnsRecordType: "A", ddnsIpVersion: "ipv4" };
+          : { ddnsEnabled: false, ddnsDomain: null, ddnsRecordType: "A", ddnsIpVersion: "ipv4", ddnsValueMode: "primary" };
         if ((ddnsConfig as any).ddnsEnabled) await assertHostDdnsServiceConfigured();
         // 公网出口整形只有管理员能设：整台机器一起减速，不是租户自己那几条规则的事。
         const egressConfig = ctx.user.role === "admin" ? hostEgressShapingPayload(input) : { egressShapingMode: "off", egressMbps: 0 };
@@ -1544,6 +1599,8 @@ export const hostsRouter = router({
         ip: hostAddressSchema.optional(),
         /** 手改「Agent 检测 IP」：只有改过才传；空串 = 交回自动检测（shared/hostManualAddress） */
         detectedAddress: z.string().max(200).optional(),
+        primaryIpv4: hostPrimaryAddressSchema,
+        primaryIpv6: hostPrimaryAddressSchema,
         hostType: z.enum(["master", "slave"]).optional(),
         networkInterface: networkInterfaceSchema,
         sortOrder: hostSortOrderSchema,
@@ -1582,6 +1639,7 @@ export const hostsRouter = router({
         ddnsDomain: hostDdnsDomainSchema,
         ddnsRecordType: hostDdnsRecordTypeSchema.optional(),
         ddnsIpVersion: hostDdnsIpVersionSchema.optional(),
+        ddnsValueMode: hostDdnsValueModeSchema.optional(),
         blockHttp: z.boolean().optional(),
         blockSocks: z.boolean().optional(),
         blockTls: z.boolean().optional(),
@@ -1602,7 +1660,7 @@ export const hostsRouter = router({
         const nextPortAllowlist = input.portAllowlist !== undefined
           ? normalizePortAllowlist(input.portAllowlist)
           : String((host as any).portAllowlist || "");
-        const { id, detectedAddress, ...data } = input;
+        const { id, detectedAddress, primaryIpv4, primaryIpv6, ...data } = input;
         applyHostCostInput(data, ctx.user.role === "admin");
         let ddnsConfigChanged = false;
         // 公网出口整形：两个字段一起收敛；变了要让这台机器的 Agent 重发 FXP 配置。
@@ -1635,19 +1693,26 @@ export const hostsRouter = router({
           // 清空：交回 Agent，下一次心跳就会写上它查到的地址
           else (data as any).addressManual = false;
         }
+        // 主 IP：手改了地址（这次或之前）时只记下选择、不动地址栏 —— 手改的说了算
+        const primaryPatch = hostPrimaryAddressPatch(host, { primaryIpv4, primaryIpv6 }, {
+          addressManual: (data as Record<string, unknown>).addressManual !== undefined ? !!(data as Record<string, unknown>).addressManual : !!host.addressManual,
+        });
+        const primaryAddressChanged = Object.keys(primaryPatch).length > 0;
+        if (primaryAddressChanged) Object.assign(data, primaryPatch);
         if (data.networkInterface !== undefined) data.networkInterface = data.networkInterface || null;
         if ((data as any).sortOrder !== undefined) (data as any).sortOrder = Math.min(200, Math.max(0, Math.floor(Number((data as any).sortOrder) || 0)));
         if (data.entryIp !== undefined) data.entryIp = data.entryIp || null;
         if (data.tunnelEntryIp !== undefined) data.tunnelEntryIp = data.tunnelEntryIp || null;
         if ((data as any).portAllowlist !== undefined) (data as any).portAllowlist = nextPortAllowlist || null;
         if (ctx.user.role === "admin") {
-          const hasDdnsConfigInput = ["ddnsEnabled", "ddnsDomain", "ddnsRecordType", "ddnsIpVersion"].some((key) => (data as any)[key] !== undefined);
+          const hasDdnsConfigInput = ["ddnsEnabled", "ddnsDomain", "ddnsRecordType", "ddnsIpVersion", "ddnsValueMode"].some((key) => (data as any)[key] !== undefined);
           if (hasDdnsConfigInput) {
             const ddnsConfig = normalizeHostDdnsPayload({
               ddnsEnabled: (data as any).ddnsEnabled !== undefined ? (data as any).ddnsEnabled : (host as any).ddnsEnabled,
               ddnsDomain: (data as any).ddnsDomain !== undefined ? (data as any).ddnsDomain : (host as any).ddnsDomain,
               ddnsRecordType: (data as any).ddnsRecordType !== undefined ? (data as any).ddnsRecordType : (host as any).ddnsRecordType,
               ddnsIpVersion: (data as any).ddnsIpVersion !== undefined ? (data as any).ddnsIpVersion : (host as any).ddnsIpVersion,
+              ddnsValueMode: normalizeHostDdnsValueMode(data.ddnsValueMode !== undefined ? data.ddnsValueMode : host.ddnsValueMode),
             });
             if (ddnsConfig.ddnsEnabled) await assertHostDdnsServiceConfigured();
             Object.assign(data as any, ddnsConfig);
@@ -1655,8 +1720,15 @@ export const hostsRouter = router({
             const previousDdnsDomain = String((host as any).ddnsDomain || "").trim().replace(/\.+$/, "").toLowerCase();
             const ddnsTargetChanged = ddnsConfig.ddnsDomain !== previousDdnsDomain
               || ddnsConfig.ddnsEnabled !== !!(host as any).ddnsEnabled
-              || ddnsConfig.ddnsIpVersion !== normalizeHostDdnsIpVersion((host as any).ddnsIpVersion, (host as any).ddnsRecordType);
-            if (ddnsTargetChanged) {
+              || ddnsConfig.ddnsIpVersion !== normalizeHostDdnsIpVersion((host as any).ddnsIpVersion, (host as any).ddnsRecordType)
+              || ddnsConfig.ddnsValueMode !== normalizeHostDdnsValueMode(host.ddnsValueMode);
+            // 只换了记录类型 / 值模式、域名没变：新格式的 lastDdnsValue（A=…;AAAA=…）要留着，
+            // 下一次同步靠它知道面板之前发过哪一族，好把不再要的那一族删掉（shared/hostDdnsPlan）。
+            // 老格式的裸地址照旧清空，和原来一样。
+            const keepTypedDdnsSignature = ddnsConfig.ddnsDomain === previousDdnsDomain
+              && ddnsConfig.ddnsEnabled === !!host.ddnsEnabled
+              && parseHostDdnsSignature(host.lastDdnsValue).typed;
+            if (ddnsTargetChanged && !keepTypedDdnsSignature) {
               (data as any).lastDdnsValue = null;
               (data as any).lastDdnsAt = null;
               (data as any).lastDdnsError = null;
@@ -1702,7 +1774,7 @@ export const hostsRouter = router({
             }
           }
         } else {
-          for (const field of ["purchasedAt", "stoppedAt", "trafficLimit", "trafficMeasureMode", "trafficFailoverEnabled", "trafficFailoverThresholdPercent", "telegramTrafficAlertEnabled", "trafficAlertThresholdPercent", "telegramRenewalReminderEnabled", "renewalReminderDays", "billingCycleMonths", "billingMonth", "billingDay", "expiryHandling", "trafficAutoReset", "trafficResetDay", "ddnsEnabled", "ddnsDomain", "ddnsRecordType", "ddnsIpVersion"] as const) delete (data as any)[field];
+          for (const field of ["purchasedAt", "stoppedAt", "trafficLimit", "trafficMeasureMode", "trafficFailoverEnabled", "trafficFailoverThresholdPercent", "telegramTrafficAlertEnabled", "trafficAlertThresholdPercent", "telegramRenewalReminderEnabled", "renewalReminderDays", "billingCycleMonths", "billingMonth", "billingDay", "expiryHandling", "trafficAutoReset", "trafficResetDay", "ddnsEnabled", "ddnsDomain", "ddnsRecordType", "ddnsIpVersion", "ddnsValueMode"] as const) delete (data as any)[field];
         }
         if (ctx.user.role !== "admin") {
           for (const field of hostProtocolPolicyFields) delete (data as any)[field];
@@ -1749,6 +1821,14 @@ export const hostsRouter = router({
         }
         if (entryChanged) {
           await refreshHostAddressRuntime(id, host, "host-address-updated");
+        }
+        if (primaryAddressChanged && entryChanged) {
+          // 换了主 IP 等于换了这台机器的地址：主机 DDNS、转发组 / 入口组的解析也要跟着走（心跳那条路走的是
+          // handleHostAddressChanged，这里只补它比 refreshHostAddressRuntime 多做的那两件）
+          if (!ddnsConfigChanged) scheduleHostDdnsUpdate({ ...host, ...(data as Record<string, unknown>), id }, "host-primary-address-updated");
+          await db.runForwardGroupsForHostAddressChange(id, "host-primary-address-updated").catch((error) => {
+            console.warn(`[HostAddress] Forward group DDNS refresh failed host=${id}: ${error instanceof Error ? error.message : String(error)}`);
+          });
         }
         // 手填入口、主机 DDNS 都会改变首选入口地址，规则专属域名的记录值跟着改。
         if (entryChanged || ddnsConfigChanged) void scheduleRuleEntryDomainSyncForHost(id, "host-entry-updated");
@@ -1798,11 +1878,18 @@ export const hostsRouter = router({
       .input(z.object({ hostId: z.number(), limit: z.number().int().min(1).max(1440).default(60), live: z.boolean().optional() }))
       .query(async ({ input, ctx }) => {
         await requireHostAccess(ctx, input.hostId);
-        if (input.live) return db.getLatestHostMetrics(input.hostId, input.limit);
+        // 负载在库里是乘 100 的整数（loadAvg1…），给前端的是 load1 / load5 / load15 小数
+        const withLoadAverage = <T extends { loadAvg1?: unknown; loadAvg5?: unknown; loadAvg15?: unknown }>(rows: T[]) => rows.map((row) => ({
+          ...row,
+          load1: loadAverageFromStored(row?.loadAvg1),
+          load5: loadAverageFromStored(row?.loadAvg5),
+          load15: loadAverageFromStored(row?.loadAvg15),
+        }));
+        if (input.live) return withLoadAverage(await db.getLatestHostMetrics(input.hostId, input.limit));
         return hostQueryCache.get(
           `metrics:${ctx.user.id}:${input.hostId}:${input.limit}`,
           { ttlMs: 10_000, staleMs: 60_000 },
-          () => db.getLatestHostMetrics(input.hostId, input.limit),
+          async () => withLoadAverage(await db.getLatestHostMetrics(input.hostId, input.limit)),
         );
       }),
     latestMetricsSummary: protectedProcedure

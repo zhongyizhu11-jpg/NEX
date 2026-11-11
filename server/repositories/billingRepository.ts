@@ -48,6 +48,7 @@ import { dbBool, sqlBool } from "./repositoryUtils";
 import { pushAgentRefresh } from "../agentEvents";
 import { getUserUsableTrafficBillingResourceIds } from "./trafficBillingRepository";
 import { getSetting, setSetting } from "./settingsRepository";
+import { PLAN_STOCK_SOLD_OUT_MESSAGE, releasePlanStock, tryReservePlanStock } from "./productStockRepository";
 import { getReferralSettings } from "./referralRepository";
 import {
   evaluateReferralCommission,
@@ -57,6 +58,7 @@ import {
   type ReferralSourceType,
 } from "../../shared/referral";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
+import { paymentOrderUndeletableReason } from "../../shared/paymentOrderDeletion";
 import { addRulePortSpan } from "../../shared/portRange";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
@@ -126,6 +128,15 @@ export async function createPaymentOrder(order: InsertPaymentOrder) {
         .where(eq(subscriptionPlans.id, Number(order.planId)))
         .limit(1);
       if (!plan[0]) throw new Error("套餐已删除，无法创建支付订单");
+      /*
+        新购的待支付订单下单时就占一份库存：不占的话，最后一份可以同时被几个人拉起
+        收银台，谁都付得了款，付完才发现没货。续费单（带 subscriptionId）不占 ——
+        那一份在当初新购时已经占过了。占额和建单在同一个事务里，建单失败一起回滚。
+      */
+      if (!order.subscriptionId) {
+        if (!(await tryReservePlanStock(Number(order.planId)))) throw new Error(PLAN_STOCK_SOLD_OUT_MESSAGE);
+        order = { ...order, stockReserved: true } as InsertPaymentOrder;
+      }
     }
     await db.insert(paymentOrders).values(order);
     return getPaymentOrderByOutTradeNo(order.outTradeNo);
@@ -299,6 +310,30 @@ export async function getPaymentOrderByOutTradeNoForUpdate(outTradeNo: string) {
   );
   if (!rows[0]) return undefined;
   return getPaymentOrderByOutTradeNo(outTradeNo);
+}
+
+/**
+ * 锁住订单行，同时把库存判断要用的三列一起读出来。
+ *
+ * 不复用上面那个「先锁、再用普通查询读整行」的写法：MySQL 默认隔离级别下普通查询读的是
+ * 事务快照，可能还是锁之前的旧状态；库存的占 / 退只能照着加锁读到的当前值来判断，
+ * 否则一笔订单可能被退两次。
+ */
+async function lockPaymentOrderStockState(outTradeNo: string) {
+  const q = quoteDbIdentifier;
+  const lock = getDatabaseKind() === "sqlite" ? "" : " FOR UPDATE";
+  const rows = await queryRaw<{ status: string; planId: number | null; stockReserved: unknown }>(
+    `SELECT ${q("status")} AS ${q("status")}, ${q("planId")} AS ${q("planId")}, ${q("stockReserved")} AS ${q("stockReserved")}
+       FROM ${q("payment_orders")} WHERE ${q("outTradeNo")} = ? LIMIT 1${lock}`,
+    [outTradeNo],
+  );
+  const row = rows[0];
+  if (!row) return undefined;
+  return {
+    status: String(row.status || ""),
+    planId: Number(row.planId || 0),
+    stockReserved: dbBool(row.stockReserved),
+  };
 }
 
 // ==================== Subscription Plans ====================
@@ -2849,6 +2884,34 @@ function addSubscriptionDays(base: Date, days: number) {
   return new Date(base.getTime() + days * 24 * 3600 * 1000);
 }
 
+/**
+ * 新开一条订阅时占一份套餐库存。
+ *
+ * - 余额购买、管理员分配、兑换码：这里直接占。
+ * - 在线支付：下单时已经占过的（订单上 stockReserved）不再占第二次；没占过的
+ *   （加库存之前建的老订单）在发货这一刻补占，并记到订单上。
+ *
+ * 卖完了抛「永久失败」：在线支付那边会把实付金额转入余额并结单（见 finalizePaidOrder），
+ * 其余入口把这句话原样告诉操作的人。和调用方在同一个事务里，后面分不到端口段之类的
+ * 失败会把占的这一份一起回滚。
+ */
+async function occupyPlanStockForNewSubscription(planId: number, source: SubscriptionSource, paymentOrderNo?: string | null) {
+  if (source === "payment" && paymentOrderNo) {
+    // 锁住订单行再看 stockReserved：和「订单过期关单、退回库存」互斥，不会一边退一边当成已占。
+    const order = await lockPaymentOrderStockState(paymentOrderNo);
+    if (order?.stockReserved) return;
+    if (!(await tryReservePlanStock(planId))) throw new PermanentDeliveryError(PLAN_STOCK_SOLD_OUT_MESSAGE);
+    if (order) {
+      const db = await getDb();
+      await db!.update(paymentOrders)
+        .set({ stockReserved: true, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
+        .where(eq(paymentOrders.outTradeNo, paymentOrderNo));
+    }
+    return;
+  }
+  if (!(await tryReservePlanStock(planId))) throw new PermanentDeliveryError(PLAN_STOCK_SOLD_OUT_MESSAGE);
+}
+
 async function applySubscriptionToUserUnlocked(
   userId: number,
   planId: number,
@@ -2971,6 +3034,8 @@ async function applySubscriptionToUserUnlocked(
     };
   }
 
+  // 走到这里就是开一条新订阅（续费在上面那一支已经返回了）：占一份销售库存。
+  await occupyPlanStockForNewSubscription(planId, source, paymentOrderNo);
   const block = await findAvailableSubscriptionPortBlock(Number(plan.portCount) || 1, hostIds, tunnelIds, forwardGroupIds);
   if (!block) throw new PermanentDeliveryError("套餐可用端口不足，无法分配连续端口段");
   const expiresAt = durationDays > 0 ? addSubscriptionDays(now, durationDays) : null;
@@ -3383,26 +3448,12 @@ async function listUserSubscriptionsForLedger(
     .limit(limit);
 }
 
-export async function listBillingLedger(options?: {
-  viewerUserId?: number;
-  isAdmin?: boolean;
-  userId?: number;
-  limit?: number;
-  includeCancelledSubscriptions?: boolean;
-}, selectedIds?: { balance: number[]; payment: number[]; subscription: number[] }) {
-  const limit = normalizeBillingLimit(options?.limit);
-  const targetUserId = options?.isAdmin ? options?.userId : options?.viewerUserId;
-  if (!options?.isAdmin && !targetUserId) return [];
-
-  const [transactions, orders, subscriptions] = await Promise.all([
-    listBalanceTransactions(targetUserId, limit, selectedIds?.balance),
-    listPaymentOrders(limit, targetUserId, selectedIds?.payment),
-    listUserSubscriptionsForLedger(targetUserId, limit, {
-      isAdmin: !!options?.isAdmin,
-      includeCancelledSubscriptions: !!options?.includeCancelledSubscriptions,
-    }, selectedIds?.subscription),
-  ]);
-
+/** 三张表的行合成账单条目（按时间倒序）。列表和 Excel 导出共用这一份，两边的口径不会漂。 */
+function buildBillingLedgerItems(
+  transactions: Awaited<ReturnType<typeof listBalanceTransactions>>,
+  orders: Awaited<ReturnType<typeof listPaymentOrders>>,
+  subscriptions: Awaited<ReturnType<typeof listUserSubscriptionsForLedger>>,
+) {
   const items = [
     ...transactions.map((tx: any) => ({
       id: `balance-${tx.id}`,
@@ -3473,9 +3524,82 @@ export async function listBillingLedger(options?: {
     })),
   ];
 
-  return items
-    .sort((a, b) => billingTime(b.createdAt) - billingTime(a.createdAt))
-    .slice(0, limit);
+  return items.sort((a, b) => billingTime(b.createdAt) - billingTime(a.createdAt));
+}
+
+export async function listBillingLedger(options?: {
+  viewerUserId?: number;
+  isAdmin?: boolean;
+  userId?: number;
+  limit?: number;
+  includeCancelledSubscriptions?: boolean;
+}, selectedIds?: { balance: number[]; payment: number[]; subscription: number[] }) {
+  const limit = normalizeBillingLimit(options?.limit);
+  const targetUserId = options?.isAdmin ? options?.userId : options?.viewerUserId;
+  if (!options?.isAdmin && !targetUserId) return [];
+
+  const [transactions, orders, subscriptions] = await Promise.all([
+    listBalanceTransactions(targetUserId, limit, selectedIds?.balance),
+    listPaymentOrders(limit, targetUserId, selectedIds?.payment),
+    listUserSubscriptionsForLedger(targetUserId, limit, {
+      isAdmin: !!options?.isAdmin,
+      includeCancelledSubscriptions: !!options?.includeCancelledSubscriptions,
+    }, selectedIds?.subscription),
+  ]);
+
+  return buildBillingLedgerItems(transactions, orders, subscriptions).slice(0, limit);
+}
+
+/**
+ * 账单 Excel 导出要的三份数据（上游 2.3.286）：账单流水（三张表合在一起，和账单页同一份口径）、
+ * 余额流水、支付订单。
+ *
+ * 看谁的由调用方（server/billingExport.ts）按登录的人算好再传进来：普通用户永远是自己，
+ * 这里不再信任任何外来的 userId。先数再读：超过上限直接说清楚，不读一半给一份残缺的表。
+ */
+export async function countBillingExportRows(options: { targetUserId?: number; isAdmin: boolean; includeCancelledSubscriptions: boolean }) {
+  const q = quoteDbIdentifier;
+  const count = async (table: string, extra: string[] = [], extraParams: unknown[] = []) => {
+    const conditions = [...extra];
+    const params: unknown[] = [...extraParams];
+    if (options.targetUserId !== undefined) { conditions.push(`${q("userId")} = ?`); params.push(options.targetUserId); }
+    const [row] = await queryRaw<{ n: number }>(
+      `SELECT COUNT(*) AS ${q("n")} FROM ${q(table)}${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""}`,
+      params,
+    );
+    return Number(row?.n || 0);
+  };
+  const subscriptionConditions = [`${q("adminDismissedAt")} IS NULL`];
+  const subscriptionParams: unknown[] = [];
+  if (!options.isAdmin) subscriptionConditions.push(`${q("userDismissedAt")} IS NULL`);
+  if (!options.includeCancelledSubscriptions) { subscriptionConditions.push(`${q("status")} <> ?`); subscriptionParams.push("cancelled"); }
+  const [balance, payment, subscription] = await Promise.all([
+    count("balance_transactions"),
+    count("payment_orders"),
+    count("user_subscriptions", subscriptionConditions, subscriptionParams),
+  ]);
+  return { balance, payment, subscription, ledger: balance + payment + subscription };
+}
+
+export async function listBillingExportData(options: { targetUserId?: number; isAdmin: boolean; includeCancelledSubscriptions: boolean; limit: number }) {
+  const limit = Math.max(1, Math.floor(options.limit));
+  const [transactions, orders, subscriptions] = await Promise.all([
+    listBalanceTransactions(options.targetUserId, limit),
+    listPaymentOrders(limit, options.targetUserId),
+    listUserSubscriptionsForLedger(options.targetUserId, limit, {
+      isAdmin: options.isAdmin,
+      includeCancelledSubscriptions: options.includeCancelledSubscriptions,
+    }),
+  ]);
+  return {
+    ledger: buildBillingLedgerItems(transactions, orders, subscriptions),
+    transactions,
+    orders: (orders as Array<(typeof orders)[number]>).map((order) => ({
+      ...order,
+      statusLabel: paymentStatusLabel(order.status),
+      orderTypeLabel: paymentOrderTypeLabel(order.orderType),
+    })),
+  };
 }
 
 /**
@@ -3974,7 +4098,8 @@ export async function redeemCode(userId: number, code: string, attemptScope?: st
       });
     } catch (error) {
       const message = String((error as any)?.message || error || "");
-      if (message !== "Database not available" && !message.includes("兑换过于频繁")) {
+      // 码是对的、只是套餐卖完了：不是在猜码，不计入失败次数（否则补货后他还得等限流过去）。
+      if (message !== "Database not available" && !message.includes("兑换过于频繁") && message !== PLAN_STOCK_SOLD_OUT_MESSAGE) {
         recordRedemptionAttemptFailure(userId, attemptScope);
       }
       throw error;
@@ -4226,7 +4351,31 @@ export async function listPaymentOrders(limit = 100, userId?: number, selectedId
   return base.where(conditions.length > 0 ? and(...conditions) : undefined).orderBy(desc(paymentOrders.createdAt), desc(paymentOrders.id)).limit(limit);
 }
 
+const CLOSED_PAYMENT_ORDER_STATUSES = ["expired", "failed", "cancelled"];
+
 export async function updatePaymentOrder(outTradeNo: string, data: Partial<InsertPaymentOrder>) {
+  /*
+    把一笔还没付款的订单关掉（过期 / 取消 / 创建失败）时，它占着的那份套餐库存在这里退回。
+    放在仓库这一层而不是各个关单入口里：以后不管从哪条路关单，库存都不会漏退。
+    只认 pending → 关闭这一种：已付款的订单即使被改成关闭状态，货可能已经发了，不能退。
+  */
+  if (data.status && CLOSED_PAYMENT_ORDER_STATUSES.includes(String(data.status))) {
+    return withDatabaseTransaction(async () => {
+      const db = await getDb();
+      if (!db) return undefined;
+      const previous = await lockPaymentOrderStockState(outTradeNo);
+      let patch = data;
+      if (previous && previous.status === "pending" && previous.stockReserved) {
+        if (previous.planId) await releasePlanStock(previous.planId);
+        patch = { ...data, stockReserved: false } as Partial<InsertPaymentOrder>;
+      }
+      await db
+        .update(paymentOrders)
+        .set({ ...patch, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
+        .where(eq(paymentOrders.outTradeNo, outTradeNo));
+      return getPaymentOrderByOutTradeNo(outTradeNo);
+    });
+  }
   const db = await getDb();
   if (!db) return undefined;
   await db
@@ -4236,8 +4385,162 @@ export async function updatePaymentOrder(outTradeNo: string, data: Partial<Inser
   return getPaymentOrderByOutTradeNo(outTradeNo);
 }
 
+/**
+ * 付了款却发不了货（钱转入余额结单）时，把这笔订单占着的库存退回去。
+ *
+ * 要在锁着订单行的事务里调用。返回 true 表示确实退了一份 —— 调用方把订单更新成结单
+ * 状态时一并带上 stockReserved: false 也可以，这里已经写过，重复写无害。
+ */
+export async function releasePaymentOrderPlanStock(outTradeNo: string) {
+  return withDatabaseTransaction(async () => {
+    const db = await getDb();
+    if (!db) return false;
+    const order = await lockPaymentOrderStockState(outTradeNo);
+    if (!order || !order.stockReserved) return false;
+    if (order.planId) await releasePlanStock(order.planId);
+    await db
+      .update(paymentOrders)
+      .set({ stockReserved: false, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
+      .where(eq(paymentOrders.outTradeNo, outTradeNo));
+    return true;
+  });
+}
+
 function affectedRows(result: any) {
   return rawAffectedRows(result);
+}
+
+// ==================== 删除未支付订单（上游 2.3.298） ====================
+
+/** 墓碑留多久：支付网关的回调重试一般几小时到几天，留半年足够，再久没意义。 */
+const PAYMENT_ORDER_TOMBSTONE_RETENTION_SECONDS = 180 * 24 * 60 * 60;
+
+export type PaymentOrderTombstone = {
+  outTradeNo: string;
+  userId: number;
+  provider: string;
+  orderType: string;
+  status: string;
+  amountCents: number;
+  currency: string;
+  tradeNo: string | null;
+  creditedAt: number | null;
+};
+
+function mapTombstone(row: Record<string, unknown> | undefined): PaymentOrderTombstone | undefined {
+  if (!row) return undefined;
+  return {
+    outTradeNo: String(row.outTradeNo),
+    userId: Number(row.userId),
+    provider: String(row.provider || ""),
+    orderType: String(row.orderType || "balance"),
+    status: String(row.status || ""),
+    amountCents: Number(row.amountCents || 0),
+    currency: String(row.currency || "CNY"),
+    tradeNo: row.tradeNo ? String(row.tradeNo) : null,
+    creditedAt: row.creditedAt ? Number(row.creditedAt) : null,
+  };
+}
+
+/** 读一条墓碑；forUpdate 时要在事务里调用，锁住这一行（转入余额只能做一次）。 */
+export async function getPaymentOrderTombstone(outTradeNo: string, options: { forUpdate?: boolean } = {}) {
+  const q = quoteDbIdentifier;
+  const lock = options.forUpdate && getDatabaseKind() !== "sqlite" ? " FOR UPDATE" : "";
+  const rows = await queryRaw<Record<string, unknown>>(
+    `SELECT ${["outTradeNo", "userId", "provider", "orderType", "status", "amountCents", "currency", "tradeNo", "creditedAt"].map((name) => q(name)).join(", ")}
+       FROM ${q("payment_order_tombstones")} WHERE ${q("outTradeNo")} = ? LIMIT 1${lock}`,
+    [outTradeNo],
+  );
+  return mapTombstone(rows[0]);
+}
+
+export async function markPaymentOrderTombstoneCredited(outTradeNo: string) {
+  const q = quoteDbIdentifier;
+  await executeRaw(
+    `UPDATE ${q("payment_order_tombstones")} SET ${q("creditedAt")} = ? WHERE ${q("outTradeNo")} = ? AND ${q("creditedAt")} IS NULL`,
+    [Math.floor(Date.now() / 1000), outTradeNo],
+  );
+}
+
+export type DeleteUnpaidPaymentOrdersResult = {
+  deleted: Array<{ id: number; outTradeNo: string; stockReleased: boolean; discountReleased: boolean }>;
+  skipped: Array<{ id: number; outTradeNo: string | null; reason: string }>;
+};
+
+/**
+ * 删掉没付过款的支付订单（单笔、批量都走这里）。
+ *
+ * 每笔一个事务：锁住订单行，按锁到的当前状态再判一次能不能删（列表是几秒前的快照，期间可能刚好付了款）；
+ * 还占着的套餐库存、折扣码名额在同一个事务里退回去，再写墓碑、删行 —— 任何一步失败整笔回滚，
+ * 不会出现「订单删了、库存没退」。已支付 / 已完成的不删，返回原因。
+ */
+export async function deleteUnpaidPaymentOrders(ids: number[], operatorUserId: number | null): Promise<DeleteUnpaidPaymentOrdersResult> {
+  const q = quoteDbIdentifier;
+  const result: DeleteUnpaidPaymentOrdersResult = { deleted: [], skipped: [] };
+  const uniqueIds = Array.from(new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  if (uniqueIds.length === 0) return result;
+  const nowSec = Math.floor(Date.now() / 1000);
+  // 顺手清掉过期的墓碑，不另起定时任务。
+  await executeRaw(`DELETE FROM ${q("payment_order_tombstones")} WHERE ${q("deletedAt")} < ?`, [nowSec - PAYMENT_ORDER_TOMBSTONE_RETENTION_SECONDS]);
+  const lock = getDatabaseKind() === "sqlite" ? "" : " FOR UPDATE";
+  const columns = ["id", "outTradeNo", "userId", "provider", "orderType", "status", "amountCents", "currency", "tradeNo",
+    "planId", "stockReserved", "discountCodeId", "discountConsumed", "paidAt", "rawNotify"];
+  for (const id of uniqueIds) {
+    try {
+      const outcome = await withDatabaseTransaction(async () => {
+        const [order] = await queryRaw<Record<string, unknown>>(
+          `SELECT ${columns.map((name) => q(name)).join(", ")} FROM ${q("payment_orders")} WHERE ${q("id")} = ? LIMIT 1${lock}`,
+          [id],
+        );
+        if (!order) return { skipped: { id, outTradeNo: null, reason: "订单不存在或已删除" } };
+        const outTradeNo = String(order.outTradeNo);
+        const reason = paymentOrderUndeletableReason({ status: String(order.status || ""), paidAt: order.paidAt, rawNotify: order.rawNotify });
+        if (reason) return { skipped: { id, outTradeNo, reason } };
+        // 兜底：已经有入账流水或开出过订阅的，不管状态写的是什么都不删（账要对得上）。
+        const [linked] = await queryRaw<{ n: number }>(
+          `SELECT (SELECT COUNT(*) FROM ${q("balance_transactions")} WHERE ${q("paymentOrderNo")} = ?)
+                + (SELECT COUNT(*) FROM ${q("user_subscriptions")} WHERE ${q("paymentOrderNo")} = ?) AS ${q("n")}`,
+          [outTradeNo, outTradeNo],
+        );
+        if (Number(linked?.n || 0) > 0) return { skipped: { id, outTradeNo, reason: "这笔订单已有入账或开通记录，不能删除" } };
+        // 没付款的单占着的那一份库存退回去（关单时已经退过的 stockReserved 早就清了，这里不会退第二次）。
+        let stockReleased = false;
+        if (dbBool(order.stockReserved) && Number(order.planId || 0) > 0) {
+          await releasePlanStock(Number(order.planId));
+          stockReleased = true;
+        }
+        // 待支付的单下单时就占了折扣码名额，删单一起还回去。
+        let discountReleased = false;
+        if (Number(order.discountCodeId || 0) > 0 && dbBool(order.discountConsumed)) {
+          discountReleased = await releaseDiscountCode(Number(order.discountCodeId));
+        }
+        await executeRaw(
+          `DELETE FROM ${q("payment_order_tombstones")} WHERE ${q("outTradeNo")} = ?`,
+          [outTradeNo],
+        );
+        await insertAndGetId("payment_order_tombstones", {
+          outTradeNo,
+          userId: Number(order.userId),
+          provider: String(order.provider || ""),
+          orderType: String(order.orderType || "balance"),
+          status: String(order.status || ""),
+          amountCents: Number(order.amountCents || 0),
+          currency: String(order.currency || "CNY"),
+          tradeNo: order.tradeNo ? String(order.tradeNo) : null,
+          deletedByUserId: operatorUserId,
+          deletedAt: nowSec,
+          creditedAt: null,
+        });
+        await executeRaw(`DELETE FROM ${q("payment_orders")} WHERE ${q("id")} = ?`, [id]);
+        return { deleted: { id, outTradeNo, stockReleased, discountReleased } };
+      });
+      if ("deleted" in outcome && outcome.deleted) result.deleted.push(outcome.deleted);
+      else if ("skipped" in outcome && outcome.skipped) result.skipped.push(outcome.skipped);
+    } catch (error) {
+      result.skipped.push({ id, outTradeNo: null, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return result;
 }
 
 export async function claimPaidPaymentOrder(outTradeNo: string) {

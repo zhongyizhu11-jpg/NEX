@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
+import { loadAverageToStored, parseAgentLoadAverage } from "../shared/hostLoadAverage";
 import {
   routeDeliveryStrategy,
   routeDestSpreadReady,
@@ -23,6 +24,8 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
+import { buildVlessEgressBridgePlan, collectVlessEgressBridges, planVlessEgressBridgePorts } from "./vlessEgress";
+import { isVlessEgressAgentSupported } from "../shared/vlessEgress";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
 import {
@@ -31,7 +34,8 @@ import {
   proxyInboundTrafficRuleId,
 } from "../shared/proxyInboundTraffic";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeCompleted, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
-import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
+// 主机可以单独指定 Agent 连哪个面板地址（server/hostAgentPanelUrl.ts），没指定时就是全局的公开地址。
+import { resolveHostAgentAdvertisedPanelUrl } from "./hostAgentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import {
@@ -117,6 +121,7 @@ import {
   socatServiceNameForPort,
 } from "./forwardRuntimeConfigs";
 import { handleHostAddressChanged, hostIngressAddress } from "./hostAddressRuntime";
+import { syncHostDetectedAddressesSafely } from "./hostPublicAddressSync";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
 import {
@@ -179,7 +184,7 @@ import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
 import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
-import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
+import { isSniRuntimeRule, planAgentSniInbounds, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { recordAgentRuntimeStats } from "./ops/agentRuntime";
 import { evaluateRuleEgress, loadEgressRuntimeContext, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf } from "./ssEgress";
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
@@ -330,7 +335,7 @@ agentRouter.post("/api/agent/live-metrics", async (req: Request, res: Response) 
       return;
     }
     const hostId = Number((host as any).id);
-    const sample = liveSampleFromCompactMetrics(req.body?.m, Date.now(), "live");
+    const sample = liveSampleFromCompactMetrics(req.body?.m, Date.now(), "live", req.body?.loadAverage);
     if (sample) recordHostLiveSample(hostId, sample);
     res.json({ success: true, intervalMs: liveMetricsIntervalFor(hostId) });
   } catch (error) {
@@ -481,6 +486,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 2.2.215 起 Agent 多报两个数：此刻的 TCP / UDP 连接数。旧 Agent 没有这两项，存 null，界面画「—」。
     const tcpConnections = heartbeatMetric("tcpConnections", 13, 2147483647);
     const udpConnections = heartbeatMetric("udpConnections", 14, 2147483647);
+    // 2.2.255 起 Agent 多报 loadAverage：[1, 5, 15 分钟负载]，小数。不走上面的 heartbeatMetric（那边一律取整），
+    // 老 Agent、没有 /proc/loadavg 的平台不报，三个都是 null，界面上不多画。
+    const loadAverage = parseAgentLoadAverage(req.body?.loadAverage);
     const { cpuInfo, agentVersion } = req.body;
     const nextCpuInfo = normalizeAgentText(cpuInfo, 256);
     const nextAgentVersion = normalizeAgentText(agentVersion, 64);
@@ -671,6 +679,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 地址单独写、带条件：用户刚好在这次心跳期间手改了地址时不盖掉它（见 applyAgentReportedHostAddress）
     const addressApplied = addressChanged && await db.applyAgentReportedHostAddress(host.id, reportedAddress);
     if (addressApplied) Object.assign(host as any, reportedAddress);
+    // Agent 2.2.255+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
+    await syncHostDetectedAddressesSafely(host, req.body);
     if (fxpVersionChanged) {
       appendPanelLog(
         "info",
@@ -752,6 +762,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       uptime: uptime ?? null,
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
+      // 库里存乘 100 的整数（没有浮点列），见 shared/hostLoadAverage.ts
+      loadAvg1: loadAverageToStored(loadAverage.load1),
+      loadAvg5: loadAverageToStored(loadAverage.load5),
+      loadAvg15: loadAverageToStored(loadAverage.load15),
     }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
     // 按 95 值计费的主机记 5 分钟桶（主机账本用）；别的主机这里直接返回（server/hostRateBuckets.ts）。
     void recordHostRateSample(host, { atMs: Date.now(), networkIn: networkIn ?? null, networkOut: networkOut ?? null }).catch(() => undefined);
@@ -779,10 +793,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       uptime: uptime ?? null,
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
+      ...loadAverage,
     });
 
     if (busyHeartbeat) {
-      const panelUrl = await resolveAgentAdvertisedPanelUrl();
+      const panelUrl = await resolveHostAgentAdvertisedPanelUrl(host);
       const metricsWatching = isHostMetricsWatching(host.id);
       logAgentHeartbeatSummary({
         hostId: logHostId,
@@ -908,6 +923,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       而入口机没报这项能力时规则按停用下发（绝不退回直连）；能跑的规则带上 egressRuntime，下面生成 gost 配置时挂出口链。只管这台主机自己的规则。
     */
     let egressRuntimeContext = await loadEgressRuntimeContext(rawRules as any[]);
+    // VLESS Reality 出口的本机 sing-box 桥接端口（server/vlessEgress.ts）：下面协议守卫分端口时当作已占用。
+    const vlessBridgePorts = await planVlessEgressBridgePorts(Number(host.id), rawRules, hostTunnels);
     const egressRuntimeView = <T extends Record<string, any>>(rule: T): T => (Number(rule?.hostId) === Number(host.id)
       ? ruleEgressRuntimeView(rule, {
         entryHostId: Number(host.id),
@@ -917,6 +934,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         entryAgentCapabilities: (host as any).agentCapabilities,
         entryRuntimeVersion: (host as any).runtimeVersion,
         context: egressRuntimeContext,
+        vlessBridgePorts,
       })
       : rule);
     const gatedRules = (await gateForwardRulesForRuntime(rawRules as any[])).map(sniRuntimeView).map(egressRuntimeView);
@@ -1849,6 +1867,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const port = Number(value || 0);
       if (Number.isInteger(port) && port > 0 && port <= 65535) reservedProtocolGuardPorts.add(port);
     };
+    for (const port of vlessBridgePorts.ports()) reserveProtocolGuardPort(port);
     for (const rule of agentAllRules as any[]) {
       reserveProtocolGuardPort(rule?.udpOverTcpPort);
       reserveProtocolGuardPort(rule?.gostRelayPort);
@@ -2807,6 +2826,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (!rule || rule.forwardType !== "gost" || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) return false;
       if (Number(rule.tunnelId || 0) !== Number(tunnel?.id || 0) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) return false;
       if (isEntryBridgeRuntimeRule(rule) || runtimeBool(rule.failoverEnabled) || forwardGroupHealthByRuleId.has(Number(rule.id))) return false;
+      // 共享 TLS 入站上的规则：连接从本机回环进来，PREROUTING 的直通规则接不到。
+      if (isSniRuntimeRule(rule)) return false;
       const port = Number(rule.sourcePort || 0);
       if (!Number.isInteger(port) || port <= 0 || port > 65535 || !kernelPassthroughRuleTarget(rule)) return false;
       const limits = ruleRateLimits(rule, tunnel);
@@ -2880,9 +2901,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       // 这里再套一层守卫会多一个用户态进程，还会让同一份限速串联两次。
       if (isEntryBridgeRuntimeRule(rule)) return false;
       // 共享 TLS 入站上的规则一律由守卫在回环上接（入站把连接交到 127.0.0.1:sourcePort），
-      // 计数、限速和普通规则同一套。
-      if (isSniRuntimeRule(rule)) return true;
+      // 计数、限速和普通规则同一套。经隧道的不用守卫：隧道入口自己只听回环（见 tlsInboundRuntime.ts）。
       const tunnel = tunnelForRule(rule);
+      if (isSniRuntimeRule(rule) && !tunnel) return true;
       const nginxTunnelEntry = isNginxTunnelEntryRule(rule, tunnel);
       const rateLimits = guardRateLimitForRule(rule);
       if (rateLimits.limitIn > 0 || rateLimits.limitOut > 0) {
@@ -4017,6 +4038,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               tunnelId: tunnel.id,
               ruleId: rule.id,
               listenPort: rule.sourcePort,
+              // 共享 TLS 入站上的规则：入口只听回环，客户端连的是入站端口（SNI 分流器交过来）。
+              ...(isSniRuntimeRule(rule) ? { listenHost: "127.0.0.1" } : {}),
               protocol: rule.protocol,
               exitHost: entryRoute.host,
               exitPort: entryRoute.port,
@@ -4270,6 +4293,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      */
     const hostProxyInbounds = await getEnabledProxyInboundsWithUsersByHost(Number(host.id));
     for (const row of hostProxyInbounds) {
+      // Mieru 由 mita 按用户计数（server/mitaTraffic.ts）：mita 的用户不分端口，按端口计会记错人。
+      if (row.protocol === "mieru") continue;
       addRunningRule({
         ruleId: proxyInboundTrafficRuleId(row.id),
         sourcePort: row.port,
@@ -4456,7 +4481,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       .sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
     // 自动换 IP 的探测借同一个通道下发（保留的 serviceId 段，不进 host_probe_services 表），见 server/ipChange/。
     const hostProbeServices = [
-      ...await db.getHostProbeTasksForHost(host.id),
+      // URL 连接检测只发给够版本的 Agent：用这一次心跳报上来的版本，升级后的第一次心跳就拿得到
+      ...await db.getHostProbeTasksForHost(host.id, { agentVersion: effectiveAgentVersion }),
       ...await getIpChangeProbeTasksForHost(Number(host.id)),
     ];
 
@@ -4494,7 +4520,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (agentUpgradeCompleted) {
       await db.clearHostAgentUpgradeRequest(host.id);
     }
-    const panelUrl = await resolveAgentAdvertisedPanelUrl();
+    const panelUrl = await resolveHostAgentAdvertisedPanelUrl(host);
     const agentMigrationTargetPanelUrl = await getAgentMigrationSwitchTarget();
     const panelMigration = await getPanelMigrationAgentDirective(Number(host.id));
     const staleMigrationUpgrade = (host as any).agentUpgradeRequested
@@ -4817,6 +4843,36 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         AGENT_GOST_RUNTIME_RECONCILE_MS,
       )) {
         actions.push(singboxAction);
+      }
+      /*
+        VLESS Reality 出口的本机桥接（server/vlessEgress.ts）：单独一个 sing-box 服务，规则改了不打断上面的落地入站。
+        只发给 2.2.255 起的 Agent（旧 Agent 上这类规则本来就按停用下发，也就没有桥接）；没有桥接时发一份收尾。
+      */
+      if (isVlessEgressAgentSupported(effectiveAgentVersion)) {
+        const bridgePlan = buildVlessEgressBridgePlan({
+          bridges: collectVlessEgressBridges(rules, Number(host.id)),
+          accelerator: await getSingboxAccelerator(),
+          panelRelayBase: singboxAssetRelayBase(panelUrl),
+        });
+        const bridgeAction = {
+          statusType: "runtime",
+          ruleId: 0,
+          tunnelId: 0,
+          op: "apply",
+          forwardType: "singbox-egress-runtime-sync",
+          sourcePort: 0,
+          targetIp: "",
+          targetPort: 0,
+          protocol: "tcp",
+          knownRunning: false,
+          forceRuntimeSync: true,
+          preCommands: bridgePlan.preCommands,
+          commands: bridgePlan.commands,
+          managedConfigs: bridgePlan.managedConfigs,
+        };
+        if (shouldSendRuntimeSyncAction(Number(host.id), bridgeAction, runtimeSyncBootstrap, responseIssuedAt, AGENT_GOST_RUNTIME_RECONCILE_MS)) {
+          actions.push(bridgeAction);
+        }
       }
     }
     if (!deferActionsForLocalState && mimicRuntimeSyncWanted) {
@@ -5176,7 +5232,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     for (const entryHostId of recordTunnelExitPorts(Number(host.id), tunnelExitPortEntries)) {
       pushAgentRefresh(entryHostId, "tunnel-exit-ports-changed");
     }
-    const sniInbounds = buildAgentSniInbounds({
+    const sniInbounds = planAgentSniInbounds({
       hostId: Number(host.id),
       agentVersion: effectiveAgentVersion,
       inbounds: hostTlsInbounds,

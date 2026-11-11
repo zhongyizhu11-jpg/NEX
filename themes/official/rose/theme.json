@@ -1,0 +1,22 @@
+{
+  "apiVersion": 1,
+  "id": "rose",
+  "name": "玫瑰",
+  "version": "1.0.0",
+  "description": "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。",
+  "author": "NEX",
+  "homepage": "https://github.com/zhongyizhu11-jpg/NEX",
+  "stylesheet": "theme.css",
+  "preview": {
+    "light": {
+      "page": "#fbf0f2",
+      "card": "#fffafb",
+      "accent": "#c13a66"
+    },
+    "dark": {
+      "page": "#150f12",
+      "card": "#1e1619",
+      "accent": "#c13a66"
+    }
+  }
+}

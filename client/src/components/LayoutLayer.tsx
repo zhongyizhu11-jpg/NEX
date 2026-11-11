@@ -1,6 +1,9 @@
 import { useEffect } from "react";
 
+import { isUiMotionEnabled } from "@shared/uiPreferences";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { useLayoutPreference } from "@/hooks/useCompactLayout";
+import { applyMotionAttribute, rememberMotion } from "@/lib/uiMotion";
 
 /*
   把现在生效的布局写到 <html data-layout>：精简是 "compact"，标准不带属性。compact.css 现在对两种布局都生效
@@ -31,5 +34,16 @@ export default function LayoutLayer() {
     applyLayoutAttribute(effective);
     try { window.localStorage.setItem(LAYOUT_STORAGE_KEY, effective); } catch { /* 记不住就下次刷新多画一帧 */ }
   }, [effective]);
+  /*
+    界面动画（lib/uiMotion.ts）：auth.me 回来以后按账号的偏好校正 <html data-motion>，并记到本机，下次刷新第一帧就对。
+    还在加载、没登录（登录页）时不动：沿用本机上次记住的那个值，不要先放开再关上。
+  */
+  const { user, loading } = useAuth();
+  const motionEnabled = user ? isUiMotionEnabled(user) : null;
+  useEffect(() => {
+    if (loading || motionEnabled === null) return;
+    applyMotionAttribute(motionEnabled);
+    rememberMotion(motionEnabled);
+  }, [loading, motionEnabled]);
   return null;
 }

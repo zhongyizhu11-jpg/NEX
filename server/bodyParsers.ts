@@ -11,7 +11,7 @@ import { COOKIE_NAME } from "../shared/const";
 
   · Agent 上报（/api/agent/*、/api/sync）：规则多的机器，流量、连接、诊断、支持包结果会很大；
   · tRPC 里的插件包上传（base64）、插件设置和用法（白名单这类大文本）、面板备份导入、
-    设置里的背景图和 Logo（data URL）。
+    设置里的背景图和 Logo（data URL）、主题压缩包上传（base64）。
 
   这几条也只有带着凭据（Authorization 头或登录 cookie）时才放大：真正鉴权在后面，
   这里只是不让完全匿名的请求白白占 10MB。
@@ -31,6 +31,10 @@ export const LARGE_BODY_TRPC_PROCEDURES = new Set([
   "plugins.runAction",
   "system.importPanelBackup",
   "system.updateSettings",
+  // 主题压缩包（base64，上限见 shared/uiThemePackage.ts 的 UI_THEME_LIMITS.archiveBytes）
+  "uiThemes.installFromUpload",
+  // 规则批量复制交给服务端任务时，一次带着最多 5000 条新规则的参数（shared/ruleBatchJobs.ts）
+  "rules.batchJobStart",
 ]);
 
 /** tRPC 请求路径（相对 /api/trpc 或带前缀都行）里的过程名。 */

@@ -20,6 +20,8 @@ import Live2DWidgetHost from "./components/plugins/Live2DWidgetHost";
 import HomePage from "@/pages/Home";
 import LoginPage from "@/pages/Login";
 import DatabaseHealthGate from "./components/DatabaseHealthGate";
+import { ImpersonationBoundary } from "./components/ImpersonationBoundary";
+import { useMotionEnabled } from "./hooks/useUiPreferences";
 
 const loadMotionFeatures = () => import("@/motionFeatures").then((mod) => mod.default);
 
@@ -328,6 +330,8 @@ function SetupGate() {
 }
 
 function App() {
+  // 界面动画关了（lib/uiMotion.ts）：motion 的动画已经全局跳过，这里再让 reducedMotion 一并生效，两条路都关上
+  const motionEnabled = useMotionEnabled();
   return (
     /*
       动画库按需加载：入口包里只有 LazyMotion + m.*（几 KB）；淡入淡出的实现
@@ -336,7 +340,7 @@ function App() {
       strict 模式下再写 motion.* 会直接报错，防止又长回去。
     */
     <LazyMotion features={loadMotionFeatures} strict>
-    <MotionConfig reducedMotion="user">
+    <MotionConfig reducedMotion={motionEnabled ? "user" : "always"}>
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
@@ -346,9 +350,12 @@ function App() {
             <LiquidGlassBackdrop />
             <Live2DWidgetHost />
             <Toaster />
-            <DatabaseHealthGate>
-              <SetupGate />
-            </DatabaseHealthGate>
+            {/* 管理员「进入用户后台」的标签页：顶上一条横幅；代入结束后整页换成「已结束」（普通标签页不受影响） */}
+            <ImpersonationBoundary>
+              <DatabaseHealthGate>
+                <SetupGate />
+              </DatabaseHealthGate>
+            </ImpersonationBoundary>
           </ConfirmDialogProvider>
         </TooltipProvider>
       </ThemeProvider>

@@ -30,6 +30,7 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 安装向导整个 setup.*：装好以后本来就锁着，令牌更不该碰；
   · Telegram 绑定 / 解绑和机器人登录：绑上自己的 Telegram 就能用机器人登录拿到浏览器会话；
   · Google / Discord 设初始密码、解绑：给没设密码的账号设密码再解绑，能把主人锁在外面；
+  · 通用 OIDC 整个 oidcAuth.*：除了上面那两样，改 Issuer 就是改「信谁来证明身份」，测试发现还会发出站请求；
   · 面板备份导出导入、迁移码、面板迁移、切换数据库：整库带走（含 Agent 令牌和 2FA 密钥）或改写用户表；
   · 面板 SSL 私钥查看：私钥只给网页上的管理员；
   · 插件安装、更新、授予信任、执行动作：插件能在所有 Agent 上以 root 跑脚本；
@@ -37,6 +38,8 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 改接口限流：被限流的令牌不能自己把限流关掉；
   · 操作审计整个路由：审计记着所有人的 IP 和参数，令牌既不该能读走，也不该能把保留天数改短、借每天的清理删掉记录。
   · 面板性能剖析整个路由：堆快照就是面板进程内存的原样拷贝（会话、密码、密钥都在里面），下载路由也只认网页会话。
+  · 进入用户后台（users.enterUserBackend）：那是给网页上的管理员开一个代入窗口，令牌拿到代入凭据等于多了一个没人看着的身份。
+  · 找回密码（auth.requestPasswordReset / auth.resetPasswordWithToken）：本来就是没登录时用的，令牌没有理由替谁发重置链接、改密码。
   · 指标导出整个路由：能看、能换 /metrics 的抓取口令，是另一枚凭据。
   · 事件推送整个路由：接收地址允许填内网（自建用户要推到内网的 n8n / Home Assistant），泄露的令牌不该能借它
     让面板往内网任意地址发请求、再从「测试」的返回里探内网；接收地址本身也常带着令牌，不给令牌读。
@@ -56,8 +59,11 @@ const TOKEN_FORBIDDEN_PATHS = [
   "auth.beginTwoFactorSetup",
   "auth.enableTwoFactor",
   "auth.disableTwoFactor",
+  "auth.requestPasswordReset",
+  "auth.resetPasswordWithToken",
   "users.resetPassword",
   "users.removeTwoFactor",
+  "users.enterUserBackend",
   "telegram.createBindCode",
   "telegram.unbind",
   "telegram.startMobileLogin",
@@ -69,6 +75,8 @@ const TOKEN_FORBIDDEN_PATHS = [
   "googleAuth.unlink",
   "discordAuth.setInitialPassword",
   "discordAuth.unlink",
+  // 通用 OIDC 整个路由：改信任哪个 IdP、发出站请求（测试发现）、解绑、设初始密码都只能在网页上做
+  "oidcAuth.",
   "system.exportPanelBackup",
   "system.importPanelBackup",
   "system.createMigrationCode",

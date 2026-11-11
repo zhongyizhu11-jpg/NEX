@@ -4,16 +4,19 @@ import path from "node:path";
 import test from "node:test";
 
 /**
- * 规则表格（标准布局重构工作包一）：列定义只写一遍，colgroup、表头、单元格都从 ruleTableColumns 出；
+ * 规则表格（标准布局重构工作包一）：列定义只写一遍（ruleTableColumns），colgroup、表头、单元格都从
+ * 按列设置（显示哪些、顺序、列宽，上游 2.3.287）落下来的 shownRuleTableColumns 出；
  * 不再按管理员 / 排序各写一个 1610～1764px 的最小宽度。守在源码上。
  */
 const source = fs.readFileSync(path.resolve(import.meta.dirname, "Rules.tsx"), "utf8");
 
 test("规则表格的列只在 ruleTableColumns 里定义一遍", () => {
-  assert.ok((source.match(/ruleTableColumns\.map\(/g) ?? []).length >= 3, "colgroup、表头、单元格三处都从 ruleTableColumns 出");
-  // 最小宽度只剩一档（1366 宽不横滚）；不再按管理员 / 排序各写一个
+  assert.ok((source.match(/shownRuleTableColumns\.map\(/g) ?? []).length >= 3, "colgroup、表头、单元格三处都从 shownRuleTableColumns 出");
+  assert.match(source, /new Map\(ruleTableColumns\.map\(/, "画出来的列都从 ruleTableColumns 这一份定义里取");
+  // 最小宽度只剩一档（默认约 1000px，1366 宽不横滚），跟着列设置算；不再按管理员 / 排序各写一个
   assert.doesNotMatch(source, /min-w-\[1764px\]|min-w-\[1654px\]|min-w-\[1720px\]|min-w-\[1610px\]/);
-  assert.match(source, /"fx-rules-table table-fixed min-w-\[1000px\]"/);
+  assert.match(source, /"fx-rules-table table-fixed" style=\{\{ minWidth: ruleTableMinWidth \}\}/);
+  assert.match(source, /RULE_TABLE_MIN_WIDTH_RATIO = 1000 \/ 1016/);
   assert.match(source, /colSpan=\{ruleTableColumnCount\}/, "分组表头那一行的跨列数跟着列数组走");
 });
 

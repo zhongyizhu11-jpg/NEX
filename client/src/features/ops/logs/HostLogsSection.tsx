@@ -161,7 +161,7 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
         {visible.length === 0 ? (
           <div className="text-muted-foreground">{needle && lines.length > 0 ? "没有匹配的行" : "还没有日志"}</div>
         ) : (
-          visible.map((line) => <div key={line.seq} className="whitespace-pre-wrap break-all">{line.text}</div>)
+          visible.map((line) => <div key={line.seq} className="whitespace-pre-wrap break-all" data-no-translate="">{line.text}</div>)
         )}
       </div>
       <div className="text-meta text-muted-foreground">{hint}。日志里的密码、token 已打码。</div>

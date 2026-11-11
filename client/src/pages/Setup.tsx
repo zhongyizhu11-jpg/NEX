@@ -32,6 +32,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { authErrorMessage } from "@/lib/authErrorMessage";
 import { type PanelMigrationScope } from "@shared/panelMigration";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
 type DatabaseType = "mysql" | "postgresql" | "sqlite";
 type SetupMode = "new" | "migrate" | null;
@@ -321,6 +322,9 @@ export default function Setup() {
   return (
     <div className="setup-shell px-4 py-8 text-foreground">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+        <div className="-mb-4 flex justify-end">
+          <LanguageSwitcher />
+        </div>
         <div className="text-center">
           <img src="/logo-light.png" alt="NEX" className="mx-auto h-14 w-14 object-contain dark:hidden" />
           <img src="/logo-dark.png" alt="NEX" className="mx-auto hidden h-14 w-14 object-contain dark:block" />

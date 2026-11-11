@@ -124,7 +124,7 @@ test("面板一轮：点检查 → 下发 → 收到结果；调优优先；超�
   assert.equal(__test.directiveFor(host, 500), undefined, "没点过不下发");
 
   const check = requestNetTuneRun(9, false, 1_000);
-  assert.deepEqual(__test.directiveFor(host, 1_500), { runs: [{ id: check.id, apply: false }] });
+  assert.deepEqual(__test.directiveFor(host, 1_500), { runs: [{ id: check.id, apply: false, mode: "check" }] });
 
   // 在等检查时点调优：换成调优
   const apply = requestNetTuneRun(9, true, 2_000);
@@ -149,4 +149,42 @@ test("面板一轮：点检查 → 下发 → 收到结果；调优优先；超�
   assert.equal(expired.timedOut?.id, late.id);
   assert.equal(expired.lastApply?.id, apply.id, "超时不清掉上一次调优的结果");
   resetNetTuneStateForTest();
+});
+
+test("逐项设置 / 还原：面板先校验，指令带 mode 和 values；检查让位给改动，改动不叠加", async () => {
+  const { normalizeNetTuneSetting, NETTUNE_EDITABLE_KEYS, normalizeNetTuneResult } = await import("../shared/netTune");
+  const agent = await import("./ops/netTuneAgent");
+  agent.resetNetTuneStateForTest();
+
+  assert.equal(normalizeNetTuneSetting("net.ipv4.tcp_rmem", " 4096  131072\t33554432 "), "4096 131072 33554432");
+  assert.equal(normalizeNetTuneSetting("net.core.default_qdisc", "cake"), "cake");
+  assert.equal(normalizeNetTuneSetting("net.ipv4.tcp_congestion_control", "bbr"), "bbr");
+  assert.throws(() => normalizeNetTuneSetting("kernel.panic", "1"), /不能在这里改/);
+  assert.throws(() => normalizeNetTuneSetting("net.core.somaxconn", "-1"), /不是非负整数/);
+  assert.throws(() => normalizeNetTuneSetting("net.core.somaxconn", "1; reboot"), /不是非负整数/);
+  assert.throws(() => normalizeNetTuneSetting("net.core.somaxconn", ""), /值是空的/);
+  assert.throws(() => normalizeNetTuneSetting("net.ipv4.tcp_rmem", "1 2 3 4"), /最多 3 个数/);
+  assert.throws(() => normalizeNetTuneSetting("net.core.default_qdisc", "noqueue"), /只支持/);
+  assert.throws(() => normalizeNetTuneSetting("net.ipv4.tcp_congestion_control", "bbr cubic"), /算法名不对/);
+  assert.ok(NETTUNE_EDITABLE_KEYS.includes("net.ipv4.tcp_congestion_control"));
+
+  const host = { id: 7 } as any;
+  const check = agent.requestNetTuneRun(7, false, 1_000);
+  assert.equal(check.mode, "check");
+  const set = agent.requestNetTuneRun(7, "set", 1_001, { "net.core.somaxconn": "65535" });
+  assert.notEqual(set.id, check.id, "检查让位给设置");
+  assert.equal(agent.requestNetTuneRun(7, "restore", 1_002).id, set.id, "已经在等一轮改动：不叠加");
+  assert.deepEqual(agent.__test.directiveFor(host, 1_003), { runs: [{ id: set.id, apply: false, mode: "set", values: { "net.core.somaxconn": "65535" } }] });
+
+  agent.ingestNetTuneReport(host, { results: [{ id: set.id, status: "done", apply: false, mode: "set", hasBackup: true, changed: [{ key: "net.core.somaxconn", from: "4096", to: "65535" }] }] });
+  const status = agent.netTuneStatus(7, 1_004);
+  assert.equal(status.pending, null);
+  assert.equal(status.lastApply?.mode, "set", "逐项设置算「最近一次改动」");
+  assert.equal(status.latest?.hasBackup, true);
+
+  // 老 Agent 不报 mode / hasBackup：按 undefined，不当成能还原
+  const old = normalizeNetTuneResult({ id: "abc", status: "done", apply: true });
+  assert.equal(old?.mode, undefined);
+  assert.equal(old?.hasBackup, undefined);
+  agent.resetNetTuneStateForTest();
 });

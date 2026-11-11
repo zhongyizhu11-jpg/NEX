@@ -179,6 +179,8 @@ def verify_nex(secret: str, headers, raw_body: bytes) -> bool:
 | `host.packet_loss_recovered` | info | 丢包回落 | `tunnelId`、`lossPercent`、`peak`、`durationSeconds` |
 | `host.relay_switched` | warn / info | Agent 改走中转连面板（自动或手动） | `viaHostId`、`auto`；自动时有 `offlineMinutes`，手动时有 `previousViaHostId` |
 | `host.relay_fallback` | warn | 经中转连不上，退回直连 | `via`、`error` |
+| `host.agent_takeover` | warn | 同一个 Token 在另一台机器上装了 Agent，新实例接管了这台主机 | `installationId`、`previous`（新旧实例 ID 前 8 位） |
+| `host.traffic_shutdown` | crit | 本周期流量达到关机阈值，已授权 Agent 关机 | `usedBytes`、`trafficLimit`、`thresholdPercent`、`cycleMark` |
 
 **线路（route）**
 
@@ -226,6 +228,8 @@ def verify_nex(secret: str, headers, raw_body: bytes) -> bool:
 | `account.password_set` | info | 第三方登录的账号设了初始密码 | `ip` |
 | `account.google_linked` / `account.google_registered` / `account.google_unlinked` | info | Google 登录绑定 / 注册 / 解绑 | `ip` |
 | `account.discord_linked` / `account.discord_registered` / `account.discord_unlinked` | info | Discord 登录绑定 / 注册 / 解绑 | `ip` |
+| `account.oidc_linked` / `account.oidc_registered` / `account.oidc_unlinked` | info | OIDC 登录绑定 / 注册 / 解绑 | `ip` |
+| `account.impersonation_started` | info | 管理员「进入用户后台」 | `adminUserId`、`targetUserId`、`impersonationId`、`ip` |
 
 **安全（security）**
 
@@ -238,6 +242,8 @@ def verify_nex(secret: str, headers, raw_body: bytes) -> bool:
 | `security.firewall_error` | warn | 地区规则 / IP 封禁没能在主机上生效 | — |
 | `security.api_rate_limited` | warn | 有人触发了接口限流 | `subject`、`key`、`path`、`limit`、`ip` |
 | `security.google_login_toggled` / `security.discord_login_toggled` | info | 开关 Google / Discord 登录 | — |
+| `security.oidc_login_toggled` | info | 开关 OIDC 登录 | — |
+| `security.oidc_login_changed` | warn | OIDC 的 Issuer、内网访问或 HS 签名设置改了 | — |
 | `security.discord_bot_disabled` | warn | Discord 机器人令牌失效，通知被自动关掉 | — |
 
 **工单（ticket）**

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { FormField } from "@/components/ui/form-field";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -15,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { usePaymentOrderDialog } from "@/components/PaymentOrderDialog";
+import { BillingExportButton } from "@/components/billing/BillingExportButton";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -32,7 +34,7 @@ type PaymentType = "alipay" | "wxpay" | "stripe" | "usdt";
 function dateText(value?: string | Date | null) {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale());
 }
 
 function orderTypeText(type?: string | null) {
@@ -204,12 +206,16 @@ export default function Wallet() {
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ReceiptText className="h-5 w-5" />
-              账单流水
-            </CardTitle>
-            <CardDescription>按时间查看全部记录。</CardDescription>
+          <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <ReceiptText className="h-5 w-5" />
+                账单流水
+              </CardTitle>
+              <CardDescription>按时间查看全部记录。</CardDescription>
+            </div>
+            {/* 普通用户只能导出自己的全部记录：服务端按登录的人算，不看前端传什么 */}
+            <BillingExportButton />
           </CardHeader>
           <CardContent className="overflow-x-auto">
             {ledgerLoading ? (

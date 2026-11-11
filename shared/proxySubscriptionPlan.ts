@@ -8,6 +8,7 @@
  */
 
 import { getHostEntryAddress, getHostEntryAddresses, hostAutoIpv4, hostAutoIpv6, hostNeverConnected, type HostEntryAddressSource } from "./hostEntryAddress";
+import { directFamilyEntryAddresses, hostFamilyEntryAddresses, type ProxySubEntryAddresses } from "./proxySubIpVersion";
 import { coordinatesFromMicro } from "./proxySubGeo";
 import { compileProxySubGroupFilter, type ProxySubGroupMatch } from "./proxySubGroupFilter";
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
@@ -26,7 +27,7 @@ import {
 import {
   createEmptyProxyNode,
   proxyNodeAlwaysTls,
-  proxyNodeRequiresUdp,
+  proxyNodeOnlyUdp,
   PROXY_NODE_PROTOCOLS,
   PROXY_NODE_TRANSPORTS,
   relayProxyNode,
@@ -53,6 +54,8 @@ export type ProxyNodeTemplateRow = {
   address?: unknown;
   port?: unknown;
   uuid?: unknown;
+  /** socks5 / mieru 的用户名 */
+  username?: unknown;
   password?: unknown;
   method?: unknown;
   alterId?: unknown;
@@ -79,10 +82,19 @@ export type ProxyNodeTemplateRow = {
   snellVersion?: unknown;
   snellMode?: unknown;
   xhttpMode?: unknown;
+  /** Mieru：端口段终点与承载（TCP / UDP / BOTH） */
+  portRangeEnd?: unknown;
+  mieruTransport?: unknown;
   isEnabled?: unknown;
   autoGroup?: unknown;
   /** 手工填的地区（国家码）；空则看落地机器的 geo，再猜名字。 */
   countryCode?: unknown;
+  /**
+   * 落地池节点没有所在机器（池是几台一起开的）：订阅要按 IPv4 / IPv6 输出时，服务端把池成员的
+   * 两种地址查好填在这里（见 shared/proxySubIpVersion.ts）。平时不查、不填。
+   */
+  entryIpv4?: unknown;
+  entryIpv6?: unknown;
 };
 
 /** forward_rules 表里订阅需要用到的字段。 */
@@ -142,7 +154,10 @@ export type ProxySubscriptionSkipReason =
   | "rule-disabled"
   | "no-entry-address"
   | "udp-not-forwarded"
-  | "unreachable";
+  | "unreachable"
+  // 地址上要了 ipVersion=4 / 6、这条没有那种地址（见 shared/proxySubIpVersion.ts）。
+  | "no-ipv4-address"
+  | "no-ipv6-address";
 
 export const PROXY_SUBSCRIPTION_SKIP_LABELS: Record<ProxySubscriptionSkipReason, string> = {
   unbound: "未绑定客户端节点",
@@ -152,6 +167,8 @@ export const PROXY_SUBSCRIPTION_SKIP_LABELS: Record<ProxySubscriptionSkipReason,
   "no-entry-address": "入口主机没有可用地址",
   "udp-not-forwarded": "节点走 QUIC（只用 UDP），但这条转发没放行 UDP",
   unreachable: "最近几次端到端探测都不通，暂时移出订阅（通了自动回来）",
+  "no-ipv4-address": "这条地址要求 IPv4，入口（或它的前置节点）没有 IPv4 地址",
+  "no-ipv6-address": "这条地址要求 IPv6，入口（或它的前置节点）没有 IPv6 地址",
 };
 
 export type ProxySubscriptionEntry = {
@@ -176,6 +193,11 @@ export type ProxySubscriptionEntry = {
   meta?: ProxySubEntryMeta;
   /** 这条转发开了线路组：一个入口，面板在几条线路之间切。只给界面标注用。 */
   lineGroup?: boolean;
+  /**
+   * 入口真实的 IPv4 / IPv6 字面量（没有的是空串）。只有地址上带了 ipVersion 时才用来换掉
+   * node.address，平时不影响输出。老调用方可能不填 = 两种都没有。
+   */
+  addresses?: ProxySubEntryAddresses;
   node: ProxyNode;
 };
 
@@ -259,6 +281,18 @@ function toPort(value: unknown): number {
 const PROTOCOLS = new Set<ProxyNodeProtocol>(PROXY_NODE_PROTOCOLS);
 const TRANSPORTS = new Set<ProxyNodeTransport>(PROXY_NODE_TRANSPORTS);
 
+/**
+ * 经中转的 Mieru 两个承载都开时，只留转发放行的那一个：转发只放 TCP，客户端拿着 UDP 那份
+ * 去连只会超时；只放 UDP 的反过来。转发的协议没查（缺省）或者两个都放，就原样留着。
+ */
+function relayedForRuleProtocol(node: ProxyNode, ruleProtocol: unknown): ProxyNode {
+  if (node.protocol !== "mieru" || String(node.mieruTransport || "").toUpperCase() !== "BOTH") return node;
+  const forwarded = text(ruleProtocol).toLowerCase();
+  if (forwarded === "tcp") return { ...node, mieruTransport: "TCP" };
+  if (forwarded === "udp") return { ...node, mieruTransport: "UDP" };
+  return node;
+}
+
 /** 把数据库行还原成节点模型。列都是宽松类型，这里统一收敛。 */
 export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   const node = createEmptyProxyNode();
@@ -268,6 +302,7 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   node.address = text(row.address);
   node.port = toPort(row.port);
   node.uuid = text(row.uuid);
+  node.username = text(row.username);
   node.password = text(row.password);
   node.method = text(row.method);
   node.alterId = Number(text(row.alterId)) || 0;
@@ -295,6 +330,11 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   node.snellVersion = Number(text(row.snellVersion)) || 0;
   node.snellMode = text(row.snellMode);
   node.xhttpMode = text(row.xhttpMode);
+  if (node.protocol === "mieru") {
+    const end = toPort(row.portRangeEnd);
+    node.portRangeEnd = end > node.port ? end : 0;
+    node.mieruTransport = text(row.mieruTransport).toUpperCase() || "TCP";
+  }
   // Hysteria2 / TUIC / AnyTLS 的 TLS 是协议自带的，老行里 tls 列可能是 0。
   if (proxyNodeAlwaysTls(node.protocol)) node.tls = true;
   return node;
@@ -415,6 +455,16 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     }
     return address;
   };
+  // 中转条目的两种地址（ipVersion=4 / 6 时用），同一台入口机器只算一遍。
+  const hostFamilyAddresses = new Map<ProxySubscriptionHostRow | undefined, ProxySubEntryAddresses>();
+  const familyAddressesOf = (host: ProxySubscriptionHostRow | undefined): ProxySubEntryAddresses => {
+    let addresses = hostFamilyAddresses.get(host);
+    if (!addresses) {
+      addresses = hostFamilyEntryAddresses(host);
+      hostFamilyAddresses.set(host, addresses);
+    }
+    return addresses;
+  };
   // 中转条目只读模板的节点模型（relayProxyNode 会拷一份再改地址），同一个模板共用一份。
   const templateNodes = new Map<ProxyNodeTemplateRow, ProxyNode>();
   const templateNodeOf = (template: ProxyNodeTemplateRow): ProxyNode => {
@@ -507,6 +557,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       templateId,
       kind: "direct",
       frontTemplateId: 0,
+      addresses: directFamilyEntryAddresses(node.address, hostsById.get(Number(template.hostId || 0)), template),
       meta: {
         hostName: "", templateName: node.name, ruleName: "", customName: false,
         regionCode: templateRegionCode(template, hostsById), exitHostId: templateExitHostId(template),
@@ -619,7 +670,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
      * 只在明确是 tcp 时排除：protocol 缺省（调用方没查这一列）时不做判断，
      * 宁可放行也不要凭猜测吞掉节点。
      */
-    if (proxyNodeRequiresUdp(text(template.protocol).toLowerCase()) && text(rule.protocol).toLowerCase() === "tcp") {
+    if (proxyNodeOnlyUdp({ protocol: text(template.protocol).toLowerCase(), mieruTransport: text(template.mieruTransport) }) && text(rule.protocol).toLowerCase() === "tcp") {
       skip("udp-not-forwarded");
       continue;
     }
@@ -680,6 +731,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       ...(targetMismatch ? { targetMismatch: true } : {}),
       ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}),
       ...(bool(rule.failoverEnabled) ? { lineGroup: true } : {}),
+      addresses: familyAddressesOf(host),
       meta: {
         hostName: text(host?.name),
         templateName: templateNode.name,
@@ -693,7 +745,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
         ...entryCoordinates(host),
         ...(input.latencyByRuleId?.has(ruleId) ? { latencyMs: input.latencyByRuleId.get(ruleId) ?? null } : {}),
       },
-      node: relayProxyNode(templateNode, { address, port, name }),
+      node: relayedForRuleProtocol(relayProxyNode(templateNode, { address, port, name }), rule.protocol),
     });
   }
 
@@ -906,6 +958,19 @@ export type ProxySubCustomGroup = {
   match?: ProxySubGroupMatch;
   /** 成员里也带上自动组和地区组。 */
   includeGroups?: boolean;
+  /**
+   * 点名要的成员（排在最前，按这里的顺序）：别的自定义组、自动选路组 / 地区组、某个节点、DIRECT。
+   * 订阅里不存在的名字渲染时丢掉（指向不存在的成员 Clash 会拒绝整份配置）；互相引用成环的那一条边丢掉。
+   * 不填 = 老模板的样子，只按 filter 挑节点。
+   */
+  members?: string[];
+  /** false = 不按 filter 挑节点，只要上面点名的（「🚀 节点选择 = 香港组 / 日本组 / DIRECT」这种）。不填 = true。 */
+  includeNodes?: boolean;
+  /**
+   * 认不出的字段原样留着（别处导入的、以后版本加的）：可视化编辑只改它认得的那几个，
+   * 存回去时不能把别的弄丢。渲染不看它们。
+   */
+  [extra: string]: unknown;
 };
 
 export type BuildProxySubscriptionDocumentOptions = {
@@ -946,21 +1011,84 @@ function regionGroupsFor(nodes: readonly ProxyNode[], type: ProxySubRegionGroupT
   return groups;
 }
 
+/** 自定义组成员里能直接写的内置去向。REJECT 不收：sing-box 没有对应的出站，放进组里整份配置起不来。 */
+const PROXY_RULE_TARGET_DIRECT_NAME = "DIRECT";
+
 export function customGroupsFor(custom: readonly ProxySubCustomGroup[], nodeNames: readonly string[], groupNames: readonly string[]): ProxySubscriptionGroup[] {
-  const out: ProxySubscriptionGroup[] = [];
-  for (const group of custom) {
-    const name = text(group.name);
-    if (!name) continue;
-    const matcher = compileProxySubGroupFilter(text(group.filter), group.match);
-    const members = [
-      ...(group.includeGroups ? groupNames : []),
-      ...nodeNames.filter(matcher),
-    ];
-    if (members.length === 0) continue;
-    out.push({ name, type: group.type, members });
+  const defs = custom
+    .map((group) => ({ group, name: text(group.name) }))
+    .filter((item) => item.name);
+  // 同名的自定义组只认第一个当引用目标（重名本身是写错了，照旧都输出，不在这里改老行为）。
+  const indexByName = new Map<string, number>();
+  defs.forEach((item, index) => { if (!indexByName.has(item.name)) indexByName.set(item.name, index); });
+  const nodeSet = new Set(nodeNames);
+  const builtSet = new Set(groupNames);
+
+  // 不点名成员的组（老模板全是这种）：和原来一模一样的算法，输出逐字节不变。
+  const baseMembers = defs.map(({ group }) => {
+    const nodes = group.includeNodes === false ? [] : nodeNames.filter(compileProxySubGroupFilter(text(group.filter), group.match));
+    return [...(group.includeGroups ? groupNames : []), ...nodes];
+  });
+  const explicitOf = (index: number) => (Array.isArray(defs[index].group.members) ? defs[index].group.members! : []).map(text).filter(Boolean);
+
+  /*
+    组引用组：成环的边丢掉（mihomo 遇到环直接报 loop detected 拒绝整份配置）。按定义顺序深搜，
+    指回「还在栈上」的组的那条就是成环的边。保存时已经挡过一次，这里是给手改数据库 / 老数据兜底。
+  */
+  const refs = defs.map((_item, index) => explicitOf(index)
+    .map((member) => indexByName.get(member))
+    .filter((target): target is number => target !== undefined && target !== index));
+  const keptEdges = defs.map(() => new Set<number>());
+  const state = defs.map(() => 0); // 0 没到过 / 1 在栈上 / 2 走完了
+  const visit = (index: number) => {
+    state[index] = 1;
+    for (const target of refs[index]) {
+      if (state[target] === 1) continue;
+      keptEdges[index].add(target);
+      if (state[target] === 0) visit(target);
+    }
+    state[index] = 2;
+  };
+  defs.forEach((_item, index) => { if (state[index] === 0) visit(index); });
+
+  // 空组不出（老行为），引用了空组的那一项也得拿掉；反复算到不动为止（无环，最多 n 轮）。
+  const emitted = defs.map(() => true);
+  const resolved: string[][] = defs.map(() => []);
+  for (let round = 0; round <= defs.length; round += 1) {
+    let changed = false;
+    defs.forEach((_item, index) => {
+      const explicit = explicitOf(index);
+      if (explicit.length === 0) {
+        resolved[index] = baseMembers[index];
+      } else {
+        const picked: string[] = [];
+        for (const member of explicit) {
+          const target = indexByName.get(member);
+          if (target !== undefined) {
+            if (target !== index && keptEdges[index].has(target) && emitted[target]) picked.push(member);
+          } else if (member === PROXY_RULE_TARGET_DIRECT_NAME || builtSet.has(member) || nodeSet.has(member)) {
+            picked.push(member);
+          }
+        }
+        resolved[index] = Array.from(new Set([...picked, ...baseMembers[index]]));
+      }
+      const next = resolved[index].length > 0;
+      if (next !== emitted[index]) {
+        emitted[index] = next;
+        changed = true;
+      }
+    });
+    if (!changed) break;
   }
+
+  const out: ProxySubscriptionGroup[] = [];
+  defs.forEach(({ group, name }, index) => {
+    if (!emitted[index] || resolved[index].length === 0) return;
+    out.push({ name, type: group.type, members: resolved[index] });
+  });
   return out;
 }
+
 
 export function buildProxySubscriptionDocument(
   plan: ProxySubscriptionPlan,

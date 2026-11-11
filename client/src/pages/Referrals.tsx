@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
@@ -25,7 +26,7 @@ const PAGE_SIZE = 20;
 function dateText(value?: string | Date | null) {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale());
 }
 
 async function copyText(value: string, message: string) {

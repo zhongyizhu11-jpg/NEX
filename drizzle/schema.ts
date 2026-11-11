@@ -217,6 +217,8 @@ export const users = table("users", {
   telegramAnnouncementSubscribed: boolean("telegramAnnouncementSubscribed").notNull().default(false),
   /** 布局偏好：null 跟随站点默认（设置 › 个性化 › 布局），"standard" / "compact" 自己定。见 shared/personalization.ts。 */
   uiLayout: varchar("uiLayout", { length: 16 }),
+  /** 其他按账号保存的界面偏好（界面动画、列表的列 / 顺序 / 列宽），一段 JSON。见 shared/uiPreferences.ts。 */
+  uiPreferences: text("uiPreferences"),
   telegramBindCode: text("telegramBindCode").unique(),
   telegramBindCodeExpiresAt: epoch("telegramBindCodeExpiresAt"),
   telegramLoginCode: text("telegramLoginCode").unique(),
@@ -236,6 +238,12 @@ export const users = table("users", {
   discordEmail: text("discordEmail"),
   discordLinkedAt: epoch("discordLinkedAt"),
   discordDmBlockedAt: epoch("discordDmBlockedAt"),
+  // 通用 OIDC 登录（server/oidcLoginService.ts）：IdP 的 issuer 和 sub（同一个 sub 在别的 IdP 那里是另一个人）、
+  // 绑定时的邮箱（只用来显示）、绑定时间。(oidcIssuer, oidcSub) 的联合唯一索引建在 server/dbSchema.ts 里。
+  oidcIssuer: varchar("oidcIssuer", { length: 191 }),
+  oidcSub: varchar("oidcSub", { length: 191 }),
+  oidcEmail: text("oidcEmail"),
+  oidcLinkedAt: epoch("oidcLinkedAt"),
   browserSessionToken: text("browserSessionToken"),
   mobileSessionToken: text("mobileSessionToken"),
   telegramSessionToken: text("telegramSessionToken"),
@@ -351,6 +359,17 @@ export const hosts = table("hosts", {
   flowOffload: boolean("flowOffload").notNull().default(false),
   hostStatusNotifyEnabled: boolean("hostStatusNotifyEnabled").notNull().default(true),
   ipWhitelistOnly: boolean("ipWhitelistOnly").notNull().default(false),
+  // ===== Agent 管理（和 server/dbSchema.ts 同一组列，见那边的说明） =====
+  agentPanelUrlEnabled: boolean("agentPanelUrlEnabled").notNull().default(false),
+  agentPanelUrl: text("agentPanelUrl"),
+  trafficShutdownEnabled: boolean("trafficShutdownEnabled").notNull().default(false),
+  trafficShutdownThresholdPercent: int("trafficShutdownThresholdPercent").notNull().default(100),
+  trafficShutdownTriggeredAt: epoch("trafficShutdownTriggeredAt"),
+  trafficShutdownCycleMark: bigint("trafficShutdownCycleMark", { mode: "number" }),
+  resourceAlertOverride: text("resourceAlertOverride"),
+  agentInstallationId: varchar("agentInstallationId", { length: 64 }),
+  agentRetiredInstallationIds: text("agentRetiredInstallationIds"),
+  agentInstallationChangedAt: epoch("agentInstallationChangedAt"),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),
@@ -362,6 +381,8 @@ export const hosts = table("hosts", {
   ddnsDomain: text("ddnsDomain"),
   ddnsRecordType: varchar("ddnsRecordType", { length: 8 }).notNull().default("A"),
   ddnsIpVersion: varchar("ddnsIpVersion", { length: 8 }).notNull().default("ipv4"),
+  /** 主机 DDNS 发哪些值：primary = 只发主 IP（原来的行为），all = 检测到的全部地址（shared/hostDdnsPlan） */
+  ddnsValueMode: varchar("ddnsValueMode", { length: 8 }).notNull().default("primary"),
   lastDdnsValue: text("lastDdnsValue"),
   lastDdnsAt: epoch("lastDdnsAt"),
   lastDdnsError: text("lastDdnsError"),
@@ -388,6 +409,13 @@ export const hosts = table("hosts", {
     心跳上报的地址不再覆盖。
   */
   addressManual: boolean("addressManual").notNull().default(false),
+  /*
+    Agent 2.2.255 起上报的网卡全部公网地址（JSON，shared/hostPublicAddresses）。老 Agent 不报，一直为空。
+    primaryIpv4 / primaryIpv6 是管理员挑的主 IP：空 = 没挑过，照旧用 Agent 上报的那一个。
+  */
+  detectedAddresses: text("detectedAddresses"),
+  primaryIpv4: text("primaryIpv4"),
+  primaryIpv6: text("primaryIpv6"),
   // ===== 端口区间限制 =====
   portRangeStart: int("portRangeStart"),  // 允许转发的起始端口，null = 不限制
   portRangeEnd: int("portRangeEnd"),      // 允许转发的结束端口，null = 不限制
@@ -659,6 +687,10 @@ export const proxyNodes = table("proxy_nodes", {
   snellMode: text("snellMode"),
   // XHTTP 传输的 mode：auto | stream-one | stream-up | packet-up
   xhttpMode: text("xhttpMode"),
+  // socks5 / mieru 的用户名。Mieru 的端口段终点（0 = 单端口）与承载（TCP | UDP | BOTH）。
+  username: text("username"),
+  portRangeEnd: int("portRangeEnd").notNull().default(0),
+  mieruTransport: varchar("mieruTransport", { length: 8 }),
   // 多台中转指向同一落地节点时，订阅里额外生成的选路组类型：off | url-test | fallback | load-balance（负载均衡）
   autoGroup: varchar("autoGroup", { length: 16 }).notNull().default("url-test"),
   // 把落地机自己的地址也作为一个节点放进订阅。默认关：开了之后落地 IP 会出现在
@@ -721,7 +753,7 @@ export const proxyInbounds = table("proxy_inbounds", {
   remark: text("remark"),
   /** 对外标注：分享出去时对方看得到的那一句，会带到派生节点上。见 proxy_nodes.publicLabel。 */
   publicLabel: text("publicLabel"),
-  // vless | vmess | trojan | shadowsocks | hysteria2 | tuic | anytls | snell
+  // vless | vmess | trojan | shadowsocks | hysteria2 | tuic | anytls | snell | socks5 | mieru
   protocol: varchar("protocol", { length: 32 }).notNull().default("vless"),
   port: int("port").notNull(),
   transport: varchar("transport", { length: 16 }).notNull().default("tcp"), // tcp | ws | grpc | http
@@ -751,6 +783,9 @@ export const proxyInbounds = table("proxy_inbounds", {
   congestionControl: text("congestionControl"),
   snellVersion: int("snellVersion").notNull().default(0),
   snellMode: text("snellMode"),
+  /** Mieru（mita，shared/mieruInbound.ts）：端口段终点（0 = 单端口）与承载（TCP | UDP | BOTH）。 */
+  portRangeEnd: int("portRangeEnd").notNull().default(0),
+  mieruTransport: varchar("mieruTransport", { length: 8 }),
   /**
    * 这个入站是从哪个入站克隆出来的（0 = 人手建的）。
    *
@@ -830,6 +865,14 @@ export const proxyInboundUsers = table("proxy_inbound_users", {
    */
   sharedUserId: int("sharedUserId").notNull().default(0),
   sortOrder: int("sortOrder").notNull().default(0),
+  /**
+   * 这一份凭据自己跑了多少字节。只有 Mieru 有（mita 按用户计数，server/mitaTraffic.ts）；
+   * mitaCounter* 是上次见到的 mita 累计值和它属于哪个 mita 进程，用来算增量。
+   */
+  trafficUsed: bigint("trafficUsed", { mode: "number" }).notNull().default(0),
+  mitaCounterKey: text("mitaCounterKey"),
+  mitaCounterUp: bigint("mitaCounterUp", { mode: "number" }).notNull().default(0),
+  mitaCounterDown: bigint("mitaCounterDown", { mode: "number" }).notNull().default(0),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });
@@ -996,6 +1039,10 @@ export const proxySubTemplates = table("proxy_sub_templates", {
   target: varchar("target", { length: 16 }).notNull(),
   prelude: text("prelude").notNull().default(""),
   customGroupsJson: text("customGroupsJson"),
+  /** 模板里的分流规则文本（shared/proxySubCustomRules.ts 的写法）。 */
+  customRules: text("customRules"),
+  /** 模块 / 插件引用（JSON 数组），目前只有 Loon 模板用，见 shared/proxySubModules.ts。 */
+  modulesJson: text("modulesJson"),
   isDefault: boolean("isDefault").notNull().default(false),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
@@ -1071,6 +1118,8 @@ export const forwardGroups = table("forward_groups", {
   chinaHealthCheckMethod: varchar("chinaHealthCheckMethod", { length: 16 }).notNull().default("tcp"),
   telegramSwitchNotifyEnabled: boolean("telegramSwitchNotifyEnabled").notNull().default(false),
   ddnsAutoResolveEnabled: boolean("ddnsAutoResolveEnabled").notNull().default(true),
+  /** A / AAAA 组同时发另一族（双栈）：成员挑选照旧按主记录类型，另一族跟着同一批成员走（forwardGroupDualStackDdns） */
+  ddnsDualStack: boolean("ddnsDualStack").notNull().default(false),
   autoFailback: boolean("autoFailback").notNull().default(true),
   // Multi-front-VPS bandwidth aggregation for entry groups. Disabled by default
   // so existing groups keep their equal-share publishing behaviour.
@@ -1078,6 +1127,10 @@ export const forwardGroups = table("forward_groups", {
   bandwidthAggregationStrategy: varchar("bandwidthAggregationStrategy", { length: 32 }).notNull().default("capacity"),
   bandwidthAggregationSlots: int("bandwidthAggregationSlots").notNull().default(8),
   bandwidthAggregationMinMembers: int("bandwidthAggregationMinMembers").notNull().default(1),
+  /** 分线路解析：线路成员全挂时 default = 改用默认线路健康成员，remove = 删掉线路记录（shared/ddnsLines.ts）。 */
+  ddnsLineFallback: varchar("ddnsLineFallback", { length: 16 }).notNull().default("default"),
+  /** 面板在每条非默认线路上发布的值和服务商记录 ID（运行状态，JSON）。 */
+  ddnsLineState: text("ddnsLineState"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   activeMemberId: int("activeMemberId"),
   /** 成员跟着哪个节点池（server/nodePoolGroups.ts）；null = 手动维护。 */
@@ -1108,6 +1161,8 @@ export const forwardGroupMembers = table("forward_group_members", {
   // aggregation weight (0 = derive the weight from the group strategy).
   bandwidthMbps: int("bandwidthMbps").notNull().default(0),
   aggregationWeight: int("aggregationWeight").notNull().default(0),
+  /** 分到的运营商线路，JSON [{id,name}]；null = 只在默认线路（shared/ddnsLines.ts）。 */
+  ddnsLines: text("ddnsLines"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   activeSchedule: text("activeSchedule"),
   scheduleSuspended: boolean("scheduleSuspended").notNull().default(false),
@@ -1338,6 +1393,13 @@ export const hostMetrics = table("host_metrics", {
   /** 此刻的 TCP / UDP 连接数（Agent 2.2.215 起上报；旧 Agent 为 null） */
   tcpConnections: int("tcpConnections"),
   udpConnections: int("udpConnections"),
+  /**
+   * 系统平均负载（1 / 5 / 15 分钟）乘 100 的整数（Agent 2.2.255 起上报；没报为 null）。
+   * 库里没有浮点列，所以 0.12 存成 12，读的地方除回去（shared/hostLoadAverage.ts）。
+   */
+  loadAvg1: int("loadAvg1"),
+  loadAvg5: int("loadAvg5"),
+  loadAvg15: int("loadAvg15"),
   recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
 });
 export type HostMetric = typeof hostMetrics.$inferSelect;
@@ -1526,6 +1588,14 @@ export const hostProbeServices = table("host_probe_services", {
   targetPort: int("targetPort"),
   /** 目标是域名时按哪一族解析：auto / ipv4 / ipv6（shared/probeFamily.ts，Agent 2.2.225 起生效）。 */
   addressFamily: varchar("addressFamily", { length: 8 }).notNull().default("auto"),
+  /*
+    下面三项只有 method = "http"（URL 连接检测，Agent 2.2.255 起）用得上，这时 targetIp 里存的是完整 URL：
+    超时秒数（1-30）、预期状态码（"200-399"、"200,204" 这样的规范写法）、要不要忽略证书错误。
+    见 shared/hostProbeService.ts。
+  */
+  httpTimeoutSeconds: int("httpTimeoutSeconds").notNull().default(5),
+  httpExpectedStatus: varchar("httpExpectedStatus", { length: 128 }).notNull().default("200-399"),
+  httpSkipTlsVerify: boolean("httpSkipTlsVerify").notNull().default(false),
   hostScope: varchar("hostScope", { length: 16 }).notNull().default("all"),
   hostIds: text("hostIds"),
   excludeHostIds: text("excludeHostIds"),
@@ -1535,6 +1605,8 @@ export const hostProbeServices = table("host_probe_services", {
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+  /** 三网视图的运营商标签：ct 电信 / cu 联通 / cm 移动（shared/probeCarrier.ts），空 = 不归哪一网。 */
+  carrier: varchar("carrier", { length: 8 }),
 });
 export type HostProbeService = typeof hostProbeServices.$inferSelect;
 export type InsertHostProbeService = typeof hostProbeServices.$inferInsert;
@@ -1547,6 +1619,10 @@ export const hostProbeServiceStats = table("host_probe_service_stats", {
   isTimeout: boolean("isTimeout").notNull().default(false),
   probeCount: int("probeCount").notNull().default(1),
   probeSuccesses: int("probeSuccesses").notNull().default(0),
+  /** 没通时是哪一种不通（shared/hostProbeService.ts）；通了、或老 Agent 没报是 null。 */
+  failure: varchar("failure", { length: 16 }),
+  /** URL 连接检测拿到的 HTTP 状态码；没拿到响应、或不是 URL 检测是 null。 */
+  httpStatus: int("httpStatus"),
   recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
 });
 export type HostProbeServiceStat = typeof hostProbeServiceStats.$inferSelect;
@@ -1660,6 +1736,9 @@ export const paymentOrders = table("payment_orders", {
   subscriptionId: int("subscriptionId"),
   discountCodeId: int("discountCodeId"),
   discountConsumed: boolean("discountConsumed").notNull().default(false),
+  // 这笔订单是否占着套餐的一份库存。新购的待支付订单下单时就占；没付款关闭时退回、
+  // 这一列清掉。续费单不占。靠这一列保证同一笔订单只占一次、只退一次。
+  stockReserved: boolean("stockReserved").notNull().default(false),
   discountAmountCents: bigint("discountAmountCents", { mode: "number" }).notNull().default(0),
   clientIp: text("clientIp"),
   rawNotify: text("rawNotify"),
@@ -1716,6 +1795,13 @@ export const subscriptionPlans = table("subscription_plans", {
    * 按套餐分开设：利润薄的套餐可以不返，引流套餐可以多返。
    */
   referralRateBps: int("referralRateBps").notNull().default(0),
+  /**
+   * 销售库存。stockLimit 是总量，0 = 不限；stockUsed 是已占用的份数（新购、管理员分配、
+   * 兑换码、待支付订单各占一份，续费不占；卖出去的到期也不退回，只有没付款的订单关闭才退）。
+   * 历史销售不追溯：加这两列之前卖出去的不计入 stockUsed。
+   */
+  stockLimit: int("stockLimit").notNull().default(0),
+  stockUsed: int("stockUsed").notNull().default(0),
 });
 export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 export type InsertSubscriptionPlan = typeof subscriptionPlans.$inferInsert;
@@ -1873,6 +1959,13 @@ export const trafficBillingConfigs = table("traffic_billing_configs", {
   pricePerGbCents: bigint("pricePerGbCents", { mode: "number" }).notNull().default(0),
   pricePerGbMilliCents: bigint("pricePerGbMilliCents", { mode: "number" }).notNull().default(0),
   multiplier: int("multiplier").notNull().default(100), // snapshot from linked resource, 0.01x = 1, 1x = 100, 50x = 5000
+  /**
+   * 账号库存：这个资源最多给几个账号用，0 = 不限。一个账号不管建了多少条规则都只占一份，
+   * 占用数不落库 —— 按现有逻辑规则现算（见 productStockRepository）。
+   */
+  stockLimit: int("stockLimit").notNull().default(0),
+  // 每个账号在这个资源上最多建几条逻辑规则，0 = 不限。
+  maxRulesPerUser: int("maxRulesPerUser").notNull().default(0),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

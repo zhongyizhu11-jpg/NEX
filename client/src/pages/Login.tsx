@@ -24,6 +24,11 @@ import { parseGoogleLoginReturn, stripGoogleLoginReturnFromUrl } from "@/feature
 import DiscordLoginButton from "@/features/discordLogin/DiscordLoginButton";
 import DiscordMark from "@/features/discordLogin/DiscordMark";
 import { parseDiscordLoginReturn, stripDiscordLoginReturnFromUrl } from "@/features/discordLogin/discordLoginReturn";
+import PasswordResetDialog, { type PasswordResetCaptchaProps } from "@/features/passwordReset/PasswordResetDialog";
+import AuthCaptchaField from "@/features/authCaptcha/AuthCaptchaField";
+import { authCaptchaSubmissionFields, normalizeAuthCaptchaMode, type AuthCaptchaSubmission } from "@shared/authCaptchaMode";
+import OidcLoginButton from "@/features/oidcLogin/OidcLoginButton";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -48,13 +53,6 @@ type TwoFactorChallengeState = {
   challengeId: string;
   username: string;
   expiresAt: number;
-};
-
-type CaptchaChallengeState = {
-  captchaId: string;
-  imageDataUrl: string;
-  expiresAt: number;
-  purpose: "login" | "register";
 };
 
 type TelegramWebAppBridge = {
@@ -95,195 +93,19 @@ function clearTelegramLinkFromUrl() {
   window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
 }
 
-function captchaRetryAfterSeconds(message: string) {
-  const match = /^CAPTCHA_REFRESH_RATE_LIMITED:(\d+)$/.exec(message);
-  return match ? Math.max(1, Number(match[1])) : 0;
-}
-
-/*
-  验证组件（@cap.js/widget，压缩前 42 kB）用到时才下载。
-
-  登录页是同步打进入口包的，原来顶部一句 import 就让每个人首屏都带上它 ——
-  可验证只在「同一账号连续输错」和「注册」时才出现，绝大多数登录根本用不到。
-  cap-widget 是自定义元素，模块加载完才注册；所以等它 ready 了再创建元素，
-  不去依赖浏览器事后升级（升级前设的属性和监听虽然也保得住，但少一种时序可想）。
-*/
-let capWidgetLoaded = false;
-let capWidgetPromise: Promise<void> | null = null;
-function loadCapWidget() {
-  if (!capWidgetPromise) {
-    capWidgetPromise = import("@cap.js/widget").then(
-      () => {
-        capWidgetLoaded = true;
-      },
-      (error) => {
-        capWidgetPromise = null;
-        throw error;
-      },
-    );
-  }
-  return capWidgetPromise;
-}
-
-function CapVerificationField(props: {
-  purpose: "login" | "register";
-  disabled?: boolean;
-  resetKey: number;
-  onToken: (token: string) => void;
-  onError: (message: string) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [widgetReady, setWidgetReady] = useState(capWidgetLoaded);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [loadAttempt, setLoadAttempt] = useState(0);
-
-  useEffect(() => {
-    if (widgetReady) return;
-    let cancelled = false;
-    setLoadFailed(false);
-    loadCapWidget()
-      .then(() => {
-        if (!cancelled) setWidgetReady(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLoadFailed(true);
-        props.onError("CAPTCHA_LOAD_FAILED");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadAttempt, props.onError, widgetReady]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !widgetReady) return;
-    const widget = document.createElement("cap-widget");
-    const panelBase = mobileAuth.isNative ? mobileAuth.normalizePanelUrl(mobileAuth.getPanelUrl()) : "";
-    widget.setAttribute("data-cap-api-endpoint", `${panelBase}/api/auth/cap/${props.purpose}/`);
-    widget.setAttribute("data-cap-worker-count", "2");
-    widget.setAttribute("data-cap-i18n-initial-state", "点击验证");
-    widget.setAttribute("data-cap-i18n-verifying-label", "验证中...");
-    widget.setAttribute("data-cap-i18n-solved-label", "验证通过");
-    widget.setAttribute("data-cap-i18n-error-label", "验证失败，请重试");
-    widget.setAttribute("data-cap-i18n-verify-aria-label", "点击验证你是真人");
-    if (props.disabled) {
-      widget.setAttribute("aria-disabled", "true");
-      widget.style.pointerEvents = "none";
-      widget.style.opacity = "0.65";
-    }
-    const handleSolve = (event: Event) => {
-      const token = String((event as CustomEvent<{ token?: string }>).detail?.token || "").trim();
-      if (token) props.onToken(token);
-    };
-    const handleReset = () => props.onToken("");
-    const handleError = (event: Event) => {
-      props.onToken("");
-      props.onError(String((event as CustomEvent<{ message?: string }>).detail?.message || "CAPTCHA_INVALID"));
-    };
-    widget.addEventListener("solve", handleSolve);
-    widget.addEventListener("reset", handleReset);
-    widget.addEventListener("error", handleError);
-    container.replaceChildren(widget);
-    return () => {
-      widget.removeEventListener("solve", handleSolve);
-      widget.removeEventListener("reset", handleReset);
-      widget.removeEventListener("error", handleError);
-      widget.remove();
-    };
-  }, [props.disabled, props.onError, props.onToken, props.purpose, props.resetKey, widgetReady]);
-
+/** 「忘记密码」里的人机验证：和登录用同一个组件、同一个 purpose（服务端按 login 验），方式跟着系统设置走。 */
+function renderPasswordResetCaptcha(props: PasswordResetCaptchaProps) {
   return (
-    <div className="space-y-2">
-      <Label>人机验证</Label>
-      <div className="min-h-14" aria-live="polite">
-        {!widgetReady && (loadFailed ? (
-          <button
-            type="button"
-            className="flex min-h-14 w-full items-center text-left text-meta text-destructive underline-offset-4 hover:underline"
-            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
-          >
-            验证没加载出来，点这里重试
-          </button>
-        ) : (
-          <p className="flex min-h-14 items-center text-meta text-muted-foreground">正在加载验证…</p>
-        ))}
-        {/* 组件是命令式塞进去的，单独一个空 div，不和 React 管的占位文字混在一起 */}
-        <div ref={containerRef} />
-      </div>
-    </div>
-  );
-}
-
-const ignoreCapError = () => undefined;
-
-function ImageCaptchaField(props: {
-  id: string;
-  value: string;
-  imageDataUrl?: string;
-  loading: boolean;
-  refreshDisabled: boolean;
-  refreshTitle: string;
-  disabled?: boolean;
-  onChange: (value: string) => void;
-  onRefresh: () => void;
-  resetKey?: number;
-}) {
-  return (
-    <CapVerificationField
-      purpose={props.id === "reg-captcha" ? "register" : "login"}
+    <AuthCaptchaField
+      key={props.mode}
+      id="reset-captcha"
+      mode={props.mode}
+      purpose="login"
       disabled={props.disabled}
-      resetKey={props.resetKey ?? 0}
-      onToken={props.onChange}
-      onError={ignoreCapError}
+      resetKey={props.resetKey}
+      onChange={props.onChange}
     />
   );
-  /*
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={props.id}>验证码</Label>
-      <div className="flex items-stretch gap-2">
-        <div className="flex h-14 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-md border bg-white">
-          {props.imageDataUrl ? (
-            <img
-              src={props.imageDataUrl}
-              alt="图片验证码"
-              className="h-full w-full select-none object-fill"
-              draggable={false}
-            />
-          ) : props.loading ? (
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          ) : (
-            <span className="text-sm text-muted-foreground">验证码暂不可用</span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={props.onRefresh}
-          disabled={props.refreshDisabled}
-          className="flex h-14 w-11 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          title={props.refreshTitle}
-          aria-label={props.refreshTitle}
-        >
-          <RefreshCw className={`h-4 w-4 ${props.loading ? "animate-spin" : ""}`} />
-        </button>
-      </div>
-      <Input
-        id={props.id}
-        type="text"
-        inputMode="text"
-        autoCapitalize="characters"
-        autoComplete="off"
-        spellCheck={false}
-        maxLength={12}
-        placeholder="请输入图片中的字符"
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        disabled={props.disabled || !props.imageDataUrl}
-      />
-    </div>
-  );
-  */
 }
 
 const LOGIN_WELCOME_TOAST_KEY = "forwardx.loginWelcome";
@@ -319,24 +141,22 @@ export default function Login() {
   // 邀请链接（?invite= / ?ref=）带来的码：预填并锁住，免得被误改掉；手动来的人可以自己填。
   const linkedInviteCode = readInviteCodeFromSearch(search);
   const [inviteCode, setInviteCode] = useState(() => linkedInviteCode || "");
-  const [captchaAnswer, setCaptchaAnswer] = useState("");
-  const [captchaChallenge, setCaptchaChallenge] = useState<CaptchaChallengeState | null>(null);
+  // 人机验证的结果（点击是一枚令牌，图片是挑战 id + 字符）；都只能用一次，提交失败就清掉、resetKey 加一换新的。
+  const [captchaSubmission, setCaptchaSubmission] = useState<AuthCaptchaSubmission | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [loginCaptchaRequiredFor, setLoginCaptchaRequiredFor] = useState<string | null>(null);
-  const [captchaCooldownUntil, setCaptchaCooldownUntil] = useState(0);
   const [telegramLoginCode, setTelegramLoginCode] = useState<string | null>(null);
   const [mobileTelegramLogin, setMobileTelegramLogin] = useState<MobileTelegramLoginState | null>(null);
   const [twoFactorChallenge, setTwoFactorChallenge] = useState<TwoFactorChallengeState | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [panelUrlDraft, setPanelUrlDraft] = useState(() => mobileAuth.getPanelUrl());
   const [showPanelSettings, setShowPanelSettings] = useState(false);
+  const [passwordResetOpen, setPasswordResetOpen] = useState(false);
   const { resolvedTheme, setTheme } = useTheme();
   const hasMobilePanelUrl = !mobileAuth.isNative || mobileAuth.hasPanelUrl();
   const showInsecurePanelWarning = mobileAuth.isNative && mobileAuth.isInsecurePanelUrl(mobileAuth.getPanelUrl());
   const telegramWebAppAutoLoginTriedRef = useRef(false);
   const telegramWebAppChallengeRetriedRef = useRef(false);
-  const captchaRequestIdRef = useRef(0);
-  const captchaRequestPendingRef = useRef(false);
   const telegramWebAppLoginRetryMutateRef = useRef((payload: { initData: string; challenge?: string; mobile?: boolean }) => {
     void payload;
   });
@@ -439,72 +259,23 @@ export default function Login() {
   });
   const serverRequiresLoginCaptcha = captchaStatusQuery.data?.required === true;
   const loginCaptchaRequired = captchaStatusQuery.data?.enabled !== false && (serverRequiresLoginCaptcha || loginCaptchaRequiredFor === normalizedUsername);
-  // The image challenge remains available only for old clients; the current
-  // page uses the self-hosted Cap widget below.
-  const captchaVisible = false;
-  const captchaPurpose = mode === "register" ? "register" as const : "login" as const;
-
-  const createCaptchaMutation = trpc.auth.createCaptcha.useMutation();
-  const requestCaptcha = useCallback((purpose: "login" | "register", clearExisting = true) => {
-    if (!hasMobilePanelUrl) {
-      setCaptchaAnswer("");
-      return;
-    }
-    if (Date.now() < captchaCooldownUntil || captchaRequestPendingRef.current) return;
-    const requestId = ++captchaRequestIdRef.current;
-    captchaRequestPendingRef.current = true;
-    if (clearExisting) setCaptchaChallenge(null);
-    createCaptchaMutation.mutate({ purpose }, {
-      onSuccess: (data) => {
-        captchaRequestPendingRef.current = false;
-        if (requestId !== captchaRequestIdRef.current) return;
-        setCaptchaChallenge({
-          captchaId: data.captchaId,
-          imageDataUrl: data.imageDataUrl,
-          expiresAt: Date.now() + data.expiresInSeconds * 1000,
-          purpose,
-        });
-        setCaptchaAnswer("");
-        setCaptchaCooldownUntil(0);
-      },
-      onError: (error) => {
-        captchaRequestPendingRef.current = false;
-        if (requestId !== captchaRequestIdRef.current) return;
-        const retryAfter = captchaRetryAfterSeconds(error.message || "");
-        if (retryAfter > 0) {
-          setCaptchaCooldownUntil(Date.now() + retryAfter * 1000);
-          toast.error(`验证码刷新过于频繁，请 ${retryAfter} 秒后重试`);
-          return;
-        }
-        if (mobileAuth.isNative && isMobileNetworkError(error.message || "")) {
-          toast.error("无法连接面板，请检查右上角面板地址");
-          return;
-        }
-        toast.error(authErrorMessage(error.message, "验证码加载失败"));
-      },
-    });
-  }, [captchaCooldownUntil, createCaptchaMutation, hasMobilePanelUrl]);
-
-  useEffect(() => {
-    if (!captchaVisible || !hasMobilePanelUrl) return;
-    const challengeReady = captchaChallenge?.purpose === captchaPurpose && captchaChallenge.expiresAt > Date.now();
-    if (challengeReady || createCaptchaMutation.isPending || Date.now() < captchaCooldownUntil) return;
-    requestCaptcha(captchaPurpose);
-  }, [captchaChallenge, captchaCooldownUntil, captchaPurpose, captchaVisible, createCaptchaMutation.isPending, hasMobilePanelUrl, requestCaptcha]);
-
-  useEffect(() => {
-    if (captchaCooldownUntil <= Date.now()) return;
-    const timeout = window.setTimeout(() => setCaptchaCooldownUntil(0), captchaCooldownUntil - Date.now() + 50);
-    return () => window.clearTimeout(timeout);
-  }, [captchaCooldownUntil]);
+  /*
+    人机验证方式（系统设置 › 注册，shared/authCaptchaMode.ts）：服务端只认选中的那一种，这里也只画那一种。
+    登录看 needsCaptcha（不缓存，管理员刚换了也立刻跟上）、注册看 emailConfig，都没回来时先按 publicInfo。
+  */
+  const captchaMode = normalizeAuthCaptchaMode(
+    (mode === "register" ? emailConfig?.authCaptchaMode : captchaStatusQuery.data?.mode) ?? publicInfo?.authCaptchaMode,
+  );
+  const handleCaptchaChange = useCallback((value: AuthCaptchaSubmission | null) => setCaptchaSubmission(value), []);
+  const captchaFields = authCaptchaSubmissionFields(captchaSubmission);
+  const captchaReady = Object.keys(captchaFields).length > 0;
 
   // 登录 mutation
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: (data) => {
       if (data.twoFactorRequired) {
         setLoginCaptchaRequiredFor(null);
-        setCaptchaChallenge(null);
-        setCaptchaAnswer("");
+        setCaptchaSubmission(null);
         setTwoFactorChallenge({
           challengeId: data.challengeId,
           username: data.username,
@@ -531,7 +302,7 @@ export default function Login() {
       }
       if (msg === "CAPTCHA_REQUIRED" || msg === "CAPTCHA_REQUIRED_AFTER_FAIL") {
         setLoginCaptchaRequiredFor(variables.username.trim().toLowerCase());
-        setCaptchaAnswer("");
+        setCaptchaSubmission(null);
         setCaptchaResetKey((value) => value + 1);
         if (msg === "CAPTCHA_REQUIRED_AFTER_FAIL") {
           toast.error("用户名或密码错误，请输入验证码后重试");
@@ -541,17 +312,20 @@ export default function Login() {
       } else if (msg === "CAPTCHA_INVALID") {
         setLoginCaptchaRequiredFor(variables.username.trim().toLowerCase());
         toast.error("验证码错误或已过期，请重新输入");
-        setCaptchaAnswer("");
+        setCaptchaSubmission(null);
         setCaptchaResetKey((value) => value + 1);
+        // 可能是管理员刚换了验证方式：重新问一次，下一张就按新方式画
+        void captchaStatusQuery.refetch();
       } else {
         toast.error(authErrorMessage(msg, "登录失败"));
         if (msg === ACCOUNT_DISABLED_ERR_MSG && mobileAuth.isNative) {
           mobileAuth.clear();
         }
-        if (variables.captchaId && !msg.startsWith("LOGIN_RATE_LIMITED:")) {
+        if ((variables.captchaId || variables.capToken) && !msg.startsWith("LOGIN_RATE_LIMITED:")) {
+          // 交过去的验证已经用掉了：换一枚新的，再问一次还要不要验证
           setLoginCaptchaRequiredFor(null);
-          setCaptchaChallenge(null);
-          setCaptchaAnswer("");
+          setCaptchaSubmission(null);
+          setCaptchaResetKey((value) => value + 1);
           void captchaStatusQuery.refetch();
         }
       }
@@ -771,8 +545,8 @@ export default function Login() {
       setMode("login");
       setConfirmPassword("");
       setName("");
-      setCaptchaAnswer("");
-      setCaptchaChallenge(null);
+      setCaptchaSubmission(null);
+      setCaptchaResetKey((value) => value + 1);
     },
     onError: (error) => {
       const msg = error.message || "";
@@ -782,7 +556,7 @@ export default function Login() {
         return;
       }
       toast.error(authErrorMessage(msg, "注册失败"));
-      setCaptchaAnswer("");
+      setCaptchaSubmission(null);
       setCaptchaResetKey((value) => value + 1);
     },
   });
@@ -911,14 +685,14 @@ export default function Login() {
       return;
     }
     if (loginCaptchaRequired) {
-      if (!captchaAnswer.trim()) {
-        toast.error("请先完成人机验证");
+      if (!captchaReady) {
+        toast.error(captchaMode === "image" ? "请输入图片中的验证码" : "请先完成人机验证");
         return;
       }
       loginMutation.mutate({
         username: username.trim(),
         password,
-        capToken: captchaAnswer.trim(),
+        ...captchaFields,
         mobile: mobileAuth.isNative,
       });
     } else {
@@ -971,8 +745,8 @@ export default function Login() {
       toast.error("当前仅支持邀请注册，请填写有效的邀请码");
       return;
     }
-    if (registrationCaptchaEnabled && !captchaAnswer.trim()) {
-      toast.error("请先完成人机验证");
+    if (registrationCaptchaEnabled && !captchaReady) {
+      toast.error(captchaMode === "image" ? "请输入图片中的验证码" : "请先完成人机验证");
       return;
     }
     if (name.trim().length > DISPLAY_NAME_MAX_LENGTH) {
@@ -985,7 +759,7 @@ export default function Login() {
       name: name.trim() || undefined,
       email: email.trim() || undefined,
       emailCode: emailCode.trim() || undefined,
-      capToken: registrationCaptchaEnabled ? captchaAnswer.trim() : undefined,
+      ...(registrationCaptchaEnabled ? captchaFields : {}),
       // 返利没开时不带：服务端本来也会忽略，但没必要把链接里的码发过去。
       inviteCode: referralEnabled ? inviteCode.trim() || undefined : undefined,
     });
@@ -1004,7 +778,7 @@ export default function Login() {
     mobileAuth.setPanelUrl(normalized);
     setPanelUrlDraft(normalized);
     setShowPanelSettings(false);
-    setCaptchaAnswer("");
+    setCaptchaSubmission(null);
     void utils.invalidate();
     toast.success("面板地址已保存");
   };
@@ -1029,12 +803,9 @@ export default function Login() {
   const isTwoFactorPending = verifyTwoFactorLoginMutation.isPending;
   const isTelegramPending = telegramLoginMutation.isPending || telegramWebAppLoginMutation.isPending;
   const isMobileTelegramWaiting = startMobileTelegramLoginMutation.isPending || !!mobileTelegramLogin;
-  const showTelegramLoginSlot = mode === "login" && hasMobilePanelUrl && !getTelegramWebAppInitData();
-  const captchaCooldownSeconds = Math.max(0, Math.ceil((captchaCooldownUntil - Date.now()) / 1000));
-  const activeCaptchaImage = captchaChallenge?.purpose === captchaPurpose ? captchaChallenge.imageDataUrl : undefined;
-  const captchaRefreshTitle = captchaCooldownSeconds > 0
-    ? `${captchaCooldownSeconds} 秒后可刷新`
-    : "刷新验证码";
+  // 管理员可以单独关掉 Telegram 登录（系统设置 › 注册与登录）：关了就不画这一块，服务端那几个登录过程也一律拒绝。
+  const telegramLoginEnabled = publicInfo?.telegramLoginEnabled !== false;
+  const showTelegramLoginSlot = mode === "login" && hasMobilePanelUrl && telegramLoginEnabled && !getTelegramWebAppInitData();
 
   return (
     <div className="mobile-login-screen auth-shell relative min-h-screen overflow-hidden">
@@ -1068,6 +839,7 @@ export default function Login() {
             <SettingsIcon className={mobileAuth.hasPanelUrl() ? "h-5 w-5 text-muted-foreground" : "h-5 w-5 text-[var(--fx-warn-text)]"} />
           </button>
         )}
+        <LanguageSwitcher />
         <button
           onClick={toggleTheme}
           className="flex h-9 w-9 items-center justify-center rounded-md bg-[var(--fx-l1-surface)] text-foreground shadow-[var(--fx-elevation-control)] transition-colors hover:bg-[var(--fx-hover)] focus:outline-none focus-visible:shadow-[var(--fx-focus-ring)]"
@@ -1166,7 +938,17 @@ export default function Login() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">密码</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="password">密码</Label>
+                  <button
+                    type="button"
+                    className="text-meta text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
+                    disabled={isPending || !hasMobilePanelUrl}
+                    onClick={() => setPasswordResetOpen(true)}
+                  >
+                    忘记密码？
+                  </button>
+                </div>
                 <PasswordInput
                   id="password"
                   placeholder="请输入密码"
@@ -1177,17 +959,15 @@ export default function Login() {
                 />
               </div>
               {loginCaptchaRequired && (
-                <ImageCaptchaField
+                <AuthCaptchaField
+                  key={`login-${captchaMode}`}
                   id="captcha"
-                  value={captchaAnswer}
-                  imageDataUrl={activeCaptchaImage}
-                  loading={createCaptchaMutation.isPending}
-                  refreshDisabled={createCaptchaMutation.isPending || captchaCooldownSeconds > 0}
-                  refreshTitle={captchaRefreshTitle}
+                  mode={captchaMode}
+                  purpose="login"
+                  available={hasMobilePanelUrl}
                   disabled={isPending}
-                  onChange={setCaptchaAnswer}
                   resetKey={captchaResetKey}
-                  onRefresh={() => requestCaptcha("login", false)}
+                  onChange={handleCaptchaChange}
                 />
               )}
 
@@ -1239,6 +1019,15 @@ export default function Login() {
                   }}
                 />
               ) : null}
+
+              {/* 通用 OIDC（Pocket ID、Keycloak……）：显不显示、失败提示、2FA 跳回都在组件里自己处理 */}
+              <OidcLoginButton
+                disabled={isPending}
+                inviteCode={referralEnabled ? inviteCode : null}
+                onTwoFactorRequired={(data) => {
+                  startTwoFactorFromTelegram({ twoFactorRequired: true, ...data });
+                }}
+              />
 
               <OpsLoginExtras disabled={isPending} />
 
@@ -1307,7 +1096,7 @@ export default function Login() {
                       return;
                     }
                     setMode("register");
-                    setCaptchaAnswer("");
+                    setCaptchaSubmission(null);
                   }}
                   className="text-sm text-muted-foreground hover:text-primary transition-colors"
                 >
@@ -1434,17 +1223,15 @@ export default function Login() {
                 </div>
               )}
               {registrationCaptchaEnabled ? (
-                <ImageCaptchaField
+                <AuthCaptchaField
+                  key={`register-${captchaMode}`}
                   id="reg-captcha"
-                  value={captchaAnswer}
-                  imageDataUrl={activeCaptchaImage}
-                  loading={createCaptchaMutation.isPending}
-                  refreshDisabled={createCaptchaMutation.isPending || captchaCooldownSeconds > 0}
-                  refreshTitle={captchaRefreshTitle}
+                  mode={captchaMode}
+                  purpose="register"
+                  available={hasMobilePanelUrl}
                   disabled={isPending || !hasMobilePanelUrl}
-                  onChange={setCaptchaAnswer}
                   resetKey={captchaResetKey}
-                  onRefresh={() => requestCaptcha("register", false)}
+                  onChange={handleCaptchaChange}
                 />
               ) : null}
 
@@ -1470,7 +1257,7 @@ export default function Login() {
               <div className="text-center">
                 <button
                   type="button"
-                  onClick={() => { setMode("login"); setCaptchaAnswer(""); }}
+                  onClick={() => { setMode("login"); setCaptchaSubmission(null); }}
                   className="text-sm text-muted-foreground hover:text-primary transition-colors"
                 >
                   已有账号？返回登录
@@ -1488,6 +1275,19 @@ export default function Login() {
           </Card>
         </main>
       </div>
+
+      {/* 忘记密码：申请重置链接；从链接打开登录页时（#password-reset=…）它自己弹出来设新密码 */}
+      <PasswordResetDialog
+        open={passwordResetOpen}
+        onOpenChange={setPasswordResetOpen}
+        defaultIdentifier={username}
+        renderCaptcha={renderPasswordResetCaptcha}
+        onPasswordReset={() => {
+          // 输入框里可能还填着旧密码；App 里只记用户名，不存密码。
+          setPassword("");
+          setConfirmPassword("");
+        }}
+      />
 
       {mobileAuth.isNative && (
         <Dialog open={showPanelSettings} onOpenChange={setShowPanelSettings}>

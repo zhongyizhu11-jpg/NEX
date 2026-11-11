@@ -17,6 +17,7 @@ import {
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { billingCalendarParts, billingDaysInMonth, billingMonthStart } from "../../shared/billingTime";
 import { recordUserAccessPausedEvent } from "../ops/eventHooks";
+import { clearPersonalRuleGroupsForUser } from "../ruleGroupRelations";
 
 export type ForwardAccessPauseReason = "manual" | "traffic_billing_balance" | "traffic_limit" | "expired" | null;
 
@@ -118,7 +119,7 @@ export async function verifyUserPassword(userId: number, password: string) {
   return await verifyPassword(password, user.password);
 }
 
-export async function updateUserProfile(userId: number, data: { name?: string; email?: string; displayRemark?: string | null; avatar?: string | null; telegramAnnouncementSubscribed?: boolean; uiLayout?: "standard" | "compact" | null }) {
+export async function updateUserProfile(userId: number, data: { name?: string; email?: string; displayRemark?: string | null; avatar?: string | null; telegramAnnouncementSubscribed?: boolean; uiLayout?: "standard" | "compact" | null; uiPreferences?: string | null }) {
   const db = await getDb();
   if (!db) return;
   const patch: Record<string, unknown> = { ...data, updatedAt: nowDate() };
@@ -401,6 +402,10 @@ export async function registerUser(data: {
   discordId?: string | null;
   discordUsername?: string | null;
   discordEmail?: string | null;
+  /** 通用 OIDC 注册同理：(oidcIssuer, oidcSub) 有唯一索引，并发注册只会成功一个。 */
+  oidcIssuer?: string | null;
+  oidcSub?: string | null;
+  oidcEmail?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -409,6 +414,7 @@ export async function registerUser(data: {
     password: data.unusablePassword ? createUnusablePasswordHash() : await hashPassword(data.password),
     ...(data.googleSub ? { googleSub: data.googleSub, googleEmail: data.googleEmail ?? null, googleLinkedAt: nowDate() } : {}),
     ...(data.discordId ? { discordId: data.discordId, discordUsername: data.discordUsername ?? null, discordEmail: data.discordEmail ?? null, discordLinkedAt: nowDate() } : {}),
+    ...(data.oidcIssuer && data.oidcSub ? { oidcIssuer: data.oidcIssuer, oidcSub: data.oidcSub, oidcEmail: data.oidcEmail ?? null, oidcLinkedAt: nowDate() } : {}),
     name: data.name ?? data.username,
     email: data.email ?? null,
     emailVerified: data.emailVerified ?? false,
@@ -844,6 +850,13 @@ export async function deleteUser(userId: number): Promise<{ hostIds: number[] }>
       }
     }
   }
+  // 他自己建的规则分组和里面的关系跟着账号一起删：分组只有本人看得见，人没了就是没人认领的数据。
+  await clearPersonalRuleGroupsForUser(userId);
+  // 他在网络拓扑上手动画的外部节点和连线（server/topologyManual.ts）：只是展示用，人没了一起删，
+  // 不然迁移导入时 userId 映射不出来会被当成缺依赖
+  await (await import("../topologyManual")).deleteTopologyManualForUser(userId);
+  // 他的流量日历史（server/userTrafficHistory.ts）同理
+  await executeRaw(`DELETE FROM ${quoteDbIdentifier("user_traffic_daily")} WHERE ${quoteDbIdentifier("userId")} = ?`, [userId]).catch(() => undefined);
   await db.delete(users).where(eq(users.id, userId));
   // 被他邀请来的人不再有邀请人：留着悬空的 id，哪天 id 被复用就错绑到别人头上。
   // 已经返过的返利记录保留，账要对得上。

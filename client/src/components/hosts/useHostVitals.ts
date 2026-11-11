@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo } from "react";
 
 import { trpc } from "@/lib/trpc";
@@ -8,6 +9,7 @@ import {
   normalizeHostTrafficMeasureMode,
 } from "@shared/hostTrafficQuota";
 import { resolveNetworkHealth, type NetworkHealth } from "@shared/networkHealth";
+import { normalizeLoadAverageValue } from "@shared/hostLoadAverage";
 
 import { formatUptime, readCachedHostMetrics } from "./hostDisplay";
 
@@ -68,6 +70,13 @@ export type HostVitals = {
    */
   tcpConnections: number | null;
   udpConnections: number | null;
+  /**
+   * 1 / 5 / 15 分钟系统负载（Agent 2.2.255 起报，shared/hostLoadAverage.ts）。和 CPU 一样是
+   * 「此刻」的量：离线回 null；老 Agent、没有 /proc/loadavg 的平台也是 null，界面上什么都不多画。
+   */
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
 };
 
 const bytesOrNull = (value: unknown) => (value == null ? null : Number(value));
@@ -153,7 +162,7 @@ export function deriveHostVitals(
     uptimeText: latest?.uptime == null ? "—" : formatUptime(latest.uptime),
     uptimeLabel: isOnline ? "已运行" : "最后运行",
     lastReportedText: latest?.recordedAt
-      ? new Date(latest.recordedAt).toLocaleString("zh-CN", { hour12: false })
+      ? new Date(latest.recordedAt).toLocaleString(getFormatLocale(), { hour12: false })
       : "",
     memoryUsed: bytesOrNull(latest?.memoryUsed),
     memoryTotal: bytesOrNull(host?.memoryTotal),
@@ -161,6 +170,9 @@ export function deriveHostVitals(
     diskTotal: bytesOrNull(latest?.diskTotal),
     tcpConnections: pct(latest?.tcpConnections),
     udpConnections: pct(latest?.udpConnections),
+    load1: isOnline ? normalizeLoadAverageValue(latest?.load1) : null,
+    load5: isOnline ? normalizeLoadAverageValue(latest?.load5) : null,
+    load15: isOnline ? normalizeLoadAverageValue(latest?.load15) : null,
   };
 }
 

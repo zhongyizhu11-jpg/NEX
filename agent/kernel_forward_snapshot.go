@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"regexp"
 	"sort"
@@ -16,6 +17,11 @@ type kernelForwardSnapshot struct {
 	iptablesNatRule         map[string]string
 	iptablesMangleLoaded    bool
 	iptablesForwardxMarkers map[int]bool
+	// Docker 主机上的 DOCKER-USER 放行（docker_forward_compat.go）：按前端各读一次。
+	env                   *kernelForwardEnv
+	dockerFrontEndsLoaded bool
+	dockerFrontEnds       []string
+	dockerFronts          map[string]*dockerCompatFrontState
 }
 
 func newKernelForwardSnapshot() *kernelForwardSnapshot {
@@ -54,6 +60,27 @@ func (s *kernelForwardSnapshot) desiredActionConsistent(a action) bool {
 
 func (s *kernelForwardSnapshot) actionApplyReady(a action) bool {
 	return s.kernelRuleApplyPresent(a.ForwardType, a.RuleID, a.SourcePort, a.SourcePortEnd, a.TargetIP, a.TargetPort, a.Protocol)
+}
+
+// actionNotReadyReason 说明一次内核转发动作之后还差什么，原因进动作状态，面板上看得到；对得上时返回 ""。
+func (s *kernelForwardSnapshot) actionNotReadyReason(a action) string {
+	if !actionRequiresKernelForwardConsistency(a) {
+		return ""
+	}
+	switch strings.TrimSpace(a.Op) {
+	case "apply":
+		if a.SourcePort <= 0 {
+			return "source port is missing"
+		}
+		return s.kernelRuleNotReadyReason(a.ForwardType, a.RuleID, a.SourcePort, a.SourcePortEnd, a.TargetIP, a.TargetPort, a.Protocol)
+	case "remove":
+		if s.actionRemoveDone(a) {
+			return ""
+		}
+		return "kernel forwarding state of this rule is still present"
+	default:
+		return ""
+	}
 }
 
 func (s *kernelForwardSnapshot) actionRemoveDone(a action) bool {
@@ -182,13 +209,32 @@ func (s *kernelForwardSnapshot) kernelRuleApplyPresent(forwardType string, ruleI
 	if sourcePort <= 0 {
 		return false
 	}
+	return s.kernelRuleNotReadyReason(forwardType, ruleID, sourcePort, sourcePortEnd, targetIP, targetPort, protocol) == ""
+}
+
+// kernelRuleNotReadyReason：动作完成判定、旧动作接管和本地状态上报共用这一个结论，
+// Agent 重启后旧的成功记录也盖不住缺失的那一段。
+func (s *kernelForwardSnapshot) kernelRuleNotReadyReason(forwardType string, ruleID int, sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) string {
 	switch strings.TrimSpace(forwardType) {
 	case "nftables":
-		return s.nftForwardRulePresent(ruleID, sourcePort, sourcePortEnd, targetIP, targetPort, protocol)
+		if sourcePortEnd > sourcePort {
+			// 端口段：DNAT 整段在不在（server/rulePortRange.ts 下发的那套）；Docker 放行那套还不管端口段
+			if !s.nftForwardRangePresent(ruleID, sourcePort, sourcePortEnd, targetIP, targetPort, protocol) {
+				return fmt.Sprintf("the nftables DNAT rule for ports %d-%d is missing", sourcePort, sourcePortEnd)
+			}
+			return ""
+		}
+		return s.nftForwardRuleNotReadyReason(ruleID, sourcePort, targetIP, targetPort, protocol)
 	case "iptables":
-		return s.iptablesForwardRulePresent(sourcePort, sourcePortEnd, targetIP, targetPort, protocol)
+		if sourcePortEnd > sourcePort {
+			if !s.iptablesForwardRangePresent(sourcePort, sourcePortEnd, targetIP, targetPort, protocol) {
+				return fmt.Sprintf("the iptables forward rules for ports %d-%d are incomplete", sourcePort, sourcePortEnd)
+			}
+			return ""
+		}
+		return s.iptablesForwardRuleNotReadyReason(ruleID, sourcePort, targetIP, targetPort, protocol)
 	default:
-		return true
+		return ""
 	}
 }
 
@@ -198,9 +244,9 @@ func (s *kernelForwardSnapshot) kernelRuleResiduePresent(forwardType string, rul
 	}
 	switch strings.TrimSpace(forwardType) {
 	case "nftables":
-		return s.nftForwardRuleResiduePresent(ruleID, sourcePort, protocol)
+		return s.nftForwardRuleResiduePresent(ruleID, sourcePort, protocol) || s.dockerCompatResidue(ruleID, sourcePort, protocol)
 	case "iptables":
-		return s.iptablesForwardRuleResiduePresent(sourcePort, protocol)
+		return s.iptablesForwardRuleResiduePresent(sourcePort, protocol) || s.dockerCompatResidue(ruleID, sourcePort, protocol)
 	default:
 		return false
 	}
@@ -260,7 +306,8 @@ func (s *kernelForwardSnapshot) iptablesChainText(binary string, table string, c
 	return s.iptablesNatRule[key]
 }
 
-func (s *kernelForwardSnapshot) nftForwardRulePresent(ruleID int, sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
+// nftForwardRangePresent：端口段规则的 DNAT 整段都在（单端口规则走 nftForwardRuleNotReadyReason）。
+func (s *kernelForwardSnapshot) nftForwardRangePresent(ruleID int, sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
 	text := s.nftTableText()
 	if text == "" {
 		return false
@@ -353,7 +400,7 @@ func nftDnatLinePresent(text string, ruleID int, proto string, sourcePort int, t
 	return false
 }
 
-func (s *kernelForwardSnapshot) iptablesForwardRulePresent(sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
+func (s *kernelForwardSnapshot) iptablesForwardRangePresent(sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
 	target := kernelCleanAddress(targetIP)
 	binary := iptablesAgentBinaryForTarget(target)
 	ranged := sourcePortEnd > sourcePort
@@ -421,6 +468,45 @@ func iptablesTargetRuleSpanLinePresent(text string, chain string, jump string, p
 			}
 		}
 		if dest != nil && dest.Equal(want) && protoOK && portOK && jumpOK {
+			return true
+		}
+	}
+	return false
+}
+
+// iptablesTargetReturnLinePresent 找回程放行 `-A FORWARD -s <target> -p <proto> --sport <port> ... -j ACCEPT`。
+func iptablesTargetReturnLinePresent(text string, proto string, targetIP string, targetPort int) bool {
+	want := net.ParseIP(kernelCleanAddress(targetIP))
+	if want == nil || targetPort <= 0 {
+		return false
+	}
+	for _, rawLine := range strings.Split(text, "\n") {
+		fields := strings.Fields(rawLine)
+		if len(fields) < 2 || fields[0] != "-A" || fields[1] != "FORWARD" {
+			continue
+		}
+		var source net.IP
+		protoOK, portOK, jumpOK := false, false, false
+		for i := 2; i+1 < len(fields); i++ {
+			switch fields[i] {
+			case "-s":
+				addr := fields[i+1]
+				if slash := strings.IndexByte(addr, '/'); slash >= 0 {
+					if mask := addr[slash+1:]; mask != "32" && mask != "128" {
+						continue
+					}
+					addr = addr[:slash]
+				}
+				source = net.ParseIP(kernelCleanAddress(addr))
+			case "-p":
+				protoOK = strings.EqualFold(fields[i+1], proto)
+			case "--sport":
+				portOK = fields[i+1] == strconv.Itoa(targetPort)
+			case "-j":
+				jumpOK = fields[i+1] == "ACCEPT"
+			}
+		}
+		if source != nil && source.Equal(want) && protoOK && portOK && jumpOK {
 			return true
 		}
 	}

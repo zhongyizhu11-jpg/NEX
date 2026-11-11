@@ -8,9 +8,22 @@
  *   2. 下发给 Agent 的 sniInbounds：每个启用的入站一份路由表，名字 → 规则的回环端口。
  *      暂停 / 失效的规则照样列出来但标成不可用 —— Agent 看到这种名字直接断开，绝不落到
  *      默认规则上（否则一个用户停掉的规则，流量会跑到别人的默认规则里）。
+ *   3. 转送规则（经隧道 / 转发链 / 转发组走，见 shared/tlsInbound.ts 的 sniRuleRouteKind）：规则在入口机上
+ *      的入口（隧道入口、转发链第一跳、组成员上的子规则）只听 127.0.0.1:<规则端口>，分流器照样把连接
+ *      交过去，限速、计数、配额还挂在规则自己的入口上。要 Agent 2.2.255，路由表带 revision，Agent 装上
+ *      以后原样报回来 —— 报回来的和下发的一致，这台入口的 SNI 配置才算「已确认」（见 tlsInboundReadiness.ts）。
  */
 
-import { isTlsInboundAgentSupported, parseSniNameJson, TLS_INBOUND_PER_IP_HANDSHAKES } from "../shared/tlsInbound";
+import { createHash } from "node:crypto";
+
+import {
+  isSniRouteAgentSupported,
+  isTlsInboundAgentSupported,
+  isTlsInboundRoutedAgentSupported,
+  parseSniNameJson,
+  sniRuleRouteKind,
+  TLS_INBOUND_PER_IP_HANDSHAKES,
+} from "../shared/tlsInbound";
 import type { TlsInboundRow } from "./repositories/tlsInboundRepository";
 
 export type AgentSniRoute = {
@@ -40,6 +53,8 @@ export type AgentSniInbound = {
   allowedSni: string[];
   defaultBackend: AgentSniBackend | null;
   routes: AgentSniRoute[];
+  /** 这张表的版本号（只发给 2.2.255 起的 Agent）：表的内容一变它就变，Agent 装上后原样回报。 */
+  revision?: string;
 };
 
 function truthy(value: unknown) {
@@ -59,12 +74,19 @@ export function sniRuleRuntimeView<T extends Record<string, any>>(rule: T, optio
   inboundById: Map<number, TlsInboundRow>;
 }): T {
   if (!isSniRuntimeRule(rule)) return rule;
+  /*
+    别的机器上的规则出现在这台的列表里，只可能是这台是它隧道的出口 / 中转：出口那一侧和普通隧道规则
+    一模一样，原样放过（在这里停掉它，入口机上 SNI 分过来的连接就到不了目标）。入口那一侧的
+    「只听回环」不看这个视图，按 isSniRuntimeRule 判断，所以隧道挂了入口组也不会在组里别的主机上
+    对外开出这个端口。
+  */
+  if (Number(rule.hostId) !== Number(options.hostId)) return rule;
+  const routeKind = sniRuleRouteKind(rule);
   const inbound = options.inboundById.get(Number(rule.tlsInboundId));
   const runnable = !!inbound
     && inbound.isEnabled
     && inbound.hostId === Number(options.hostId)
-    && Number(rule.hostId) === Number(options.hostId)
-    && isTlsInboundAgentSupported(options.agentVersion);
+    && isSniRouteAgentSupported(routeKind, options.agentVersion);
   const view: Record<string, any> = {
     ...rule,
     protocol: "tcp",
@@ -77,11 +99,22 @@ export function sniRuleRuntimeView<T extends Record<string, any>>(rule: T, optio
     blockSocks: false,
     blockTls: false,
   };
+  if (routeKind === "tunnel") {
+    // 隧道规则的 PROXY 头分「入口收 / 入口发 / 出口收 / 出口发」四段，入口在回环上只能看到本机地址，
+    // 这一版经隧道的 SNI 规则不带 PROXY 头（建规则时就清掉了，这里兜底）：分流器不发，入口不收。
+    view.proxyProtocolReceive = false;
+    view.proxyProtocolSend = false;
+  }
   if (!runnable) {
     view.isEnabled = false;
     view.sniRuntimeBlocked = true;
   }
   return view as T;
+}
+
+/** 表的版本号：同样的内容永远算出同一个值，内容一变就变。只取前 16 位，够分辨又不占地方。 */
+export function sniInboundRevision(spec: Omit<AgentSniInbound, "revision">) {
+  return createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 16);
 }
 
 function ruleProxyVersion(rule: any) {
@@ -135,7 +168,7 @@ export function buildAgentSniInbounds(options: {
         defaultBackend = { ruleId: Number(rule.id), backendPort: Number(rule.sourcePort), proxyProtocolVersion: ruleProxyVersion(rule) };
       }
     }
-    output.push({
+    const spec: AgentSniInbound = {
       id: inbound.id,
       port: inbound.port,
       proxyProtocol: inbound.proxyProtocol,
@@ -147,16 +180,85 @@ export function buildAgentSniInbounds(options: {
       allowedSni: [...inbound.allowedSni].sort(),
       defaultBackend,
       routes: Array.from(routes.values()).sort((a, b) => a.name.localeCompare(b.name)),
-    });
+    };
+    // 老 Agent 不认 revision 也不回报，不给它发，免得它的表白白跟着版本号变来变去。
+    if (isTlsInboundRoutedAgentSupported(options.agentVersion)) spec.revision = sniInboundRevision(spec);
+    output.push(spec);
   }
   return output.sort((a, b) => a.port - b.port || a.id - b.id);
 }
 
+/*
+  下发了哪张表、Agent 报回来装上了哪张：都只存内存。面板重启后一台入口要等它下一次心跳才重新算「已确认」，
+  这段时间里 DDNS 不会把流量切到它上面（已经在用的入口不受影响，见 tlsInboundReadiness.ts）。
+*/
+const RUNTIME_STATUS_HOST_MAX = 4096;
+const sentRevisionByHost = new Map<number, Map<number, string>>();
+
+/** 心跳里生成 sniInbounds 用这个：和 buildAgentSniInbounds 一样，只是顺手记下下发的版本号。 */
+export function planAgentSniInbounds(options: Parameters<typeof buildAgentSniInbounds>[0]): AgentSniInbound[] {
+  const specs = buildAgentSniInbounds(options);
+  const hostId = Number(options.hostId);
+  if (hostId > 0) {
+    const sent = new Map<number, string>();
+    for (const spec of specs) if (spec.revision) sent.set(spec.id, spec.revision);
+    if (!sentRevisionByHost.has(hostId) && sentRevisionByHost.size >= RUNTIME_STATUS_HOST_MAX) {
+      const oldest = sentRevisionByHost.keys().next().value;
+      if (oldest !== undefined) sentRevisionByHost.delete(oldest);
+    }
+    sentRevisionByHost.set(hostId, sent);
+  }
+  return specs;
+}
+
+export function getSentTlsInboundRevision(hostId: number, inboundId: number) {
+  return sentRevisionByHost.get(Number(hostId))?.get(Number(inboundId)) || "";
+}
+
+/**
+ * 这台机器上这个入站的路由表是不是已经确认：Agent 报它在听，而且报回来的版本号就是面板最近下发的那张。
+ * 老 Agent 不报版本号，永远是 false。
+ */
+export function isTlsInboundTableConfirmed(hostId: number, inboundId: number) {
+  const sent = getSentTlsInboundRevision(hostId, inboundId);
+  if (!sent) return false;
+  const status = getTlsInboundRuntimeStatus(hostId, inboundId);
+  return !!status && status.listening && status.revision === sent;
+}
+
 /** Agent 在心跳里报上来的入站监听状态（只存内存，给主机详情显示「监听失败」用）。 */
-export type TlsInboundRuntimeStatus = { id: number; port: number; listening: boolean; error: string; updatedAt: number };
+export type TlsInboundRuntimeStatus = {
+  id: number;
+  port: number;
+  listening: boolean;
+  error: string;
+  updatedAt: number;
+  /** 以下 Agent 2.2.255 起才有：装上的表的版本号、可用的名字数、分流计数（监听起来以后累计）。 */
+  revision: string;
+  routes: number;
+  matched: number;
+  dropped: number;
+  backendErrors: number;
+};
+
+function counterValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+/** Agent 2.2.255 起多报的那几项；老 Agent 没有，全是空 / 0。 */
+function reportedTableFields(item: unknown) {
+  const record = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+  return {
+    revision: String(record.revision || "").slice(0, 64),
+    routes: counterValue(record.routes),
+    matched: counterValue(record.matched),
+    dropped: counterValue(record.dropped),
+    backendErrors: counterValue(record.backendErrors),
+  };
+}
 
 const runtimeStatusByHost = new Map<number, Map<number, TlsInboundRuntimeStatus>>();
-const RUNTIME_STATUS_HOST_MAX = 4096;
 
 export function recordTlsInboundRuntimeStatus(hostId: number, input: unknown, now = Date.now()) {
   if (!Array.isArray(input)) return;
@@ -172,6 +274,7 @@ export function recordTlsInboundRuntimeStatus(hostId: number, input: unknown, no
       listening: (item as any)?.listening === true,
       error: String((item as any)?.error || "").slice(0, 300),
       updatedAt: now,
+      ...reportedTableFields(item),
     });
   }
   if (!runtimeStatusByHost.has(id) && runtimeStatusByHost.size >= RUNTIME_STATUS_HOST_MAX) {

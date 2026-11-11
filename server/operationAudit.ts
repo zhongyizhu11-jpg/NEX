@@ -60,6 +60,8 @@ export function currentOperationAuditRequestId(): string | undefined {
 export const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
   // 登录流程
   "auth.createCaptcha", "auth.sendEmailCode", "auth.login", "auth.verifyTwoFactorLogin", "auth.register",
+  // 找回密码：没登录时用的，成功的申请 / 重置由 server/ops/passwordReset.ts 自己补记一行
+  "auth.requestPasswordReset", "auth.resetPasswordWithToken",
   "telegram.startMobileLogin", "telegram.mobileLoginStatus", "telegram.login", "telegram.loginWithWidget", "telegram.loginWithWebApp",
   "ops.passkeys.loginOptions", "ops.passkeys.finishLogin", "ops.passkeys.registrationOptions",
   "googleAuth.appStart", "googleAuth.appStatus", "googleAuth.appCancel",
@@ -73,8 +75,9 @@ export const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
   "lineDiagnostics.segmentSpeedStart", "lineDiagnostics.segmentLatencyStart",
   "rules.startSelfTest", "rules.connectionsStart", "tunnels.test", "forwardGroups.test",
   "hosts.startSpeedTest", "hosts.startUnlockCheck", "netProfile.recheck", "proxySubscriptions.nodeExitCheckStart",
+  "proxyInbounds.realityCheckStart",
   "ipChange.accounts.test", "ops.webhooks.test", "ops.resourceAlert.test", "ops.digest.sendTest",
-  "ops.offsiteBackup.testConnection", "telegram.testSend", "system.sendTestEmail", "discordAuth.testBot",
+  "ops.offsiteBackup.testConnection", "telegram.testSend", "system.sendTestEmail", "discordAuth.testBot", "oidcAuth.testDiscovery",
   "payment.testGmPayGateway", "system.testDatabaseSwitchTarget",
   "plugins.checkUpdate", "plugins.checkUpdates", "plugins.refreshStore", "plugins.refreshStoreSource",
   // 预览、解析、盯着看、已读、用量
@@ -100,10 +103,13 @@ type AuditCtx = {
   req?: AuditRequest | null;
   user?: { id?: unknown; username?: unknown; name?: unknown; role?: unknown } | null;
   apiToken?: { id?: unknown; name?: unknown } | null;
+  /** 管理员代入用户后台（server/ops/impersonation.ts）：user 是被代入的人，真正动手的是这里的管理员。 */
+  impersonation?: { adminUserId?: unknown; adminName?: unknown } | null;
 };
 
 /** 这次调用从哪儿来。MCP 也带令牌，按请求路径分开；Telegram 机器人的上下文 IP 写的是 "telegram"。 */
 export function operationAuditChannel(ctx: AuditCtx): OperationAuditChannel {
+  if (ctx.impersonation) return "impersonation";
   const req: AuditRequest = ctx.req || {};
   const url = String(req.originalUrl || req.url || "");
   if (ctx.apiToken) return /(^|\/)mcp(\/|$|\?)/.test(url) ? "mcp" : "api";
@@ -124,6 +130,9 @@ export type OperationAuditRow = {
   actorRole: string | null;
   apiTokenId: number | null;
   apiTokenName: string | null;
+  /** 代入用户后台时：这次操作是以谁的身份做的（actor* 记的是管理员）。平时为 null。 */
+  onBehalfOfUserId?: number | null;
+  onBehalfOfName?: string | null;
   channel: OperationAuditChannel;
   path: string;
   module: string;
@@ -214,12 +223,16 @@ export async function auditMutationCall<R extends MiddlewareResultLike>(opts: {
   }
   const req: AuditRequest = ctx.req || {};
   const code = result.ok ? null : String(result.error?.code || "INTERNAL_SERVER_ERROR");
+  // 代入用户后台：操作人记管理员（动手的是他），被代入的用户另记两列 —— 审计里不能看起来像用户自己改的。
+  const impersonatorId = ctx.impersonation ? positiveId(ctx.impersonation.adminUserId) : null;
   queueWrite({
-    actorUserId: actorId,
-    actorName: clip(ctx.user?.username || ctx.user?.name, 128),
-    actorRole: clip(ctx.user?.role, 16),
+    actorUserId: impersonatorId ?? actorId,
+    actorName: clip(impersonatorId ? ctx.impersonation?.adminName : ctx.user?.username || ctx.user?.name, 128),
+    actorRole: impersonatorId ? "admin" : clip(ctx.user?.role, 16),
     apiTokenId: positiveId(ctx.apiToken?.id),
     apiTokenName: clip(ctx.apiToken?.name, 64),
+    onBehalfOfUserId: impersonatorId ? actorId : null,
+    onBehalfOfName: impersonatorId ? clip(ctx.user?.username || ctx.user?.name, 128) : null,
     channel: operationAuditChannel(ctx),
     path: String(path).slice(0, 128),
     module: operationAuditModule(path).slice(0, 96),
@@ -291,6 +304,8 @@ function rowToListItem(row: DbRow): OperationAuditListItem {
     actorRole: nullableText(row.actorRole),
     apiTokenId: positiveId(row.apiTokenId),
     apiTokenName: nullableText(row.apiTokenName),
+    onBehalfOfUserId: positiveId(row.onBehalfOfUserId),
+    onBehalfOfName: nullableText(row.onBehalfOfName),
     channel: (row.channel || "web") as OperationAuditChannel,
     path: String(row.path || ""),
     module: String(row.module || ""),
@@ -310,7 +325,7 @@ function rowToEvent(row: DbRow): OperationAuditEvent {
 }
 
 const LIST_COLUMNS = [
-  "id", "actorUserId", "actorName", "actorRole", "apiTokenId", "apiTokenName", "channel", "path", "module",
+  "id", "actorUserId", "actorName", "actorRole", "apiTokenId", "apiTokenName", "onBehalfOfUserId", "onBehalfOfName", "channel", "path", "module",
   "result", "errorCode", "errorMessage", "ip", "userAgent", "requestId", "durationMs", "createdAt",
 ] as const;
 
@@ -346,7 +361,7 @@ export async function listOperationAuditEvents(input: ListOperationAuditInput = 
   const search = String(input.search || "").trim().slice(0, 64);
   if (search) {
     const pattern = `%${escapeLike(search)}%`;
-    const fields = ["path", "actorName", "ip", "inputJson", "errorMessage", "apiTokenName"];
+    const fields = ["path", "actorName", "ip", "inputJson", "errorMessage", "apiTokenName", "onBehalfOfName"];
     where.push(`(${fields.map((field) => `${q(field)} LIKE ? ESCAPE '!'`).join(" OR ")})`);
     for (let index = 0; index < fields.length; index += 1) params.push(pattern);
   }

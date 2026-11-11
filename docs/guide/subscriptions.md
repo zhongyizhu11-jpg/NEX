@@ -1,6 +1,6 @@
 # 客户端订阅
 
-NEX 把你的转发规则和落地节点组装成一条订阅地址，各家客户端（Clash / mihomo、sing-box、v2rayN、Shadowrocket、Surge、Loon、Quantumult X、Hiddify、Happ……）导入即用。本页讲订阅地址怎么用、能调什么、商家怎么管。
+NEX 把你的转发规则和落地节点组装成一条订阅地址，各家客户端（Clash / mihomo、sing-box、v2rayN、Shadowrocket、Surge、Loon、Quantumult X、Egern、Hiddify、Happ……）导入即用。本页讲订阅地址怎么用、能调什么、商家怎么管。
 
 这里的「订阅」只指客户端订阅；买的套餐在「我的套餐」。各个叫法的意思见[术语表](./glossary.md)。
 
@@ -24,13 +24,22 @@ NEX 把你的转发规则和落地节点组装成一条订阅地址，各家客�
 | --- | --- |
 | `/api/sub/<令牌>` | 主地址。按客户端的 User-Agent 自动给对应格式；浏览器打开是落地页。 |
 | `/api/sub/<令牌>?rules=1` | 规则订阅：节点 + 策略组 + 分流规则的完整配置。 |
-| `/api/sub/<令牌>/<格式>` | 显式格式：`clash`、`singbox`、`v2ray-json`、`surge`、`loon`、`quantumultx`、`shadowrocket`、`base64`。 |
+| `/api/sub/<令牌>/<格式>` | 显式格式：`clash`、`singbox`、`v2ray-json`、`surge`、`loon`、`quantumultx`、`shadowrocket`、`egern`、`base64`。 |
 | `/api/sub/<令牌>/info` | JSON：用量、到期、节点数、设备数、公告。给自定义客户端或排查用。 |
 | `/s/<别名>` | 短链。在令牌编辑里设别名后可用，内容和主地址一样。 |
 
 同一条地址粘到哪个客户端都能拿到对的格式。认不出客户端时用令牌上设的「认不出来时按 … 返回」，也可以在地址上加 `flag=clash` 这类参数强制指定。
 
 v2rayN 6.40+、v2rayNG 1.8.29+、Happ 1.63+ 会拿到 Xray JSON 配置（参数更全，分流一起带）；老版本照旧 base64。
+
+### Egern
+
+Egern 拿到的是**它自己的 YAML 配置**（`proxies` / `policy_groups` / `rules` / `modules`），不再是 Surge 格式。这是有意改的默认：Surge 格式里写不了 VLESS / REALITY，也没有放模块的位置。已经导入过的 Egern 订阅不用重新导，下次更新就拿到新格式。
+
+- **节点订阅**（不带 `rules`）：只有 `proxies`，就是 Egern 文档里的「订阅文件」，用 Egern 的「添加订阅」导入（一键订阅面板里的 Egern 图标就是 `egern:/subscriptions/new?url=…`）。
+- **规则订阅**（`?rules=1`）：完整配置——模板开头部分、节点、策略组（手动选择 `select`、自动选最快 `auto_test`、主备 `fallback`、负载均衡 `load_balance` 按轮询）、分流规则（规则集用和 Surge 同一份规则列表，镜像设置一样生效；兜底写成 `default`）、模板里的模块。带 `auto_update`，Egern 会按设置里的更新间隔自己重新下载。
+- 协议：Shadowsocks（含 2022）、VMess、VLESS（含 REALITY / Vision）、Trojan、Hysteria2、TUIC、AnyTLS、Snell（v1–v5）、SOCKS5 都有；前置节点写成 `prev_hop`。写不出来的跳过并在文件头注明：XHTTP / HTTPUpgrade 传输、Snell v6、Hysteria2 的 gecko 混淆、Trojan 走 gRPC、没开 TLS 的 gRPC、配在 WebSocket 上的 REALITY、Egern 没有的加密方式。
+- **还想要 Surge 格式**：地址上加 `?target=surge`（或用 `/api/sub/<令牌>/surge`）。显式格式永远优先于 User-Agent。
 
 ### 地址上的临时参数
 
@@ -46,7 +55,21 @@ v2rayN 6.40+、v2rayNG 1.8.29+、Happ 1.63+ 会拿到 Xray JSON 配置（参数�
 ?include=香港   只要名字匹配的节点（正则）
 ?exclude=测试   排除名字匹配的节点
 ?types=vless,trojan   只要这些协议
+?ipVersion=6    节点地址只用 IPv6（ipVersion=4 只用 IPv4），见下一节
 ```
+
+### 按 IPv4 / IPv6 输出
+
+不带参数时节点地址照旧：规则专属域名 → 入口域名 / DDNS 域名 → 入口 IP（域名优先，机器换 IP 后照样能用）。家宽只有 IPv6、手机流量 IPv4 很烂这类场合，可以在地址上钉死一种：
+
+- `?ipVersion=6`：每个节点用入口机器**真实的 IPv6 地址**（URI 里写成 `[2001:db8::1]:端口`，Clash / sing-box / Surge / Loon 的 server 字段写裸地址，QX 写 `[地址]:端口`），不用域名。
+- `?ipVersion=4`：同理，只用真实的 IPv4（入口域名、DDNS 域名也换成 IPv4）。
+
+地址从哪来：中转节点看这条转发**此刻**的入口机器（转发组 / 入口组按第一台启用的成员，隧道按隧道入口）——手填的入口是这种 IP 就用它，否则用面板记下的 IPv4 / IPv6（DDNS 发 AAAA 时用的也是这个 IPv6）；落地直连看节点自己的地址，再看节点所在的机器；落地池看池成员。
+
+**没有这种地址的节点直接跳过，绝不悄悄换成另一种**：挂着前置节点、而前置没有这种地址的也一起跳过（只摘前置会变成不经前置直连）。跳过几条写在响应头 `X-ForwardX-Skipped-Entries`，能写注释的格式在文件头列出名字；令牌菜单的「预览内容」里也看得到原因。一个都不剩时返回 `422` 和一句「没有可用的 IPv6 节点」，而不是一份空订阅。参数写错（`ipVersion=5`）返回 `400`。
+
+「一键订阅」面板里的「节点地址」下拉框选「只要 IPv4 / 只要 IPv6」，下面的地址、二维码、客户端图标就都带上这个参数。
 
 ### 备用域名
 
@@ -72,6 +95,25 @@ v2rayN 6.40+、v2rayNG 1.8.29+、Happ 1.63+ 会拿到 Xray JSON 配置（参数�
 
 开启后订阅最前面多几条连不上的占位节点：「📊 剩余 90 GB / 100 GB」「📅 2026-12-31 到期」「🔄 11月1日 重置流量」「📢 公告」。客户端不读 `Subscription-Userinfo` 响应头时（老版本、部分路由器插件）靠它看用量。代价是客户端测速会把它们标红，所以默认关着，令牌上、套餐上、全局设置里都能开。
 
+<a id="mieru"></a>
+
+### Mieru 节点进哪些订阅
+
+Mieru 落地（运行时是 mita，见[落地池 › Mieru 落地](./landing-pools.md#mieru)）只有一部分客户端认，订阅按格式和客户端分别处理：
+
+| 客户端 / 格式 | Mieru |
+| --- | --- |
+| Clash Verge / mihomo（Clash 订阅） | 进订阅：`type: mieru`，`transport: TCP`，端口段写 `port-range`。需要 mihomo 1.19.0 以上，更旧的按版本跳过。只开了 UDP 承载的节点不进（mihomo 的 Mieru 只有 TCP） |
+| Stash、原版 Clash（同一份 Clash 订阅） | 不进：两家的协议表里都没有 Mieru，混进去会让整份配置导入失败；按 User-Agent 跳过 |
+| sing-box、Karing（sing-box 订阅） | 不进：sing-box 没有 Mieru |
+| v2rayN / v2rayNG / Happ / v2RayTun / Streisand（Xray JSON / Base64） | 不进：Xray 内核没有 Mieru |
+| Shadowrocket、Hiddify、NekoBox（Base64） | 不进：通用订阅是一串链接，这些客户端不认 `mierus://` |
+| Surge / Surfboard、Loon、Quantumult X | 不进：手册里没有 Mieru |
+
+跳过的节点在 Clash / Surge / Loon / QX 的文件头写明原因，「预览内容」里也看得到。
+
+要在别的设备上用，在「我的节点」里点这一行的「复制链接」：Mieru 给的是官方的 `mierus://` 简单分享链接（`mierus://用户名:密码@地址?profile=名字&port=端口或端口段&protocol=TCP`），Mieru 官方客户端 `mieru import config simple <链接>` 能导入。「添加节点」里也能直接粘这种链接。
+
 ## 外部订阅
 
 管理员开了「允许用户添加外部订阅」、套餐也开了之后，「订阅管理」底部多一张「外部订阅」卡：填别处的订阅地址，面板定时拉取（最短 10 分钟）、解析（链接列表 / base64 / Clash YAML / sing-box JSON 都认），节点并进你的订阅，也能绑到转发上走中转。上游变了就自动对账：新增、更新、下线。
@@ -94,9 +136,28 @@ v2rayN 6.40+、v2rayNG 1.8.29+、Happ 1.63+ 会拿到 Xray JSON 配置（参数�
 
 ### 模板
 
-「订阅运营 → 模板」。模板只管「节点之外」的部分：Clash 的端口 / DNS / TUN / sniffer，sing-box 的 log / dns / inbounds / experimental / route.rules，Surge / Loon / QX / Shadowrocket 的 `[General]`。节点、策略组、规则集、分流规则照旧由面板生成接在后面。模板只进**规则订阅**；节点订阅保持最小配置。
+「订阅运营 → 模板」。模板只管「节点之外」的部分：Clash 的端口 / DNS / TUN / sniffer，sing-box 的 log / dns / inbounds / experimental / route.rules，Surge / Loon / QX / Shadowrocket 的 `[General]`，Egern 放在 `proxies:` 前面的那段 YAML（`ipv6` / `dns` / `mitm`……，不能含 `proxies` / `policy_groups` / `rules` / `modules`；内置的只有一行 `proxy_latency_test_url`）。节点、策略组、规则集、分流规则照旧由面板生成接在后面。模板只进**规则订阅**；节点订阅保持最小配置。
 
-模板还能定义自定义策略组：按正则从节点名里挑成员（`港|HK` → 「🇭🇰 香港」），出现在主选择器和各分类组里。
+模板还能定义自定义策略组：按正则从节点名里挑成员（`港|HK` → 「🇭🇰 香港」），出现在主选择器和各分类组里。组的成员也可以**点名**：别的自定义组、自动选路组 / 地区组、某个节点、`DIRECT`（排在最前，按点名的顺序），再关掉「按名字挑节点」，就是「🚀 节点选择 = ⚡ 专线 / 🇭🇰 香港 / DIRECT」这种组。点名的名字订阅里没有时丢掉；不能点名 `REJECT`（sing-box 里没有这个出站）和主选择器，组之间互相引用成环时保存不了。
+
+模板里还可以写**分流规则**（写法同下面的自定义规则），排在全局前置规则之后、用户 / 令牌规则之前。
+
+**Loon 插件**：Loon 模板可以挂插件（地址、开关、名字、参数），写进规则订阅的 `[Plugin]` 段（`https://…plugin, tag=名字, argument=参数, enabled=true`），插件本身由 Loon 下载和更新。只收 http / https 地址、不能含空白和逗号，最多 30 个；关掉的照样写进去（`enabled=false`），用户在 Loon 里自己能打开。别的格式不写插件；Shadowrocket 来拉 Loon 格式时也不写。
+
+**Egern 模块**：Egern 模板同样能挂模块（地址、开关、名字、参数），写进规则订阅的 `modules`：
+
+```yaml
+modules:
+  - url: "https://example.com/adblock.yaml"
+    name: "去广告"
+    enabled: true
+    compat_arguments:
+      "BLOCK_MODE": "reject"
+```
+
+模块本身由 Egern 下载和更新（`.yaml` 和 Surge 的 `.sgmodule` 都行）。地址的要求和 Loon 插件一样（http / https、不含空白和逗号、最多 30 个），关掉的照样写进去（`enabled: false`）。名字填了就盖过模块文件里的名字。参数写成 `KEY=值`，多个用 `&` 隔开（`BLOCK_MODE=reject&REGION=cn`），变成 `compat_arguments`：只覆盖模块文件里声明过的参数，值里不能有双引号和反斜杠（模块里的占位符是按纯文本替换的）。Loon 那种 `[…]` 写法的参数在 Egern 模板里保存不了。
+
+**可视化编辑**：编辑模板时默认是「可视化」——策略组（名字、类型、点名的成员、按名字挑节点）、分流规则（类型下拉附说明、匹配值、去向、不解析、开关、上下挪）、Loon 插件 / Egern 模块一张张卡片地改，旁边按一组示例节点实时渲染出 Clash YAML（非 Clash 模板还能切到它自己的格式看开头部分和插件），走的是和真订阅同一条生成流程。「高级 / 代码」里还是原来的文本：开头部分、规则文本、组的 JSON。两边改的是同一份数据：没动过的规则行原样保存，注释和这里认不出的写法照存不丢，停用的规则存成 `# ` 开头的注释行；组上认不出的字段也原样留着。
 
 分配顺序：令牌指定 → 用户指定（用户页）→ 套餐指定 → 该格式的默认模板 → 内置。
 
@@ -116,7 +177,7 @@ GEOIP,JP,PROXY
 GEOSITE,netflix,🎥 奈飞视频
 ```
 
-去向：`DIRECT` / `REJECT` / `PROXY`（主选择器）/ 策略组名。三处可写：全局前置 / 后置（设置页）、按用户（用户管理 → 编辑用户 → 订阅）、按令牌。前置的排在预设规则前（命中即止），后置的排在 MATCH 前。GEOSITE 在 Surge / Loon / QX / Shadowrocket 上没有对应写法，会跳过。
+去向：`DIRECT` / `REJECT` / `PROXY`（主选择器）/ 策略组名。四处可写：全局前置 / 后置（设置页）、模板、按用户（用户管理 → 编辑用户 → 订阅）、按令牌。前置的排在预设规则前（命中即止，顺序是全局前置 → 模板 → 用户 → 令牌），后置的排在 MATCH 前。`#` 开头的行是注释。GEOSITE 在 Surge / Loon / QX / Shadowrocket / Egern 上没有对应写法，会跳过。
 
 ### 可调参数
 
@@ -130,7 +191,7 @@ GEOSITE,netflix,🎥 奈飞视频
 
 ## 常见问题
 
-**导进去没节点 / 少节点。** 看令牌菜单的「预览内容」：没进订阅的转发会写明原因（没绑节点、隐藏了、转发停用、探测不通）。Surge 不支持 VLESS，QX 不支持 Hysteria2 / TUIC / REALITY，老版本 v2rayNG 不支持 Hysteria2 —— 这些会按客户端跳过并在文件头注明。
+**导进去没节点 / 少节点。** 看令牌菜单的「预览内容」：没进订阅的转发会写明原因（没绑节点、隐藏了、转发停用、探测不通）。Surge 不支持 VLESS，QX 不支持 Hysteria2 / TUIC / REALITY，老版本 v2rayNG 不支持 Hysteria2，Mieru 只有 mihomo 认（见[上面](#mieru)）—— 这些会按客户端跳过并在文件头注明。
 
 **链路换了入口机器，节点全超时。** 订阅按链路**当前**的入口机器出节点，换完入口面板这边立刻就是新地址，但客户端手里那份还是旧的，让客户更新一次订阅即可；换出口或中间机器不影响节点地址，客户端什么都不用做。想连刷新都省掉，给转发开「入口域名」。
 

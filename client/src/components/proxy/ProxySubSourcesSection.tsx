@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 /**
  * 外部订阅：用户把别处的订阅地址填进来，面板定时拉取并并进自己的订阅（或透传给客户端）。
  */
@@ -31,7 +32,7 @@ const INTERVALS: Array<{ value: number; label: string }> = [
 function timeText(value: unknown): string {
   if (!value) return "从没拉过";
   const date = new Date(value as any);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "—";
+  return Number.isFinite(date.getTime()) ? date.toLocaleString(getFormatLocale(), { hour12: false }) : "—";
 }
 
 export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged }: { allowed: boolean; maxPerUser: number; onChanged?: () => void }) {

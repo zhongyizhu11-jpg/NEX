@@ -62,6 +62,10 @@ func validateManagedConfigSpec(spec managedConfigSpec, data []byte, stagedPath s
 		if err := validateGostShadowsocksNodes(data); err != nil {
 			return fmt.Errorf("%s: %w", spec.Path, err)
 		}
+		// VLESS 出口的本机 sing-box 桥接：只许听回环、只许 vless + REALITY 出站（见 singbox_egress_bridge.go）。
+		if err := validateSingboxEgressBridgeConfig(spec.Path, data); err != nil {
+			return fmt.Errorf("%s: %w", spec.Path, err)
+		}
 	default:
 		return fmt.Errorf("%s uses unsupported format %q", spec.Path, spec.Format)
 	}

@@ -1300,7 +1300,12 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     '  echo "[步骤 3/5] 清理 Go Agent 二进制和配置..."',
     '  rm -f "$GO_AGENT_BIN" "$FXP_BIN" "$RUNTIME_BIN" "$NGINX_BIN" /usr/local/bin/forwardx-udp2raw',
-    '  rm -f /usr/local/bin/fwxm',
+    // 同机还装着面板（面板安装脚本放了 /usr/local/lib/nex/fwxm-panel）：fwxm 换回面板的转发脚本，不直接删
+    '  if [ -x /usr/local/lib/nex/fwxm-panel ]; then',
+    '    printf \'%s\\n\' \'#!/bin/bash\' \'# nex-panel-fwxm-dispatcher：只装了面板时的 fwxm\' \'[ "${1:-}" = panel ] && shift\' \'exec /usr/local/lib/nex/fwxm-panel "$@"\' > /usr/local/bin/fwxm && chmod 755 /usr/local/bin/fwxm',
+    '  else',
+    '    rm -f /usr/local/bin/fwxm',
+    '  fi',
     '  if [ -L /usr/bin/fwxm ]; then rm -f /usr/bin/fwxm; fi',
     '  rm -rf "$CONFIG_DIR" "$LEGACY_CONFIG_DIR" /etc/forwardx /etc/forwardx-runtime /etc/forwardx-tunnel-runtime /etc/forwardx-gost /etc/forwardx-tunnels /etc/forwardx/nginx',
     '  echo "[信息] Go Agent 文件已删除"',

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { lazy, Suspense, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,7 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
           <Row label="下载 / 上传" value={`${formatMbps(speed.downloadMbps)} / ${formatMbps(speed.uploadMbps)}${speed.server === "panel" ? "（到面板）" : ""}`} />
           <Row label="延迟 / 抖动" value={`${formatSpeedMs(speed.latencyMs)} / ${formatSpeedMs(speed.jitterMs)}`} />
           <Row label="测速点" value={speedServerLabel(speed)} />
-          <Row label="测于" value={data?.latest?.checkedAt ? new Date(data.latest.checkedAt * 1000).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"} />
+          <Row label="测于" value={data?.latest?.checkedAt ? new Date(data.latest.checkedAt * 1000).toLocaleString(getFormatLocale(), { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"} />
         </>
       ) : (
         <Row label="最近一次" value={status.isLoading ? "读取中…" : data?.latest?.error ? <span className="text-[var(--fx-down-text)]">上次失败</span> : "还没测过"} />

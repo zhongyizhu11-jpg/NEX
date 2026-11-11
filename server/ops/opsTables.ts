@@ -11,12 +11,19 @@ import { offsiteBackupTables, offsiteBackupMigrationTables } from "./offsiteBack
 import { webhooksTables, webhooksMigrationTables } from "./webhooksTables";
 import { statusAvailabilityTables, statusAvailabilityMigrationTables } from "./statusAvailabilityTables";
 import { netProfileTables, netProfileMigrationTables } from "./netProfileTables";
+import { ipIntelTables } from "./ipIntelTables";
+import { topologyManualTables, topologyManualMigrationTables } from "./topologyManualTables";
+import { userTrafficDailyTables, userTrafficDailyMigrationTables } from "./userTrafficDailyTables";
 import { unlockTables, unlockMigrationTables } from "./unlockTables";
 import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
 import { nodeCheckTables, nodeCheckMigrationTables } from "./nodeCheckTables";
 import { nodePoolTables, nodePoolMigrationTables } from "./nodePoolTables";
+import { ruleGroupsTables, ruleGroupsMigrationTables } from "./ruleGroupsTables";
 import { loginDevicesTables, loginDevicesMigrationTables } from "./loginDevicesTables";
 import { operationAuditTables, operationAuditMigrationTables } from "./operationAuditTables";
+import { uiThemesTables, uiThemesMigrationTables } from "./uiThemesTables";
+import { impersonationTables, impersonationMigrationTables } from "./impersonationTables";
+import { passwordResetTables, passwordResetMigrationTables } from "./passwordResetTables";
 import { trafficAnomalyTables, trafficAnomalyMigrationTables } from "./trafficAnomalyTables";
 import { shopSyncTables, shopSyncMigrationTables } from "../shopSync/tables";
 
@@ -33,12 +40,19 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...webhooksTables,
   ...statusAvailabilityTables,
   ...netProfileTables,
+  ...ipIntelTables,
   ...unlockTables,
   ...connStatsTables,
   ...nodeCheckTables,
   ...nodePoolTables,
+  ...ruleGroupsTables,
   ...loginDevicesTables,
   ...operationAuditTables,
+  ...uiThemesTables,
+  ...impersonationTables,
+  ...passwordResetTables,
+  ...topologyManualTables,
+  ...userTrafficDailyTables,
   ...trafficAnomalyTables,
   ...shopSyncTables,
 ];
@@ -60,8 +74,14 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...connStatsMigrationTables,
   ...nodeCheckMigrationTables,
   ...nodePoolMigrationTables,
+  ...ruleGroupsMigrationTables,
   ...loginDevicesMigrationTables,
   ...operationAuditMigrationTables,
+  ...uiThemesMigrationTables,
+  ...impersonationMigrationTables,
+  ...passwordResetMigrationTables,
+  ...topologyManualMigrationTables,
+  ...userTrafficDailyMigrationTables,
   ...trafficAnomalyMigrationTables,
   ...shopSyncMigrationTables,
 ];

@@ -989,6 +989,13 @@ export class IpChangeService {
       }
     }
     if (result.ipRole === "primary" && !boolish(host.addressManual)) {
+      // 管理员挑的主 IP 正好是被换掉的旧 IP（shared/hostPublicAddresses）：不清掉它，心跳会一直顶着旧 IP，
+      // 新 IP 永远报不上来。清掉 = 交回 Agent 上报的地址。
+      const chosenColumn = family === 6 ? "primaryIpv6" : "primaryIpv4";
+      if (oldIp && String(host[chosenColumn] || "").trim().toLowerCase() === oldIp.toLowerCase()) {
+        await this.deps.hosts.update(hostId, { [chosenColumn]: null });
+        notes.push(`主 ${family === 6 ? "IPv6" : "IPv4"} 选的是旧 IP，已取消选择，改用 Agent 上报的新地址`);
+      }
       followUp = this.followUpPrimaryAddress(hostId, newIp, eventId).catch((error) => {
         this.deps.log("warn", `[IpChange] host=${hostId} 等待新 IP 上报时出错：${errorMessage(error)}`);
       });

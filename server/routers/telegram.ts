@@ -17,6 +17,7 @@ import { SESSION_TOKEN_TTL_MS, SESSION_TOKEN_TTL_SECONDS, stripSessionSensitiveF
 import { createLoginAuthSession } from "../loginSessionService";
 import { authRateLimitState, clearAuthAccountFailures, recordPasswordFailure, recordTwoFactorChallengeIssue, recordTwoFactorFailure, twoFactorChallengeIssueState } from "../authRateLimit";
 import { createTwoFactorChallenge } from "../twoFactorChallenges";
+import { isTelegramLoginEnabled } from "../telegramLoginSwitch";
 
 const BIND_CODE_TTL_MS = 5 * 60 * 1000;
 const MOBILE_LOGIN_TTL_MS = 5 * 60 * 1000;
@@ -26,6 +27,17 @@ const usedTelegramWebAppLogins = new Map<string, number>();
 const TELEGRAM_WIDGET_LOGIN_MAX_AGE_SECONDS = 5 * 60;
 // 预览失败只按来源 IP 计数（recordPasswordFailure），不设全局账户维度，免得任何人刷几次就把所有人的预览锁住。
 const TELEGRAM_LOGIN_PREVIEW_SCOPE = "telegram-login-preview";
+
+/*
+  Telegram 登录单独开关（server/telegramLoginSwitch.ts）关了：所有「拿 Telegram 换面板会话」的过程一律拒绝，
+  放在最前面 —— 不发挑战、不预览、不消费登录码。绑定 / 解绑 / 通知走别的过程，不经过这里。
+  消息沿用 TELEGRAM_LOGIN_DISABLED，登录页已经认得它（lib/authErrorMessage.ts）。
+*/
+async function assertTelegramLoginEnabled() {
+  if (!(await isTelegramLoginEnabled())) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "TELEGRAM_LOGIN_DISABLED" });
+  }
+}
 
 function randomCode(length = 24) {
   let out = "";
@@ -223,6 +235,7 @@ export const telegramRouter = router({
     const settings = await getTelegramSettings();
     return {
       enabled: settings.enabled,
+      loginEnabled: await isTelegramLoginEnabled(),
       configured: settings.configured,
       botUsername: settings.botUsername,
       panelPublicUrl: settings.panelPublicUrl,
@@ -329,6 +342,7 @@ export const telegramRouter = router({
   }),
 
   startMobileLogin: publicProcedure.mutation(async ({ ctx }) => {
+    await assertTelegramLoginEnabled();
     // 公开接口：先过来源限流再干活。已经因为试码失败被封的来源也不给发新的挑战。
     const ip = String(ctx.req.ip || ctx.req.socket.remoteAddress || "unknown");
     const blocked = authRateLimitState(ip, TELEGRAM_LOGIN_PREVIEW_SCOPE);
@@ -358,6 +372,7 @@ export const telegramRouter = router({
   mobileLoginStatus: publicProcedure
     .input(z.object({ code: z.string().min(8).max(64), pollToken: z.string().min(16).max(128) }))
     .mutation(async ({ input, ctx }) => {
+      await assertTelegramLoginEnabled();
       const code = input.code.trim().toUpperCase();
       if (!isMobileLoginCode(code) || !verifyTelegramMobilePollToken(code, input.pollToken)) {
         return { status: "pending" as const };
@@ -376,6 +391,7 @@ export const telegramRouter = router({
   previewLogin: publicProcedure
     .input(z.object({ code: z.string().min(8).max(64) }))
     .query(async ({ input, ctx }) => {
+      await assertTelegramLoginEnabled();
       const ip = String(ctx.req.ip || ctx.req.socket.remoteAddress || "unknown");
       const limited = authRateLimitState(ip, TELEGRAM_LOGIN_PREVIEW_SCOPE);
       if (limited.limited) {
@@ -399,6 +415,7 @@ export const telegramRouter = router({
   login: publicProcedure
     .input(z.object({ code: z.string().min(8).max(64), mobile: z.boolean().optional() }))
     .mutation(async ({ input, ctx }) => {
+      await assertTelegramLoginEnabled();
       const code = input.code.trim().toUpperCase();
       // APP-prefixed codes belong exclusively to the browser/mobile polling
       // flow and require its separate poll token.
@@ -411,10 +428,12 @@ export const telegramRouter = router({
   loginWithWidget: publicProcedure
     .input(telegramWidgetLoginSchema)
     .mutation(async ({ input, ctx }) => {
+      await assertTelegramLoginEnabled();
       const settings = await getTelegramRuntimeSettings();
       if (!settings.enabled || !settings.configured || !settings.token) {
         throw new Error("TELEGRAM_LOGIN_DISABLED");
       }
+
       const ip = String(ctx.req.ip || ctx.req.socket.remoteAddress || "unknown");
       const widgetScope = `telegram-widget:${String(input.id).trim()}`;
       const limited = authRateLimitState(ip, widgetScope);
@@ -452,10 +471,12 @@ export const telegramRouter = router({
   loginWithWebApp: publicProcedure
     .input(telegramWebAppLoginSchema)
     .mutation(async ({ input, ctx }) => {
+      await assertTelegramLoginEnabled();
       const settings = await getTelegramRuntimeSettings();
       if (!settings.enabled || !settings.configured || !settings.token) {
         throw new Error("TELEGRAM_LOGIN_DISABLED");
       }
+
       const payload = verifyTelegramWebAppLogin(input.initData, settings.token);
       if (!payload) {
         throw new Error("TELEGRAM_WEBAPP_VERIFY_FAILED");

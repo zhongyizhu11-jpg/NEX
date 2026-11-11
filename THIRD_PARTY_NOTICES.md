@@ -192,3 +192,18 @@ SOFTWARE.
   （`server/ipRegionOffline.ts`），加载时校验 sha256，见 `server/assets/ip2region/NOTICE.txt`
 
 Copyright (c) 2015 Lionsoul<chenxin619315@gmail.com>
+
+## mita（Mieru 服务端，Mieru 落地用）
+
+- 程序：`mita`，上游 <https://github.com/enfein/mieru>（版权归 mieru 的作者，见上游仓库的 LICENSE）
+- 钉死版本：`v3.39.0`，发布包与包内二进制的 SHA-256 都钉在 `shared/mitaAssets.ts`
+  （`mita_3.39.0_linux_amd64.tar.gz` `ea35fdef…5798c`、`mita_3.39.0_linux_arm64.tar.gz` `853eb8c3…d1c6`）
+- 许可：GNU General Public License v3.0（GPL-3.0），全文见 <https://www.gnu.org/licenses/gpl-3.0.txt>，
+  对应的源码就是上游该版本的标签 <https://github.com/enfein/mieru/tree/v3.39.0>
+- 分发方式：作为**独立程序**分发，不与 NEX 的任何代码链接，NEX 也没有修改它。
+  `scripts/build-agent-release.sh` 从上游发布页下载官方构建的静态二进制、按钉死的哈希校验，原样放进
+  Agent 发布包（`forwardx-mita-linux-amd64` / `forwardx-mita-linux-arm64`）；面板经 `/api/agent/assets` 转发给
+  开了 Mieru 落地的主机。Agent 把它装成 `/usr/local/bin/forwardx-mita`，以单独的 `forwardx-mita` 服务运行
+  （`mita run`），双方只通过配置文件（`/etc/forwardx/mita/server.json`）和 mita 自己的命令行
+  （`mita get metrics`）交互。
+- 收到二进制的人同样享有 GPL-3.0 赋予的全部权利，包括从上面的地址取得完整源码。

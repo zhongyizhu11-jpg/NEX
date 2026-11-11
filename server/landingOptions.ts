@@ -13,6 +13,7 @@
 
 import { getHostEntryAddress } from "../shared/hostEntryAddress";
 import { normalizeSsMethod, ssEgressMethodError } from "../shared/ssEgress";
+import { vlessEgressInboundError } from "../shared/vlessEgress";
 import type { UnlockStatus } from "../shared/unlockCheck";
 import * as db from "./db";
 import { isHostConsideredOnline } from "./hostHeartbeatPolicy";
@@ -25,6 +26,12 @@ export type LandingOptionInbound = {
   id: number;
   name: string;
   port: number;
+  /**
+   * shadowsocks，或者 vless（2.3.525 起，VLESS Reality 出口用；分流只走 Shadowsocks，选择器按调用方要的协议过滤）。
+   * 老界面不看这个字段：它们只认 Shadowsocks，所以 VLESS 入站在它们眼里是 methodError 不为空的那种（不能选）。
+   */
+  protocol: "shadowsocks" | "vless";
+  /** Shadowsocks 的加密方式；VLESS 入站写成「VLESS Reality」只用来显示。 */
   method: string;
   /** 这个方法不能做 gost 出口时的原因（分流那边 sing-box 同样只接这几种）。 */
   methodError: string | null;
@@ -70,7 +77,9 @@ export async function listLandingOptions(actor: Actor): Promise<LandingOptionHos
   const unlockByHost = await latestUnlockStatusesByHostIds(visibleHosts.map((host) => Number(host.id)));
   const byHost = new Map<number, LandingOptionInbound[]>();
   for (const inbound of inbounds) {
-    if (String(inbound.protocol) !== "shadowsocks") continue;
+    const protocol = String(inbound.protocol);
+    // VLESS 只列 REALITY 的（别的安全层根本做不了出口，列出来只是一排灰的）。
+    if (protocol !== "shadowsocks" && !(protocol === "vless" && String(inbound.security) === "reality")) continue;
     // 落地池的成员入站跟着池走（池里去掉那台它就没了），不拿来当单独的出口 / 分流落地。
     if (Number(inbound.nodePoolId || 0) > 0) continue;
     const usable = isAdmin || Number(inbound.userId) === Number(actor.id) || dbBool(inbound.landingEgress);
@@ -82,8 +91,9 @@ export async function listLandingOptions(actor: Actor): Promise<LandingOptionHos
       id: Number(inbound.id),
       name: String(inbound.name || ""),
       port: Number(inbound.port),
-      method: normalizeSsMethod(inbound.method),
-      methodError: ssEgressMethodError(inbound.method),
+      protocol: protocol === "vless" ? "vless" : "shadowsocks",
+      method: protocol === "vless" ? "VLESS Reality" : normalizeSsMethod(inbound.method),
+      methodError: protocol === "vless" ? vlessEgressInboundError(inbound) : ssEgressMethodError(inbound.method),
       isEnabled: dbBool(inbound.isEnabled, true),
       landingEgress: dbBool(inbound.landingEgress),
       unlock: services ? Object.fromEntries(Array.from(services.entries()).map(([id, value]) => [id, value.status])) : {},

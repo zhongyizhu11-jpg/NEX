@@ -9,6 +9,7 @@ import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimistic
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -68,7 +69,8 @@ type AgentTokenManagerProps = {
 };
 
 export type { AgentTokenViewMode } from "@/lib/agentTokenViewMode";
-type InstallAddressMode = "public" | "current";
+// host：这台主机在「Agent 连接与保护」里设置的独立面板连接地址（只在已绑定主机的安装命令里出现）。
+type InstallAddressMode = "public" | "current" | "host";
 type InstallAddressOption = {
   id: InstallAddressMode;
   label: string;
@@ -404,6 +406,9 @@ export default function AgentTokenManager({
   const [showNewToken, setShowNewToken] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const [scriptToken, setScriptToken] = useState("");
+  // 安装命令对应的 Token 已经绑着一台主机时：在线就在复制前确认（同 Token 换机接管），有独立地址就用它。
+  const [scriptBoundHost, setScriptBoundHost] = useState<{ id: number; name: string; online: boolean; agentPanelUrl: string | null } | null>(null);
+  const confirmDialog = useConfirmDialog();
   const [loadingScriptTokenId, setLoadingScriptTokenId] = useState<number | null>(null);
   const [newToken, setNewToken] = useState("");
   const [description, setDescription] = useState("");
@@ -471,6 +476,15 @@ export default function AgentTokenManager({
   const panelUrl = configuredPanelUrl || currentPanelUrl;
   const installAddressOptions = useMemo<InstallAddressOption[]>(() => {
     const options: InstallAddressOption[] = [];
+    const hostPanelUrl = normalizeConfigUrl(scriptBoundHost?.agentPanelUrl || "");
+    if (hostPanelUrl) {
+      options.push({
+        id: "host",
+        label: "主机独立地址",
+        description: "这台主机设置的 Agent 面板连接地址。",
+        url: hostPanelUrl,
+      });
+    }
     if (configuredPanelUrl) {
       options.push({
         id: "public",
@@ -496,7 +510,7 @@ export default function AgentTokenManager({
       });
     }
     return options;
-  }, [configuredPanelUrl, currentPanelUrl, panelUrl]);
+  }, [configuredPanelUrl, currentPanelUrl, panelUrl, scriptBoundHost?.agentPanelUrl]);
   useEffect(() => {
     if (installAddressOptions.length === 0) return;
     if (!installAddressOptions.some((option) => option.id === installAddressMode)) {
@@ -576,6 +590,8 @@ export default function AgentTokenManager({
       setLoadingScriptTokenId(tokenId);
       const data = await utils.agentTokens.getInstallToken.fetch({ id: tokenId });
       setScriptToken(data.token);
+      setScriptBoundHost(data.boundHost ?? null);
+      if (data.boundHost?.agentPanelUrl) setInstallAddressMode("host");
       setShowScript(true);
     } catch (err: any) {
       toast.error(err?.message || "获取安装命令失败");
@@ -619,6 +635,21 @@ export default function AgentTokenManager({
     });
 
   const getInstallCommand = (token: string) => getAgentScriptCommand("install", token);
+  /*
+    同 Token 换机接管：这个 Token 绑着的主机还在线时，在另一台机器上执行安装命令会让新机器接管这条主机记录、
+    原来那台停止同步。复制前问一句，免得把「给另一台机器装」和「重装这台」弄混。
+  */
+  const copyInstallCommand = async (command: string) => {
+    if (scriptBoundHost?.online) {
+      const confirmed = await confirmDialog({
+        title: "这台主机已经有在线的 Agent",
+        description: `「${scriptBoundHost.name || `主机 #${scriptBoundHost.id}`}」现在在线。在另一台机器上安装会接管它：新机器接手这条主机记录和它的规则，原来那台停止和面板同步（已有转发保留）。只是在同一台机器上重装或升级不受影响。`,
+        confirmText: "仍然复制",
+      });
+      if (!confirmed) return;
+    }
+    await copyToClipboard(command);
+  };
   // OpenWrt / iStoreOS：同一条安装命令，最前面先用 opkg 补上 bash、curl。
   const getOpenWrtInstallCommand = (token: string) => getAgentScriptCommand("install", token, commandPanelUrl, true);
   // 装了 Docker 的 NAS、iStoreOS：一行 docker run（docker/agent），Agent 照样从面板装。
@@ -977,7 +1008,10 @@ export default function AgentTokenManager({
 
       <Dialog open={showScript} onOpenChange={(open) => {
         setShowScript(open);
-        if (!open) setScriptToken("");
+        if (!open) {
+          setScriptToken("");
+          setScriptBoundHost(null);
+        }
       }}>
         <DialogContent className="w-[calc(100vw-2rem)] max-w-[42rem] sm:w-[calc(100vw-2rem)]">
           <DialogHeader>
@@ -1008,19 +1042,19 @@ export default function AgentTokenManager({
               label="安装命令"
               command={scriptToken ? getInstallCommand(scriptToken) : ""}
               copyDisabled={!scriptToken}
-              onCopy={() => scriptToken && copyToClipboard(getInstallCommand(scriptToken))}
+              onCopy={() => { if (scriptToken) void copyInstallCommand(getInstallCommand(scriptToken)); }}
             />
             <CommandRow
               label="OpenWrt / iStoreOS"
               command={scriptToken ? getOpenWrtInstallCommand(scriptToken) : ""}
               copyDisabled={!scriptToken}
-              onCopy={() => scriptToken && copyToClipboard(getOpenWrtInstallCommand(scriptToken))}
+              onCopy={() => { if (scriptToken) void copyInstallCommand(getOpenWrtInstallCommand(scriptToken)); }}
             />
             <CommandRow
               label="Docker（NAS 等装了 Docker 的设备）"
               command={scriptToken ? getDockerCommand(scriptToken) : ""}
               copyDisabled={!scriptToken}
-              onCopy={() => scriptToken && copyToClipboard(getDockerCommand(scriptToken))}
+              onCopy={() => { if (scriptToken) void copyInstallCommand(getDockerCommand(scriptToken)); }}
             />
             <CommandRow
               label="卸载命令"
@@ -1037,6 +1071,7 @@ export default function AgentTokenManager({
             <Button onClick={() => {
               setShowScript(false);
               setScriptToken("");
+              setScriptBoundHost(null);
             }}>关闭</Button>
           </DialogFooter>
         </DialogContent>

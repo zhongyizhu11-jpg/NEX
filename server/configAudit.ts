@@ -27,12 +27,16 @@ const VOLATILE_KEYS = new Set([
   "createdAt", "updatedAt", "lastHeartbeat", "isOnline", "isRunning", "lastLatencyMs",
   "lastTestAt", "lastTestStatus", "lastTestMessage", "lastError", "trafficUsed",
   "lastDdnsValue", "lastDdnsAt", "lastDdnsError", "geoUpdatedAt", "mimicCheckedAt",
+  // 分线路解析每条线路此刻发布的值和服务商记录 ID：和 lastDdnsValue 一样是运行状态。
+  "ddnsLineState",
   "mimicMessage", "mimicStatus", "mimicRuntimeStatus", "mimicRuntimeMessage",
   "mimicRuntimeCheckedAt", "agentRecoveryStartedAt", "agentRecoveryCompletedAt",
   "agentRecoveryExpected", "agentRecoveryReady", "agentLastReceivedRevision",
   "agentLastAppliedRevision", "agentLastReceivedHash", "agentLastAppliedHash",
   // 规则专属域名是面板对 DNS 的簿记，和 Agent 跑的配置无关，不能让它改动配置摘要。
   "entryDomain", "entryDomainValue", "entryDomainAt", "entryDomainError",
+  // Agent 上报的网卡地址列表（shared/hostPublicAddresses）是检测结果，不是谁改的配置。
+  "detectedAddresses",
 ]);
 
 type SecretMode = "redact" | "hash" | "plain";

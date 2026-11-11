@@ -14,20 +14,23 @@ import { dbBool } from "../repositories/repositoryUtils";
 import {
   assertTlsInboundDeletable,
   normalizeTlsInboundInput,
+  routedTlsInboundUse,
   usableTlsInboundHostIds,
   validateTlsInboundChange,
 } from "../tlsInbounds";
 import {
   isTlsInboundAgentSupported,
+  isTlsInboundRoutedAgentSupported,
   parseSniNameJson,
   TLS_INBOUND_AGENT_VERSION,
+  TLS_INBOUND_ROUTED_AGENT_VERSION,
   TLS_INBOUND_MAX_HANDSHAKE_TIMEOUT,
   TLS_INBOUND_MAX_HANDSHAKES_LIMIT,
   TLS_INBOUND_PROXY_PROTOCOL_MODES,
   TLS_INBOUND_UNKNOWN_SNI_ACTIONS,
 } from "../../shared/tlsInbound";
 import { withKeyedTaskLock } from "../keyedTaskLock";
-import { getTlsInboundRuntimeStatus } from "../tlsInboundRuntime";
+import { getTlsInboundRuntimeStatus, isTlsInboundTableConfirmed } from "../tlsInboundRuntime";
 
 const settingsShape = {
   name: z.string().trim().min(1).max(64),
@@ -47,7 +50,11 @@ function hostLockKey(hostId: number) {
 }
 
 async function describeInboundRules(inboundIds: number[]) {
-  const rules = await db.getSniRulesForInbounds(inboundIds) as any[];
+  // 转发资源的子规则在别的入口机上找不到同端口入站时挂着锚点（不下发），不算挂在这个入站上。
+  const inboundHostById = new Map((await Promise.all(inboundIds.map((id) => db.getTlsInboundById(id))))
+    .filter(Boolean).map((inbound) => [inbound!.id, inbound!.hostId] as const));
+  const rules = (await db.getSniRulesForInbounds(inboundIds) as any[])
+    .filter((rule) => dbBool(rule.isForwardGroupTemplate) || Number(rule.hostId) === inboundHostById.get(Number(rule.tlsInboundId)));
   const userIds = Array.from(new Set(rules.map((rule) => Number(rule.userId)).filter((id) => id > 0)));
   const users = await Promise.all(userIds.map((id) => db.getUserById(id)));
   const userById = new Map(users.filter(Boolean).map((user: any) => [Number(user.id), user]));
@@ -79,14 +86,19 @@ export const tlsInboundsRouter = router({
       if (!host) throw new Error("主机不存在");
       const inbounds = await db.listTlsInboundsByHost(input.hostId);
       const rulesByInbound = await describeInboundRules(inbounds.map((inbound) => inbound.id));
+      const agentVersion = String(host.agentVersion || "");
       return {
-        agentSupported: isTlsInboundAgentSupported(String((host as any).agentVersion || "")),
+        agentSupported: isTlsInboundAgentSupported(agentVersion),
+        routedAgentSupported: isTlsInboundRoutedAgentSupported(agentVersion),
         requiredAgentVersion: TLS_INBOUND_AGENT_VERSION,
-        agentVersion: String((host as any).agentVersion || ""),
+        routedAgentVersion: TLS_INBOUND_ROUTED_AGENT_VERSION,
+        agentVersion,
         inbounds: inbounds.map((inbound) => ({
           ...inbound,
           rules: rulesByInbound.get(inbound.id) || [],
           runtime: getTlsInboundRuntimeStatus(input.hostId, inbound.id),
+          // 路由表已确认：Agent 报回来的版本号就是最近下发的那张（2.2.255 起才有）。
+          tableConfirmed: isTlsInboundTableConfirmed(input.hostId, inbound.id),
         })),
       };
     }),
@@ -157,7 +169,9 @@ export const tlsInboundsRouter = router({
       const ownRules = await db.getForwardRules(ctx.user.id) as any[];
       referenced = new Set(ownRules.map((rule) => Number(rule.tlsInboundId || 0)).filter((id) => id > 0));
     }
-    const visible = all.filter((inbound) => usableHosts.has(inbound.hostId) || referenced.has(inbound.id));
+    // 经隧道 / 转发资源才用得上的入站也列出来（usable 为 false，带上能经哪些隧道、转发资源用）。
+    const routed = await routedTlsInboundUse(ctx.user);
+    const visible = all.filter((inbound) => usableHosts.has(inbound.hostId) || routed.has(inbound.hostId) || referenced.has(inbound.id));
     const hosts = await db.getHostsByIds(Array.from(new Set(visible.map((inbound) => inbound.hostId)))) as any[];
     const hostById = new Map(hosts.map((host) => [Number(host.id), host]));
     return visible.map((inbound) => {
@@ -172,7 +186,10 @@ export const tlsInboundsRouter = router({
         allowedSni: inbound.allowedSni,
         agentVersion: String(host?.agentVersion || ""),
         agentSupported: isTlsInboundAgentSupported(String(host?.agentVersion || "")),
+        routedAgentSupported: isTlsInboundRoutedAgentSupported(String(host?.agentVersion || "")),
         usable: usableHosts.has(inbound.hostId),
+        tunnelIds: routed.get(inbound.hostId)?.tunnelIds || [],
+        forwardGroupIds: routed.get(inbound.hostId)?.forwardGroupIds || [],
       };
     });
   }),

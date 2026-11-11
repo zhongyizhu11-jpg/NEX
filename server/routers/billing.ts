@@ -6,6 +6,9 @@ import { refreshUserForwardEndpoints } from "./helpers";
 import { adjustUserBalanceCommand, setUserBalanceCommand } from "../services/userCommandService";
 import { clearForwardxAiSettingsCache } from "../ai/settings";
 import { clientIp } from "../clientIp";
+import { productStock } from "../../shared/productStock";
+import { TRPCError } from "@trpc/server";
+import { buildBillingExport } from "../billingExport";
 
 const dateInput = z.string().trim().max(64).optional().nullable();
 
@@ -33,6 +36,9 @@ const billingPageInput = z.object({
   page: z.number().int().min(1).max(100_000).default(1),
   pageSize: z.number().int().min(1).max(100).default(20),
 });
+
+/** 同一个人同一时间只跑一份导出：几万行的表连点几下就是几倍的库查询和内存。 */
+const billingExportsInFlight = new Set<number>();
 
 export const billingRouter = router({
   summary: adminProcedure.query(async () => db.getBillingAdminSummary()),
@@ -89,6 +95,35 @@ export const billingRouter = router({
         page: input.page,
         pageSize: input.pageSize,
       });
+    }),
+
+  /**
+   * 账单 Excel 导出（上游 2.3.286）。管理员可导出全部或指定用户；普通用户只导出自己的，
+   * 传别人的 userId 也只按自己算（server/billingExport.ts）。是查询不是修改：只读令牌也能导。
+   * 文件用 base64 带回去，前端存成 .xlsx。
+   */
+  exportXlsx: protectedProcedure
+    .input(z.object({
+      userId: z.number().int().positive().optional().nullable(),
+      includeCancelledSubscriptions: z.boolean().default(true),
+    }).optional())
+    .query(async ({ input, ctx }) => {
+      const viewerId = Number(ctx.user.id);
+      if (billingExportsInFlight.has(viewerId)) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "上一份账单还在导出，请稍候" });
+      }
+      billingExportsInFlight.add(viewerId);
+      try {
+        const exported = await buildBillingExport({
+          viewer: { id: viewerId, role: String(ctx.user.role) },
+          userId: input?.userId ?? null,
+          includeCancelledSubscriptions: input?.includeCancelledSubscriptions ?? true,
+        });
+        appendPanelLog("info", `[Billing] export user=${viewerId} scope=${ctx.user.role === "admin" ? input?.userId ?? "all" : "self"} rows=${exported.counts.ledger}`);
+        return { filename: exported.filename, dataBase64: exported.buffer.toString("base64"), counts: exported.counts };
+      } finally {
+        billingExportsInFlight.delete(viewerId);
+      }
     }),
 
   ledger: protectedProcedure
@@ -157,6 +192,8 @@ export const billingRouter = router({
       if ((await db.getSetting("storeEnabled")) !== "true") throw new Error("商店功能未开启");
       const plan = await db.getSubscriptionPlanById(input.planId);
       if (!plan || !plan.isActive || !plan.isStoreVisible) throw new Error("套餐不可购买");
+      // 已售罄的先拦下（续费不受库存限制）。并发下真正防超售的是开通事务里那条带条件的占额语句。
+      if (!input.subscriptionId && productStock(plan).soldOut) throw new Error(db.PLAN_STOCK_SOLD_OUT_MESSAGE);
       // 折扣按**选中那一档**的价格预览，否则年付的单会按月付价算折扣。
       const { option } = await db.resolvePlanPricing(input.planId, input.durationDays ?? null);
       let discountCodeId: number | null = null;

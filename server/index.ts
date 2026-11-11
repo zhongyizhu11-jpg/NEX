@@ -14,6 +14,7 @@ import { agentRouter } from "./agentRoutes";
 import { paymentCallbackRouter } from "./payment";
 import { migrationRouter } from "./migration";
 import { clientLogoRouter } from "./clientLogoRoute";
+import { uiThemeRouter } from "./uiThemeRoute";
 import { proxySubscriptionRouter } from "./proxySubscriptionRoute";
 import { panelProfilingRouter } from "./panelProfilingRoute";
 import { xboardCompatRouter } from "./xboardCompatRoute";
@@ -36,6 +37,7 @@ import { metricsRouter } from "./ops/metricsExport";
 import { openApiRouter } from "./openApiRoute";
 import { googleAuthRouter } from "./googleAuthRoute";
 import { discordAuthRouter } from "./discordAuthRoute";
+import { oidcAuthRouter } from "./oidcAuthRoute";
 import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
 import { startDatabaseHealthMonitor } from "./databaseHealthMonitor";
 import { startPerfSamplerFromEnv } from "./perfSampler";
@@ -214,6 +216,8 @@ async function startServer() {
   app.use(googleAuthRouter);
   // GET /api/auth/discord/start、/callback：Discord 登录的整页跳转（server/discordAuthRoute.ts）。
   app.use(discordAuthRouter);
+  // GET /api/auth/oidc/start、/callback：通用 OIDC 登录（Pocket ID、Keycloak……）的整页跳转（server/oidcAuthRoute.ts）。
+  app.use(oidcAuthRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
   // 规则集镜像要排在订阅路由前面：/api/sub/ruleset/… 会被 /api/sub/:token/:format 抢走。
@@ -222,6 +226,8 @@ async function startServer() {
   // Xboard / V2Board 兼容的几个用户端接口（默认关，设置 › 订阅里开）：server/xboardCompatRoute.ts。
   app.use(xboardCompatRouter);
   app.use(clientLogoRouter);
+  // GET /api/ui-themes/<id>.css：已安装主题包的样式（server/uiThemeRoute.ts）。
+  app.use(uiThemeRouter);
   // GET /api/ops/profiling/:id/download：管理员下载面板的 CPU 剖析 / 堆快照（server/panelProfilingRoute.ts）。
   app.use(panelProfilingRouter);
   // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。

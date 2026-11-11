@@ -28,6 +28,7 @@ import { SELF_TEST_MAX_LIFETIME_SECONDS } from "../selfTestTiming";
 import { reconcileHostTrafficPolicy } from "../hostTrafficPolicy";
 import { onHostDeleted } from "../entityCleanup";
 import { ignoreErrorWith } from "../ignoredError";
+import { loadAverageFromStored } from "../../shared/hostLoadAverage";
 
 export const TRAFFIC_BUCKET_MINUTES = 30;
 const TRAFFIC_BUCKET_SECONDS = TRAFFIC_BUCKET_MINUTES * 60;
@@ -303,7 +304,8 @@ export async function getLatestHostMetricRows(hostIds?: number[]) {
   const rows = await queryLatestHostMetricRows(ids, [
     "id", "hostId", "cpuUsage", "memoryUsage", "memoryUsed", "swapUsage",
     "swapUsed", "swapTotal", "networkIn", "networkOut", "diskUsage",
-    "diskUsed", "diskTotal", "uptime", "tcpConnections", "udpConnections", "recordedAt",
+    "diskUsed", "diskTotal", "uptime", "tcpConnections", "udpConnections",
+    "loadAvg1", "loadAvg5", "loadAvg15", "recordedAt",
   ]).catch(ignoreErrorWith("HostMetrics latest rows", [] as any[]));
   const mapped = (rows as any[])
     .map((row) => ({
@@ -323,6 +325,10 @@ export async function getLatestHostMetricRows(hostIds?: number[]) {
       uptime: row?.uptime == null ? null : numeric(row.uptime),
       tcpConnections: row?.tcpConnections == null ? null : numeric(row.tcpConnections),
       udpConnections: row?.udpConnections == null ? null : numeric(row.udpConnections),
+      // 库里是乘 100 的整数，这里除回小数；老 Agent、没有 /proc/loadavg 的平台是 null
+      load1: loadAverageFromStored(row?.loadAvg1),
+      load5: loadAverageFromStored(row?.loadAvg5),
+      load15: loadAverageFromStored(row?.loadAvg15),
       recordedAt: rowDate(row?.recordedAt),
       rn: Math.max(1, Math.floor(Number(row?.rn || 0))),
     }))

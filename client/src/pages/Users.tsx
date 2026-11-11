@@ -1,7 +1,9 @@
+import { getFormatLocale } from "@/i18n";
 import { FormField } from "@/components/ui/form-field";
 import UserProxySubConfig from "@/components/proxy/UserProxySubConfig";
 import OpsUserMenuItems from "@/features/ops/slots/UserMenuItems";
 import { UserOnlineIpsDialogHost } from "@/features/ops/online/UserOnlineIpsMenuItem";
+import { UserTrafficHistoryDialogHost } from "@/components/users/UserTrafficHistory";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError from "@/components/DataSectionError";
@@ -99,7 +101,10 @@ import {
   Mail,
   MoreHorizontal,
   Pencil,
+  LogIn,
 } from "lucide-react";
+import { openUserBackend } from "@/lib/userImpersonation";
+import { mobileAuth } from "@/lib/mobileAuth";
 import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -143,13 +148,13 @@ type UserManageType = typeof USER_MANAGE_TYPES[number];
 function dateText(value?: string | Date | null) {
   if (!value) return "永久";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString(getFormatLocale());
 }
 
 function billingDateTimeText(value?: string | Date | null) {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN", BILLING_DATE_TIME_FORMAT_OPTIONS);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale(), BILLING_DATE_TIME_FORMAT_OPTIONS);
 }
 
 function currentBillingResetDay() {
@@ -463,6 +468,16 @@ function UsersContent() {
     },
     onError: (err) => toast.error(err.message || "创建用户失败"),
   });
+
+  /*
+    进入用户后台：新标签页里以这个用户的身份看面板，这个标签页还是管理员（lib/userImpersonation.ts）。
+    App 里没有「新标签页」，不提供。
+  */
+  const enterUserBackendMutation = trpc.users.enterUserBackend.useMutation();
+  const enterUserBackend = (u: { id: number }) => {
+    void openUserBackend(() => enterUserBackendMutation.mutateAsync({ userId: u.id }))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "进入用户后台失败"));
+  };
 
   const resetPasswordMutation = trpc.users.resetPassword.useMutation({
     onSuccess: () => {
@@ -1327,6 +1342,16 @@ function UsersContent() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <OpsUserMenuItems user={u} />
+        {!mobileAuth.isNative ? (
+          <DropdownMenuItem
+            disabled={u.role === "admin" || u.accountEnabled === false || enterUserBackendMutation.isPending}
+            onSelect={() => enterUserBackend(u)}
+            title={u.role === "admin" ? "不能进入管理员账号的后台" : u.accountEnabled === false ? "账号已停用" : "在新窗口以这个用户的身份查看，当前窗口不受影响"}
+          >
+            <LogIn />
+            <span>进入后台</span>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onSelect={() => openRechargeDialog(u)}>
           <WalletCards />
           <span>余额充值</span>
@@ -3041,6 +3066,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
       <UserOnlineIpsDialogHost />
+      <UserTrafficHistoryDialogHost />
     </div>
   );
 

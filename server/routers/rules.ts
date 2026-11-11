@@ -7,6 +7,10 @@ import { batchRulesRouter } from "./rules.batch";
 import { portsRulesRouter } from "./rules.ports";
 import { selfTestRulesRouter } from "./rules.selfTest";
 import { trafficRulesRouter } from "./rules.traffic";
+import { personalRuleGroupsRouter } from "./rules.groups";
+import { ruleBatchJobsRouter } from "./rules.batchJobs";
+import { getRulePersonalGroupIds } from "../ruleGroups";
+import { ruleGroupFilterSchema } from "../../shared/ruleGroups";
 import { canUseForwardRuleResource, getLinkAccessScope } from "../linkAccessView";
 import { isManagedForwardGroupChildRule } from "../forwardRuleVisibility";
 import { formatHostAddressWithPort, getHostEntryAddress } from "@shared/hostEntryAddress";
@@ -29,6 +33,7 @@ import { ROUTE_PATH_QUALITY_RETENTION_HOURS } from "../repositories/routePathQua
 import { dbBool } from "../repositories/repositoryUtils";
 import { ruleTrafficQueryCache } from "../ruleLatencyQueryCache";
 import { idSetFingerprint } from "../queryCache";
+import { withRulePortWarnings } from "../rulePortOccupancy";
 import { withAnomalyThrottles } from "../ops/trafficAnomalyThrottles";
 
 /** 看一条规则的线路状态：管理员随便看，别人只能看自己的。 */
@@ -88,6 +93,28 @@ async function withRuleEntryBridges<T extends any>(value: T): Promise<T> {
   return decorate(value) as T;
 }
 
+/**
+ * 给规则带上「在当前登录的人的哪几个组里」（personalGroupIds，按组的顺序；一个都不在是空数组）。
+ * 认的是看的人，不是规则的主人：管理员看别人的规则，带的是管理员自己的组；别人的组谁也带不出来。
+ */
+type RuleRowLike = Record<string, unknown> | null | undefined;
+
+async function withRulePersonalGroups<T>(value: T, user: { id: number }): Promise<T> {
+  // 三种形状：规则数组、带 items 的一页、单条规则（可能是 null）。
+  const items = !Array.isArray(value) && value && typeof value === "object" ? (value as { items?: unknown }).items : undefined;
+  const list: RuleRowLike[] = Array.isArray(value)
+    ? value as RuleRowLike[]
+    : Array.isArray(items)
+      ? items as RuleRowLike[]
+      : value && typeof value === "object" ? [value as RuleRowLike] : [];
+  const ruleIds = list.map((rule) => Number(rule?.id || 0)).filter((id) => id > 0);
+  const groupsByRule = ruleIds.length > 0 ? await getRulePersonalGroupIds(user.id, ruleIds) : new Map<number, number[]>();
+  const decorate = (rule: RuleRowLike) => (rule ? { ...rule, personalGroupIds: groupsByRule.get(Number(rule.id)) || [] } : rule);
+  if (Array.isArray(value)) return (value as RuleRowLike[]).map(decorate) as T;
+  if (Array.isArray(items)) return { ...(value as object), items: (items as RuleRowLike[]).map(decorate) } as T;
+  return (value && typeof value === "object" ? decorate(value as RuleRowLike) : value) as T;
+}
+
 type RuleListCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleResourceType = "local" | "tunnel" | "chain" | "group";
 type RuleListFilters = {
@@ -98,6 +125,8 @@ type RuleListFilters = {
   resourceId?: number | null;
   category: RuleListCategory;
   search: string;
+  personalGroupId?: number | null;
+  sortBy?: "default" | "personalGroup";
 };
 
 async function getRuleListRepositoryInput(
@@ -127,6 +156,10 @@ async function getRuleListRepositoryInput(
     resourceId: input.resourceId,
     category: input.category,
     search: input.search,
+    // 个人分组一律按当前登录的人算（server/ruleGroups.ts）：主人从会话里取，不从入参里取。
+    personalGroupId: input.personalGroupId,
+    personalGroupOwnerId: user.id,
+    sortByPersonalGroup: input.sortBy === "personalGroup",
   };
 }
 
@@ -249,7 +282,7 @@ export const rulesRouter = router({
         : input.tunnelId === null
           ? rules.filter((rule: any) => !rule.tunnelId)
           : rules.filter((rule: any) => Number(rule.tunnelId || 0) === Number(input.tunnelId));
-      return withRuleResourceAccess(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(filtered)))), ctx.user);
+      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(filtered)))), ctx.user), ctx.user), isAdmin);
     }),
   listPage: protectedProcedure
     .input(z.object({
@@ -262,11 +295,14 @@ export const rulesRouter = router({
       resourceId: z.number().int().positive().nullable().optional(),
       category: z.enum(["all", "local", "tunnel", "chain", "group"]).default("all"),
       search: z.string().trim().max(200).optional().default(""),
+      // 个人分组筛选（0 = 未分组）和「按分组排序」：都只认当前登录的人自己的组。
+      personalGroupId: ruleGroupFilterSchema,
+      sortBy: z.enum(["default", "personalGroup"]).optional(),
     }))
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const page = await db.getForwardRulesPage({ ...repositoryInput, page: input.page, pageSize: input.pageSize });
-      return withRuleResourceAccess(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page)))), ctx.user);
+      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page)))), ctx.user), ctx.user), ctx.user.role === "admin");
     }),
   mapItems: protectedProcedure
     .input(z.object({
@@ -279,11 +315,12 @@ export const rulesRouter = router({
       resourceId: z.number().int().positive().nullable().optional(),
       category: z.enum(["all", "local", "tunnel", "chain", "group"]).default("all"),
       search: z.string().trim().max(200).optional().default(""),
+      personalGroupId: ruleGroupFilterSchema,
     }))
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const batch = await db.getForwardRuleMapBatch(repositoryInput, input.cursor || 0, input.limit);
-      return withRuleResourceAccess(await withRuleEgressDisplay(batch), ctx.user);
+      return withRulePortWarnings(await withRuleResourceAccess(await withRuleEgressDisplay(batch), ctx.user), ctx.user.role === "admin");
     }),
   listSummary: protectedProcedure
     .input(z.object({
@@ -294,6 +331,7 @@ export const rulesRouter = router({
       resourceId: z.number().int().positive().nullable().optional(),
       category: z.enum(["all", "local", "tunnel", "chain", "group"]).default("all"),
       search: z.string().trim().max(200).optional().default(""),
+      personalGroupId: ruleGroupFilterSchema,
     }))
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
@@ -349,7 +387,7 @@ export const rulesRouter = router({
       if (ctx.user.role !== "admin" && isManagedForwardGroupChildRule(rule)) return null;
       // 端口转发模板：「现在走哪条」和路径的拨号地址都换成展开那条的，和列表里一致（线路详情按 id 单独取也是这里）。
       const [shown] = await withTemplateRouteActive([rule]);
-      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(shown)), ctx.user);
+      return withRuleResourceAccess(await withRulePersonalGroups(await withRuleEgressDisplay(await withRuleEntryBridges(shown)), ctx.user), ctx.user);
     }),
   /**
    * 能当「备用线路」用的中转。
@@ -441,4 +479,8 @@ export const rulesRouter = router({
   ...batchRulesRouter._def.procedures,
   ...trafficRulesRouter._def.procedures,
   ...selfTestRulesRouter._def.procedures,
+  // 个人分组（rules.personalGroups / savePersonalGroup / deletePersonalGroup / reorderPersonalGroups / moveToPersonalGroups）
+  ...personalRuleGroupsRouter._def.procedures,
+  // 批量任务（rules.batchJobStart / batchJobs / batchJobStatus / batchJobStop / batchJobRetryFailed / batchJobDismiss）
+  ...ruleBatchJobsRouter._def.procedures,
 });

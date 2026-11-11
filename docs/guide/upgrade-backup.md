@@ -87,6 +87,12 @@ curl -fsSL "https://mirror.example.com/https://raw.githubusercontent.com/zhongyi
 
 GitHub 加速不会作用于 `ghcr.io` Docker 镜像。需要更换镜像源时，请通过 `FORWARDX_IMAGE` 或 `FORWARDX_IMAGE_REPO` 单独配置。
 
+## 开发者公告
+
+管理员打开面板、面板检查更新时，会顺带读一次仓库里的 `announcements/feed.json`（最多半小时一次，和检查更新共用「自动检查更新」开关和 GitHub 加速站）。适用于你这个版本的开发者公告会出现在「公告」里，比如安全提醒、升级注意事项，不升级也能收到。
+
+每条只出现一次：删掉或停用以后不会被下一次检查放回来。关掉「自动检查更新」就不会再取。
+
 ## Agent 升级
 
 可以在面板中选择主机批量升级 Agent，也可以单独选择某台主机升级。

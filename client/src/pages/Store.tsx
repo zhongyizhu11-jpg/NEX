@@ -32,6 +32,8 @@ import {
 import { Check, CheckCircle2, Coins, CreditCard, Lock, Package, RefreshCw, Route, Server, ShoppingBag, TicketPercent, WalletCards } from "lucide-react";
 import { useMemo, useState } from "react";
 import { usePaymentOrderDialog } from "@/components/PaymentOrderDialog";
+import { ProductStockBadge } from "@/components/ProductStock";
+import { productStock } from "@shared/productStock";
 import { toast } from "sonner";
 
 function speed(value?: number | null) {
@@ -98,6 +100,9 @@ function StorePlanCard({
    */
   const [selectedDays, setSelectedDays] = useState<number>(() => defaultPricingOption(options)?.durationDays ?? 30);
   const active = findPricingOption(options, selectedDays) || defaultPricingOption(options) || options[0];
+  // 售罄的套餐照常展示（价格、权益都还看得到），只是不能下单 —— 整张卡消失的话，
+  // 客户会以为套餐下架了，而不是「等补货」。
+  const soldOut = productStock(plan).soldOut;
 
   /*
     V1 这张卡是五层：顶上一条渐变装饰线、一个图标方块、「周期 / 端口」两个小框（套在一个
@@ -110,7 +115,10 @@ function StorePlanCard({
   */
   return (
     <EntityCard className="h-full p-[var(--fx-card-padding)]">
-      <h3 className="line-clamp-1 text-primary-type font-semibold text-foreground">{plan.name}</h3>
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="line-clamp-1 min-w-0 text-primary-type font-semibold text-foreground">{plan.name}</h3>
+        <ProductStockBadge product={plan} />
+      </div>
       {/* div 不用 p：手机上 `.workspace-main p` 会在名字和说明之间再撑出 12px。 */}
       <PlanDescriptionView text={planDescription(plan)} fallback="订阅后自动开通端口段和可用资源。" />
 
@@ -164,11 +172,11 @@ function StorePlanCard({
 
       <Button
         className="mt-5 w-full"
-        onClick={() => active && onBuy(active)}
-        disabled={purchasing || !active}
+        onClick={() => active && !soldOut && onBuy(active)}
+        disabled={purchasing || !active || soldOut}
       >
         <ShoppingBag className="mr-2 h-4 w-4" />
-        购买套餐
+        {soldOut ? "已售罄" : "购买套餐"}
       </Button>
     </EntityCard>
   );
@@ -232,12 +240,18 @@ export default function Store() {
     onSuccess: (order) => {
       toast.success("订单已创建");
       setSelectedPlan(null);
+      // 下单即占一份库存，卡片上的剩余数量要跟着变。
+      void utils.plans.storeList.invalidate();
       utils.plans.mySubscriptions.invalidate();
       utils.billing.me.invalidate();
       utils.billing.ledgerPage.invalidate();
       paymentDialog.launch(order);
     },
-    onError: (error) => toast.error(error.message || "创建订单失败"),
+    onError: (error) => {
+      toast.error(error.message || "创建订单失败");
+      // 多半是库存刚被别人占走：刷新一下，卡片上的剩余数量和「已售罄」才对得上。
+      void utils.plans.storeList.invalidate();
+    },
   });
 
   const buyWithBalance = trpc.billing.purchasePlanWithBalance.useMutation({
@@ -246,11 +260,15 @@ export default function Store() {
       setSelectedPlan(null);
       setDiscountCode("");
       setDiscountPreview(null);
+      void utils.plans.storeList.invalidate();
       utils.plans.mySubscriptions.invalidate();
       utils.billing.me.invalidate();
       utils.billing.ledgerPage.invalidate();
     },
-    onError: (error) => toast.error(error.message || "购买失败"),
+    onError: (error) => {
+      toast.error(error.message || "购买失败");
+      void utils.plans.storeList.invalidate();
+    },
   });
 
   const previewDiscount = trpc.billing.previewDiscount.useMutation({
@@ -275,8 +293,20 @@ export default function Store() {
     setSelectedPlan(plan);
   };
 
+  /*
+    收银台弹窗开着的时候最后一份可能被别人买走。拿列表里最新的那份数据判断，而不是点
+    「购买」那一刻存下来的 selectedPlan —— 列表会跟着刷新，存下来的那份不会。
+  */
+  const selectedPlanSoldOut = !!selectedPlan && productStock(
+    plans.find((plan) => Number(plan.id) === Number(selectedPlan.id)) || selectedPlan,
+  ).soldOut;
+
   const confirmBuy = () => {
     if (!selectedPlan) return;
+    if (selectedPlanSoldOut) {
+      toast.error("套餐库存不足或已售罄");
+      return;
+    }
     const durationDays = selectedOption?.durationDays;
     if (payMode === "balance") {
       buyWithBalance.mutate({
@@ -401,7 +431,21 @@ export default function Store() {
                         </h3>
                         <Badge variant="outline">{config.resourceKind || (config.resourceType === "host" ? "整台主机" : config.resourceType === "tunnel" ? "隧道转发" : "转发资源")}</Badge>
                       </div>
-                      <div className="mt-1 text-secondary-type text-muted-foreground">余额可用时可直接在转发规则中使用。</div>
+                      {/*
+                        售罄的资源照常展示。自己已经占着一份的人不受售罄影响（还能在每账号上限内
+                        继续建规则），所以对他显示「已占用」而不是「已售罄」。
+                      */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <ProductStockBadge product={config} held={Number(config.currentUserRuleCount) > 0} />
+                        <Badge variant="secondary">
+                          每账号规则 {Number(config.currentUserRuleCount) || 0} / {Number(config.maxRulesPerUser) > 0 ? config.maxRulesPerUser : "∞"}
+                        </Badge>
+                      </div>
+                      <div className="mt-2 text-secondary-type text-muted-foreground">
+                        {productStock(config).soldOut && !(Number(config.currentUserRuleCount) > 0)
+                          ? "名额已满，暂时不能在这个资源上新建规则；有人让出后可用。"
+                          : "余额可用时可直接在转发规则中使用。"}
+                      </div>
                       <div className="mt-4 flex flex-wrap items-baseline gap-x-1.5">
                         <span className="text-metric font-semibold tabular-nums text-foreground">{moneyFromMilliCents(effectiveBillingPriceMilliCents(config))}</span>
                         <span className="text-meta text-muted-foreground">/ 计费 GB</span>
@@ -553,9 +597,9 @@ export default function Store() {
             </div>
             <DialogFooter className="gap-2">
               <Button variant="outline" onClick={() => setSelectedPlan(null)}>取消</Button>
-              <Button onClick={confirmBuy} disabled={createOrder.isPending || buyWithBalance.isPending || (payMode === "gateway" && paymentMethods.length === 0) || (payMode === "balance" && walletLoading && !isFreeOrder)}>
+              <Button onClick={confirmBuy} disabled={selectedPlanSoldOut || createOrder.isPending || buyWithBalance.isPending || (payMode === "gateway" && paymentMethods.length === 0) || (payMode === "balance" && walletLoading && !isFreeOrder)}>
                 {(createOrder.isPending || buyWithBalance.isPending) ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ShoppingBag className="mr-2 h-4 w-4" />}
-                {isFreeOrder ? "免费开通" : payMode === "balance" ? (walletLoading ? "余额加载中" : "余额购买") : "去支付"}
+                {selectedPlanSoldOut ? "已售罄" : isFreeOrder ? "免费开通" : payMode === "balance" ? (walletLoading ? "余额加载中" : "余额购买") : "去支付"}
               </Button>
             </DialogFooter>
           </DialogContent>

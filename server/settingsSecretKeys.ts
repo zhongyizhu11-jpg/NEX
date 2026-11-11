@@ -2,7 +2,7 @@
   系统设置（system_settings）里哪些键存的是密钥 —— 这些键的值落库时加密，见 server/settingsEncryption.ts。
 
   名单是照代码里真实读写的键一个个找出来的（设置页 system.updateSettings、DDNS、邮件、Telegram、
-  Discord、Google 登录、AI、支付、异地备份、运维 Webhook）。加一个新的密钥类设置，记得加到这里；
+  Discord、Google / OIDC 登录、AI、支付、异地备份、运维 Webhook）。加一个新的密钥类设置，记得加到这里；
   漏加不会出错，只是那一项照旧明文存。
 
   不在名单里的：各家的 AccessKeyId / SecretId 之外的「账号名」类字段（单独拿到没用）、Bot 用户名、
@@ -22,6 +22,7 @@ export const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
   discordBotToken: "Discord 机器人 Token",
   discordClientSecret: "Discord 登录 Client Secret",
   googleClientSecret: "Google 登录 Client Secret",
+  oidcClientSecret: "OIDC 登录 Client Secret",
   deepseekApiKey: "AI API Key",
   deepseekApiKeyDeepseek: "AI API Key（DeepSeek）",
   deepseekApiKeySiliconflow: "AI API Key（硅基流动）",
@@ -31,6 +32,10 @@ export const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
   "ops.backup.s3.secretKey": "异地备份 · S3 Secret Key",
   "ops.backup.passphrase": "异地备份 · 备份密码",
   "ops.webhook.url": "运维 Webhook 地址",
+  // 网络画像的可选数据库 Key（server/ops/ipIntel.ts）：只在面板上用，不下发给 Agent
+  "ops.netProfile.ipapiIsKey": "网络画像 · ipapi.is API Key",
+  "ops.netProfile.abuseIpdbKey": "网络画像 · AbuseIPDB API Key",
+  "ops.netProfile.ipinfoToken": "网络画像 · IPinfo Token",
   "ops.metrics.token": "指标导出 · 抓取口令",
   "ops.eventWebhooks.endpoints": "事件推送 · 接收地址与签名密钥",
 };

@@ -59,6 +59,8 @@ import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { TableColumnResizeHandle, TableColumnSettingsMenu, useTableColumnSettings, type TableColumnMeta } from "@/components/TableColumnSettings";
+import type { ResolvedTableColumn, TableColumnPreference } from "@shared/uiPreferences";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -90,6 +92,7 @@ import {
   type RuleVisualStatusSnapshot,
 } from "@/lib/ruleStatusCache";
 import { batchOperationErrorMessage, chunkBatchItems, isBatchPortConflictError, runBatchOperations } from "@/lib/batchOperations";
+import { useRuleBatchJobSubmit } from "@/components/rules/useRuleBatchJobSubmit";
 import {
   RULE_TRANSFER_FILE_KIND,
   RULE_TRANSFER_FILE_VERSION,
@@ -112,6 +115,14 @@ import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities
 import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
 import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
 import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
+import { RuleGroupManagerDialog, RulePersonalGroupBadges, useRefreshPersonalRuleGroups } from "@/components/rules/PersonalRuleGroups";
+import {
+  MAX_PERSONAL_RULE_GROUP_CHANGE,
+  canChangePersonalRuleGroups,
+  matchesPersonalRuleGroup,
+  personalRuleGroupRank,
+  type PersonalRuleGroup,
+} from "@shared/ruleGroups";
 import { hasRuleLimits } from "@shared/ruleLimits";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
 import {
@@ -123,16 +134,24 @@ import {
   ruleEgressStateTone,
   ruleEgressSummaryText,
   RULE_EGRESS_TYPE_LABELS,
+  ruleEgressProtocolOf,
+  ruleEgressUsesInbound,
+  ruleEgressUsesLink,
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressState,
 } from "@shared/ssEgress";
+import { VLESS_EGRESS_UDP_SUPPORTED } from "@shared/vlessEgress";
 import {
   formatSniRuleEntry,
   parseSniNameJson,
+  sniInboundChoiceKey,
+  sniInboundChoices,
   sniRuleFormBlocker,
+  sniRuleRouteKind,
   TLS_INBOUND_MAX_SNI_PER_RULE,
   TLS_INBOUND_RULE_STATE_LABELS,
   tlsInboundRuleState,
+  type SniRuleRouteKind,
 } from "@shared/tlsInbound";
 import {
   BILLING_TIME_ZONE,
@@ -229,6 +248,12 @@ import {
   RotateCcw,
   Lock,
   X,
+  Check,
+  Folder,
+  FolderCog,
+  Pause,
+  Play,
+  RotateCw,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -374,8 +399,9 @@ type RuleFormData = {
    */
   routeGroup: RouteGroupDraft | null;
   /**
-   * 端口转发的入口方式：port = 自己占一个端口；sni = 挂到主机的共享 TLS 入站上，按 SNI 分流
-   * （shared/tlsInbound.ts）。sni 时没有源端口，协议固定 TCP，不支持线路组。
+   * 入口方式：port = 自己占一个端口；sni = 挂到主机的共享 TLS 入站上，按 SNI 分流
+   * （shared/tlsInbound.ts）。sni 时没有源端口，协议固定 TCP，不支持线路组。端口转发页签是直连
+   * （或经端口转发资源），隧道 / 转发链 / 转发组页签是经它们走（Agent 2.2.255 起）。
    */
   entryMode: "port" | "sni";
   tlsInboundId: number | null;
@@ -442,7 +468,8 @@ type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleCategoryCounts = Record<RuleCategory, number>;
 type RuleTransferScopeType = Exclude<RuleCategory, "all">;
 type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
-type RuleBatchManageMode = "copy" | "edit" | "export" | "import";
+// state：批量启用 / 暂停 / 重启（上游 2.3.292），和删除、复制一样交给服务端任务（RuleBatchJobWidget 看进度）
+type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group" | "state";
 type BatchEditFormData = Pick<RuleFormData, "routeMode" | "forwardType" | "tunnelId" | "forwardGroupId" | "targetIp" | "targetPort">;
 
 const RULE_CATEGORIES = ["all", "local", "tunnel", "chain", "group"] as const;
@@ -488,6 +515,72 @@ const RULE_GROUP_COLLAPSED_STORAGE_KEY = "forwardx.rules.groupCollapsed";
 const RULE_CATEGORY_STORAGE_KEY = "forwardx.rules.category";
 const RULE_FILTER_USER_STORAGE_KEY = "forwardx.rules.filterUser";
 const RULE_FILTER_RESOURCE_STORAGE_KEY = "forwardx.rules.filterResource";
+/** 个人分组筛选（按账号记）："" = 全部，"0" = 未分组，数字 = 那个组。 */
+const RULE_FILTER_PERSONAL_GROUP_STORAGE_KEY = "forwardx.rules.filterPersonalGroup";
+const RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY = "forwardx.rules.sortByPersonalGroup";
+const RULE_TABLE_GROUP_COLUMN_STORAGE_KEY = "forwardx.rules.tableGroupColumn";
+/*
+  规则列表视图的「列设置」（上游 2.3.287，components/TableColumnSettings.tsx）：显示哪些列、顺序、列宽按账号存。
+  key 和下面 ruleTableColumns 里的一一对应（标准 / 精简各有几列不一样，存在同一份偏好里，没有的列忽略）。
+  规则名、操作两列必须显示，钉在头尾。
+*/
+const RULE_TABLE_COLUMN_LABELS: Record<string, string> = {
+  rule: "规则",
+  personalGroups: "分组",
+  resource: "所属资源",
+  entry: "转发入口",
+  exit: "转发出口",
+  protocol: "协议",
+  total: "累计",
+  traffic: "流量",
+  latency: "延迟",
+  enabled: "开关",
+  actions: "操作",
+};
+function ruleTableColumnMeta(keys: string[]): TableColumnMeta[] {
+  return keys.map((key) => ({
+    key,
+    label: RULE_TABLE_COLUMN_LABELS[key] ?? key,
+    required: key === "rule" || key === "actions",
+    pin: key === "rule" ? "start" as const : key === "actions" ? "end" as const : undefined,
+    minWidth: key === "rule" ? 120 : key === "actions" ? 100 : 48,
+  }));
+}
+const RULE_TABLE_COLUMNS_STANDARD = ruleTableColumnMeta(["rule", "personalGroups", "resource", "entry", "exit", "traffic", "latency", "enabled", "actions"]);
+const RULE_TABLE_COLUMNS_COMPACT = ruleTableColumnMeta(["rule", "personalGroups", "resource", "entry", "exit", "protocol", "total", "latency", "actions"]);
+/** 账号上还没存过列设置、本机原来记着「不显示分组列」时，照它来。 */
+const LEGACY_HIDDEN_GROUP_COLUMN_PREFERENCE: TableColumnPreference = { order: [], hidden: ["personalGroups"], widths: {} };
+/** 默认八、九列加起来约 1016px，表格最小宽度原来写死 1000：拖宽、藏列以后按这个比例跟着变。 */
+const RULE_TABLE_MIN_WIDTH_RATIO = 1000 / 1016;
+const EMPTY_PERSONAL_RULE_GROUPS: PersonalRuleGroup[] = [];
+/** 卡片上的分组名拼成一个字符串传给 memo 的卡片（数组每轮都是新的，会让卡片白重画）；分组名里打不出这个字符。 */
+const PERSONAL_GROUP_NAME_SEPARATOR = "\u001f";
+
+function parseStoredPersonalGroupFilter(value: string): number | null {
+  if (value === "") return null;
+  const id = Math.floor(Number(value));
+  return Number.isSafeInteger(id) && id >= 0 ? id : null;
+}
+
+/**
+ * 规则卡 / 深空行名字旁边的分组标签。拿的是拼好的名字串（见 PERSONAL_GROUP_NAME_SEPARATOR），只画前 max 个，
+ * 后面写「+N」，悬停看全部 —— 卡片上地方小，和链路、协议挤在同一行。
+ */
+function RuleCardGroupChips({ names, max = 1 }: { names: string; max?: number }) {
+  if (!names) return null;
+  const list = names.split(PERSONAL_GROUP_NAME_SEPARATOR);
+  return (
+    <span data-rule-personal-groups="" className="inline-flex min-w-0 shrink-0 items-center gap-1" title={`所属分组：${list.join("、")}`}>
+      {list.slice(0, max).map((name) => (
+        <Badge key={name} variant="outline" className="h-[18px] min-w-0 max-w-[6.5rem] gap-1 px-1.5 text-[10.5px] font-normal text-muted-foreground">
+          <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">{name}</span>
+        </Badge>
+      ))}
+      {list.length > max ? <Badge variant="secondary" className="h-[18px] shrink-0 px-1.5 text-[10.5px] font-normal">+{list.length - max}</Badge> : null}
+    </span>
+  );
+}
 const RULE_SORT_CATEGORY_ORDER: RuleTransferScopeType[] = ["local", "tunnel", "chain", "group"];
 const RULE_SORT_CATEGORY_RANK = new Map<RuleTransferScopeType, number>(
   RULE_SORT_CATEGORY_ORDER.map((category, index) => [category, index]),
@@ -757,6 +850,7 @@ type RuleCardUi = {
   renderSniRuleBadge: (rule: RuleCardRule) => ReactNode;
   renderEgressBadge: (rule: RuleCardRule) => ReactNode;
   renderKernelForwardWarningBadge: (rule: RuleCardRule) => ReactNode;
+  renderPortWarningBadge: (rule: RuleCardRule) => ReactNode;
   renderTunnelFxpIssueBadge: (rule: RuleCardRule) => ReactNode;
   renderSubscriptionBadge: (rule: RuleCardRule) => ReactNode;
   renderSubscriptionMark: (rule: RuleCardRule) => ReactNode;
@@ -786,6 +880,8 @@ type RuleCardProps = RuleCardDerivedProps & {
   rule: RuleCardRule;
   sortable?: RuleSortableRenderState;
   page: RuleCardPage;
+  /** 这条规则在当前登录的人的哪几个分组里：名字按组的顺序拼成一串（见 PERSONAL_GROUP_NAME_SEPARATOR），不在任何组是 ""。 */
+  personalGroupNames: string;
 };
 
 const RULE_TONE_COLOR: Record<RuleCardTone, string> = {
@@ -821,6 +917,7 @@ function createRuleCardUiDispatcher(ref: { current: RuleCardUi | null }): RuleCa
     renderSniRuleBadge: (rule) => latest().renderSniRuleBadge(rule),
     renderEgressBadge: (rule) => latest().renderEgressBadge(rule),
     renderKernelForwardWarningBadge: (rule) => latest().renderKernelForwardWarningBadge(rule),
+    renderPortWarningBadge: (rule) => latest().renderPortWarningBadge(rule),
     renderTunnelFxpIssueBadge: (rule) => latest().renderTunnelFxpIssueBadge(rule),
     renderSubscriptionBadge: (rule) => latest().renderSubscriptionBadge(rule),
     renderSubscriptionMark: (rule) => latest().renderSubscriptionMark(rule),
@@ -964,6 +1061,7 @@ function deriveRuleView({
     ui.renderSniRuleBadge(rule),
     ui.renderEgressBadge(rule),
     ui.renderKernelForwardWarningBadge(rule),
+    ui.renderPortWarningBadge(rule),
     rule?.tunnelId ? ui.renderTunnelFxpIssueBadge(rule) : null,
     ui.renderSubscriptionBadge(rule),
     !supported ? (
@@ -1013,10 +1111,18 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
                   </span>
                 ) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
               </span>
-              <span className="truncate" title={rule.name}>{rule.name}</span>
+              <span className="truncate" title={rule.name} data-no-translate="">{rule.name}</span>
               {ui.renderSubscriptionMark(rule)}
             </div>
-            <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
+            {/* 链路 · 工具 · 协议和分组标签同一行（上游 2.3.287）；还是这一个 .fx-rule-sub，精简布局的网格认的是它 */}
+            {props.personalGroupNames ? (
+              <div className="fx-rule-sub flex items-center gap-1.5" title={`${subtitle} · 分组：${props.personalGroupNames.split(PERSONAL_GROUP_NAME_SEPARATOR).join("、")}`}>
+                <span className="min-w-0 truncate">{subtitle}</span>
+                <RuleCardGroupChips names={props.personalGroupNames} />
+              </div>
+            ) : (
+              <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
+            )}
           </div>
           <div className="fx-rule-head-actions">
             {ui.renderRuleActions(rule)}
@@ -1171,7 +1277,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
   手机：三行 —— ● 名字 · 副标题 ……… 延迟 ··· [开关] / 入口 → 目标 ……… 累计 / 一条贴满整行的走势。
   桌面：一行一条的表格 —— 名字 | 入口 → 目标 | 延迟 | 近 24 小时走势 | 近 24 小时 ↓↑ | 累计 | 操作。
   内容、判断、按钮和规则卡完全一样（deriveRuleView），只是排法不同；告警、限速、到期这些附加信息
-  有才出现，在行的最下面另起一行。排法全在 theme-deepspace.css 的 .fx-ds-rule*。
+  有才出现，在行的最下面另起一行。排法全在 themes/official/deepspace/theme.css 的 .fx-ds-rule*。
 */
 const RuleRow = memo(function RuleRow(props: RuleCardProps) {
   const { rule, sortable, page, totalIn, totalOut, hasTotal, dailyIn, dailyOut, spark, routeBoard, failover } = props;
@@ -1211,8 +1317,9 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
         <div className="fx-ds-rule-names">
           <div className="fx-ds-rule-name">
             <span className="fx-ds-rule-kind" data-kind={category}>{desktopRuleTypeLabels[category as RuleGroupType] || "转发"}</span>
-            <span className="truncate" title={rule.name}>{rule.name}</span>
+            <span className="truncate" title={rule.name} data-no-translate="">{rule.name}</span>
             {ui.renderSubscriptionMark(rule)}
+            <RuleCardGroupChips names={props.personalGroupNames} />
           </div>
           <div className="fx-ds-rule-sub" title={subtitle}>{subtitle}</div>
         </div>
@@ -1643,8 +1750,14 @@ function hostEntryFamilies(host: any | null | undefined) {
   if (manualEntry) {
     addLiteralHostFamily(families, manualEntry);
   } else if (hostDdnsDomain(host)) {
-    const ddnsFamily = hostDdnsFamily(host);
-    if (ddnsFamily) families.add(ddnsFamily);
+    // 双栈 DDNS（A + AAAA）的域名两族都能解析
+    if (String(host?.ddnsIpVersion || "").trim().toLowerCase() === "dual") {
+      families.add("ipv4");
+      families.add("ipv6");
+    } else {
+      const ddnsFamily = hostDdnsFamily(host);
+      if (ddnsFamily) families.add(ddnsFamily);
+    }
   } else {
     addLiteralHostFamily(families, hostAutoIpv4(host) || hostAutoIpv6(host) || host?.ip);
   }
@@ -2828,6 +2941,31 @@ function RulesContent() {
     parseRuleResourceFilter(getStoredString(filterResourceStorageKey, "all")).type || "local",
   );
   const [filterUser, setFilterUser] = useState<string>(() => getStoredString(filterUserStorageKey, "self"));
+  /*
+    个人分组（上游 2.3.287，components/rules/PersonalRuleGroups.tsx）：筛选按账号记；组本身也只是自己的 ——
+    管理员切到「所有用户」照样只看得到自己的组，筛出来的是所有人的规则里放进了自己组的那些。
+  */
+  const filterPersonalGroupStorageKey = ruleFilterStorageKey(RULE_FILTER_PERSONAL_GROUP_STORAGE_KEY, user);
+  const [personalGroupFilter, setPersonalGroupFilter] = useState<number | null>(() => (
+    parseStoredPersonalGroupFilter(getStoredString(filterPersonalGroupStorageKey, ""))
+  ));
+  const handlePersonalGroupFilterChange = useCallback((value: number | null) => {
+    setPersonalGroupFilter(value);
+    storeString(filterPersonalGroupStorageKey, value === null ? "" : String(value));
+  }, [filterPersonalGroupStorageKey]);
+  const [ruleSortByGroup, setRuleSortByGroup] = useState(() => getStoredString(RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY, "") === "1");
+  /*
+    列设置按账号存（components/TableColumnSettings.tsx）。「列表显示分组列」原来记在本机：账号上还没存过列设置时，
+    照本机那个值决定分组列显不显示；以后 ··· 菜单里那一项和「列设置」改的是同一份。
+  */
+  const [legacyRuleGroupColumnHidden] = useState(() => getStoredString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, "1") === "0");
+  const ruleColumnSettings = useTableColumnSettings(
+    "rules",
+    compactLayout ? RULE_TABLE_COLUMNS_COMPACT : RULE_TABLE_COLUMNS_STANDARD,
+    legacyRuleGroupColumnHidden ? LEGACY_HIDDEN_GROUP_COLUMN_PREFERENCE : null,
+  );
+  const showRuleGroupColumn = ruleColumnSettings.columns.some((column) => column.key === "personalGroups" && column.visible);
+  const [ruleGroupManagerOpen, setRuleGroupManagerOpen] = useState(false);
   const previousFilterIdentity = useRef(filterResourceStorageKey);
   useEffect(() => {
     if (previousFilterIdentity.current === filterResourceStorageKey) return;
@@ -2837,7 +2975,9 @@ function RulesContent() {
     setFilterResource(nextResource);
     setRuleResourceMenuType(parseRuleResourceFilter(nextResource).type || "local");
     setFilterUser(nextUser);
-  }, [filterResourceStorageKey, filterUserStorageKey, user?.role]);
+    // 换了账号：上一个人的分组 id 在这个人这里没有意义
+    setPersonalGroupFilter(parseStoredPersonalGroupFilter(getStoredString(filterPersonalGroupStorageKey, "")));
+  }, [filterPersonalGroupStorageKey, filterResourceStorageKey, filterUserStorageKey, user?.role]);
   const [ruleSearchQuery, setRuleSearchQuery] = useState((() => {
     // 从别处（网络拓扑的详情面板）带着 ?q= 跳过来：先按它搜一遍。
     try {
@@ -2881,6 +3021,44 @@ function RulesContent() {
   }, [filterUser, user?.id, user?.role]);
   const effectiveRulesQuery = selectedRulesQuery || undefined;
   /*
+    分组栏那一份：自己的组（按顺序、带规则数）和「全部 / 未分组」的数字，数的范围跟着用户筛选走。
+    卡片、表格的分组标签、筛选下拉、批量管理都用这一份，不各查各的。
+  */
+  const personalGroupsQuery = trpc.rules.personalGroups.useQuery(effectiveRulesQuery, {
+    refetchInterval: pollingInterval("slow"),
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
+  });
+  const personalGroups = personalGroupsQuery.data?.groups || EMPTY_PERSONAL_RULE_GROUPS;
+  const personalGroupRankById = useMemo(
+    () => new Map(personalGroups.map((group, index) => [Number(group.id), index])),
+    [personalGroups],
+  );
+  // 选中的组没了（在别的标签页、别的设备上删了）：退回「全部」，不留一个永远是空的列表。
+  useEffect(() => {
+    if (!personalGroupsQuery.data || personalGroupsQuery.isPlaceholderData || !personalGroupFilter) return;
+    if (!personalGroupsQuery.data.groups.some((group) => Number(group.id) === personalGroupFilter)) handlePersonalGroupFilterChange(null);
+  }, [handlePersonalGroupFilterChange, personalGroupFilter, personalGroupsQuery.data, personalGroupsQuery.isPlaceholderData]);
+  // 一个组都没有时「按分组排序」没有意义，照原来的顺序排
+  const personalGroupSortActive = ruleSortByGroup && personalGroups.length > 0;
+  const toggleRuleSortByGroup = () => {
+    const next = !ruleSortByGroup;
+    setRuleSortByGroup(next);
+    storeString(RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY, next ? "1" : "");
+  };
+  const toggleRuleGroupColumn = () => {
+    const next = !showRuleGroupColumn;
+    ruleColumnSettings.toggle("personalGroups", next);
+    storeString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, next ? "1" : "0");
+  };
+  const personalGroupNamesOf = (rule: { personalGroupIds?: number[] | null }) => {
+    const ids = rule?.personalGroupIds;
+    if (!ids || ids.length === 0) return "";
+    const set = new Set(ids.map(Number));
+    return personalGroups.filter((group) => set.has(Number(group.id))).map((group) => group.name).join(PERSONAL_GROUP_NAME_SEPARATOR);
+  };
+  /*
     管理员在「用户」筛选里选中了某个人：新建 / 复制 / 导入的规则归他（server/ruleOperationOwner.ts），
     端口提示、端口检查、随机端口也按他的权限和套餐端口段来。编辑不改归属。
   */
@@ -2911,6 +3089,15 @@ function RulesContent() {
   const [copyRuleSearch, setCopyRuleSearch] = useState("");
   const [copyRuleCategory, setCopyRuleCategory] = useState<RuleCategory>("all");
   const [copyManageMode, setCopyManageMode] = useState<RuleBatchManageMode>("copy");
+  /*
+    批量管理里的个人分组（上游 2.3.290）：左边按分组筛（每种操作都能用，打开时沿用页面上的分组筛选）；
+    「调整分组」先选目标分组和加入 / 移出，左边只列出真的会被改到的规则（canChangePersonalRuleGroups）。
+  */
+  const [copyRulePersonalGroup, setCopyRulePersonalGroup] = useState<number | null>(null);
+  const [batchGroupTargetIds, setBatchGroupTargetIds] = useState<number[]>([]);
+  const [batchGroupMode, setBatchGroupMode] = useState<"add" | "remove">("add");
+  const moveToPersonalGroupsMutation = trpc.rules.moveToPersonalGroups.useMutation();
+  const refreshPersonalRuleGroups = useRefreshPersonalRuleGroups();
   const [copyTargetScopeType, setCopyTargetScopeType] = useState<RuleTransferScopeType>("local");
   const [copyTargetResourceIds, setCopyTargetResourceIds] = useState<number[]>([]);
   // Keep an eagerly-updated snapshot of the target selection.  React state is
@@ -2960,7 +3147,7 @@ function RulesContent() {
   const importingRulesRef = useRef(false);
   const rulePageRequest = usePersistentPageRequest("forwardx.rules.page");
   const rulePageResource = parseRuleResourceFilter(filterResource);
-  const rulePageFilterKey = [filterUser, filterResource, ruleCategory, ruleSearchQuery.trim(), rulePageSize].join(":");
+  const rulePageFilterKey = [filterUser, filterResource, ruleCategory, ruleSearchQuery.trim(), rulePageSize, personalGroupFilter ?? "all", personalGroupSortActive ? "group" : "default"].join(":");
   const previousRulePageFilterKey = useRef(rulePageFilterKey);
   useEffect(() => {
     if (previousRulePageFilterKey.current === rulePageFilterKey) return;
@@ -2975,6 +3162,8 @@ function RulesContent() {
     resourceId: rulePageResource.id,
     category: ruleCategory,
     search: ruleSearchQuery,
+    personalGroupId: personalGroupFilter,
+    sortBy: personalGroupSortActive ? "personalGroup" : undefined,
   }, {
     refetchInterval: pollingInterval("normal"),
     staleTime: 10_000,
@@ -2989,6 +3178,7 @@ function RulesContent() {
     resourceId: rulePageResource.id,
     category: ruleCategory,
     search: ruleSearchQuery,
+    personalGroupId: personalGroupFilter,
   }, {
     enabled: isRuleGlobeView,
     initialCursor: 0,
@@ -3038,6 +3228,7 @@ function RulesContent() {
     resourceId: rulePageResource.id,
     category: ruleCategory,
     search: ruleSearchQuery,
+    personalGroupId: personalGroupFilter,
   }, {
     enabled: secondaryQueriesReady,
     // 页头的统计数字：30 秒一轮；增删改、启停后各自 invalidate，不等这一轮。
@@ -3176,6 +3367,8 @@ function RulesContent() {
       utils.rules.listPage.invalidate();
       utils.rules.mapItems.invalidate();
       utils.rules.listSummary.invalidate();
+      // 删掉的规则的分组关系服务端已经清了，分组上的数字跟着刷新
+      void utils.rules.personalGroups.invalidate();
       toast.success("规则已删除");
     },
     onError: (err) => toast.error(err.message || "删除失败"),
@@ -3189,6 +3382,7 @@ function RulesContent() {
   const batchCreateMutation = trpc.rules.create.useMutation();
   const batchUpdateMutation = trpc.rules.update.useMutation();
   const batchDeleteMutation = trpc.rules.deleteBatch.useMutation();
+  const ruleBatchJob = useRuleBatchJobSubmit();
 
   const importCreateMutation = trpc.rules.create.useMutation();
 
@@ -3241,6 +3435,9 @@ function RulesContent() {
     setForm((prev) => ({
       ...prev,
       routeMode: mode,
+      // 换页签回到独立端口：上一个页签选的入站多半不在新页签的资源上。
+      entryMode: "port",
+      tlsInboundId: null,
       forwardType: nextForwardType,
       tunnelId: mode === "tunnel" && nextTunnel ? Number(nextTunnel.id) : null,
       forwardGroupId: usesForwardGroup && nextGroup ? Number(nextGroup.id) : null,
@@ -3446,6 +3643,9 @@ function RulesContent() {
   const openCopyDialog = () => {
     setCopyManageMode(transferSourceRules.length ? "copy" : "import");
     setBatchEditForm(buildEmptyBatchEditForm());
+    setCopyRulePersonalGroup(personalGroupFilter);
+    setBatchGroupTargetIds([]);
+    setBatchGroupMode("add");
     setCopyRuleCategory(ruleCategory);
     setCopyRuleSearch(ruleSearchQuery);
     const preferredCopyTargetScope: RuleTransferScopeType = canUseSavedLocalForward
@@ -3877,7 +4077,31 @@ function RulesContent() {
     [tlsInboundOptions],
   );
   const canUseSniInbound = usableTlsInbounds.length > 0 && usableForwardTypes.length > 0;
-  const isSniEntryMode = form.routeMode === "local" && form.entryMode === "sni";
+  const isSniEntryMode = form.entryMode === "sni";
+  /** SNI 规则怎么走：端口转发页签是直连（选了端口转发资源就是经资源），其余页签经隧道 / 转发资源。 */
+  const sniRouteKind: SniRuleRouteKind = form.routeMode === "tunnel"
+    ? "tunnel"
+    : form.routeMode === "chain" || form.routeMode === "group" || Number(form.forwardGroupId || 0) > 0
+    ? "group"
+    : "direct";
+  const sniChoices = useMemo(() => {
+    const keep = { inboundId: form.tlsInboundId, forwardGroupId: form.routeMode === "local" ? form.forwardGroupId : null };
+    if (form.routeMode === "tunnel") return sniInboundChoices(tlsInboundOptions, { kind: "tunnel", tunnelId: form.tunnelId }, keep);
+    if (form.routeMode === "chain" || form.routeMode === "group") {
+      return sniInboundChoices(tlsInboundOptions, { kind: "group", forwardGroupId: form.forwardGroupId }, { ...keep, forwardGroupId: form.forwardGroupId });
+    }
+    return sniInboundChoices(tlsInboundOptions, { kind: "direct", portGroupIds: availablePortForwardGroups.map((group) => Number(group.id)) }, keep);
+  }, [tlsInboundOptions, form.routeMode, form.tunnelId, form.forwardGroupId, form.tlsInboundId, availablePortForwardGroups]);
+  /** 某个页签有没有能经它用的共享 TLS 入站（决定要不要显示「入口方式」那一行）。 */
+  const sniAvailableForTab = (mode: RuleRouteMode) => {
+    const options = tlsInboundOptions;
+    const viaTunnel = (tunnelId: number) => options.some((inbound) => inbound.isEnabled && (inbound.tunnelIds || []).includes(tunnelId));
+    const viaGroup = (groupId: number) => options.some((inbound) => inbound.isEnabled && (inbound.forwardGroupIds || []).includes(groupId));
+    if (mode === "tunnel") return availableTunnels.some((tunnel) => viaTunnel(Number(tunnel.id)));
+    if (mode === "chain") return availableForwardChainGroups.some((group) => viaGroup(Number(group.id)));
+    if (mode === "group") return availableFailoverForwardGroups.some((group) => viaGroup(Number(group.id)));
+    return canUseSniInbound || availablePortForwardGroups.some((group) => viaGroup(Number(group.id)));
+  };
   const selectedTlsInbound = isSniEntryMode && form.tlsInboundId ? tlsInboundById.get(Number(form.tlsInboundId)) || null : null;
   const canUseLocalForward = canUseSavedLocalForward || canUseBillingHostLocalForward || canUseSniInbound;
   const canUseGost = allowedForwardTypes.includes("gost") && supportedTunnels.length > 0;
@@ -3973,7 +4197,7 @@ function RulesContent() {
     if (!isForwardGroupRouteMode || !selectedForwardGroup) return null;
     if (!ruleEgressSwitchesForwardType(form.egress.egressType, effectiveRouteForwardType)) return null;
     const label = FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType;
-    return `这个端口转发用的是 ${label}，${label} 不会 Shadowsocks：开了出口的这一条规则改用 gost 转发，端口、计数、限速照旧；其它规则不受影响，改回「直接连接」就恢复成 ${label}。`;
+    return `这个端口转发用的是 ${label}，${label} 不会 Shadowsocks / VLESS：开了出口的这一条规则改用 gost 转发，端口、计数、限速照旧；其它规则不受影响，改回「直接连接」就恢复成 ${label}。`;
   }, [isForwardGroupRouteMode, selectedForwardGroup, form.egress.egressType, effectiveRouteForwardType]);
   const egressCapabilities = useEgressEntryCapabilities(egressEntryHostIds, egressActive, egressViaTunnel ? "隧道出口机" : "入口主机");
   const egressBlocker = useMemo<string | null>(() => {
@@ -3986,19 +4210,30 @@ function RulesContent() {
       egressUdp: form.egress.egressUdp,
       forwardGroupMode: isForwardGroupRouteMode ? forwardGroupModeOf(selectedForwardGroup) : null,
       failoverEnabled: false,
+      // VLESS Reality 出口不接隧道（shared/ssEgress.ts）：走隧道时把隧道带上，让形态检查说清楚。
+      tunnelId: egressViaTunnel ? form.tunnelId : null,
+      tunnelMode: egressViaTunnel ? selectedTunnel?.mode : null,
     });
     if (shapeError) return shapeError;
-    if (form.egress.egressType === "ss_host" && !form.egress.egressInboundId) return "请选择落地主机上的 Shadowsocks 入站";
-    if (form.egress.egressType === "ss_link" && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 链接";
-    // UDP 走出口要每台入口机都报了能力（服务端保存时同样会拦）。
-    if (form.egress.egressUdp && !egressCapabilities.loading && !egressCapabilities.udp) return egressCapabilities.udpReason || "入口主机还不支持 UDP 走出口";
+    const egressVless = ruleEgressProtocolOf(form.egress.egressType) === "vless";
+    if (ruleEgressUsesInbound(form.egress.egressType) && !form.egress.egressInboundId) return `请选择落地主机上的${egressVless ? " VLESS Reality " : " Shadowsocks "}入站`;
+    if (ruleEgressUsesLink(form.egress.egressType) && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 或 VLESS Reality 链接";
+    if (egressVless && !egressCapabilities.loading && !egressCapabilities.vless) return egressCapabilities.vlessReason || "入口主机的 Agent 需要升级才能用 VLESS Reality 出口";
+    // UDP 走 Shadowsocks 出口要每台入口机都报了能力（服务端保存时同样会拦）；VLESS 的 UDP 只看上面的 Agent 版本。
+    if (!egressVless && form.egress.egressUdp && !egressCapabilities.loading && !egressCapabilities.udp) return egressCapabilities.udpReason || "入口主机还不支持 UDP 走出口";
     return null;
-  }, [egressActive, egressBlockedReason, form.egress, form.protocol, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup, egressCapabilities]);
+  }, [egressActive, egressBlockedReason, form.egress, form.protocol, form.tunnelId, egressViaTunnel, selectedTunnel, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup, egressCapabilities]);
   const submitBlocker = useMemo<string | null>(
     () => (isSniEntryMode
-      ? sniRuleFormBlocker(form, selectedTlsInbound)
+      ? (form.routeMode === "tunnel" && !form.tunnelId
+        ? "还没选隧道"
+        : (form.routeMode === "chain" || form.routeMode === "group") && !form.forwardGroupId
+        ? "还没选转发链 / 转发组"
+        : form.tlsInboundId && !sniChoices.some((choice) => Number(choice.inbound.id) === Number(form.tlsInboundId))
+        ? "这个共享 TLS 入站不在所选隧道 / 转发资源的入口主机上，请重新选择"
+        : sniRuleFormBlocker(form, selectedTlsInbound, undefined, sniRouteKind))
       : forwardRuleFormBlocker(form, ruleFormContext) || egressBlocker),
-    [form, ruleFormContext, isSniEntryMode, selectedTlsInbound, egressBlocker],
+    [form, ruleFormContext, isSniEntryMode, selectedTlsInbound, egressBlocker, sniChoices, sniRouteKind],
   );
   const sourcePortRequired = isForwardRuleSourcePortRequired(ruleFormContext);
   /*
@@ -4254,7 +4489,7 @@ function RulesContent() {
     const tunnelId = form.tunnelId;
     const sourcePort = form.sourcePort;
     // 共享 TLS 入站上的规则没有自己的对外端口，不查。
-    if (form.routeMode === "local" && form.entryMode === "sni") return;
+    if (form.entryMode === "sni") return;
     if (!sourcePort || sourcePort < 1) return;
     if (isForwardGroupRouteMode ? !forwardGroupId : !hostId) return;
     if (!isValidForwardPort(sourcePort)) {
@@ -4377,6 +4612,8 @@ function RulesContent() {
   };
 
   const switchCopyManageMode = (mode: RuleBatchManageMode) => {
+    // 进出「调整分组」时清掉勾选：那里只列得出能改的规则，带着别处勾的规则过去，等于改了看不见的规则。
+    if ((mode === "group") !== (copyManageMode === "group")) setCopyRuleIds([]);
     setCopyManageMode(mode);
     if (mode === "edit") {
       commitCopyTargetSelection(copyTargetSelectionRef.current.scopeType, []);
@@ -4485,21 +4722,6 @@ function RulesContent() {
     return payload;
   };
 
-  const createBatchCopyRule = async (rule: any, targetType: RuleTransferScopeType, resource: any) => {
-    const sourcePort = Number(rule.sourcePort || 0);
-    try {
-      await batchCreateMutation.mutateAsync(buildBatchCopyRulePayload(rule, targetType, resource, sourcePort) as any);
-      return { copied: true, skipped: false };
-    } catch (error: any) {
-      if (copyConflictStrategy === "error" || !isBatchPortConflictError(error)) throw error;
-      if (copyConflictStrategy === "auto") {
-        await batchCreateMutation.mutateAsync(buildBatchCopyRulePayload(rule, targetType, resource, 0) as any);
-        return { copied: true, skipped: false };
-      }
-      return { copied: false, skipped: true };
-    }
-  };
-
   const updateBatchRuleTarget = async (rule: any) => {
     const sourcePort = Number(rule.sourcePort || 0);
     try {
@@ -4550,41 +4772,21 @@ function RulesContent() {
     const targetSummary = targetNames.length <= 3
       ? targetNames.join("、")
       : `${targetNames.slice(0, 3).join("、")} 等 ${targetNames.length} 个目标`;
-    setCopyWorking(true);
-    let copied = 0;
-    let skipped = 0;
-    try {
-      const jobs: Array<{ resource: any; rule: any }> = selectedTargets.flatMap((resource: any) => (
-        copySelectedRules.map((rule: any) => ({ resource, rule }))
-      ));
-      const results = await runBatchOperations(jobs, 6, ({ resource, rule }) => (
-        createBatchCopyRule(rule, targetType, resource)
-      ));
-      for (const result of results) {
-        if (result.status === "rejected") continue;
-        if (result.value.copied) copied += 1;
-        if (result.value.skipped) skipped += 1;
-      }
-      await Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-        utils.rules.trafficSummary.invalidate(),
-      ]);
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length > 0) {
-        toast.error(`批量复制完成：成功 ${copied} 条，跳过 ${skipped} 条，失败 ${failures.length} 条。${batchOperationErrorMessage(failures[0].reason)}`);
-      } else {
-        toast.success(`已复制 ${copied} 条规则到 ${targetSummary}${skipped ? "，跳过 " + skipped + " 条" : ""}`);
-        if (copied > 0) setShowCopyDialog(false);
-      }
-    } catch (error: any) {
-      toast.error("批量复制处理失败：" + (error?.message || "请检查目标配置"));
-    } finally {
-      setCopyWorking(false);
-    }
+    /*
+      批量复制交给服务端任务（上游 2.3.290）：每条副本的参数在这里按原来的规则拼好，服务端逐条调 rules.create，
+      端口冲突按所选策略换端口或跳过。提交即返回，进度、失败明细、重试失败项都在右下角的小窗里。
+    */
+    const copyItems = selectedTargets.flatMap((resource: any) => copySelectedRules.map((rule: any) => ({
+      label: `${String(rule.name || `规则 #${rule.id}`)} → ${getTransferResourceLabel(targetType, resource)}`.slice(0, 160),
+      input: buildBatchCopyRulePayload(rule, targetType, resource, Number(rule.sourcePort || 0)) as Record<string, unknown>,
+    })));
+    const submitted = await ruleBatchJob.submit({
+      operation: "copy",
+      title: `复制 ${copySelectedRules.length} 条规则到 ${targetSummary}`.slice(0, 80),
+      copyItems,
+      conflictStrategy: copyConflictStrategy,
+    });
+    if (submitted) setShowCopyDialog(false);
   };
 
   const handleBatchEditRules = async () => {
@@ -4661,6 +4863,12 @@ function RulesContent() {
     toast.success(`已导出 ${copySelectedRules.length} 条规则${partCount > 1 ? `，共 ${partCount} 个文件` : ""}`);
   };
 
+  /** 批量删除 / 启用 / 暂停 / 重启都交给服务端任务：提交即返回，进度见右下角的小窗。 */
+  const batchRuleLabels = (rules: any[]) => Object.fromEntries(rules.map((rule: any) => [
+    String(rule.id),
+    String(rule.name || `规则 #${rule.id}`).slice(0, 160),
+  ]));
+
   const handleBatchDeleteRules = async () => {
     if (copySelectedRules.length === 0) {
       toast.error("请选择要删除的规则");
@@ -4668,51 +4876,40 @@ function RulesContent() {
     }
     if (!(await confirmDialog({
       title: "删除转发规则",
-      description: `确认删除选中的 ${copySelectedRules.length} 条转发规则？`,
+      description: `确认删除选中的 ${copySelectedRules.length} 条转发规则？删除在后台逐条进行，可以随时停止剩下的。`,
       confirmText: "删除",
       tone: "destructive",
     }))) return;
-    setCopyWorking(true);
-    try {
-      const requestedIds = Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id))));
-      const chunkResults = await runBatchOperations(chunkBatchItems(requestedIds, 500), 2, (ids) => (
-        batchDeleteMutation.mutateAsync({ ids })
-      ));
-      const deletedIdList: number[] = [];
-      const failures: Array<{ id: number; error: string }> = [];
-      for (const chunkResult of chunkResults) {
-        if (chunkResult.status === "fulfilled") {
-          deletedIdList.push(...(chunkResult.value.deletedIds || []).map(Number));
-          failures.push(...(chunkResult.value.failures || []).map((failure) => ({
-            id: Number(failure.id),
-            error: String(failure.error || "删除失败"),
-          })));
-          continue;
-        }
-        const error = batchOperationErrorMessage(chunkResult.reason);
-        failures.push(...chunkResult.item.map((id) => ({ id: Number(id), error })));
-      }
-      const deletedIds = new Set(deletedIdList);
-      invalidateRuleProbeStatuses(deletedIdList);
-      setCopyRuleIds((prev) => prev.filter((id) => !deletedIds.has(Number(id))));
-      await Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-        utils.rules.trafficSummary.invalidate(),
-      ]);
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      if (failures.length > 0) {
-        toast.error(`批量删除完成：成功 ${deletedIdList.length} 条，失败 ${failures.length} 条。${failures[0]?.error || "请稍后重试"}`);
-      } else {
-        toast.success("已删除 " + deletedIdList.length + " 条规则");
-      }
-    } catch (error: any) {
-      toast.error("批量删除失败：" + (error?.message || "请稍后重试"));
-    } finally {
-      setCopyWorking(false);
+    const requestedIds = Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id))));
+    const submitted = await ruleBatchJob.submit({
+      operation: "delete",
+      ruleIds: requestedIds,
+      ruleLabels: batchRuleLabels(copySelectedRules),
+      conflictStrategy: "error",
+    });
+    if (submitted) {
+      setCopyRuleIds([]);
+      setShowCopyDialog(false);
     }
+  };
+
+  const handleBatchStateRules = async (operation: "enable" | "pause" | "restart") => {
+    if (copySelectedRules.length === 0) {
+      toast.error("请选择规则");
+      return;
+    }
+    if (operation === "restart" && !(await confirmDialog({
+      title: "重启转发规则",
+      description: `按当前配置把选中的 ${copySelectedRules.length} 条规则重新下发给 Agent。已暂停的规则保持暂停，流量统计不受影响。`,
+      confirmText: "重启",
+    }))) return;
+    const submitted = await ruleBatchJob.submit({
+      operation,
+      ruleIds: Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id)))),
+      ruleLabels: batchRuleLabels(copySelectedRules),
+      conflictStrategy: "error",
+    });
+    if (submitted) setShowCopyDialog(false);
   };
 
   const handleConfirmResetTraffic = () => {
@@ -4776,7 +4973,10 @@ function RulesContent() {
       // 共享 TLS 入站：没有源端口、不查端口占用，名字由服务端规整并检查冲突。
       const sniPayload = {
         name: resolveForwardRuleName(form.name, form).slice(0, 128),
-        forwardType: form.forwardType,
+        forwardType: sniRouteKind === "tunnel" ? "gost" as ForwardType : sniRouteKind === "group" ? effectiveRouteForwardType : form.forwardType,
+        // 走法：直连不带；经隧道 / 转发资源时带上（编辑时服务端只认原值，换走法要新建）。
+        tunnelId: sniRouteKind === "tunnel" ? form.tunnelId : null,
+        forwardGroupId: sniRouteKind === "group" ? form.forwardGroupId : null,
         protocol: "tcp" as const,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
@@ -4849,8 +5049,8 @@ function RulesContent() {
     const egressPayload = egressSectionVisible
       ? {
         egressType: form.egress.egressType,
-        egressInboundId: form.egress.egressType === "ss_host" ? form.egress.egressInboundId : null,
-        egressLink: form.egress.egressType === "ss_link" && form.egress.egressLink.trim() ? form.egress.egressLink.trim() : undefined,
+        egressInboundId: ruleEgressUsesInbound(form.egress.egressType) ? form.egress.egressInboundId : null,
+        egressLink: ruleEgressUsesLink(form.egress.egressType) && form.egress.egressLink.trim() ? form.egress.egressLink.trim() : undefined,
         egressUdp: form.egress.egressType !== "none" && form.egress.egressUdp,
       }
       : editingId ? { egressType: "none" as const } : {};
@@ -4954,15 +5154,27 @@ function RulesContent() {
       ruleCategory: copyRuleCategory,
       searchQuery: copyRuleSearch,
     };
+    const groupMode = copyManageMode === "group";
+    // 启停 / 重启和调整分组一样不搬家：共享 TLS 入站上的规则也能勾。
+    const keepsResource = groupMode || copyManageMode === "state";
     return transferSourceRules
       // 共享 TLS 入站上的规则不参与批量复制 / 迁移：它们没有自己的端口，搬到别的资源上就不是同一条规则了。
-      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))
-      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters));
-  }, [copyRuleCategory, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
+      // 调整分组只是贴标签，这些规则照样能分组。
+      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && (keepsResource || (!(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))))
+      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters))
+      .filter((rule) => matchesPersonalRuleGroup(rule.personalGroupIds, copyRulePersonalGroup))
+      .filter((rule) => !groupMode || canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
+  }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleCategory, copyRulePersonalGroup, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
   const copySelectedRules = useMemo(() => {
     const selected = new Set(copyRuleIds.map(Number));
-    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0));
-  }, [copyRuleIds, transferSourceRules]);
+    if (copyManageMode === "group") {
+      // 勾着的、而且此刻还真的会被改到的（列表刷新后有的规则可能已经在组里了）
+      return transferSourceRules.filter((rule) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
+        && canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
+    }
+    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
+      && (copyManageMode === "state" || !(Number(rule.tlsInboundId || 0) > 0)));
+  }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleIds, transferSourceRules]);
   const copyTargetResources = useMemo(() => {
     if (copyTargetScopeType === "local") return availablePortForwardGroups;
     if (copyTargetScopeType === "tunnel") return supportedTunnels;
@@ -5000,7 +5212,9 @@ function RulesContent() {
     return copyTargetResources.filter((resource: any) => selected.has(Number(resource.id)));
   }, [copyTargetResourceIds, copyTargetResources]);
   const copyTargetScopeLabel = ruleTransferScopeLabels[copyTargetScopeType];
-  const copyActionPending = copyWorking || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending;
+  const copyActionPending = copyWorking || ruleBatchJob.isPending || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending || moveToPersonalGroupsMutation.isPending;
+  const isBatchGroupMode = copyManageMode === "group";
+  const isBatchStateMode = copyManageMode === "state";
   const isBatchEditMode = copyManageMode === "edit";
   const isBatchCopyMode = copyManageMode === "copy";
   const isBatchExportMode = copyManageMode === "export";
@@ -5011,7 +5225,11 @@ function RulesContent() {
     && copyableSourceRules.every((rule: any) => copyRuleIds.includes(Number(rule.id)));
   const allVisibleCopyTargetsSelected = filteredCopyTargetResources.length > 0
     && filteredCopyTargetResources.every((resource: any) => copyTargetResourceIds.includes(Number(resource.id)));
-  const batchFlowHintLabel = isBatchEditMode
+  const batchFlowHintLabel = isBatchGroupMode
+    ? batchGroupMode === "add" ? "加入右侧分组" : "移出右侧分组"
+    : isBatchStateMode
+    ? "启停或重启所选"
+    : isBatchEditMode
     ? "按右侧设置处理"
     : isBatchExportMode
       ? "导出左侧已选规则"
@@ -5082,6 +5300,22 @@ function RulesContent() {
         <span className="text-xs text-muted-foreground tabular-nums">
           {copyableSourceRules.length} 项
         </span>
+        {/* 按个人分组筛：换一个分组就清掉勾选，免得带着看不见的规则去做批量操作 */}
+        <Select
+          value={copyRulePersonalGroup === null ? "all" : String(copyRulePersonalGroup)}
+          onValueChange={(value) => {
+            setCopyRulePersonalGroup(value === "all" ? null : Number(value));
+            setCopyRuleIds([]);
+          }}
+          disabled={copyActionPending}
+        >
+          <SelectTrigger aria-label="按个人分组筛选" className="ml-auto h-8 w-[9.5rem] text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部分组</SelectItem>
+            {personalGroups.map((group) => <SelectItem key={group.id} value={String(group.id)}>{group.name}</SelectItem>)}
+            <SelectItem value="0">未分组</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
         {copyableSourceRules.length > 0 ? copyableSourceRules.map((rule: any) => {
@@ -5105,18 +5339,125 @@ function RulesContent() {
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                   {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
-                  <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
+                  <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
                   <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                 </span>
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
                   :{formatPortSpan(rule.sourcePort, ruleSourcePortEnd(rule))} -&gt; {rule.targetIp}:{formatRuleTargetPort(rule)} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}
                 </span>
+                {rule.personalGroupIds?.length ? (
+                  <span className="mt-1 flex min-w-0"><RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} maxVisible={3} /></span>
+                ) : null}
               </span>
             </label>
           );
         }) : (
-          <div className="py-10 text-center text-sm text-muted-foreground">没有匹配的转发规则</div>
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            {isBatchGroupMode && batchGroupTargetIds.length === 0 ? "先在右侧选择目标分组" : "没有匹配的转发规则"}
+          </div>
         )}
+      </div>
+    </div>
+  );
+  /** 「调整分组」：把勾选的规则加入 / 移出右边选的那几个组。一次最多 500 条，多了分几次交。 */
+  const handleBatchGroupRules = async () => {
+    const ids = Array.from(new Set(copySelectedRules.map((rule) => Number(rule.id))));
+    if (ids.length === 0 || batchGroupTargetIds.length === 0) return;
+    setCopyWorking(true);
+    let done = 0;
+    try {
+      for (const chunk of chunkBatchItems(ids, MAX_PERSONAL_RULE_GROUP_CHANGE)) {
+        const result = await moveToPersonalGroupsMutation.mutateAsync({ ids: chunk, groupIds: batchGroupTargetIds, mode: batchGroupMode });
+        done += Number(result.count || chunk.length);
+      }
+      setCopyRuleIds([]);
+      toast.success(`已${batchGroupMode === "add" ? "加入" : "移出"}分组：${done} 条规则`);
+    } catch (error) {
+      toast.error(`${done > 0 ? `已处理 ${done} 条，其余` : ""}调整分组失败：${(error instanceof Error && error.message) || "请稍后重试"}`);
+    } finally {
+      await refreshPersonalRuleGroups();
+      if (showCopyDialog) await fullRulesQuery.refetch();
+      setCopyWorking(false);
+    }
+  };
+  // 启停 / 重启（上游 2.3.292）：右侧只说明三种操作分别做什么，按钮在底部。
+  const batchStatePanel = (
+    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Label>启停 / 重启</Label>
+        <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+          <span>已选</span>
+          <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedBatchRuleCount}</span>
+        </div>
+      </div>
+      <ul className="space-y-2 text-xs leading-5 text-muted-foreground">
+        <li><span className="font-medium text-foreground">启用</span>：和单条打开开关一样检查端口、套餐与授权，通过的才启用。</li>
+        <li><span className="font-medium text-foreground">暂停</span>：停止转发，规则和统计都保留。</li>
+        <li><span className="font-medium text-foreground">重启</span>：启用中的规则按当前配置重新下发给 Agent；已暂停的保持暂停，流量统计不清零。</li>
+      </ul>
+      <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        提交后在右下角看进度，可停止剩余或只重试失败项；同一批规则正在处理时不会重复提交。
+      </div>
+    </div>
+  );
+  const batchGroupPanel = (
+    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <Label>目标分组</Label>
+          <div className="text-xs text-muted-foreground">分组只有你自己看得见，不影响转发和授权。</div>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 self-start text-xs" onClick={() => setRuleGroupManagerOpen(true)} disabled={copyActionPending}>
+          <FolderCog className="h-3.5 w-3.5" />管理分组
+        </Button>
+      </div>
+      <div className={segmentedControlClassName}>
+        <div className="grid grid-cols-2 gap-1">
+          {(["add", "remove"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={routeModeOptionClass(batchGroupMode === mode, copyActionPending)}
+              aria-pressed={batchGroupMode === mode}
+              disabled={copyActionPending}
+              onClick={() => {
+                if (batchGroupMode === mode) return;
+                setBatchGroupMode(mode);
+                setCopyRuleIds([]);
+              }}
+            >
+              <span className="truncate">{mode === "add" ? "加入分组" : "移出分组"}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="max-h-[19rem] space-y-1 overflow-y-auto rounded-md border border-border/60 p-2">
+        {personalGroups.length > 0 ? personalGroups.map((group) => {
+          const checked = batchGroupTargetIds.includes(Number(group.id));
+          return (
+            <label key={group.id} className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/40 ${checked ? "bg-primary/5" : ""}`}>
+              <Checkbox
+                checked={checked}
+                disabled={copyActionPending}
+                onCheckedChange={(next) => {
+                  setBatchGroupTargetIds((current) => next ? Array.from(new Set([...current, Number(group.id)])) : current.filter((id) => id !== Number(group.id)));
+                  // 目标分组变了，左边能改的规则也跟着变：清掉勾选，不带着看不见的规则走
+                  setCopyRuleIds([]);
+                }}
+              />
+              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{group.name}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">{group.count}</span>
+            </label>
+          );
+        }) : (
+          <div className="py-8 text-center text-sm text-muted-foreground">还没有分组，先点「管理分组」建一个</div>
+        )}
+      </div>
+      <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+        {batchGroupMode === "add"
+          ? "左边只列出还没在全部所选分组里的规则；只在其中几个组里的照样列出，加入时补齐。规则原来的其他分组不变。"
+          : "左边只列出在任一所选分组里的规则；移出只去掉所选的分组，规则的其他分组保留。"}
       </div>
     </div>
   );
@@ -5487,6 +5828,11 @@ function RulesContent() {
   const effectiveRuleListSummary = ruleListSummary ?? stableRuleListSummary;
   const dailyTrafficTotals = effectiveRuleListSummary?.dailyTraffic || pageDailyTrafficTotals;
   const compareRulesBySavedOrder = useCallback((a: any, b: any) => {
+    // 按分组排序：和服务端同一个名次（所在组里最靠前那个组的顺序，未分组最后），同名次里照原来的排
+    if (personalGroupSortActive) {
+      const groupCompare = personalRuleGroupRank(a.personalGroupIds, personalGroupRankById) - personalRuleGroupRank(b.personalGroupIds, personalGroupRankById);
+      if (groupCompare !== 0) return groupCompare;
+    }
     const aCategory = getRuleCategory(a, forwardGroupById);
     const bCategory = getRuleCategory(b, forwardGroupById);
     if (ruleCategory === "all") {
@@ -5499,7 +5845,7 @@ function RulesContent() {
     const createdCompare = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     if (createdCompare !== 0) return createdCompare;
     return Number(b.id || 0) - Number(a.id || 0);
-  }, [forwardGroupById, ruleCategory]);
+  }, [forwardGroupById, personalGroupRankById, personalGroupSortActive, ruleCategory]);
   const sortedFilteredRules = useMemo(() => {
     return [...filteredRules].sort(compareRulesBySavedOrder);
   }, [compareRulesBySavedOrder, filteredRules]);
@@ -5518,7 +5864,7 @@ function RulesContent() {
     [filterResource, ruleCategory, ruleFilterCacheScope, ruleSearchQuery],
   );
   const hasActiveUserFilter = user?.role === "admin" && filterUser !== "self";
-  const hasActiveRuleFilter = hasActiveUserFilter || filterResource !== "all" || ruleCategory !== "all" || ruleSearchQuery.trim().length > 0;
+  const hasActiveRuleFilter = hasActiveUserFilter || filterResource !== "all" || ruleCategory !== "all" || ruleSearchQuery.trim().length > 0 || personalGroupFilter !== null;
   const rulesHeaderLoading = isLoading || !rules || !scopedRulesReady || !filteredRulesPrimed;
   const dailyTrafficTotalsLoading = rulesHeaderLoading || !secondaryQueriesReady || ruleListSummaryLoading;
   const [stableRulePageMeta, setStableRulePageMeta] = useState({ activeItems: 0, totalItems: 0, scopeTotalItems: 0 });
@@ -5543,9 +5889,12 @@ function RulesContent() {
    * 能不能拖：不在地球视图、没按资源筛、没在搜索。管理员看「全部用户」时，这一页的规则只要都是同一个人的
    * 也能拖（单人自用的面板就是这样）；混着几个人的不给拖，免得把别人的顺序一起挪了。
    */
+  // 按个人分组筛 / 排的时候也不给拖：这一页不是那个分类的连续一段，拖完存回去的顺序会把别的规则挤乱。
   const ruleSortingBase = effectiveViewMode !== "globe"
     && filterResource === "all"
-    && ruleSearchQuery.trim().length === 0;
+    && ruleSearchQuery.trim().length === 0
+    && personalGroupFilter === null
+    && !personalGroupSortActive;
   const ruleSortOwnersOk = (rules: ReadonlyArray<{ userId?: unknown }>) => user?.role !== "admin"
     || filterUser !== "all"
     || new Set(rules.map((rule) => Number(rule.userId || 0))).size <= 1;
@@ -5593,7 +5942,8 @@ function RulesContent() {
     return groups.filter((group) => group.rules.length > 0);
   }, [forwardGroupById, pagedRules]);
   // 「深空」主题：「全部」也不分组，一张表到底；类型写在每一行名字前面的小标签上（RuleRow）
-  const shouldGroupRuleCards = ruleCategory === "all" && uiTheme !== "deepspace";
+  // 按个人分组排序时也不按类型分段：分段会把排好的分组顺序拆开
+  const shouldGroupRuleCards = ruleCategory === "all" && uiTheme !== "deepspace" && !personalGroupSortActive;
   /*
     换进这一页时先只画前几张卡（手机上刚好一屏），剩下的交给 React 的低优先级渲染随后补上：
     第一帧要画十几张卡的整棵树在手机上要几百毫秒，期间点什么都没反应（用户 2026-11-03 录屏
@@ -6930,7 +7280,7 @@ function RulesContent() {
   const renderSniRuleBadge = (rule: any) => {
     if (!(Number(rule?.tlsInboundId || 0) > 0)) return null;
     const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
-    const state = tlsInboundRuleState({ inbound, agentVersion: inbound?.agentVersion });
+    const state = tlsInboundRuleState({ inbound, agentVersion: inbound?.agentVersion, routeKind: sniRuleRouteKind(rule) });
     const text = formatSniRuleEntry({ names: parseSniNameJson(rule.sniNames), hostName: inbound?.hostName, port: inbound?.port });
     return (
       <span key="sni" className="inline-flex min-w-0 max-w-full items-center gap-1">
@@ -6972,22 +7322,40 @@ function RulesContent() {
     );
   };
 
-  /** 端口转发的两种入口方式。编辑时定死（要换就新建规则）。 */
+  /** 两种入口方式。编辑时定死（要换就新建规则）。 */
   const renderEntryModeSwitch = () => {
     const pick = (mode: "port" | "sni") => {
       if (editingId || mode === form.entryMode) return;
       latestPortCheckRef.current += 1;
       setPortStatus("idle");
       setPortRangeError(null);
+      if (form.routeMode !== "local") {
+        // 隧道 / 转发链 / 转发组页签：资源照旧在上面选，这里只换入口方式；入站在下面按所选资源列。
+        if (mode === "port") {
+          setForm({ ...form, entryMode: "port", tlsInboundId: null, sourcePort: 0 });
+          return;
+        }
+        const first = sniChoices[0];
+        setForm({
+          ...form,
+          entryMode: "sni",
+          tlsInboundId: first ? Number(first.inbound.id) : null,
+          sourcePort: 0,
+          protocol: "tcp",
+          failoverEnabled: false,
+        });
+        return;
+      }
       if (mode === "sni") {
-        const inbound = usableTlsInbounds[0];
-        if (!inbound) return;
+        const first = sniChoices[0];
+        if (!first) return;
+        const inbound = first.inbound;
         setForm({
           ...form,
           entryMode: "sni",
           tlsInboundId: Number(inbound.id),
-          hostId: Number(inbound.hostId),
-          forwardGroupId: null,
+          hostId: first.forwardGroupId ? null : Number(inbound.hostId),
+          forwardGroupId: first.forwardGroupId,
           tunnelId: null,
           sourcePort: 0,
           protocol: "tcp",
@@ -7008,7 +7376,7 @@ function RulesContent() {
         sourcePort: 0,
       });
     };
-    const portAvailable = canUseSavedLocalForward || canUseBillingHostLocalForward;
+    const portAvailable = form.routeMode !== "local" || canUseSavedLocalForward || canUseBillingHostLocalForward;
     return (
       <div className="flex min-w-0 flex-wrap items-center gap-2" role="group" aria-label="入口方式">
         <span className="text-meta text-muted-foreground">入口方式</span>
@@ -7026,7 +7394,7 @@ function RulesContent() {
           type="button"
           size="sm"
           variant={form.entryMode === "sni" ? "default" : "outline"}
-          disabled={!!editingId || !canUseSniInbound}
+          disabled={!!editingId || !sniAvailableForTab(form.routeMode)}
           aria-pressed={form.entryMode === "sni"}
           onClick={() => pick("sni")}
         >
@@ -7039,9 +7407,12 @@ function RulesContent() {
 
   /** 共享 TLS 入站：选入站 + 填 SNI。和服务端用同一份规整 / 校验（shared/tlsInbound.ts）。 */
   const renderSniEntryFields = () => {
-    const options = (tlsInboundOptions as any[]).filter((inbound: any) => (
-      (inbound.usable && inbound.isEnabled) || Number(inbound.id) === Number(form.tlsInboundId)
-    )).filter((inbound: any) => !editingId || Number(inbound.hostId) === Number(form.hostId));
+    // 编辑时只能换同一台主机（转发资源上：同端口）的入站。
+    const editingInbound = editingId && form.tlsInboundId ? tlsInboundById.get(Number(form.tlsInboundId)) : null;
+    const options = sniChoices.filter((choice) => !editingInbound || (sniRouteKind === "group"
+      ? Number(choice.inbound.port) === Number(editingInbound.port) && Number(choice.forwardGroupId || 0) === Number(form.forwardGroupId || 0)
+      : Number(choice.inbound.hostId) === Number(editingInbound.hostId)));
+    const groupNameOf = (groupId: number | null) => (groupId ? String(forwardGroupById.get(Number(groupId))?.name || `#${groupId}`) : "");
     const blocker = submitBlocker;
     const sniError = blocker && blocker !== "还缺目标地址" && blocker !== "还缺目标端口" && blocker !== "目标端口必须在 1-65535 之间" ? blocker : null;
     return (
@@ -7049,21 +7420,32 @@ function RulesContent() {
         <FormField className="space-y-1.5">
           <Label>共享 TLS 入站</Label>
           <Select
-            value={form.tlsInboundId ? String(form.tlsInboundId) : undefined}
+            value={form.tlsInboundId ? sniInboundChoiceKey(form.tlsInboundId, form.routeMode === "local" ? form.forwardGroupId : sniRouteKind === "group" ? form.forwardGroupId : null) : undefined}
             onValueChange={(value) => {
-              const inbound = tlsInboundById.get(Number(value));
-              if (!inbound) return;
-              setForm({ ...form, tlsInboundId: Number(inbound.id), hostId: Number(inbound.hostId) });
+              const choice = sniChoices.find((item) => item.key === value);
+              if (!choice) return;
+              const inbound = choice.inbound;
+              if (form.routeMode === "local") {
+                // 端口转发页签：选的是「直连」还是「经某个端口转发资源」，跟着入站一起定。
+                setForm({ ...form, tlsInboundId: Number(inbound.id), hostId: choice.forwardGroupId ? null : Number(inbound.hostId), forwardGroupId: choice.forwardGroupId });
+                return;
+              }
+              setForm({ ...form, tlsInboundId: Number(inbound.id), ...(form.routeMode === "tunnel" ? { hostId: Number(inbound.hostId) } : {}) });
             }}
           >
-            <SelectTrigger><SelectValue placeholder="选择主机上的共享 TLS 入站" /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder={sniRouteKind === "direct" ? "选择主机上的共享 TLS 入站" : "选择入口主机上的共享 TLS 入站"} /></SelectTrigger>
             <SelectContent>
-              {options.map((inbound: any) => (
-                <SelectItem key={inbound.id} value={String(inbound.id)} textValue={`${inbound.hostName} ${inbound.name} ${inbound.port}`}>
-                  {inbound.hostName || "主机"} · {inbound.name} :{inbound.port}
-                  {!inbound.agentSupported ? "（需要升级 Agent）" : !inbound.isEnabled ? "（已停用）" : ""}
-                </SelectItem>
-              ))}
+              {options.map((choice) => {
+                const inbound = choice.inbound;
+                const routed = sniRouteKind !== "direct" || !!choice.forwardGroupId;
+                return (
+                  <SelectItem key={choice.key} value={choice.key} textValue={`${groupNameOf(choice.forwardGroupId)} ${inbound.hostName} ${inbound.name} ${inbound.port}`}>
+                    {form.routeMode === "local" && choice.forwardGroupId ? `端口转发「${groupNameOf(choice.forwardGroupId)}」· ` : ""}
+                    {inbound.hostName || "主机"} · {inbound.name} :{inbound.port}
+                    {!inbound.agentSupported || (routed && inbound.routedAgentSupported === false) ? "（需要升级 Agent）" : !inbound.isEnabled ? "（已停用）" : ""}
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
         </FormField>
@@ -7087,7 +7469,11 @@ function RulesContent() {
         </FormField>
         {sniError && form.sniNamesText.trim() ? <p className="text-xs text-destructive">{sniError}</p> : null}
         <p data-fx-help="" className="text-meta leading-5 text-muted-foreground">
-          客户端用这些域名连接 {selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "入站端口"}，按 TLS 握手里的 SNI 分到这条规则，原样透传、节点不解密。每个域名的 DNS 都要解析到这台主机。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务；协议固定 TCP。
+          {sniRouteKind === "group"
+            ? `客户端用这些域名连接入口主机的 ${selectedTlsInbound ? selectedTlsInbound.port : "入站"} 端口，按 SNI 分到这条规则，再经所选转发资源转到目标，原样透传、节点不解密。每台入口主机都要有同端口的共享 TLS 入站（没有的那台不下发，DDNS 也不会切过去）；域名的 DNS 解析到入口（转发组的入口域名或入口主机）。协议固定 TCP。`
+            : sniRouteKind === "tunnel"
+            ? `客户端用这些域名连接 ${selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "隧道入口机的入站端口"}，按 SNI 分到这条规则，再经隧道到出口、由出口连目标，原样透传、节点不解密。每个域名的 DNS 都要解析到隧道的入口主机。协议固定 TCP，不带 PROXY 头。`
+            : `客户端用这些域名连接 ${selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "入站端口"}，按 TLS 握手里的 SNI 分到这条规则，原样透传、节点不解密。每个域名的 DNS 都要解析到这台主机。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务；协议固定 TCP。`}
         </p>
       </div>
     );
@@ -7314,6 +7700,36 @@ function RulesContent() {
       </Badge>
     );
   };
+  /*
+    端口占用告警（server/rulePortOccupancy.ts）：和规则的运行状态分开的一枚。
+    黄 = Agent 核对到入口端口上有别的程序在监听（内核转发不绑端口，只能这样发现）；
+    红 = 绑定失败或内核转发没装全，后面跟着 Agent 报的原因。冲突消失后下一轮就不再带这个字段。
+  */
+  const renderPortWarningBadge = (rule: { portWarnings?: unknown }) => {
+    const warnings = (Array.isArray(rule?.portWarnings) ? rule.portWarnings : []) as Array<{ level: string; label: string; message: string }>;
+    if (warnings.length === 0) return null;
+    const error = warnings.find((item) => item.level === "error");
+    const head = error || warnings[0];
+    const title = warnings.map((item) => item.message).join("\n");
+    return (
+      <Badge
+        key="port-warning"
+        variant="outline"
+        data-testid="rule-port-warning"
+        data-level={error ? "error" : "warn"}
+        className={cn(
+          "h-5 w-fit max-w-full truncate px-1.5 text-[11px]",
+          error
+            ? "border-destructive/30 text-destructive"
+            : "border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]",
+        )}
+        title={title}
+      >
+        <AlertTriangle className="mr-1 h-3 w-3" aria-hidden="true" />
+        {head.label}{warnings.length > 1 ? ` · ${warnings.length}` : ""}
+      </Badge>
+    );
+  };
   /**
    * 「在订阅里」这一小块。没绑就什么都不显示 —— 大多数转发跟订阅无关，
    * 给每一行都挂个「未加入订阅」只是噪音。
@@ -7434,7 +7850,8 @@ function RulesContent() {
     const kernelWarning = getRuleKernelForwardWarning(rule);
     const kernelWarningBadge = renderKernelForwardWarningBadge(kernelWarning);
     const fxpIssueBadge = renderTunnelFxpIssueBadge(tunnel);
-    const warningBadge = kernelWarningBadge || fxpIssueBadge ? <>{kernelWarningBadge}{fxpIssueBadge}</> : null;
+    const portWarningBadge = renderPortWarningBadge(rule);
+    const warningBadge = kernelWarningBadge || fxpIssueBadge || portWarningBadge ? <>{kernelWarningBadge}{fxpIssueBadge}{portWarningBadge}</> : null;
     const badge = (
       <Badge
         variant="outline"
@@ -7709,6 +8126,7 @@ function RulesContent() {
     setRuleSearchQuery("");
     setRuleCategory("all");
     handleFilterResourceChange("all");
+    handlePersonalGroupFilterChange(null);
     if (user?.role === "admin") {
       setFilterUser("self");
       storeString(filterUserStorageKey, "self");
@@ -7843,7 +8261,7 @@ function RulesContent() {
               {supported ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
             </span>
             <div className="min-w-0 flex-1">
-              <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
+              <span className="block truncate font-medium" title={rule.name} data-no-translate="">{rule.name}</span>
               {compactLayout ? (
                 /* 精简的表：协议自己一列，名字下面挂类型标签（端口转发 / 隧道转发 / 转发链 / 转发组）和所属人 */
                 <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
@@ -7878,6 +8296,27 @@ function RulesContent() {
           </div>
         );
       },
+    },
+    /*
+      分组列（上游 2.3.287）：最多画两个，多的写「+N」；表头点一下按分组排序（未分组排最后），再点一下回到原来的顺序。
+      ··· 菜单、「列设置」里都能把这一列关掉（显不显示由 ruleColumnSettings 定，这里总是定义着）。
+    */
+    {
+      key: "personalGroups",
+      width: compactLayout ? 120 : 140,
+      head: (
+        <button
+          type="button"
+          className={cn("inline-flex items-center gap-1 hover:text-foreground", personalGroupSortActive && "text-foreground")}
+          onClick={toggleRuleSortByGroup}
+          title={personalGroupSortActive ? "按分组排序中（未分组在最后），点一下恢复默认顺序" : "按分组排序（未分组在最后）"}
+          aria-pressed={personalGroupSortActive}
+        >
+          分组{personalGroupSortActive ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+        </button>
+      ),
+      cellClassName: "overflow-hidden",
+      cell: (rule) => <RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} emptyPlaceholder />,
     },
     {
       key: "resource",
@@ -7978,7 +8417,14 @@ function RulesContent() {
       ) : renderRuleActions(rule),
     },
   ];
-  const ruleTableColumnCount = ruleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
+  /* 真正画出来的列：按列设置的顺序、只要显示的那些，拖过的列宽盖掉默认宽度 */
+  const ruleTableColumnByKey = new Map(ruleTableColumns.map((column) => [column.key, column]));
+  const shownRuleTableColumns: (RuleTableColumn & { resolved: ResolvedTableColumn })[] = ruleColumnSettings.visibleColumns.flatMap((resolved) => {
+    const column = ruleTableColumnByKey.get(resolved.key);
+    return column ? [{ ...column, width: resolved.width ?? column.width, resolved }] : [];
+  });
+  const ruleTableColumnCount = shownRuleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
+  const ruleTableMinWidth = Math.round(shownRuleTableColumns.reduce((sum, column) => sum + column.width, ruleSortingEnabled ? 44 : 0) * RULE_TABLE_MIN_WIDTH_RATIO);
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
     const supported = isRuleSupported(rule);
     return (
@@ -8003,7 +8449,7 @@ function RulesContent() {
             />
           </TableCell>
         )}
-        {ruleTableColumns.map((column) => (
+        {shownRuleTableColumns.map((column) => (
           <TableCell key={column.key} className={cn("px-3 py-2", column.cellClassName)}>
             {column.cell(rule)}
           </TableCell>
@@ -8061,6 +8507,7 @@ function RulesContent() {
     renderSniRuleBadge,
     renderEgressBadge,
     renderKernelForwardWarningBadge: (rule) => renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
+    renderPortWarningBadge,
     renderTunnelFxpIssueBadge: (rule) => renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))),
     renderSubscriptionBadge: (rule) => renderSubscriptionBadge(rule, "card"),
     renderSubscriptionMark,
@@ -8142,6 +8589,7 @@ function RulesContent() {
       rule={rule}
       sortable={sortable}
       page={ruleCardPage}
+      personalGroupNames={personalGroupNamesOf(rule)}
       {...buildRuleCardDerivedProps(rule, ruleCardSources)}
     />
   );
@@ -8189,6 +8637,13 @@ function RulesContent() {
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={() => setBatchAddOpen(true)} disabled={!canAdd || batchAddHosts.length === 0}><ListPlus className="h-4 w-4" />批量添加</DropdownMenuItem>
               <DropdownMenuItem onSelect={openCopyDialog} disabled={!transferSourceRules.length && !canAdd}><ClipboardCopy className="h-4 w-4" />批量管理</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setRuleGroupManagerOpen(true)}><FolderCog className="h-4 w-4" />管理分组</DropdownMenuItem>
+              <DropdownMenuItem onSelect={toggleRuleSortByGroup} disabled={personalGroups.length === 0}>
+                {personalGroupSortActive ? <Check className="h-4 w-4" /> : <span className="h-4 w-4" aria-hidden="true" />}按分组排序
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={toggleRuleGroupColumn}>
+                {showRuleGroupColumn ? <Check className="h-4 w-4" /> : <span className="h-4 w-4" aria-hidden="true" />}列表显示分组列
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -8256,6 +8711,8 @@ function RulesContent() {
               { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
             ]}
           />
+          {effectiveViewMode === "table" && !isMobile ? <TableColumnSettingsMenu settings={ruleColumnSettings} /> : null}
+
           {overflowInHeader ? ruleOverflowMenu("outline") : null}
           {mergeListControls ? createRuleAction : null}
       </>} />
@@ -8286,14 +8743,14 @@ function RulesContent() {
           {collapsePhoneSearch ? (
             <SearchToggle
               open={phoneSearchOpen}
-              active={ruleSearchQuery.length > 0 || hasActiveUserFilter || filterResource !== "all"}
+              active={ruleSearchQuery.length > 0 || hasActiveUserFilter || filterResource !== "all" || personalGroupFilter !== null}
               onToggle={() => setPhoneSearchOpen((value) => !value)}
             />
           ) : null}
           </div>
           {showSearchRow ? (
           <FilterToolbar
-            activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
+            activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all") + Number(personalGroupFilter !== null)}
             collapsed={mergeListControls}
             action={mergeListControls ? undefined : createRuleAction}
             search={
@@ -8414,6 +8871,27 @@ function RulesContent() {
                 </div>
               </DropdownMenuContent>
             </DropdownMenu>
+            {/* 个人分组：全部 → 自己的组（按管理分组里的顺序）→ 未分组；旁边那枚是「管理分组」 */}
+            <div className="flex w-full items-center gap-1.5 sm:w-auto">
+              <Select
+                value={personalGroupFilter === null ? "all" : String(personalGroupFilter)}
+                onValueChange={(value) => handlePersonalGroupFilterChange(value === "all" ? null : Number(value))}
+              >
+                <SelectTrigger aria-label="按个人分组筛选规则" className="h-8 min-w-0 flex-1 text-xs sm:w-[150px] sm:flex-none">
+                  <SelectValue placeholder="全部分组" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部分组{personalGroupsQuery.data ? ` · ${personalGroupsQuery.data.total}` : ""}</SelectItem>
+                  {personalGroups.map((group) => (
+                    <SelectItem key={group.id} value={String(group.id)}>{group.name} · {group.count}</SelectItem>
+                  ))}
+                  <SelectItem value="0">未分组{personalGroupsQuery.data ? ` · ${personalGroupsQuery.data.ungrouped}` : ""}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button type="button" variant="outline" size="icon" className="h-8 w-8 shrink-0" title="管理分组" aria-label="管理分组" onClick={() => setRuleGroupManagerOpen(true)}>
+                <FolderCog className="h-4 w-4" />
+              </Button>
+            </div>
             <Select value={String(rulePageSize)} onValueChange={handleRulePageSizeChange}>
               <SelectTrigger aria-label="每页数量" className="h-8 w-full text-xs sm:w-[120px]">
                 <SelectValue placeholder="每页数量" />
@@ -8509,16 +8987,21 @@ function RulesContent() {
               <Card className="hidden border-border bg-card sm:block">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
-                    <Table className="fx-rules-table table-fixed min-w-[1000px]">
+                    <Table className="fx-rules-table table-fixed" style={{ minWidth: ruleTableMinWidth }}>
                       <colgroup>
                         {ruleSortingEnabled && <col className="w-[44px]" />}
-                        {ruleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
+                        {shownRuleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
                       </colgroup>
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
                           {ruleSortingEnabled && <TableHead className="w-[44px] px-2" aria-label="排序" />}
-                          {ruleTableColumns.map((column) => (
-                            <TableHead key={column.key} className={cn("whitespace-nowrap", column.headClassName)}>{column.head}</TableHead>
+                          {shownRuleTableColumns.map((column) => (
+                            <TableHead key={column.key} className={cn("relative whitespace-nowrap", column.headClassName)}>
+                              {column.head}
+                              {column.key !== "actions" ? (
+                                <TableColumnResizeHandle settings={ruleColumnSettings} column={column.resolved} label={RULE_TABLE_COLUMN_LABELS[column.key] ?? column.key} />
+                              ) : null}
+                            </TableHead>
                           ))}
                         </TableRow>
                       </TableHeader>
@@ -8675,7 +9158,7 @@ function RulesContent() {
                 {ROUTE_MODE_HINTS[routeTab]}
               </p>
             )}
-            {form.routeMode === "local" && (canUseSniInbound || isSniEntryMode) && renderEntryModeSwitch()}
+            {(sniAvailableForTab(form.routeMode) || isSniEntryMode) && renderEntryModeSwitch()}
 
             <RuleRouteTransition
               transitionKey={`rule-route-${form.routeMode}-${isForwardGroupRouteMode ? "resource" : "direct"}`}
@@ -8726,7 +9209,7 @@ function RulesContent() {
                 </div>
               )}
 
-              {isForwardGroupRouteMode && (
+              {isForwardGroupRouteMode && !(form.routeMode === "local" && isSniEntryMode) && (
                 <div className="space-y-2">
                     <FormField className="space-y-1.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
@@ -9011,7 +9494,13 @@ function RulesContent() {
               <SelectContent>
               <SelectItem value="tcp">TCP</SelectItem>
               {egressActive ? null : <SelectItem value="udp">UDP</SelectItem>}
-              <SelectItem value="both" disabled={egressActive && !form.egress.egressUdp && (!SS_EGRESS_UDP_SUPPORTED || (!egressCapabilities.loading && !egressCapabilities.udp))}>TCP+UDP</SelectItem>
+              <SelectItem
+                value="both"
+                disabled={egressActive && !form.egress.egressUdp && (ruleEgressProtocolOf(form.egress.egressType) === "vless"
+                  // VLESS 的 UDP 经本机桥接走 xudp，不看 ssEgressUdp 能力（Agent 版本不够时出口一段另有提示）。
+                  ? !VLESS_EGRESS_UDP_SUPPORTED
+                  : !SS_EGRESS_UDP_SUPPORTED || (!egressCapabilities.loading && !egressCapabilities.udp))}
+              >TCP+UDP</SelectItem>
               </SelectContent>
               </Select>
               </FormField>
@@ -9301,6 +9790,8 @@ function RulesContent() {
       </Dialog>
 
 
+      <RuleGroupManagerDialog open={ruleGroupManagerOpen} onOpenChange={setRuleGroupManagerOpen} ruleScope={effectiveRulesQuery} />
+
       <Dialog open={showCopyDialog} onOpenChange={(open) => !copyActionPending && setShowCopyDialog(open)}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader>
@@ -9308,11 +9799,11 @@ function RulesContent() {
               <ClipboardCopy className="h-5 w-5" />
               批量管理转发规则
             </DialogTitle>
-            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
+            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出、删除、调整分组或启停 / 重启。删除、复制、启停和重启在服务端后台执行。</DialogDescription>
           </DialogHeader>
           <div className="max-h-[72svh] space-y-4 overflow-y-auto pr-1">
             <div className={segmentedControlClassName}>
-              <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-1 sm:grid-cols-6">
                 <button
                   type="button"
                   className={routeModeOptionClass(isBatchCopyMode, copyActionPending)}
@@ -9352,6 +9843,26 @@ function RulesContent() {
                 >
                   <Upload className="h-4 w-4 shrink-0" />
                   <span className="truncate">批量导入</span>
+                </button>
+                <button
+                  type="button"
+                  className={routeModeOptionClass(isBatchGroupMode, copyActionPending)}
+                  aria-pressed={isBatchGroupMode}
+                  onClick={() => switchCopyManageMode("group")}
+                  disabled={copyActionPending || !transferSourceRules.length}
+                >
+                  <Folder className="h-4 w-4 shrink-0" />
+                  <span className="truncate">调整分组</span>
+                </button>
+                <button
+                  type="button"
+                  className={routeModeOptionClass(isBatchStateMode, copyActionPending)}
+                  aria-pressed={isBatchStateMode}
+                  onClick={() => switchCopyManageMode("state")}
+                  disabled={copyActionPending || !transferSourceRules.length}
+                >
+                  <Play className="h-4 w-4 shrink-0" />
+                  <span className="truncate">启停 / 重启</span>
                 </button>
               </div>
             </div>
@@ -9476,7 +9987,7 @@ function RulesContent() {
                         <div key={`${rule.name}-${rule.sourcePort}-${index}`} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
                           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                             <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-                            <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
+                            <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
                             <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
                           </div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">
@@ -9622,7 +10133,7 @@ function RulesContent() {
               </div>
 
               <div className="space-y-3">
-                {isBatchExportMode ? (
+                {isBatchGroupMode ? batchGroupPanel : isBatchStateMode ? batchStatePanel : isBatchExportMode ? (
                 <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="space-y-1">
@@ -9645,7 +10156,7 @@ function RulesContent() {
                           <div key={rule.id} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
                             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                               {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
-                              <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
+                              <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
                               <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                             </div>
                             <div className="mt-1 truncate text-xs text-muted-foreground">
@@ -9960,7 +10471,11 @@ function RulesContent() {
               </div>
             </div>
             <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-              {isBatchExportMode
+              {isBatchGroupMode
+                ? "调整分组只改你自己的分组归属，不会重启、停用或修改任何转发规则。"
+                : isBatchStateMode
+                ? "启用、暂停、重启逐条走和单条操作一样的权限检查，在服务端后台执行；任务只保存在面板内存中，面板重启后进度不保留。"
+                : isBatchExportMode
                 ? "批量导出会按左侧当前选中的规则生成 JSON 文件，不会受右侧资源范围限制。"
                 : isBatchEditMode
                 ? "批量编辑会按你实际填写的项逐条覆盖：入口资源未选择则保留原入口，目标地址或端口留空则保留原目标值。"
@@ -9978,6 +10493,33 @@ function RulesContent() {
                   <Button type="button" onClick={handleImportRules} disabled={!importValidation.ok || importingRules}>
                     {importingRules && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     导入规则
+                  </Button>
+                </div>
+              </>
+            ) : isBatchGroupMode ? (
+              <>
+                <div />
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
+                  <Button type="button" onClick={handleBatchGroupRules} disabled={selectedBatchRuleCount === 0 || batchGroupTargetIds.length === 0 || copyActionPending}>
+                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Folder className="mr-2 h-4 w-4" />}
+                    {`${batchGroupMode === "add" ? "加入分组" : "移出分组"}（${selectedBatchRuleCount} 条）`}
+                  </Button>
+                </div>
+              </>
+            ) : isBatchStateMode ? (
+              <>
+                <div className="text-xs text-muted-foreground sm:max-w-[16rem]">重启会按当前配置重新下发，已暂停的保持暂停。</div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
+                  <Button type="button" variant="outline" onClick={() => { void handleBatchStateRules("pause"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
+                    <Pause className="mr-2 h-4 w-4" />暂停所选
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => { void handleBatchStateRules("restart"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
+                    <RotateCw className="mr-2 h-4 w-4" />重启所选
+                  </Button>
+                  <Button type="button" onClick={() => { void handleBatchStateRules("enable"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
+                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}启用所选（{selectedBatchRuleCount} 条）
                   </Button>
                 </div>
               </>

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
@@ -45,7 +46,7 @@ function billingDateTime(value?: string | Date | null) {
   if (!value) return "---";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "---";
-  return date.toLocaleString("zh-CN", BILLING_DATE_TIME_FORMAT_OPTIONS);
+  return date.toLocaleString(getFormatLocale(), BILLING_DATE_TIME_FORMAT_OPTIONS);
 }
 
 function cycleEnd(sub: any) {

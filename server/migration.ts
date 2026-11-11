@@ -1,4 +1,5 @@
 import { parseInboundRouting } from "../shared/inboundRouting";
+import { invalidateUiThemeCache } from "./uiThemes";
 import { Request, Response, Router } from "express";
 import nodeCrypto from "crypto";
 import fs from "fs";
@@ -8,6 +9,7 @@ import { pipeline } from "stream/promises";
 import { createGzip } from "zlib";
 import Database from "better-sqlite3";
 import { MIGRATION_TABLES, ensureDatabaseSchema, getDatabaseTableDefs } from "./dbSchema";
+import { remapTopologyManualRef } from "../shared/topologyManual";
 import {
   getDb,
   defaultSqlitePath,
@@ -206,6 +208,13 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "rule_sni_names",
   "host_network_profiles",
   "host_unlock_checks",
+  // 个人分组是后加的：老面板的库里没有这两张表等于「还没建过分组」。
+  "rule_groups",
+  "rule_group_members",
+  // 网络拓扑的手动标注：老面板没有这两张表 = 还没画过
+  "topology_manual_nodes",
+  "topology_manual_links",
+  "user_traffic_daily",
   "shop_sync_users",
   "shop_sync_orders",
 ]);
@@ -247,6 +256,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "config_audit_events",
   "ip_change_events",
   "host_unlock_checks",
+  "user_traffic_daily",
 ]);
 
 export type MigrationSnapshotExportProgress = {
@@ -863,6 +873,9 @@ const IMPORT_TABLE_ORDER = [
   "forward_rules",
   // 规则占的 SNI 同时指向入站和规则，两边的 id 都得先映射好。
   "rule_sni_names",
+  // 个人分组排在用户和规则之后：组指向用户，成员同时指向组、规则和用户。
+  "rule_groups",
+  "rule_group_members",
   "forward_rule_tunnel_exits",
   "tunnel_hops",
   "agent_tokens",
@@ -929,6 +942,13 @@ const IMPORT_TABLE_ORDER = [
   // 主机网络画像：只依赖主机
   "host_network_profiles",
   "host_unlock_checks",
+  // 已安装的主题包没有依赖；放在 system_settings 前面，导入完站点默认主题指着的那套已经在库里
+  "ui_theme_packages",
+  // 拓扑手动标注：依赖用户、主机；连线引用节点，节点先导
+  "topology_manual_nodes",
+  "topology_manual_links",
+  // 用户流量日历史：依赖用户、规则
+  "user_traffic_daily",
   // 商城对接：绑定和回调记录指向用户、订阅和套餐，排在它们后面
   "shop_sync_users",
   "shop_sync_orders",
@@ -957,6 +977,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "ip_change_events",
   "host_network_profiles",
   "host_unlock_checks",
+  "user_traffic_daily",
   "system_settings",
 ]);
 
@@ -1266,6 +1287,13 @@ async function sanitizeUserUniqueFields(row: Record<string, any>) {
       }
     }
   }
+  // 通用 OIDC 的唯一键是 (oidcIssuer, oidcSub) 两列：目标面板上同一个身份已经绑了别人时，导入的这一条不带绑定。
+  if (row.oidcIssuer && row.oidcSub && await findExistingId("users", { oidcIssuer: row.oidcIssuer, oidcSub: row.oidcSub })) {
+    row.oidcIssuer = null;
+    row.oidcSub = null;
+    row.oidcEmail = null;
+    row.oidcLinkedAt = null;
+  }
 }
 
 function mappedResourceId(maps: ImportMaps, resourceType: unknown, resourceId: unknown) {
@@ -1451,7 +1479,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
         「出口配置失效」并按停用下发，用户重新粘贴一次链接即可。
       */
       row.egressInboundId = Number(source.egressInboundId || 0) > 0 ? mapId(maps, "proxy_inbounds", source.egressInboundId) || null : null;
-      if (row.egressType === "ss_host" && !row.egressInboundId) row.egressType = "none";
+      if ((row.egressType === "ss_host" || row.egressType === "vless_host") && !row.egressInboundId) row.egressType = "none";
       row.isRunning = false;
       row.pendingDelete = source.pendingDelete ?? false;
       return { row };
@@ -1466,6 +1494,17 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.tlsInboundId = mapRequiredId(maps, "host_tls_inbounds", source.tlsInboundId);
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
       return { row };
+
+    case "rule_groups":
+      // 增量合并时同一个账号里同名的组认作同一个（库里也有 userId + name 的唯一索引）。
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row, existingWhere: { userId: row.userId, name: row.name } };
+
+    case "rule_group_members":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
+      row.groupId = mapRequiredId(maps, "rule_groups", source.groupId);
+      return { row, existingWhere: { userId: row.userId, ruleId: row.ruleId, groupId: row.groupId } };
 
     case "proxy_inbounds":
       row.userId = mapRequiredId(maps, "users", source.userId);
@@ -1854,6 +1893,24 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.requestedBy = null;
       return { row, existingWhere: { runId: row.runId } };
 
+    case "topology_manual_nodes":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
+    case "user_traffic_daily":
+      // 规则删了的那几行 ruleId 记 0（名字显示「未知规则」），用户的总量照样对得上
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      row.ruleId = mapId(maps, "forward_rules", source.ruleId) || 0;
+      return { row, existingWhere: { userId: row.userId, ruleId: row.ruleId, dayStart: row.dayStart } };
+    case "topology_manual_links": {
+      // 引用里的主机 / 标注节点 ID 换成新库的；那一头没导进来（主机被删了）这条线就不要了
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      const remap = (table: "hosts" | "topology_manual_nodes", id: number) => mapId(maps, table, id) || null;
+      row.fromRef = remapTopologyManualRef(source.fromRef, remap);
+      row.toRef = remapTopologyManualRef(source.toRef, remap);
+      if (!row.fromRef || !row.toRef) return null;
+      return { row };
+    }
+
     case "system_settings": {
       const key = String(source.key || "");
       if (!key) return null;
@@ -2185,6 +2242,8 @@ export async function importDirectSqliteBackup(
   // 源面板发来的副本里密钥类设置已经是明文（decryptSecretSettingsInSqliteCopy），用本面板的密钥加密回去。
   await migrateSecretSettingsToEncrypted({ force: true });
   invalidatePanelDataSummaryCache();
+  // 备份里带着已安装的主题包（ui_theme_packages）：名单按导进来的库重读
+  invalidateUiThemeCache();
 
   return {
     importedIds,
@@ -2480,6 +2539,8 @@ export async function importMigrationSnapshot(
     if (targetPanelUrl) await setSetting("panelPublicUrl", normalizePanelUrl(targetPanelUrl));
   });
   invalidatePanelDataSummaryCache();
+  // 备份里带着已安装的主题包（ui_theme_packages）：名单按导进来的库重读
+  invalidateUiThemeCache();
 
   onProgress?.(96, "正在重建流量汇总缓存");
   const importedTrafficBuckets = (snapshot.tables.traffic_stat_buckets?.length || 0) > 0;

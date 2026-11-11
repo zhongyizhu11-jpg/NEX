@@ -8,6 +8,7 @@ import { runWithConfigAuditContext } from "../configAudit";
 import { DATABASE_MAINTENANCE_MESSAGE, isDatabaseMaintenanceActive } from "../databaseMaintenance";
 import { formatTrpcErrorShape } from "./errorFormatter";
 import { apiTokenPolicyError } from "../ops/apiTokenPolicy";
+import { impersonationPolicyError } from "../ops/impersonationPolicy";
 import { assertMaintenanceAllows } from "../ops/maintenance";
 import { databaseHealth } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
@@ -45,6 +46,18 @@ const enforceApiTokenPolicy = t.middleware(opts => {
 });
 
 /**
+ * 管理员代入用户后台时碰不到的写操作（账号安全、登录绑定、付款），见 server/ops/impersonationPolicy.ts。
+ * 和令牌策略一样排在操作审计后面：被拒的也记一行「被拒绝」，记在发起代入的管理员名下。
+ */
+const enforceImpersonationPolicy = t.middleware(opts => {
+  if (opts.ctx.impersonation) {
+    const reason = impersonationPolicyError(opts.path, opts.type);
+    if (reason) throw new TRPCError({ code: "FORBIDDEN", message: reason });
+  }
+  return opts.next();
+});
+
+/**
  * 主库不可用时所有过程一律 503「数据库暂时不可用」（上游 v2.3.281）。执行中途库挂了、
  * 过程本身报了别的错（比如因为读不到用户而报「未登录」）也改成 503：前端靠这句 message
  * 认出数据库故障、显示故障页，而不是把人踢回登录页。
@@ -73,6 +86,15 @@ const rejectWhileDatabaseUnavailable = t.middleware(async opts => {
  * （测试、定时任务、Telegram 机器人）不限，它们不是从外面打进来的。
  */
 const rateLimitedScope = new AsyncLocalStorage<true>();
+
+/**
+ * 在「外层请求已经算过一次额度」的范围里跑 fn：里面 createCaller 调的过程不再重复计数。
+ * 给脱离了原请求的后台调用用，比如规则批量任务（server/routers/rules.batchJobs.ts）——
+ * 提交那一下已经限过流，后面逐条执行的几千次调用不该把这个人的额度吃光。
+ */
+export function runAsNestedProcedureCall<T>(fn: () => Promise<T>): Promise<T> {
+  return rateLimitedScope.run(true, fn);
+}
 
 const enforceApiRateLimit = t.middleware(opts => {
   const { ctx } = opts;
@@ -104,15 +126,16 @@ const recordOperationAudit = t.middleware(opts => auditMutationCall({
 }));
 
 /**
- * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → 令牌权限。
- * 限流在审计前（被限流的不写库），审计在令牌权限前（被令牌策略拒掉的写操作记成「被拒绝」）。
+ * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → 令牌权限 → 代入限制。
+ * 限流在审计前（被限流的不写库），审计在令牌权限 / 代入限制前（被策略拒掉的写操作记成「被拒绝」）。
  */
 const baseProcedure = t.procedure
   .use(rejectWhileDatabaseUnavailable)
   .use(rejectMutationsDuringDatabaseMaintenance)
   .use(enforceApiRateLimit)
   .use(recordOperationAudit)
-  .use(enforceApiTokenPolicy);
+  .use(enforceApiTokenPolicy)
+  .use(enforceImpersonationPolicy);
 
 export const publicProcedure = baseProcedure;
 
@@ -134,10 +157,11 @@ const requireUser = t.middleware(async opts => {
   // 维护模式：普通用户调需要登录的接口一律「面板维护中」（管理员不受影响），见 server/ops/maintenance.ts。
   await assertMaintenanceAllows(ctx.user);
 
+  // 代入用户后台时，规则 / 主机这些配置的改动记在真正动手的管理员名下，来源标成代入。
   return runWithConfigAuditContext({
-    actorUserId: Number(ctx.user.id),
-    actorName: String(ctx.user.username || ctx.user.name || ""),
-    source: "panel:trpc",
+    actorUserId: ctx.impersonation ? ctx.impersonation.adminUserId : Number(ctx.user.id),
+    actorName: ctx.impersonation ? ctx.impersonation.adminName : String(ctx.user.username || ctx.user.name || ""),
+    source: ctx.impersonation ? "panel:impersonation" : "panel:trpc",
     requestId: String(ctx.req.headers["x-request-id"] || "") || undefined,
     requestPath: opts.path,
   }, () => next({ ctx: { ...ctx, user: ctx.user } }));
@@ -161,7 +185,9 @@ export const adminProcedure = baseProcedure.use(
       ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
       throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
     }
-    if (ctx.user.role !== 'admin') {
+    // 代入的目标永远是普通用户，本来就过不了下面的角色判断；这里再明确拒一次，
+    // 不让「代入会话拿到管理员权限」只靠那一条兜着。
+    if (ctx.impersonation || ctx.user.role !== 'admin') {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
 

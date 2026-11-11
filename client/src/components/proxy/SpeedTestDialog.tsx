@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
@@ -33,7 +34,7 @@ type Status = {
 
 function formatCheckedAt(sec: number) {
   if (!sec) return "";
-  return new Date(sec * 1000).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(sec * 1000).toLocaleString(getFormatLocale(), { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function SpeedChart({ samples }: { samples: SpeedSample[] }) {

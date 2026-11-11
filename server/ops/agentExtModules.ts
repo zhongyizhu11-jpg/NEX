@@ -13,3 +13,7 @@ import "./hostLogsAgent";
 import "./nodeCheckAgent";
 import "./netTuneAgent";
 import "./agentRuntimeAgent";
+import "./portOccupancyAgent";
+import "./realityCheckAgent";
+import "./trafficShutdownAgent";
+import "./mitaAgent";

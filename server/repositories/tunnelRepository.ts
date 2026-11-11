@@ -33,6 +33,7 @@ import { mapWithConcurrency } from "../asyncPool";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
+import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
@@ -43,6 +44,7 @@ import {
 import { resolveRuleProxyProtocolOptions } from "../gostProxyProtocol";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
 import { opsReservedPortsOnHost } from "../ops/opsReservedPorts";
+import { knownOccupiedPortsOnHost } from "../rulePortOccupancy";
 import { LINK_PROBE_FRESH_MS, LINK_PROBE_MAX_FUTURE_SKEW_MS } from "../../shared/linkProbePolicy";
 
 // The Agent uses the tunnel row's listener for the lowest-id active GOST
@@ -2174,12 +2176,13 @@ async function getProxyInboundPortsOnHost(hostId: number, excludeInboundId = 0):
   // 动态导入：proxyInboundRepository 那边也会回头用这个文件里的函数，静态引会成环。
   const { proxyInbounds } = await import("../../drizzle/schema");
   const rows = await db
-    .select({ id: proxyInbounds.id, port: proxyInbounds.port })
+    .select({ id: proxyInbounds.id, port: proxyInbounds.port, portRangeEnd: proxyInbounds.portRangeEnd })
     .from(proxyInbounds)
     .where(and(eq(proxyInbounds.hostId, Number(hostId)), eq(proxyInbounds.isEnabled, true)));
+  // Mieru 入站可以占一段端口（mita 整段都在听），段里每一个都算占用。
   return (rows as any[])
     .filter((row) => !excludeInboundId || Number(row.id) !== Number(excludeInboundId))
-    .map((row) => Number(row.port))
+    .flatMap((row) => mieruInboundPorts(row.port, row.portRangeEnd))
     .filter((port) => port > 0);
 }
 
@@ -2375,6 +2378,9 @@ export async function findAvailablePort(
     const port = Number(reservedPort);
     if (Number.isInteger(port) && port > 0 && port <= 65535) usedPorts.add(port);
   }
+  // 最近见过被主机上别的进程占着的端口（Agent 的端口核对、绑定失败回执，见 rulePortOccupancy.ts）：
+  // 只影响随机挑选，不拦用户手填 —— 手填的端口照旧能建，建完在规则卡上告警。
+  for (const port of knownOccupiedPortsOnHost(hostId, protocol)) usedPorts.add(port);
   return pickAvailablePort(policy, usedPorts, { start: 10000, end: 65535 });
 }
 

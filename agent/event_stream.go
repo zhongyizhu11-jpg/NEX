@@ -159,7 +159,16 @@ func agentEventStream(cfg Config) {
 }
 
 func runAgentEventStream(cfg Config) error {
-	env, err := encrypt(map[string]any{"agentVersion": Version, "fxpVersion": reportedFXPVersion()}, cfg.Token)
+	// 被另一台机器接管后不再开事件流（installation.go）；外层循环按退避慢慢再看。
+	installationID := agentInstallationIDFor(cfg)
+	if agentInstallationBlocked() {
+		return errAgentSuperseded
+	}
+	streamPayload := map[string]any{"agentVersion": Version, "fxpVersion": reportedFXPVersion()}
+	if installationID != "" {
+		streamPayload["installationId"] = installationID
+	}
+	env, err := encrypt(streamPayload, cfg.Token)
 	if err != nil {
 		return err
 	}
@@ -229,6 +238,9 @@ func runAgentEventStream(cfg Config) error {
 	defer inactivityTimer.Stop()
 	var data strings.Builder
 	for scanner.Scan() {
+		if agentInstallationBlocked() {
+			return errAgentSuperseded
+		}
 		inactivityTimer.Reset(agentEventStreamInactivityTimeout)
 		line := scanner.Text()
 		if line == "" {

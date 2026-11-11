@@ -3,6 +3,16 @@ import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
+import { MemberDdnsLinesButton, type DdnsLineOptions } from "@/components/links/MemberDdnsLinesButton";
+import { GroupDdnsLineSummary, groupHasDdnsLineSummary } from "@/components/links/GroupDdnsLineSummary";
+import {
+  DDNS_LINE_FALLBACK_LABELS,
+  DDNS_LINE_FALLBACK_MODES,
+  normalizeDdnsLineFallback,
+  parseDdnsLines,
+  type DdnsLineFallbackMode,
+  type DdnsLineRef,
+} from "@shared/ddnsLines";
 import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -174,6 +184,8 @@ type MemberForm = {
   aggregationWeight: string;
   /** 可用时段（线路按时间段启用）。转发组、入口组、出口组才有。 */
   activeSchedule?: MemberActiveSchedule | null;
+  /** 分到的运营商线路（分线路解析）。转发组、入口组才有；没有 = 只在默认线路。 */
+  ddnsLines?: DdnsLineRef[];
 };
 
 type GroupForm = {
@@ -193,6 +205,8 @@ type GroupForm = {
   udpOverTcpPort: number;
   domain: string;
   recordType: "A" | "AAAA" | "CNAME";
+  /** 双栈 DDNS：A 组同时发 AAAA、AAAA 组同时发 A，跟着同一批成员（server/forwardGroupDualStackDdns.ts） */
+  ddnsDualStack: boolean;
   failoverSeconds: string;
   recoverSeconds: string;
   rateLimitMbps: string;
@@ -206,6 +220,8 @@ type GroupForm = {
   bandwidthAggregationStrategy: BandwidthAggregationStrategy;
   bandwidthAggregationSlots: string;
   bandwidthAggregationMinMembers: string;
+  /** 分线路解析：线路成员全挂时改用默认线路的健康成员，还是删掉这条线路的记录。 */
+  ddnsLineFallback: DdnsLineFallbackMode;
   autoFailback: boolean;
   isEnabled: boolean;
   members: MemberForm[];
@@ -229,6 +245,7 @@ const makeDefaultForm = (): GroupForm => ({
   udpOverTcpPort: 0,
   domain: "",
   recordType: "A",
+  ddnsDualStack: false,
   failoverSeconds: "60",
   recoverSeconds: "120",
   rateLimitMbps: "0",
@@ -242,6 +259,7 @@ const makeDefaultForm = (): GroupForm => ({
   bandwidthAggregationStrategy: "capacity",
   bandwidthAggregationSlots: "8",
   bandwidthAggregationMinMembers: "1",
+  ddnsLineFallback: "default",
   autoFailback: true,
   isEnabled: true,
   members: [],
@@ -1049,6 +1067,7 @@ export function ForwardGroupsContent({
           activeSchedule: parseMemberSchedule(member.activeSchedule),
           bandwidthMbps: String(Math.max(0, Number(member.bandwidthMbps) || 0)),
           aggregationWeight: String(Math.max(0, Number(member.aggregationWeight) || 0)),
+          ddnsLines: parseDdnsLines(member.ddnsLines),
         });
         return acc;
       }
@@ -1068,6 +1087,7 @@ export function ForwardGroupsContent({
         activeSchedule: parseMemberSchedule(member.activeSchedule),
         bandwidthMbps: "0",
         aggregationWeight: "0",
+        ddnsLines: parseDdnsLines(member.ddnsLines),
       });
       return acc;
     }, []);
@@ -1091,6 +1111,7 @@ export function ForwardGroupsContent({
       udpOverTcpPort: Number(group.udpOverTcpPort || 0),
       domain: group.domain || "",
       recordType: group.recordType || "A",
+      ddnsDualStack: !!group.ddnsDualStack,
       failoverSeconds: String(Number(group.failoverSeconds || 60)),
       recoverSeconds: String(Number(group.recoverSeconds || 120)),
       rateLimitMbps: String(Math.max(0, Number(group.rateLimitMbps) || 0)),
@@ -1104,6 +1125,7 @@ export function ForwardGroupsContent({
       bandwidthAggregationStrategy: normalizeBandwidthAggregationStrategy(group.bandwidthAggregationStrategy),
       bandwidthAggregationSlots: String(normalizeAggregationRecordSlots(group.bandwidthAggregationSlots)),
       bandwidthAggregationMinMembers: String(normalizeAggregationMinMembers(group.bandwidthAggregationMinMembers)),
+      ddnsLineFallback: normalizeDdnsLineFallback(group.ddnsLineFallback),
       autoFailback: !!group.autoFailback,
       isEnabled: !!group.isEnabled,
       members: normalizedMembers,
@@ -1283,15 +1305,46 @@ export function ForwardGroupsContent({
     && form.bandwidthAggregationEnabled
     && effectiveGroupType === "host";
   const showScheduleColumn = groupModeSupportsMemberSchedule(form.groupMode);
+  // 运营商线路（分线路解析）：发布 DDNS 的转发组、入口组才有；服务商不支持时这一列照样在，按钮置灰说原因。
+  const showLineColumn = (form.groupMode === "failover" || form.groupMode === "entry") && effectiveGroupType === "host";
   const memberRowGridClass = form.groupMode === "port"
     ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_36px]"
     : showExitAddressColumns
     ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_44px_52px_36px]"
     : showAggregationColumns
-      ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_44px_52px_36px]"
+      ? showLineColumn
+        ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_44px_44px_52px_36px]"
+        : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_44px_52px_36px]"
       : showScheduleColumn
-        ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_44px_52px_36px]"
+        ? showLineColumn
+          ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_44px_44px_52px_36px]"
+          : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_44px_52px_36px]"
         : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_52px_36px]";
+  const ddnsLinesQuery = trpc.forwardGroups.ddnsLines.useQuery({ domain: null }, {
+    enabled: showDialog && showLineColumn,
+    staleTime: 10 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  const ddnsLineOptions: DdnsLineOptions = ddnsLinesQuery.data
+    ? {
+      available: ddnsLinesQuery.data.supported,
+      reason: ddnsLinesQuery.data.reason,
+      lines: ddnsLinesQuery.data.lines,
+      defaultLine: ddnsLinesQuery.data.defaultLine,
+    }
+    : {
+      available: false,
+      reason: ddnsLinesQuery.error ? `读取 DNSPod 线路失败：${ddnsLinesQuery.error.message}` : "正在读取 DNS 服务商的线路",
+      lines: [],
+      defaultLine: null,
+    };
+  const ddnsLineRoot = ddnsLinesQuery.data?.rootDomain || "";
+  const formDomain = form.domain.trim().toLowerCase().replace(/\.+$/, "");
+  const ddnsLineDomainWarning = ddnsLineRoot && formDomain && formDomain !== ddnsLineRoot && !formDomain.endsWith(`.${ddnsLineRoot}`)
+    ? `入口域名不在 DNSPod 主域名 ${ddnsLineRoot} 下，分线路记录写不进去`
+    : "";
+  const formHasDdnsLines = showLineColumn && form.members.some((member) => (member.ddnsLines?.length ?? 0) > 0);
   const updateMemberField = (key: string, patch: Partial<MemberForm>) => {
     setForm((prev) => ({
       ...prev,
@@ -1522,6 +1575,7 @@ export function ForwardGroupsContent({
       exitStrategy: isExitGroup ? normalizeExitGroupStrategy(form.exitStrategy) : "round_robin",
       domain: isFailoverMode || isEntryGroup ? form.domain.trim() || null : null,
       recordType: isChainGroup || isExitGroup ? "A" : form.recordType,
+      ddnsDualStack: (isFailoverMode || isEntryGroup) && form.recordType !== "CNAME" && form.ddnsDualStack,
       failoverSeconds,
       recoverSeconds,
       rateLimitMbps: runtimeConfigSupported ? rateLimitMbps : 0,
@@ -1546,6 +1600,7 @@ export function ForwardGroupsContent({
       bandwidthAggregationStrategy: normalizeBandwidthAggregationStrategy(form.bandwidthAggregationStrategy),
       bandwidthAggregationSlots: normalizeAggregationRecordSlots(form.bandwidthAggregationSlots),
       bandwidthAggregationMinMembers: normalizeAggregationMinMembers(form.bandwidthAggregationMinMembers),
+      ddnsLineFallback: normalizeDdnsLineFallback(form.ddnsLineFallback),
       // 端口转发挂了入口组：入口全由入口组定，不带自己的成员
       members: (isPortMode && form.entryGroupId ? [] : form.members).map((member, index) => ({
         memberType: member.memberType,
@@ -1558,6 +1613,8 @@ export function ForwardGroupsContent({
         bandwidthMbps: isEntryGroup ? normalizeMemberBandwidthMbps(member.bandwidthMbps) : 0,
         aggregationWeight: isEntryGroup ? normalizeMemberWeight(member.aggregationWeight) : 0,
         activeSchedule: groupModeSupportsMemberSchedule(form.groupMode) ? member.activeSchedule || null : null,
+        // 服务商暂不支持线路时也原样带回去：换回 DNSPod 后配置还在（服务端不支持时不看它）。
+        ddnsLines: isFailoverMode || isEntryGroup ? member.ddnsLines || [] : null,
       })),
     };
     if (editingId) updateMutation.mutate({ id: editingId, ...payload });
@@ -2355,6 +2412,7 @@ export function ForwardGroupsContent({
                       <TableCell className="hidden max-w-[16rem] py-3 md:table-cell">
                         <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? (Number(group.entryGroupId || 0) > 0 ? `入口组 · ${entryGroupDisplayText(group, groupsByMode)}` : (group.members || []).length > 1 ? `${(group.members || []).length} 台入口主机` : (group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
                         <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{normalizeGroupMode(group.groupMode) === "port" ? "转发规则中直接选择" : normalizeGroupMode(group.groupMode) === "chain" ? "规则使用时监听入口端口" : normalizeGroupMode(group.groupMode) === "exit" ? "隧道出口组" : group.lastDdnsValue || "未切换"}</div>
+                        {groupHasDdnsLineSummary(group) ? <GroupDdnsLineSummary compact group={group} memberLabel={memberLabel} /> : null}
                       </TableCell>
                       {isCollectionMode(activeGroupMode) ? null : (
                         <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : Number(group.templateRuleCount || 0)}</TableCell>
@@ -2506,6 +2564,50 @@ export function ForwardGroupsContent({
                     </label>
                   )}
                 </div>
+                {/*
+                  双栈（上游 2.3.294）：成员挑选、健康、切换照旧按上面的记录类型；另一族跟着同一批成员发，
+                  切走一台机器两族一起切 —— 只切 A 不切 AAAA，双栈客户端会继续连到坏机器上。
+                */}
+                {form.recordType !== "CNAME" && (
+                  <label className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
+                    <span className="space-y-1">
+                      <span className="block text-sm font-medium">{form.recordType === "AAAA" ? "同时发 IPv4（A）" : "同时发 IPv6（AAAA）"}</span>
+                      <span data-fx-help="" className="block text-xs text-muted-foreground">
+                        按上面选中的成员，把它们的{form.recordType === "AAAA" ? " IPv4 " : " IPv6 "}也发成同名记录；没有这一族地址的成员少一条，全都没有时清空这一族。
+                      </span>
+                    </span>
+                    <Checkbox aria-label="双栈 DDNS" checked={form.ddnsDualStack} onCheckedChange={(ddnsDualStack) => setForm({ ...form, ddnsDualStack })} />
+                  </label>
+                )}
+
+                {formHasDdnsLines && (
+                  <div className="space-y-2 rounded-md border border-border/60 p-3">
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,16rem)] sm:items-center">
+                      <span className="space-y-1">
+                        <span className="block text-sm font-medium">分线路解析</span>
+                        <span data-fx-help="" className="block text-xs text-muted-foreground">
+                          分了线路的成员只解析给对应运营商的用户（例如电信 → 一台、联通 → 另一台），没分的留在默认线路。
+                          一条线路的成员全不可用时怎么办：
+                        </span>
+                      </span>
+                      <Select value={form.ddnsLineFallback} onValueChange={(value) => setForm({ ...form, ddnsLineFallback: normalizeDdnsLineFallback(value) })}>
+                        <SelectTrigger aria-label="线路成员全不可用时"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {DDNS_LINE_FALLBACK_MODES.map((mode) => (
+                            <SelectItem key={mode} value={mode}>{DDNS_LINE_FALLBACK_LABELS[mode]}{mode === "default" ? "（推荐）" : ""}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {ddnsLinesQuery.data && !ddnsLinesQuery.data.supported ? (
+                      <p className="text-xs text-[var(--fx-warn)]">{ddnsLinesQuery.data.reason}；成员上的线路配置先保留，暂不生效，组照旧只发布默认线路。</p>
+                    ) : null}
+                    {ddnsLineDomainWarning ? <p className="text-xs text-[var(--fx-warn)]">{ddnsLineDomainWarning}</p> : null}
+                  </div>
+                )}
+                {editingId && groupHasDdnsLineSummary(groups.find((group) => Number(group.id) === editingId) || {}) ? (
+                  <GroupDdnsLineSummary group={groups.find((group) => Number(group.id) === editingId)} memberLabel={memberLabel} />
+                ) : null}
 
                 {form.groupMode === "entry" && (
                   <div className="space-y-3 rounded-md border border-border/60 p-3">
@@ -2853,6 +2955,7 @@ export function ForwardGroupsContent({
                                 <span>权重：手动排序比重，0 表示按所选排序依据自动计算</span>
                               </>
                             )}
+                            {showLineColumn && <span>线路：按运营商分线路解析，不分 = 只在默认线路</span>}
                             {showScheduleColumn && <span>时段：只在设定的时段使用这个成员，时段外自动暂停</span>}
                             <span>启用：关闭后该成员不参与当前组</span>
                           </div>}
@@ -2871,6 +2974,7 @@ export function ForwardGroupsContent({
                                 <span className="text-center">权重</span>
                               </>
                             )}
+                            {showLineColumn && <span className="text-center">线路</span>}
                             {showScheduleColumn && <span className="text-center">时段</span>}
                             {form.groupMode !== "port" && <span className="text-center">启用</span>}
                             <span className="text-right">操作</span>
@@ -2950,6 +3054,14 @@ export function ForwardGroupsContent({
                               />
                             </>
                           )}
+                          {showLineColumn && <div className="flex h-7 w-[44px] items-center justify-center">
+                            <MemberDdnsLinesButton
+                              value={member.ddnsLines}
+                              memberLabel={memberLabel(member)}
+                              options={ddnsLineOptions}
+                              onChange={(ddnsLines) => updateMemberField(member.key, { ddnsLines })}
+                            />
+                          </div>}
                           {showScheduleColumn && <div className="flex h-7 w-[44px] items-center justify-center">
                             <MemberScheduleButton
                               value={member.activeSchedule || null}

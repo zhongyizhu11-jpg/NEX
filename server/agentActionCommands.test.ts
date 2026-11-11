@@ -326,6 +326,8 @@ function withFakeIptables(run: (exec: (commands: string[], env?: Record<string, 
   fs.mkdirSync(bin);
   fs.mkdirSync(state);
   fs.writeFileSync(path.join(bin, "iptables"), FAKE_IPTABLES, { mode: 0o755 });
+  // DOCKER-USER 放行会找 iptables-nft / iptables-legacy：挡住机器上真的那两个，测试里绝不碰真防火墙。
+  for (const front of ["iptables-nft", "iptables-legacy"]) fs.writeFileSync(path.join(bin, front), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const exec = (commands: string[], env: Record<string, string> = {}) => {
     for (const command of commands) {
       if (/^sysctl /.test(command)) continue;

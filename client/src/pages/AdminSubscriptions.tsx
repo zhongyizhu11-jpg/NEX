@@ -7,7 +7,6 @@
 
 import DashboardLayout from "@/components/DashboardLayout";
 import QueryErrorState, { QueryErrorRow, failedQueryState } from "@/components/QueryErrorState";
-import { PROXY_SUB_GROUP_MATCHES, PROXY_SUB_GROUP_MATCH_LABELS, normalizeProxySubGroupMatch, type ProxySubGroupMatch } from "@shared/proxySubGroupFilter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { ProxySubTokenDevicesDialog, ProxySubTokenEditDialog, ProxySubTokenLogsDialog, type ProxySubTokenLike } from "@/components/proxy/ProxySubTokenDialogs";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +28,16 @@ import { formatDateTime as timeText } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
 import { PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "@shared/proxySubSettings";
-import { PROXY_SUB_TEMPLATE_TARGETS, PROXY_SUB_TEMPLATE_TARGET_LABELS, type ProxySubTemplate, type ProxySubTemplateTarget } from "@shared/proxySubTemplates";
+import {
+  proxySubTemplateModuleFlavor,
+  PROXY_SUB_TEMPLATE_MODULE_NOUNS,
+  PROXY_SUB_TEMPLATE_MODULE_TARGETS,
+  PROXY_SUB_TEMPLATE_TARGETS,
+  PROXY_SUB_TEMPLATE_TARGET_LABELS,
+  type ProxySubTemplate,
+  type ProxySubTemplateTarget,
+} from "@shared/proxySubTemplates";
+import ProxySubTemplateVisualEditor, { type ProxySubTemplateEditorValue } from "@/components/proxy/ProxySubTemplateVisualEditor";
 import { parseProxySubTokenOptions, parseProxySubTokenScope } from "@shared/proxySubTokenScope";
 import { Activity, FileCode2, KeyRound, Plus, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -230,8 +238,6 @@ function StatsTab() {
 
 // ==================== 模板 ====================
 
-type GroupForm = { name: string; type: "select" | "url-test" | "fallback" | "load-balance"; filter: string; match: ProxySubGroupMatch; includeGroups: boolean };
-
 function TemplatesTab() {
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
@@ -240,8 +246,8 @@ function TemplatesTab() {
   const [editing, setEditing] = useState<ProxySubTemplate | null>(null);
   const [name, setName] = useState("");
   const [target, setTarget] = useState<ProxySubTemplateTarget>("clash");
-  const [prelude, setPrelude] = useState("");
-  const [groups, setGroups] = useState<GroupForm[]>([]);
+  // 开头部分、自定义组、分流规则、插件：可视化和「高级 / 代码」两边改的都是这一份。
+  const [content, setContent] = useState<ProxySubTemplateEditorValue>({ prelude: "", customGroups: [], customRules: "", modules: [] });
   const [isDefault, setIsDefault] = useState(false);
   const refresh = () => { void utils.proxySubscriptions.adminListTemplates.invalidate(); };
   const create = trpc.proxySubscriptions.adminCreateTemplate.useMutation({ onSuccess: () => { toast.success("模板已创建"); setDialogOpen(false); refresh(); }, onError: (error) => toast.error(error.message) });
@@ -253,8 +259,7 @@ function TemplatesTab() {
     setEditing(null);
     setName("");
     setTarget(nextTarget);
-    setPrelude(query.data?.builtin[nextTarget] || "");
-    setGroups([]);
+    setContent({ prelude: query.data?.builtin[nextTarget] || "", customGroups: [], customRules: "", modules: [] });
     setIsDefault(false);
     setDialogOpen(true);
   };
@@ -262,8 +267,8 @@ function TemplatesTab() {
     setEditing(template);
     setName(template.name);
     setTarget(template.target);
-    setPrelude(template.prelude);
-    setGroups(template.customGroups.map((group) => ({ name: group.name, type: group.type, filter: group.filter, match: normalizeProxySubGroupMatch(group.match), includeGroups: !!group.includeGroups })));
+    // 组整个对象带过去：可视化只改它认得的字段，别的字段（附加的、以后版本加的）保存时原样回去。
+    setContent({ prelude: template.prelude, customGroups: template.customGroups.map((group) => ({ ...group })), customRules: template.customRules || "", modules: (template.modules || []).map((item) => ({ ...item })) });
     setIsDefault(!!template.isDefault);
     setDialogOpen(true);
   };
@@ -272,9 +277,11 @@ function TemplatesTab() {
       toast.error("请填名字");
       return;
     }
-    const customGroups = groups.filter((group) => group.name.trim());
-    if (editing?.id) update.mutate({ id: editing.id, name: name.trim(), prelude, customGroups, isDefault });
-    else create.mutate({ name: name.trim(), target, prelude, customGroups, isDefault });
+    const customGroups = content.customGroups.filter((group) => String(group.name || "").trim());
+    const modules = content.modules.filter((item) => item.url.trim());
+    const payload = { name: name.trim(), prelude: content.prelude, customGroups, customRules: content.customRules, modules, isDefault };
+    if (editing?.id) update.mutate({ id: editing.id, ...payload });
+    else create.mutate({ ...payload, target });
   };
   const templates = query.data?.templates || [];
 
@@ -301,6 +308,8 @@ function TemplatesTab() {
                   <Badge variant="outline">{PROXY_SUB_TEMPLATE_TARGET_LABELS[template.target]}</Badge>
                   {template.isDefault ? <Badge>默认</Badge> : null}
                   {template.customGroups.length > 0 ? <Badge variant="secondary">{template.customGroups.length} 个自定义组</Badge> : null}
+                  {template.customRules?.trim() ? <Badge variant="secondary">{template.customRules.split("\n").filter((line) => line.trim() && !/^\s*(#|;|\/\/)/.test(line)).length} 条规则</Badge> : null}
+                  {template.modules?.length ? <Badge variant="secondary">{template.modules.length} 个{PROXY_SUB_TEMPLATE_MODULE_NOUNS[proxySubTemplateModuleFlavor(template.target)]}</Badge> : null}
                 </div>
                 <pre className="max-h-24 overflow-hidden whitespace-pre-wrap rounded bg-muted p-2 font-mono text-[11px] text-muted-foreground">{template.prelude.slice(0, 400) || "（空）"}</pre>
                 <div className="flex gap-1">
@@ -314,7 +323,7 @@ function TemplatesTab() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-3xl">
+        <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-3xl lg:max-w-6xl">
           <DialogHeader className="shrink-0">
             <DialogTitle>{editing ? "编辑模板" : "新建模板"}</DialogTitle>
             <DialogDescription className="text-xs">
@@ -329,7 +338,16 @@ function TemplatesTab() {
               </FormField>
               <FormField className="space-y-1.5">
                 <Label>目标格式</Label>
-                <Select value={target} onValueChange={(value) => { const next = value as ProxySubTemplateTarget; setTarget(next); if (!editing && !prelude.trim()) setPrelude(query.data?.builtin[next] || ""); }} disabled={!!editing}>
+                <Select value={target} onValueChange={(value) => {
+                  const next = value as ProxySubTemplateTarget;
+                  // 换目标格式时：开头部分是空的或还是上一种格式的内置默认，就换成这一种的内置默认；插件 / 模块只有 Loon 和 Egern 有。
+                  setContent((prev) => ({
+                    ...prev,
+                    prelude: !prev.prelude.trim() || prev.prelude === (query.data?.builtin[target] || "") ? query.data?.builtin[next] || "" : prev.prelude,
+                    modules: PROXY_SUB_TEMPLATE_MODULE_TARGETS.includes(next) ? prev.modules : [],
+                  }));
+                  setTarget(next);
+                }} disabled={!!editing}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {PROXY_SUB_TEMPLATE_TARGETS.map((item) => <SelectItem key={item} value={item}>{PROXY_SUB_TEMPLATE_TARGET_LABELS[item]}</SelectItem>)}
@@ -337,46 +355,12 @@ function TemplatesTab() {
                 </Select>
               </FormField>
             </div>
-            <FormField className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label>开头部分</Label>
-                <Button size="sm" variant="ghost" onClick={() => setPrelude(query.data?.builtin[target] || "")}>填入内置默认</Button>
-              </div>
-              <Textarea value={prelude} onChange={(event) => setPrelude(event.target.value)} rows={14} className="font-mono text-xs" />
-              <p data-fx-help="" className="text-xs text-muted-foreground">
-                {target === "clash" ? "放在 proxies: 前面的 YAML，不能含 proxies / proxy-groups / rule-providers / rules。" : target === "singbox" ? "一个 JSON 对象（log / dns / inbounds / experimental / route.rules……），面板把 outbounds 和 route 并进去。" : "整段 [General]（含那一行表头）。"}
-              </p>
-            </FormField>
-            <FormField className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>自定义策略组</Label>
-                <Button size="sm" variant="outline" onClick={() => setGroups((prev) => [...prev, { name: "", type: "url-test", filter: "", match: "any", includeGroups: false }])}><Plus className="mr-1 h-3.5 w-3.5" />加一组</Button>
-              </div>
-              <p data-fx-help="" className="text-xs text-muted-foreground">按节点名挑成员（留空 = 全部），订阅刷新进来的新节点自动归组。会出现在主选择器和各分类组里。</p>
-              {groups.map((group, index) => (
-                <div key={index} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1fr_8rem_8.5rem_1fr_auto_auto]">
-                  <Input value={group.name} placeholder="组名，如 🇭🇰 香港" onChange={(event) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))} />
-                  <Select value={group.type} onValueChange={(value) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, type: value as GroupForm["type"] } : item)))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="select">手动选择</SelectItem>
-                      <SelectItem value="url-test">自动选最快</SelectItem>
-                      <SelectItem value="fallback">主备切换</SelectItem>
-                      <SelectItem value="load-balance">负载均衡</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={group.match} onValueChange={(value) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, match: normalizeProxySubGroupMatch(value) } : item)))}>
-                    <SelectTrigger aria-label="匹配方式"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {PROXY_SUB_GROUP_MATCHES.map((match) => <SelectItem key={match} value={match}>{PROXY_SUB_GROUP_MATCH_LABELS[match].label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Input value={group.filter} placeholder={PROXY_SUB_GROUP_MATCH_LABELS[group.match].placeholder} title={PROXY_SUB_GROUP_MATCH_LABELS[group.match].hint} onChange={(event) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, filter: event.target.value } : item)))} />
-                  <label className="flex items-center gap-1 text-xs"><Checkbox checked={group.includeGroups} onCheckedChange={(checked) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, includeGroups: checked === true } : item)))} />含自动组</label>
-                  <Button size="sm" variant="ghost" onClick={() => setGroups((prev) => prev.filter((_item, i) => i !== index))}>删</Button>
-                </div>
-              ))}
-            </FormField>
+            <ProxySubTemplateVisualEditor
+              target={target}
+              value={content}
+              onChange={(patch) => setContent((prev) => ({ ...prev, ...patch }))}
+              builtinPrelude={query.data?.builtin[target] || ""}
+            />
             <label className="flex items-center gap-2 text-sm"><Checkbox checked={isDefault} onCheckedChange={(checked) => setIsDefault(checked === true)} />设为这种格式的默认模板</label>
           </div>
           <DialogFooter className="shrink-0 border-t pt-3">

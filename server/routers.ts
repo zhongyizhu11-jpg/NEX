@@ -30,8 +30,14 @@ import { ipChangeRouter } from "./routers/ipChange";
 import { googleAuthRouter } from "./routers/googleAuth";
 import { topologyRouter } from "./routers/topology";
 import { discordAuthRouter } from "./routers/discordAuth";
+import { oidcAuthRouter } from "./routers/oidcAuth";
 import { netProfileRouter } from "./routers/netProfile";
 import { agentRuntimeRouter } from "./routers/agentRuntime";
+import { uiThemesRouter } from "./routers/uiThemes";
+import { dnsRecordsRouter } from "./routers/dnsRecords";
+import { hostAgentRouter } from "./routers/hostAgent";
+import { probeCarrierRouter } from "./routers/probeCarrier";
+import { userTrafficHistoryRouter } from "./routers/userTrafficHistory";
 import { hostReplaceRouter } from "./routers/hostReplace";
 import { shopSyncRouter } from "./routers/shopSync";
 
@@ -47,6 +53,8 @@ export const appRouter = router({
   dashboard: dashboardRouter,
   users: usersRouter,
   hosts: hostsRouter,
+  // 主机的 Agent 连接与保护（独立面板地址、流量阈值关机、本机资源告警、安装实例），见 routers/hostAgent.ts
+  hostAgent: hostAgentRouter,
   lookingGlass: lookingGlassRouter,
   lineDiagnostics: lineDiagnosticsRouter,
   nodePools: nodePoolsRouter,
@@ -67,8 +75,13 @@ export const appRouter = router({
   googleAuth: googleAuthRouter,
   topology: topologyRouter,
   discordAuth: discordAuthRouter,
+  oidcAuth: oidcAuthRouter,
   netProfile: netProfileRouter,
   agentRuntime: agentRuntimeRouter,
+  uiThemes: uiThemesRouter,
+  dnsRecords: dnsRecordsRouter,
+  probeCarrier: probeCarrierRouter,
+  userTrafficHistory: userTrafficHistoryRouter,
   hostReplace: hostReplaceRouter,
   shopSync: shopSyncRouter,
 });

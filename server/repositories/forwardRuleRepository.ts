@@ -2,7 +2,7 @@
 import { notifyRuleDeleted } from "../entityCleanup";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { forwardGroupMembers, forwardGroups, forwardRuleRouteEvents, forwardRuleTunnelExits, forwardRules, InsertForwardRule, tunnels, type ForwardRule, type ForwardRuleRouteEvent } from "../../drizzle/schema";
-import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate } from "../dbRuntime";
+import { afterDatabaseCommit, executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, withDatabaseTransaction } from "../dbRuntime";
 import { queryRaw } from "../dbRuntime";
 import { boolLiteral, boolValue, inList, quoteIdentifier } from "../dbCompat";
 import { describePortPolicy, isPortAllowedByPolicy, portPolicyFrom, portPolicyHasRestriction, type PortPolicySource } from "@shared/portPolicy";
@@ -14,6 +14,8 @@ import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
 import { signalRuleEntryDomainChanged, signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
 import { releaseRuleSniNames } from "./tlsInboundRepository";
+import { isLogicalForwardRule, TRAFFIC_STOCK_RULE_KEYS, withTrafficRuleStockGuard, type TrafficStockRule } from "./productStockRepository";
+import { RULE_GROUPS_TABLE, RULE_GROUP_MEMBERS_TABLE, clearRuleGroupMembersForRule, rowLockSuffix } from "../ruleGroupRelations";
 
 /*
   规则专属域名（server/ruleEntryDomain.ts）跟着这几列走：入口主机、开关、删除、订阅绑定、
@@ -143,6 +145,14 @@ export type ForwardRuleListQuery = PageRequest & {
   resourceId?: number | null;
   category: ForwardRuleListCategory;
   search?: string;
+  /**
+   * 按个人分组筛（shared/ruleGroups.ts）：null / 不给 = 不筛，0 = 未分组，正数 = 那个组。
+   * 分组是「谁在看」的，不是规则主人的：personalGroupOwnerId 一律由服务端填当前登录的人，不收客户端传的。
+   */
+  personalGroupId?: number | null;
+  personalGroupOwnerId?: number;
+  /** 按个人分组排序：组的顺序在前，一个组都不在的排最后；同名次内还是原来的顺序。 */
+  sortByPersonalGroup?: boolean;
 };
 
 type ForwardRuleFilterControls = {
@@ -150,6 +160,7 @@ type ForwardRuleFilterControls = {
   includeResource?: boolean;
   includeSearch?: boolean;
   includeCategory?: boolean;
+  includePersonalGroup?: boolean;
 };
 
 type ForwardRuleSqlFilter = {
@@ -307,6 +318,34 @@ function pushScopedForwardRuleSearch(
   params.push(...visible.params, ...scopedParams);
 }
 
+/**
+ * 「列表里看得见的规则」：没在等删除、不是转发组 / 线路组展开出来的子规则、没挂在转发组成员上。
+ * 列表筛选和个人分组归组前的核对（lockGroupableForwardRuleIds）用同一份，两边认的是同一批规则。
+ */
+function forwardRuleListBaseConditions() {
+  return [
+    "COALESCE(" + ruleColumn("r", "pendingDelete") + ", " + boolLiteral(false) + ") = " + boolLiteral(false),
+    "COALESCE(" + ruleColumn("r", "forwardGroupRuleId") + ", 0) = 0",
+    "COALESCE(" + ruleColumn("r", "routeParentRuleId") + ", 0) = 0",
+    "NOT EXISTS (SELECT 1 FROM " + quoteIdentifier("forward_group_members") + " linked_member"
+      + " WHERE " + ruleColumn("linked_member", "ruleId") + " = " + ruleColumn("r", "id") + ")",
+  ];
+}
+
+/**
+ * 「这条规则在 ownerId 的某个组里」的子查询主体（不含 SELECT 的列）。连上 rule_groups 再认一次主人：
+ * 关系行上的 userId 和组的主人本来就一致，多认一次是为了组行不在了的关系（外面来的备份）不算数。
+ * 带一个参数：ownerId。
+ */
+function personalGroupMembershipFromSql() {
+  return " FROM " + quoteIdentifier(RULE_GROUP_MEMBERS_TABLE) + " pm"
+    + " INNER JOIN " + quoteIdentifier(RULE_GROUPS_TABLE) + " pg"
+    + " ON " + ruleColumn("pg", "id") + " = " + ruleColumn("pm", "groupId")
+    + " AND " + ruleColumn("pg", "userId") + " = " + ruleColumn("pm", "userId")
+    + " WHERE " + ruleColumn("pm", "ruleId") + " = " + ruleColumn("r", "id")
+    + " AND " + ruleColumn("pm", "userId") + " = ?";
+}
+
 function buildForwardRuleSqlFilter(
   input: ForwardRuleListQuery,
   controls: ForwardRuleFilterControls = {},
@@ -315,14 +354,9 @@ function buildForwardRuleSqlFilter(
   const includeResource = controls.includeResource !== false;
   const includeSearch = controls.includeSearch !== false;
   const includeCategory = controls.includeCategory !== false;
+  const includePersonalGroup = controls.includePersonalGroup !== false;
   const categorySql = forwardRuleListCategorySql();
-  const conditions = [
-    "COALESCE(" + ruleColumn("r", "pendingDelete") + ", " + boolLiteral(false) + ") = " + boolLiteral(false),
-    "COALESCE(" + ruleColumn("r", "forwardGroupRuleId") + ", 0) = 0",
-    "COALESCE(" + ruleColumn("r", "routeParentRuleId") + ", 0) = 0",
-    "NOT EXISTS (SELECT 1 FROM " + quoteIdentifier("forward_group_members") + " linked_member"
-      + " WHERE " + ruleColumn("linked_member", "ruleId") + " = " + ruleColumn("r", "id") + ")",
-  ];
+  const conditions = forwardRuleListBaseConditions();
   const params: any[] = [];
 
   const ownerUserId = Math.floor(Number(input.ownerUserId || 0));
@@ -621,6 +655,22 @@ function buildForwardRuleSqlFilter(
     params.push(input.category);
   }
 
+  if (includePersonalGroup && input.personalGroupId !== null && input.personalGroupId !== undefined) {
+    const personalOwnerId = Math.floor(Number(input.personalGroupOwnerId || 0));
+    const personalGroupId = Math.floor(Number(input.personalGroupId));
+    if (!(personalOwnerId > 0) || !(personalGroupId >= 0)) {
+      // 不知道是谁在看（或组 id 不像话）就一条都不给，不能退成「不筛」。
+      conditions.push("1 = 0");
+    } else if (personalGroupId === 0) {
+      conditions.push("NOT EXISTS (SELECT 1" + personalGroupMembershipFromSql() + ")");
+      params.push(personalOwnerId);
+    } else {
+      // EXISTS 而不是 JOIN：一条规则在好几个组里也只出一行。
+      conditions.push("EXISTS (SELECT 1" + personalGroupMembershipFromSql() + " AND " + ruleColumn("pm", "groupId") + " = ?)");
+      params.push(personalOwnerId, personalGroupId);
+    }
+  }
+
   return {
     fromSql: forwardRuleListFromSql(),
     whereSql: conditions.join("\n  AND "),
@@ -819,6 +869,7 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
     includeEntryHost: false,
     includeSearch: false,
     includeCategory: false,
+    includePersonalGroup: false,
   });
   /*
     分类条上的数字只按「谁的规则」数，不跟搜索、入口机、资源筛选走：以前跟着筛选变，切一下页签、开一个筛选，
@@ -829,6 +880,7 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
     includeEntryHost: false,
     includeResource: false,
     includeSearch: false,
+    includePersonalGroup: false,
   });
   const filtered = buildForwardRuleSqlFilter(input);
   const [scopeRows, totalRows, categoryRows] = await Promise.all([
@@ -856,14 +908,24 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
   const activeItems = Number(totalRows[0]?.activeItems || 0);
   const window = pageWindowForTotal(input, totalItems);
   const categoryOrder = input.category === "all" ? filtered.categorySql + " ASC, " : "";
+  /*
+    按个人分组排序：名次 = 这条规则所在的组里排得最靠前的那个组的顺序，一个组都不在的排最后
+    （2147483647，比任何顺序都大）。排在分类前面 —— 页面上这时不再按分类分段，一张表从头排到尾；
+    同一个名次里还是原来的顺序（分类、手动拖的顺序、创建时间）。和页面上的比较函数是同一套
+    （shared/ruleGroups.ts 的 personalRuleGroupRank）。
+  */
+  const personalSortOwnerId = input.sortByPersonalGroup ? Math.floor(Number(input.personalGroupOwnerId || 0)) : 0;
+  const personalGroupOrder = personalSortOwnerId > 0
+    ? "COALESCE((SELECT MIN(" + ruleColumn("pg", "sortOrder") + ")" + personalGroupMembershipFromSql() + "), 2147483647) ASC, "
+    : "";
   const idRows = totalItems > 0
     ? await queryRaw<{ id: number }>(
       "SELECT " + ruleColumn("r", "id") + " AS " + quoteIdentifier("id") + "\n"
         + filtered.fromSql + "\nWHERE " + filtered.whereSql
-        + "\nORDER BY " + categoryOrder + ruleColumn("r", "sortOrder") + " ASC, "
+        + "\nORDER BY " + personalGroupOrder + categoryOrder + ruleColumn("r", "sortOrder") + " ASC, "
         + ruleColumn("r", "createdAt") + " DESC, " + ruleColumn("r", "id") + " DESC"
         + "\nLIMIT ? OFFSET ?",
-      [...filtered.params, window.pageSize, window.offset],
+      [...filtered.params, ...(personalSortOwnerId > 0 ? [personalSortOwnerId] : []), window.pageSize, window.offset],
     )
     : [];
   const ids = idRows.map((row) => Number(row.id)).filter((id) => id > 0);
@@ -941,6 +1003,86 @@ export async function getForwardRuleSummarySelection(input: ForwardRuleListQuery
     activeItems: Number(summaryRows[0]?.activeItems || 0),
     ruleIds: idRows.map((row) => Number(row.id)).filter((id) => id > 0),
   };
+}
+
+/**
+ * 个人分组那一栏上的数字：ownerId 的每个组里各有多少条规则，以及一共多少条、多少条一个组都不在。
+ *
+ * 只按「谁的规则」数（input.ownerUserId），不跟搜索、资源、分类筛选走 —— 和分类条上的数字一个规矩。
+ * 管理员看「所有用户」时数的是所有人的规则里进了自己组的那些；看某个人时只数那个人的。
+ */
+export async function getForwardRulePersonalGroupCounts(input: ForwardRuleListQuery, ownerId: number) {
+  const viewerId = Math.floor(Number(ownerId || 0));
+  const empty = { total: 0, ungrouped: 0, byGroup: new Map<number, number>() };
+  if (!(viewerId > 0)) return empty;
+  const scope = buildForwardRuleSqlFilter(input, {
+    includeEntryHost: false,
+    includeResource: false,
+    includeSearch: false,
+    includeCategory: false,
+    includePersonalGroup: false,
+  });
+  const [totalRows, groupRows] = await Promise.all([
+    queryRaw<{ total: number; ungrouped: number }>(
+      "SELECT COUNT(*) AS " + quoteIdentifier("total")
+        + ", COALESCE(SUM(CASE WHEN NOT EXISTS (SELECT 1" + personalGroupMembershipFromSql() + ") THEN 1 ELSE 0 END), 0) AS "
+        + quoteIdentifier("ungrouped") + "\n"
+        + scope.fromSql + "\nWHERE " + scope.whereSql,
+      // SELECT 里的那个参数排在 WHERE 的参数前面
+      [viewerId, ...scope.params],
+    ),
+    queryRaw<{ groupId: number; count: number }>(
+      "SELECT " + ruleColumn("pm", "groupId") + " AS " + quoteIdentifier("groupId")
+        + ", COUNT(*) AS " + quoteIdentifier("count") + "\n"
+        + scope.fromSql
+        + "\nINNER JOIN " + quoteIdentifier(RULE_GROUP_MEMBERS_TABLE) + " pm"
+        + " ON " + ruleColumn("pm", "ruleId") + " = " + ruleColumn("r", "id")
+        + " AND " + ruleColumn("pm", "userId") + " = ?"
+        + "\nWHERE " + scope.whereSql
+        + "\nGROUP BY " + ruleColumn("pm", "groupId"),
+      [viewerId, ...scope.params],
+    ),
+  ]);
+  const byGroup = new Map<number, number>();
+  for (const row of groupRows) byGroup.set(Number(row.groupId), Number(row.count || 0));
+  return {
+    total: Number(totalRows[0]?.total || 0),
+    ungrouped: Number(totalRows[0]?.ungrouped || 0),
+    byGroup,
+  };
+}
+
+/**
+ * 个人分组归组前核对：ruleIds 里哪些是「列表里看得见的规则」（ownerUserId 给了就还得是他的）。
+ *
+ * 必须在归组的事务里调：MySQL / PostgreSQL 上顺手把这些规则行锁住（FOR UPDATE），删规则那边
+ * 也先锁同一行（server/ruleGroupRelations.ts），「刚核对完规则就被删了、关系却写了进去」这种
+ * 孤儿就出不来。按 id 排序是为了两个人同时归同一批规则时加锁的顺序一样，不会互相等死。
+ */
+export async function lockGroupableForwardRuleIds(ruleIds: number[], ownerUserId?: number) {
+  const ids = normalizeForwardRuleIds(ruleIds);
+  if (ids.length === 0) return [];
+  const conditions = forwardRuleListBaseConditions();
+  const found: number[] = [];
+  for (let index = 0; index < ids.length; index += 400) {
+    const chunk = inList(ids.slice(index, index + 400));
+    const params: unknown[] = [...chunk.params];
+    let ownerSql = "";
+    if (ownerUserId !== undefined) {
+      ownerSql = " AND " + ruleColumn("r", "userId") + " = ?";
+      params.push(Math.floor(Number(ownerUserId)));
+    }
+    const rows = await queryRaw<{ id: number }>(
+      "SELECT " + ruleColumn("r", "id") + " AS " + quoteIdentifier("id")
+        + " FROM " + quoteIdentifier("forward_rules") + " r"
+        + " WHERE " + ruleColumn("r", "id") + " IN " + chunk.sql + ownerSql
+        + " AND " + conditions.join(" AND ")
+        + " ORDER BY " + ruleColumn("r", "id") + " ASC" + rowLockSuffix(),
+      params,
+    );
+    for (const row of rows) found.push(Number(row.id));
+  }
+  return found;
 }
 
 export async function getForwardRulesForUserSync(userId: number) {
@@ -1165,7 +1307,12 @@ export async function createForwardRule(rule: InsertForwardRule) {
   if (payload.sortOrder === undefined && !payload.forwardGroupRuleId && !payload.forwardGroupMemberId) {
     payload.sortOrder = await nextForwardRuleSortOrder(Number(payload.userId || 0), await forwardRuleCategoryForPayload(payload));
   }
-  const id = await insertAndGetId("forward_rules", payload);
+  /*
+    按量计费资源的账号库存 / 每账号规则上限在这里把关，而不是在路由里：面板、Telegram 机器人、
+    导入、转发组模板……所有建规则的路最后都落到这个函数。落在限量资源上的逻辑规则，
+    校验和插入在同一个事务、同一把配置行锁里完成；其余规则（子规则、不限量的资源）原样直接插入。
+  */
+  const id = await withTrafficRuleStockGuard(payload, null, () => insertAndGetId("forward_rules", payload));
   const created = await getForwardRuleById(id).catch(() => undefined);
   await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((created as any)?.hostId || 0), action: "create", after: created });
   if (Number(payload.proxyNodeId || 0) > 0) signalRuleEntryDomainChanged(id, "rule-created");
@@ -1378,12 +1525,67 @@ export async function getAllRouteRelayRules() {
     .where(and(sql`${forwardRules.routeParentRuleId} IS NOT NULL`, sql`${forwardRules.routeParentRuleId} <> 0`));
 }
 
+function stockColumnValue(value: unknown) {
+  if (value === true) return 1;
+  if (value === false || value === null || value === undefined) return 0;
+  return Number(value) || 0;
+}
+
+/**
+ * 这次修改会不会改变规则占的按量席位。不会就返回 null，调用方照原来的路直接写。
+ *
+ * updateForwardRule 是热路径（心跳回写运行状态、转发组同步子规则都走它），所以先用
+ * 不查库的条件筛掉绝大多数调用：没碰那几列的、明摆着是子规则的，都不多查一次。
+ */
+async function trafficStockChangeForUpdate(id: number, data: Partial<InsertForwardRule>, loaded?: ForwardRule) {
+  const patch = data as Record<string, unknown>;
+  if (!TRAFFIC_STOCK_RULE_KEYS.some((key) => patch[key] !== undefined)) return null;
+  if (!isLogicalForwardRule(patch as TrafficStockRule)) return null;
+  const current = loaded || await getForwardRuleById(id).catch(() => undefined);
+  if (!current) return null;
+  const currentColumns = current as Record<string, unknown>;
+  const changed = TRAFFIC_STOCK_RULE_KEYS.some((key) => (
+    patch[key] !== undefined && stockColumnValue(patch[key]) !== stockColumnValue(currentColumns[key])
+  ));
+  if (!changed) return null;
+  const next: Record<string, unknown> = { ...current };
+  for (const key of TRAFFIC_STOCK_RULE_KEYS) {
+    if (patch[key] !== undefined) next[key] = patch[key];
+  }
+  if (!isLogicalForwardRule(next as TrafficStockRule)) return null;
+  return { current: current as TrafficStockRule, next: next as TrafficStockRule };
+}
+
 export async function updateForwardRule(id: number, data: Partial<InsertForwardRule>) {
   const db = await getDb();
   if (!db) return;
   const audit = shouldAuditConfigPatch(data as any);
   const before = audit ? await getForwardRuleById(id).catch(() => undefined) : undefined;
-  await db.update(forwardRules).set({ ...data, updatedAt: nowDate() }).where(eq(forwardRules.id, id));
+  const stockChange = await trafficStockChangeForUpdate(id, data, before);
+  if (stockChange) {
+    /*
+      规则换了主人、换了资源，或从待删除恢复：它占的按量席位变了，要和新建一样过一遍库存。
+      校验通过后在同一个事务里写入；写之前再锁一次规则行，确认刚才拿来校验的那几列没被
+      并发的另一次修改动过 —— 否则会拿着过期的判断把规则写到一个已经满了的资源上。
+    */
+    await withTrafficRuleStockGuard(stockChange.next, stockChange.current, async (guarded) => {
+      if (guarded) {
+        const q = quoteIdentifier;
+        const [locked] = await queryRaw<Record<string, unknown>>(
+          `SELECT ${TRAFFIC_STOCK_RULE_KEYS.map((key) => `${q(key)} AS ${q(key)}`).join(", ")}
+             FROM ${q("forward_rules")} WHERE ${q("id")} = ?${getDatabaseKind() === "sqlite" ? "" : " FOR UPDATE"}`,
+          [id],
+        );
+        if (!locked || TRAFFIC_STOCK_RULE_KEYS.some((key) => stockColumnValue(locked[key]) !== stockColumnValue(stockChange.current[key]))) {
+          throw new Error("规则已被其他操作修改，请刷新后重试");
+        }
+      }
+      // 在事务里要重新取 db：外面那个是连接池上的，写出去不在这个事务里。
+      await (await getDb())!.update(forwardRules).set({ ...data, updatedAt: nowDate() }).where(eq(forwardRules.id, id));
+    });
+  } else {
+    await db.update(forwardRules).set({ ...data, updatedAt: nowDate() }).where(eq(forwardRules.id, id));
+  }
   if (audit && before) {
     const after = await getForwardRuleById(id).catch(() => undefined);
     await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((after as any)?.hostId || (before as any)?.hostId || 0), action: "update", before, after });
@@ -1535,12 +1737,19 @@ export async function deleteForwardRule(id: number) {
   const before = await getForwardRuleById(id).catch(() => undefined);
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.ruleId, id));
   await releaseRuleSniNames(id);
-  await db.update(forwardRules).set({
-    isEnabled: false,
-    isRunning: false,
-    pendingDelete: true,
-    updatedAt: nowDate(),
-  }).where(eq(forwardRules.id, id));
+  /*
+    标成待删的同一个事务里先清它的个人分组关系：待删的规则列表上已经看不见了，留着关系只会让
+    分组上的数字和点进去看到的对不上。事务里要重新拿一次 db —— 外面那个不在这个事务的连接上。
+  */
+  await withDatabaseTransaction(async () => {
+    await clearRuleGroupMembersForRule(id);
+    await (await getDb())!.update(forwardRules).set({
+      isEnabled: false,
+      isRunning: false,
+      pendingDelete: true,
+      updatedAt: nowDate(),
+    }).where(eq(forwardRules.id, id));
+  });
   if (before) await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((before as any).hostId || 0), action: "delete", before });
   signalRuleEntryDomainChanged(id, "rule-deleted");
   invalidateProxySubCacheForUser(Number((before as any)?.userId || 0));
@@ -1552,12 +1761,16 @@ export async function markForwardRulePendingDelete(id: number) {
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.ruleId, id));
   // 共享 TLS 入站上占的 SNI 立刻放掉：待删的规则不再参与分流，名字可以给别人了。
   await releaseRuleSniNames(id);
-  await db.update(forwardRules).set({
-    isEnabled: false,
-    isRunning: true,
-    pendingDelete: true,
-    updatedAt: nowDate(),
-  }).where(eq(forwardRules.id, id));
+  // 同 deleteForwardRule：标成待删和清个人分组关系在一个事务里。
+  await withDatabaseTransaction(async () => {
+    await clearRuleGroupMembersForRule(id);
+    await (await getDb())!.update(forwardRules).set({
+      isEnabled: false,
+      isRunning: true,
+      pendingDelete: true,
+      updatedAt: nowDate(),
+    }).where(eq(forwardRules.id, id));
+  });
   signalRuleEntryDomainChanged(id, "rule-deleted");
 }
 
@@ -1572,10 +1785,18 @@ export async function finalizeForwardRuleDelete(id: number) {
   } as any).where(eq(forwardGroupMembers.ruleId, id));
   // 行删掉之前把发布过的专属域名记进待删表，否则 DNS 里那条记录就没人认领了。
   const retiredDomains = await recordRuleEntryDomainCleanupsBeforeDelete({ ruleId: id }).catch(() => 0);
-  await db.delete(forwardRules).where(and(
-    eq(forwardRules.id, id),
-    eq(forwardRules.pendingDelete, true),
-  ));
+  /*
+    删行和清个人分组关系在同一个事务里，先清关系（server/ruleGroupRelations.ts 里说了为什么要先锁行）：
+    标成待删时已经清过一次，这里是兜底 —— 待删期间被写进去的、老版本留下的，都在行消失前清干净，
+    不留指向不存在规则的关系（备份 / 迁移导入会把它记成没导进来的关键数据）。
+  */
+  await withDatabaseTransaction(async () => {
+    await clearRuleGroupMembersForRule(id);
+    await (await getDb())!.delete(forwardRules).where(and(
+      eq(forwardRules.id, id),
+      eq(forwardRules.pendingDelete, true),
+    ));
+  });
   if (retiredDomains > 0) signalRuleEntryDomainCleanup("rule-deleted");
   // 按规则 id 记在内存里的缓存（目标域名解析等）一起清掉
   await afterDatabaseCommit(() => notifyRuleDeleted(id));

@@ -601,29 +601,9 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
   界面主题（设置 › 个性化 › 界面主题）：整套界面的气质，一次换掉底、卡、外壳、控件的形状。
   配色 / 页面底色 / 卡片风格那三项是「在当前主题上微调」，主题是它们底下那一层。
 
-    classic 经典 —— 现在这套：浅灰页面托白卡、细线、天蓝渐变控件；深色是炭灰。出厂值，不往 <html> 上写属性。
-    gilt    墨金 —— 米白纸底托奶白卡（暖色细线 + 软影），页面标题、卡标题、统计大数字用衬线，标题下一截
-            金线，分组小标题金色小字；筛选 chip 选中态墨色实心（深色下金色）。深色是暖墨黑配金线。
-            高端杂志 / 精品酒店的气质；主按钮仍是主色渐变。
+  面板自带三套（2.3.525 起；其余改成按需安装的主题包，见 shared/uiThemePackage.ts）：
 
-    rose    玫瑰 —— 胭脂粉底上一层很淡的玫瑰 / 淡紫 / 蜜桃柔光，卡片是没有边线的大圆角白瓣（软影浮着），
-            数字嵌在卡里一枚胭脂色托盘中；页面标题和大数字用斜体衬线；分段控件是一圈细线的空槽、
-            选中格淡底墨字，全部药丸。设置页在这套下改成编号分节 + 贴底保存栏。深色是酒红墨色。
-            参考 Rosélune 面板的 Romance（design/losantos-settings-2026-10-11/）。
-
-    cinnabar 朱砂 —— 参考 Rosélune 的 Umbrella：素白纸面、几乎直角（3px）的卡和控件、标签全大写加宽字距、
-            页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。2.3.425 ～ 2.3.436 只有这套
-            主题下才出现「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/），2.3.437 起所有主题都有。
-
-    liquid-glass 液态玻璃 —— 照 freetodo/monitor-theme-liquid-glass（Apple Liquid Glass）搬过来：页面后面两张大幅圆角
-            照片错落铺着（默认随机拉，设了壁纸就用壁纸），卡片是真毛玻璃（白 45% + 白边 + backdrop 模糊 28px），
-            鼠标移上去卡里跟着亮一团光；顶栏是浮着的玻璃条，按钮 / chip / 分段全是胶囊玻璃，选中态 Apple 蓝实心；
-            Inter 字体、标题和大数字字重 500。深色是 #111318 底上压暗到 40% 的照片。
-            照片层和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx。
-
-    indigo  靛蓝 —— 照 8bitNull 的 monitor-probe 主题 HEX：冷灰底（#f2f3f5）托纯白 1px 细线卡、不投影；强调色是沉稳的
-            靛蓝（#4268aa），按钮是平色、选中态是淡底 + 靛蓝字；整套换成系统字，读数粗黑 + 底下一根细进度条，
-            统计条是「小灰标签 + 26px 大数字」；控件一律 8px 圆角，底部标签栏是贴底通栏条。深色是蓝黑（#121417）。
+    classic 经典 —— 浅灰页面托白卡、细线、天蓝渐变控件；深色是炭灰。出厂值，不往 <html> 上写属性。
 
     pearl   珍珠 —— 照上游 poouo/Forwardx 现在那套 Pearl Glass（改编自 scaffold-master，MIT，见 THIRD_PARTY_NOTICES.md）：
             带一丝灰绿的珍珠灰底（#f4f6f5）托瓷片卡（白→珍珠白的淡渐变 + 1px 灰绿细线 + 两层很淡的影 + 顶部白高光，
@@ -631,31 +611,37 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             浮起来的瓷片；侧栏选中项也是一块瓷片，换页时滑过去（client/src/components/PearlNavMarker.tsx）；
             页面标题下一道细线，系统字。深色是蓝灰墨（#161b1e）。
 
-    deepspace 深空 —— 运维控制台那一类（Cloudflare / Tailscale / Vercel 的深色后台）：近黑蓝灰底托低一档的面板卡，
-            1px 暗线、不投影、不模糊；流量 / 延迟 / 统计数字一律等宽字；控件 8px，主按钮平的天蓝，分段控件是一排带细边的
-            小方块；手机底栏贴底通栏。深色是本色，浅色是冷白托白卡。2026-11-05 用户从三个商业化方向里挑的这一套。
+    liquid-glass 液态玻璃 —— 照 freetodo/monitor-theme-liquid-glass（Apple Liquid Glass）搬过来：页面后面两张大幅圆角
+            照片错落铺着（默认随机拉，设了壁纸就用壁纸），卡片是真毛玻璃（白 45% + 白边 + backdrop 模糊 28px），
+            鼠标移上去卡里跟着亮一团光；顶栏是浮着的玻璃条，按钮 / chip / 分段全是胶囊玻璃，选中态 Apple 蓝实心；
+            Inter 字体、标题和大数字字重 500。深色是 #111318 底上压暗到 40% 的照片。
+            照片层和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx，旋钮见下面的 LiquidGlassConfig。
 
-  画法全在 client/src/styles/theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css / theme-indigo.css / theme-pearl.css / theme-deepspace.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
-  存的是 id；别的值一律回到 classic。
+  留在面板里的是用户选定的这三套（2026-11-11）。珍珠和液态玻璃不只是样式：侧栏会滑的瓷片、照片底和光标跟随是组件。
+  深空 / 墨金 / 玫瑰 / 朱砂 / 靛蓝是官方主题库里的主题包（themes/official/<id>/），想用的站点在「主题管理」里点一下安装；
+  它们的 id 没变，组件里按 id 换结构的地方（深空的顶部导航、转发一张表）装上以后照旧生效。
+
+  内置的画法在 client/src/styles/theme-pearl.css / theme-liquid-glass.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+  存的是 id；不是内置、也没安装的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
   { id: "classic", name: "经典", description: "浅灰底托白卡、细线分区、天蓝渐变控件；深色是炭灰。现在这套。" },
-  { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
-  { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
-  { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距，一份技术规格书的样子。" },
-  { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
-  { id: "indigo", name: "靛蓝", description: "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。" },
   { id: "pearl", name: "珍珠", description: "珍珠灰底托瓷片卡：细线、淡渐变、两层软影和一道顶部高光；墨色主按钮、凹槽分段控件里浮起的选中格，侧栏选中项会滑；深色是蓝灰墨。照上游 Forwardx 的 Pearl Glass。" },
-  { id: "deepspace", name: "深空", description: "运维控制台：近黑底托暗色面板卡、1px 暗线、不投影不模糊；流量和延迟用等宽数字，带细边的分段方块、平色天蓝按钮、贴底通栏标签栏。建议配深色使用；浅色是冷白托白卡。" },
+  { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
 
-export function normalizePersonalizationUiTheme(value: unknown): PersonalizationUiThemeId {
+/**
+ * 存着的界面主题 id 现在该按哪一套画。内置的三套一直能用；主题包要在 installedIds 里才算数
+ * （服务端传库里装着的，浏览器传 publicInfo 给的那份名单），不在的回到 classic。
+ * 不传 installedIds 就是「只认内置」。
+ */
+export function normalizePersonalizationUiTheme(value: unknown, installedIds: Iterable<string> = []): string {
   const text = String(value || "").trim();
-  return PERSONALIZATION_UI_THEMES.some((theme) => theme.id === text)
-    ? text as PersonalizationUiThemeId
-    : "classic";
+  if (PERSONALIZATION_UI_THEMES.some((theme) => theme.id === text)) return text;
+  for (const id of installedIds) if (id === text) return text;
+  return "classic";
 }
 
 /*

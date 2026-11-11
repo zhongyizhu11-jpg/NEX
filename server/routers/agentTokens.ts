@@ -5,6 +5,8 @@ import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
 import { maskToken } from "./helpers";
 import { ruleOwnerSummary } from "../hostDeletion";
+import { isFreshHostHeartbeat } from "../hostHeartbeatPolicy";
+import { hostAgentPanelUrlOverride } from "../hostAgentPanelUrl";
 
 export const agentTokensRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -96,6 +98,18 @@ export const agentTokensRouter = router({
       if (ctx.user.role !== "admin" && token.userId !== ctx.user.id) {
         throw new Error("无权使用该 Token");
       }
-      return { token: token.token };
+      /*
+        这个 Token 已经绑着一台主机时一起带回去：界面上复制安装命令前，主机在线就要先确认一次 ——
+        在另一台机器上执行会接管这台主机（同 Token 换机接管）。主机配了独立的 Agent 面板连接地址时，
+        安装命令也用那个地址（只有管理员能看到这一项）。
+      */
+      const boundHost = token.hostId ? await db.getHostById(Number(token.hostId)) : await db.getHostByAgentToken(token.token);
+      const boundHostInfo = boundHost ? {
+        id: Number(boundHost.id),
+        name: String(boundHost.name || ""),
+        online: isFreshHostHeartbeat(boundHost.lastHeartbeat) && !!boundHost.isOnline,
+        agentPanelUrl: ctx.user.role === "admin" ? hostAgentPanelUrlOverride(boundHost) || null : null,
+      } : null;
+      return { token: token.token, boundHost: boundHostInfo };
     }),
 });

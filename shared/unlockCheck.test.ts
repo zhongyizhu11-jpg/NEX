@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  UNLOCK_EXTENDED_AGENT_VERSION,
+  unlockDisplayLabel,
+  unlockRegionText,
+  unlockRegionTone,
+  unlockServiceSupported,
   normalizeUnlockFamily,
   normalizeUnlockResults,
   normalizeUnlockSchedule,
@@ -14,7 +19,7 @@ test("Agent 报上来的结果：只认服务表里的服务和四种状态，�
     { service: "claude", status: "blocked", region: "hk", detail: "不支持这个地区", ms: 120.4 },
     { service: "netflix", status: "ok", region: "Hong Kong", detail: "全解锁\u0000\n", ms: -1 },
     { service: "netflix", status: "blocked" },
-    { service: "spotify", status: "ok" },
+    { service: "not_a_service", status: "ok" },
     { service: "chatgpt", status: "maybe", region: "USA", detail: "x".repeat(500) },
     "garbage",
     null,
@@ -61,4 +66,38 @@ test("服务表和 Agent 的 unlockServices 一一对应", async () => {
   const table = go.slice(go.indexOf("var unlockServices = []unlockService{"), go.indexOf("// ---------------------------------------------------------------- HTTP"));
   const goIds = Array.from(table.matchAll(/ID: "([a-z_]+)"/g), (m) => m[1]).sort();
   assert.deepEqual(goIds, UNLOCK_SERVICES.map((s) => s.id).sort());
+});
+
+test("带地区的显示：解锁 / 仅自制 / 屏蔽 / 检测失败，地区按主机所在地上色", () => {
+  assert.equal(unlockDisplayLabel("netflix", "ok"), "解锁");
+  assert.equal(unlockDisplayLabel("netflix", "partial"), "仅自制");
+  assert.equal(unlockDisplayLabel("chatgpt", "partial"), "部分解锁");
+  assert.equal(unlockDisplayLabel("disney", "blocked"), "屏蔽");
+  assert.equal(unlockDisplayLabel("claude", "unknown"), "检测失败");
+  assert.equal(unlockRegionText("steam", "usd"), "币种 USD");
+  assert.equal(unlockRegionText("netflix", "jp"), "JP");
+  assert.equal(unlockRegionText("netflix", ""), null);
+
+  assert.equal(unlockRegionTone("netflix", "JP", "JP"), "match");
+  assert.equal(unlockRegionTone("netflix", "US", "JP"), "mismatch");
+  assert.equal(unlockRegionTone("tiktok", "CN", "HK"), "china");
+  assert.equal(unlockRegionTone("gemini", "JPN", "JP"), "match", "三位码折成两位再比");
+  assert.equal(unlockRegionTone("steam", "EUR", "DE"), "match");
+  assert.equal(unlockRegionTone("steam", "USD", "SG"), "mismatch");
+  assert.equal(unlockRegionTone("steam", "CNY", "HK"), "china");
+  assert.equal(unlockRegionTone("netflix", "JP", null), "none", "不知道主机在哪就不上色");
+  assert.equal(unlockRegionTone("netflix", null, "JP"), "none");
+});
+
+test("新加的四项要 Agent 2.2.255", () => {
+  const added = UNLOCK_SERVICES.filter((def) => def.sinceAgent === UNLOCK_EXTENDED_AGENT_VERSION).map((def) => def.id);
+  assert.deepEqual(added, ["prime_video", "spotify", "steam", "bilibili_hmt"]);
+  const steam = UNLOCK_SERVICES.find((def) => def.id === "steam")!;
+  assert.equal(unlockServiceSupported(steam, "2.2.252"), false);
+  assert.equal(unlockServiceSupported(steam, "2.2.255"), true);
+  assert.equal(unlockServiceSupported(steam, "2.3.0"), true);
+  assert.equal(unlockServiceSupported(steam, null), false);
+  assert.equal(unlockServiceSupported(UNLOCK_SERVICES[0], null), true);
+  const results = normalizeUnlockResults([{ service: "steam", status: "ok", region: "USD" }, { service: "bilibili_hmt", status: "blocked" }]);
+  assert.deepEqual(results?.map((r) => [r.service, r.region]), [["steam", "USD"], ["bilibili_hmt", null]]);
 });

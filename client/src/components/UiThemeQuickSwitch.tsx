@@ -2,7 +2,6 @@ import { Check, Moon, Palette, Sun } from "lucide-react";
 
 import { toast } from "sonner";
 
-import { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } from "@shared/personalization";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { setUiThemeOverride } from "@/lib/personalizationTheme";
+import { resolveUiTheme, setUiThemeOverride } from "@/lib/personalizationTheme";
+import { useUiThemeOptions, type UiThemeOption } from "@/hooks/useUiThemeOptions";
 import { useUiThemeOverride } from "@/hooks/useUiThemeOverride";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
@@ -22,21 +22,11 @@ import { trpc } from "@/lib/trpc";
   **自己**这台设备挑一套（localStorage），不影响别人，没选就跟随站点默认。
   参考 Rosélune 面板顶栏的 Look 菜单（2026-10-11）：每项前面一枚小圆，底是那套的页面底色、
   右上一点是它的强调色，一眼看得出是哪一套。
+  列出来的是内置的三套加上这个面板装着的主题包（useUiThemeOptions）；装 / 卸主题在设置 › 个性化 › 主题管理。
 */
-export const UI_THEME_DOTS: Record<string, { a: string; b: string }> = {
-  classic: { a: "#3ea4ec", b: "#f5f5f7" },
-  gilt: { a: "#b08d57", b: "#f5f2ec" },
-  rose: { a: "#c13a66", b: "#fbf0f2" },
-  cinnabar: { a: "#d42a33", b: "#f6f6f4" },
-  "liquid-glass": { a: "#2563eb", b: "#dfe7f3" },
-  indigo: { a: "#4268aa", b: "#f2f3f5" },
-  pearl: { a: "#0e1116", b: "#f4f6f5" },
-  deepspace: { a: "#5aa9ff", b: "#0b0d10" },
-};
-
-export function UiThemeDot({ id }: { id: string }) {
-  const dot = UI_THEME_DOTS[id] || UI_THEME_DOTS.classic;
-  return <span className="fx-theme-dot" style={{ ["--sw-a" as any]: dot.a, ["--sw-b" as any]: dot.b }} aria-hidden="true" />;
+export function UiThemeDot({ theme }: { theme: Pick<UiThemeOption, "preview"> }) {
+  // 小圆点不分深浅色：底是这套浅色下的页面底色，右上一点是它的强调色（深空本色就是深的，它的「浅色」预览也给的是深底）
+  return <span className="fx-theme-dot" style={{ ["--sw-a" as any]: theme.preview.light.accent, ["--sw-b" as any]: theme.preview.light.page }} aria-hidden="true" />;
 }
 
 /*
@@ -62,7 +52,8 @@ export function UiThemeQuickSwitch({ className, darkToggle }: { className?: stri
   const isAdmin = user?.role === "admin";
   const utils = trpc.useUtils();
   const { data: publicInfo } = trpc.system.publicInfo.useQuery(undefined, { enabled: isAdmin, staleTime: 60_000, refetchOnWindowFocus: false, retry: false });
-  const siteTheme = normalizePersonalizationUiTheme((publicInfo as any)?.personalizationUiTheme);
+  const themes = useUiThemeOptions();
+  const siteTheme = resolveUiTheme((publicInfo as any)?.personalizationUiTheme);
   const saveSiteTheme = trpc.system.updateSettings.useMutation();
 
   /*
@@ -71,7 +62,7 @@ export function UiThemeQuickSwitch({ className, darkToggle }: { className?: stri
     顺手清掉这台设备以前在这里选过的「只给自己」那一套，不然它会盖过刚存的站点主题；存失败连它一起放回去。
   */
   const selectSiteTheme = (id: string) => {
-    const next = normalizePersonalizationUiTheme(id);
+    const next = resolveUiTheme(id);
     const previousOverride = override;
     setUiThemeOverride(null);
     const previous = siteTheme;
@@ -106,9 +97,9 @@ export function UiThemeQuickSwitch({ className, darkToggle }: { className?: stri
         <DropdownMenuContent align="end" className="w-52">
           <DarkModeItem darkToggle={darkToggle} />
           <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">界面主题（全站，和设置同步）</DropdownMenuLabel>
-          {PERSONALIZATION_UI_THEMES.map((theme) => (
+          {themes.map((theme) => (
             <DropdownMenuItem key={theme.id} onSelect={() => selectSiteTheme(theme.id)} disabled={saveSiteTheme.isPending} className="gap-2.5">
-              <UiThemeDot id={theme.id} />
+              <UiThemeDot theme={theme} />
               <span className="flex-1">{theme.name}</span>
               {current === theme.id ? <Check className="h-4 w-4 text-primary" aria-hidden="true" /> : null}
             </DropdownMenuItem>
@@ -135,9 +126,9 @@ export function UiThemeQuickSwitch({ className, darkToggle }: { className?: stri
           {override === null ? <Check className="h-4 w-4 text-primary" aria-hidden="true" /> : null}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {PERSONALIZATION_UI_THEMES.map((theme) => (
+        {themes.map((theme) => (
           <DropdownMenuItem key={theme.id} onSelect={() => setUiThemeOverride(theme.id)} className="gap-2.5">
-            <UiThemeDot id={theme.id} />
+            <UiThemeDot theme={theme} />
             <span className="flex-1">{theme.name}</span>
             {override === theme.id ? <Check className="h-4 w-4 text-primary" aria-hidden="true" /> : null}
           </DropdownMenuItem>

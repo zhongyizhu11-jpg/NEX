@@ -262,6 +262,7 @@ func syncDesiredState(cfg Config, state *desiredState) []<-chan struct{} {
 		return nil
 	}
 	rememberDesiredStateReceived(state)
+	rememberPortOccupancyDesiredActions(state.Actions)
 	attachDesiredSharedFXPEntryGroups(state.Actions)
 	wireGuardReplacementTunnels := desiredWireGuardReplacementTunnels(state.Actions)
 	kernelSnapshot := newKernelForwardSnapshot()

@@ -1,10 +1,15 @@
 import { resolveSiteTitle } from "../../shared/brand";
+import { AUTH_CAPTCHA_MODES, normalizeAuthCaptchaMode } from "../../shared/authCaptchaMode";
+import { TELEGRAM_LOGIN_ENABLED_SETTING, telegramLoginSwitchOn } from "../telegramLoginSwitch";
 import { undecryptableSecretSettingLabels } from "../settingsEncryption";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "./trpc";
 import { githubRepoParts } from "../../shared/githubAccelerator";
 import { updateMultiDeviceLoginSettingCache } from "./context";
 import { z } from "zod";
 import * as db from "../db";
+import { DEVELOPER_ANNOUNCEMENT_FEED_PATH, syncDeveloperAnnouncementFeed } from "../developerAnnouncementFeed";
+import { listInstalledUiThemes } from "../uiThemes";
+import type { UiThemeSummary } from "../../shared/uiThemePackage";
 import { ENV } from "../env";
 import { compareVersions, normalizeVersion } from "../../shared/version";
 import { MAX_RULE_SWITCH_BRIDGE_HOURS, RULE_SWITCH_BRIDGE_HOURS_SETTING, normalizeRuleSwitchBridgeHours } from "../../shared/ruleEntryBridge";
@@ -50,6 +55,7 @@ import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { DEFAULT_DDNS_TTL, maskSecret } from "../ddns";
 import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSettings";
 import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discordSettings";
+import { isOidcLoginUsable, readOidcLoginSettings } from "../oidcLoginSettings";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile } from "../ruleEntryDomain";
 import { resolveRuleEntryDomainRuntimeSettings } from "../repositories/ruleEntryDomainRepository";
@@ -1140,6 +1146,14 @@ async function getLatestUpdateInfoCached(force = false): Promise<UpdateInfo> {
   const request = fetchLatestUpdateInfo()
     .then((info) => {
       lastUpdateInfo = info;
+      // 顺手拉一次开发者公告（同一个开关、同一个加速站；自己有半小时冷却，不拖慢检查更新）
+      void readPanelUpdateAccelerator()
+        .then((accelerator) => syncDeveloperAnnouncementFeed(() => fetchTextNoCache(
+          githubRawMainUrl(REPO_URL, DEVELOPER_ANNOUNCEMENT_FEED_PATH),
+          accelerator,
+          (text) => /^\s*[[{]/.test(text),
+        )))
+        .catch(() => undefined);
       return info;
     });
   if (force) return request;
@@ -1674,6 +1688,12 @@ function databaseSettingsSummary(all: Record<string, string | null>, exposeDetai
   };
 }
 
+/** 登录页的「使用 … 登录」（通用 OIDC）：能不能用、按钮上的名字。 */
+function publicOidcLoginFlags(all: Record<string, string | null>) {
+  const oidc = readOidcLoginSettings(all);
+  return { oidcLoginEnabled: isOidcLoginUsable(oidc), oidcLoginName: oidc.providerName };
+}
+
 /** publicInfo 里给管理员的几个开关；算法和 getSettings 里对应字段一致。 */
 function publicAdminFlags(all: Record<string, string | null>) {
   const envToken = ENV.telegramBotToken.trim();
@@ -1683,11 +1703,29 @@ function publicAdminFlags(all: Record<string, string | null>) {
   return {
     telegramBotReady: telegramEnabled && telegramConfigured,
     ddnsEnabled: all.ddnsEnabled === "true" && ddnsProvider !== "disabled",
+    // 主机 DDNS「全部 IP」要按服务商说明能不能同名多值（shared/hostDdnsPlan）；只有服务商名，没有密钥
+    ddnsProvider,
     linkWizardEnabled: all.linkWizardEnabled === "true",
   };
 }
 
-function publicSystemSettings(all: Record<string, string | null>, activeProtocol: string) {
+/**
+ * 已安装主题包里所有人都要知道的那几样（publicInfo / getSettings 带着）：浏览器靠它判断一个主题 id 认不认、
+ * 样式去哪取（/api/ui-themes/<id>.css?v=<revision>）、预览和顶栏调色盘里的小圆点用什么颜色。
+ */
+function publicUiThemes(installed: UiThemeSummary[]) {
+  return installed.map((theme) => ({
+    id: theme.id,
+    name: theme.name,
+    description: theme.description,
+    version: theme.version,
+    preview: theme.preview,
+    revision: theme.revision,
+  }));
+}
+
+function publicSystemSettings(all: Record<string, string | null>, activeProtocol: string, installedUiThemes: UiThemeSummary[]) {
+  const installedUiThemeIds = installedUiThemes.map((theme) => theme.id);
   const aiProvider = normalizeAiProvider(all.deepseekProvider);
   const aiProviderConfigs = buildAiProviderConfigMap(all);
   const aiActiveConfig = aiProviderConfigs[aiProvider];
@@ -1704,7 +1742,8 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
     personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
     personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
-    personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
+    personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme, installedUiThemeIds),
+    installedUiThemes: publicUiThemes(installedUiThemes),
     personalizationLayout: normalizePersonalizationLayout(all.personalizationLayout),
     personalizationBackground: publicPersonalizationBackground(all),
     personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
@@ -1723,6 +1762,12 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     webPortManagement: getWebPortManagement({ publicView: true }),
     registrationEnabled: all.registrationEnabled !== "false",
     authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+    // 人机验证方式：click（点击验证，默认）/ image（图片验证码），登录、注册、找回密码都按它画（shared/authCaptchaMode.ts）。
+    authCaptchaMode: normalizeAuthCaptchaMode(all.authCaptchaMode),
+    // Telegram 登录单独开关：默认开；关了登录页不显示 Telegram 登录（server/telegramLoginSwitch.ts）。
+    telegramLoginEnabled: telegramLoginSwitchOn(all[TELEGRAM_LOGIN_ENABLED_SETTING]),
+      // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
+      passwordResetEnabled: all.passwordResetEnabled !== "false",
     twoFactorEnabled: all.twoFactorEnabled === "true",
     lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
     allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
@@ -1850,7 +1895,7 @@ export const systemRouter = router({
   }),
 
   publicInfo: publicProcedure.query(({ ctx }) => {
-    return db.getAllSettings().then((all) => ({
+    return Promise.all([db.getAllSettings(), listInstalledUiThemes()]).then(([all, installedUiThemes]) => ({
       repoUrl: REPO_URL,
       telegramBotUrl: TELEGRAM_BOT_URL,
       version: APP_VERSION,
@@ -1863,12 +1908,19 @@ export const systemRouter = router({
       personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
       personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
       personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
-      personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
+      personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme, installedUiThemes.map((theme) => theme.id)),
+      installedUiThemes: publicUiThemes(installedUiThemes),
       personalizationLayout: normalizePersonalizationLayout(all.personalizationLayout),
       personalizationBackground: publicPersonalizationBackground(all),
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 人机验证方式：click（点击验证，默认）/ image（图片验证码），登录、注册、找回密码都按它画（shared/authCaptchaMode.ts）。
+      authCaptchaMode: normalizeAuthCaptchaMode(all.authCaptchaMode),
+      // Telegram 登录单独开关：默认开；关了登录页不显示 Telegram 登录（server/telegramLoginSwitch.ts）。
+      telegramLoginEnabled: telegramLoginSwitchOn(all[TELEGRAM_LOGIN_ENABLED_SETTING]),
+      // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
+      passwordResetEnabled: all.passwordResetEnabled !== "false",
       // 邀请返利开没开（侧边栏「邀请返利」据此显隐）、注册是否必须带邀请码。
       ...db.publicReferralFlags(all),
       twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -1883,6 +1935,8 @@ export const systemRouter = router({
       googleLoginEnabled: isGoogleLoginUsable(readGoogleLoginSettings(all)),
       // 「使用 Discord 登录」同理：开关 + Client ID / Secret + https 的面板公开地址。
       discordLoginEnabled: isDiscordLoginUsable(readDiscordLoginSettings(all)),
+      // 通用 OIDC：开关 + 合法的 Issuer + 客户端 ID + 面板公开地址；按钮上写「使用 <显示名称> 登录」。
+      ...publicOidcLoginFlags(all),
       publicHostMonitor: {
         enabled: all.publicHostMonitorEnabled === "true",
         path: normalizePublicHostMonitorPath(all.publicHostMonitorPath),
@@ -1923,7 +1977,7 @@ export const systemRouter = router({
     const aiActiveConfig = aiProviderConfigs[aiProvider];
     const panelSsl = readPanelSslSettings(all);
     const activeProtocol = ctx.req.secure || ctx.req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
-    const safeSettings = publicSystemSettings(all, activeProtocol);
+    const safeSettings = publicSystemSettings(all, activeProtocol, await listInstalledUiThemes());
     if (!ctx.user || ctx.user.role !== "admin") return safeSettings;
     const deploymentInfo = getDeploymentInfo(panelUpdateAcceleratorFromRecord(all));
     const emailPort = Number(all.emailPort || 587);
@@ -1947,6 +2001,12 @@ export const systemRouter = router({
       undecryptableSecretSettings: undecryptableSecretSettingLabels(),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 人机验证方式：click（点击验证，默认）/ image（图片验证码），登录、注册、找回密码都按它画（shared/authCaptchaMode.ts）。
+      authCaptchaMode: normalizeAuthCaptchaMode(all.authCaptchaMode),
+      // Telegram 登录单独开关：默认开；关了登录页不显示 Telegram 登录（server/telegramLoginSwitch.ts）。
+      telegramLoginEnabled: telegramLoginSwitchOn(all[TELEGRAM_LOGIN_ENABLED_SETTING]),
+      // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
+      passwordResetEnabled: all.passwordResetEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       pluginsEnabled: all.pluginsEnabled === "true",
@@ -2179,10 +2239,13 @@ export const systemRouter = router({
         personalizationTheme: z.string().max(32).optional(),
         personalizationPageTint: z.string().max(16).optional(),
         personalizationCardStyle: z.string().max(16).optional(),
-        personalizationUiTheme: z.string().max(16).optional(),
+        personalizationUiTheme: z.string().max(64).optional(),
         personalizationLayout: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
         authCaptchaEnabled: z.boolean().optional(),
+        authCaptchaMode: z.enum(AUTH_CAPTCHA_MODES).optional(),
+        telegramLoginEnabled: z.boolean().optional(),
+        passwordResetEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
         allowMultiDeviceLogin: z.boolean().optional(),
@@ -2331,7 +2394,12 @@ export const systemRouter = router({
         console.info(`[Settings] personalization card style updated style=${cardStyle}`);
       }
       if (input.personalizationUiTheme !== undefined) {
-        const uiTheme = normalizePersonalizationUiTheme(input.personalizationUiTheme);
+        // 内置三套随便选；主题包要装着才能设成站点默认（没装的 id 存进去，所有人只会看到经典）
+        const requested = String(input.personalizationUiTheme || "").trim() || "classic";
+        const uiTheme = normalizePersonalizationUiTheme(requested, (await listInstalledUiThemes()).map((theme) => theme.id));
+        if (uiTheme !== requested) {
+          throw new Error("这套界面主题没有安装，请先在「主题管理」里安装");
+        }
         await db.setSetting("personalizationUiTheme", uiTheme);
         console.info(`[Settings] personalization ui theme updated theme=${uiTheme}`);
       }
@@ -2347,6 +2415,19 @@ export const systemRouter = router({
       if (input.authCaptchaEnabled !== undefined) {
         await db.setSetting("authCaptchaEnabled", input.authCaptchaEnabled ? "true" : "false");
         console.info(`[Settings] authentication captcha ${input.authCaptchaEnabled ? "enabled" : "disabled"}`);
+      }
+      if (input.authCaptchaMode !== undefined) {
+        await db.setSetting("authCaptchaMode", input.authCaptchaMode);
+        console.info(`[Settings] authentication captcha mode=${input.authCaptchaMode}`);
+      }
+      if (input.telegramLoginEnabled !== undefined) {
+        await db.setSetting(TELEGRAM_LOGIN_ENABLED_SETTING, input.telegramLoginEnabled ? "true" : "false");
+        console.info(`[Settings] Telegram login ${input.telegramLoginEnabled ? "enabled" : "disabled"}`);
+      }
+
+      if (input.passwordResetEnabled !== undefined) {
+        await db.setSetting("passwordResetEnabled", input.passwordResetEnabled ? "true" : "false");
+        console.info(`[Settings] self-service password reset ${input.passwordResetEnabled ? "enabled" : "disabled"}`);
       }
       if (input.twoFactorEnabled !== undefined) {
         await db.setSetting("twoFactorEnabled", input.twoFactorEnabled ? "true" : "false");

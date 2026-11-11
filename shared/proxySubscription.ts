@@ -45,8 +45,12 @@ import {
   type ProxyClientCapability,
 } from "./proxyClientUserAgent";
 import { renderV2rayJsonSubscription } from "./proxySubscriptionV2rayJson";
+import { formatHostAddressWithPort } from "./hostEntryAddress";
+import { loonPluginSection, type ProxySubTemplateModule } from "./proxySubModules";
+import { egernUnsupportedReason, renderEgernNodes, renderEgernProfile } from "./proxySubEgern";
 
-export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "v2rayjson", "loon", "surge", "quantumultx", "shadowrocket"] as const;
+// egern 排在最后：金样和各处按这张表遍历，加在末尾原有格式的顺序就不动。
+export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "v2rayjson", "loon", "surge", "quantumultx", "shadowrocket", "egern"] as const;
 
 export type ProxySubscriptionFormat = (typeof PROXY_SUBSCRIPTION_FORMATS)[number];
 
@@ -59,17 +63,19 @@ export const PROXY_SUBSCRIPTION_FORMAT_LABELS: Record<ProxySubscriptionFormat, s
   surge: "Surge / Surfboard",
   quantumultx: "Quantumult X",
   shadowrocket: "Shadowrocket",
+  egern: "Egern",
 };
 
 export const PROXY_SUBSCRIPTION_FORMAT_HINTS: Record<ProxySubscriptionFormat, string> = {
-  base64: "v2rayN、v2rayNG、Shadowrocket 等通用客户端。不支持 Snell（该协议没有分享链接）。",
-  clash: "Clash、Clash.Meta、mihomo、Stash。协议最全，Snell 到 v5。",
+  base64: "v2rayN、v2rayNG、Shadowrocket 等通用客户端。不支持 Snell（该协议没有分享链接）和 Mieru。",
+  clash: "Clash、Clash.Meta、mihomo、Stash。协议最全，Snell 到 v5；Mieru 只发给 mihomo（只走 TCP 的那份）。",
   singbox: "sing-box 及基于它的客户端。协议最全，不支持 XHTTP 传输。",
   v2rayjson: "v2rayN 6.40+、v2rayNG 1.8.29+、Happ 的完整 Xray 配置订阅，每个节点一份配置，分流规则一起带。只有 Xray 内核有的协议（VLESS / VMess / Trojan / Shadowsocks / SOCKS）。",
   loon: "Loon（iOS）。不支持 TUIC、Snell、XHTTP。",
   surge: "Surge（iOS/Mac）与 Surfboard（Android）。不支持 VLESS、REALITY、XHTTP。",
   quantumultx: "Quantumult X（iOS）。不支持 Hysteria2 / TUIC / AnyTLS / Snell / REALITY / XHTTP。",
   shadowrocket: "Shadowrocket（iOS）。节点订阅同通用 Base64；规则订阅是一份完整配置，节点仍来自节点订阅。",
+  egern: "Egern（iOS）自己的 YAML 配置。节点订阅只有 proxies；规则订阅是完整配置，能带模板里的模块。不支持 XHTTP、HTTPUpgrade、Snell v6。",
 };
 
 export const PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES: Record<ProxySubscriptionFormat, string> = {
@@ -81,6 +87,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES: Record<ProxySubscriptionFo
   surge: "text/plain; charset=utf-8",
   quantumultx: "text/plain; charset=utf-8",
   shadowrocket: "text/plain; charset=utf-8",
+  egern: "text/yaml; charset=utf-8",
 };
 
 export function normalizeProxySubscriptionFormat(value: unknown): ProxySubscriptionFormat {
@@ -93,6 +100,7 @@ export function normalizeProxySubscriptionFormat(value: unknown): ProxySubscript
   if (raw === "surge" || raw === "surfboard") return "surge";
   if (raw === "quantumultx" || raw === "quanx" || raw === "qx") return "quantumultx";
   if (raw === "shadowrocket") return "shadowrocket";
+  if (raw === "egern") return "egern";
   return "base64";
 }
 
@@ -151,7 +159,10 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
   const field = (key: string, value: string) => push(4, value ? `${key}: ${value}` : `${key}:`);
 
   field("server", yamlQuote(node.address));
-  field("port", String(node.port));
+  // Mieru 的端口段写 port-range，而且不能和 port 同时写（mihomo 文档原话）。
+  const portRangeEnd = node.protocol === "mieru" ? Number(node.portRangeEnd || 0) : 0;
+  if (portRangeEnd > node.port) field("port-range", yamlQuote(`${node.port}-${portRangeEnd}`));
+  else field("port", String(node.port));
 
   /**
    * Hysteria2 / TUIC / AnyTLS 的字段自成一套：没有 network 与 ws-opts，TLS 也不是
@@ -170,6 +181,21 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
       push(6, `mode: ${yamlQuote(node.obfs)}`);
       if (node.host) push(6, `host: ${yamlQuote(node.host)}`);
     }
+    if (node.frontProxyName) field("dialer-proxy", yamlQuote(node.frontProxyName));
+    return lines;
+  }
+
+  /**
+   * Mieru：mihomo 的 type: mieru，端口段已在上面写成 port-range。
+   * transport 只写 TCP —— mihomo 文档里 mieru 的 transport 只有 TCP，只开 UDP 的节点在
+   * unsupportedReason 里就挡掉了，两个都开的这里走 TCP 那一份。udp: true 是 Mieru 在连接里转 UDP。
+   */
+  if (node.protocol === "mieru") {
+    field("type", "mieru");
+    field("transport", "TCP");
+    field("username", yamlQuote(node.username));
+    field("password", yamlQuote(node.password));
+    field("udp", node.udp ? "true" : "false");
     if (node.frontProxyName) field("dialer-proxy", yamlQuote(node.frontProxyName));
     return lines;
   }
@@ -578,7 +604,8 @@ function singboxGroupOutbound(group: ProxySubscriptionGroup): Record<string, unk
   return {
     type: "urltest",
     tag: group.name,
-    outbounds: [...group.members],
+    // 模板里的自定义组可以把 DIRECT 列成成员，和上面 selector 一样换成 direct 出站。
+    outbounds: group.members.map((member) => (member === PROXY_RULE_TARGET_DIRECT ? "direct" : member)),
     url: currentSettings.testUrl,
     interval: `${currentSettings.testIntervalSec}s`,
     ...(group.type === "fallback" ? {} : { tolerance: currentSettings.toleranceMs }),
@@ -704,21 +731,29 @@ function renderSingbox(
  * 只会看到节点凭空少了，跟协议毫无字面关联。
  */
 const FORMAT_UNSUPPORTED_PROTOCOLS: Record<ProxySubscriptionFormat, readonly ProxyNodeProtocol[]> = {
-  // Snell 没有分享链接，base64 订阅是 URI 列表，装不下它。
-  base64: ["snell"],
+  /**
+   * Snell 没有分享链接，base64 订阅是 URI 列表，装不下它。
+   * Mieru 有 mierus:// 链接，但吃 base64 订阅的那些客户端（v2rayN / Shadowrocket / Hiddify……）
+   * 都不认，混进去轻则这一行报错、重则个别客户端整份订阅解析失败。链接只在「复制链接」里给。
+   */
+  base64: ["snell", "mieru"],
   clash: [],
-  singbox: [],
-  // Xray 内核没有 QUIC 系协议，也没有 AnyTLS 和 Snell。
-  v2rayjson: ["hysteria2", "tuic", "anytls", "snell"],
-  loon: ["tuic", "snell"],
-  surge: ["vless"],
-  quantumultx: ["hysteria2", "tuic", "anytls", "snell"],
+  // sing-box 没有 Mieru（服务端、客户端都没有）。
+  singbox: ["mieru"],
+  // Xray 内核没有 QUIC 系协议，也没有 AnyTLS、Snell 和 Mieru。
+  v2rayjson: ["hysteria2", "tuic", "anytls", "snell", "mieru"],
+  // Loon / Surge / Quantumult X 的手册里都没有 Mieru。
+  loon: ["tuic", "snell", "mieru"],
+  surge: ["vless", "mieru"],
+  quantumultx: ["hysteria2", "tuic", "anytls", "snell", "mieru"],
   // Shadowrocket 的节点来自 base64 订阅，能力按 base64 算。
-  shadowrocket: ["snell"],
+  shadowrocket: ["snell", "mieru"],
+  // Egern 九种都有，没有 Mieru；参数层面的（Snell v6、gecko 混淆、Trojan 的 gRPC……）在 proxySubEgern.ts 里挡。
+  egern: ["mieru"],
 };
 
 /** 能表达 REALITY 的格式。Surge 与 Quantumult X 的手册里根本没有这一层。 */
-const FORMATS_WITH_REALITY: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "v2rayjson", "loon", "shadowrocket"];
+const FORMATS_WITH_REALITY: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "v2rayjson", "loon", "shadowrocket", "egern"];
 
 /** 能表达 XHTTP 传输的格式。这是 Xray 的传输，只有 mihomo 跟进了。 */
 const FORMATS_WITH_XHTTP: readonly ProxySubscriptionFormat[] = ["base64", "clash", "v2rayjson", "shadowrocket"];
@@ -781,10 +816,15 @@ function unsupportedReason(node: ProxyNode, format: ProxySubscriptionFormat): st
     const reason = snellUnsupportedReason(node, format);
     if (reason) return reason;
   }
+  // mihomo 的 Mieru 只有 TCP 承载：只开了 UDP 的写进去，mihomo 会拒绝整份配置。
+  if (format === "clash" && node.protocol === "mieru" && String(node.mieruTransport || "").toUpperCase() === "UDP") {
+    return "mihomo 的 Mieru 只支持 TCP 承载，这个节点只开了 UDP";
+  }
   // Loon 的 Hysteria2 只有 salamander-password 这一个混淆参数，gecko 没有位置可写。
   if (format === "loon" && node.protocol === "hysteria2" && node.obfs && node.obfs !== "salamander") {
     return `Loon 的 Hysteria2 只支持 salamander 混淆，这个节点用的是 ${node.obfs}`;
   }
+  if (format === "egern") return egernUnsupportedReason(node);
   return "";
 }
 
@@ -805,6 +845,7 @@ function nodeCapabilities(node: ProxyNode): ProxyClientCapability[] {
   if (node.protocol === "hysteria2") out.push("hysteria2");
   if (node.protocol === "tuic") out.push("tuic");
   if (node.protocol === "anytls") out.push("anytls");
+  if (node.protocol === "mieru") out.push("mieru");
   if (node.realityPublicKey) out.push("reality");
   if (node.transport === "xhttp") out.push("xhttp");
   if (node.transport === "httpupgrade") out.push("httpupgrade");
@@ -1067,7 +1108,8 @@ function renderSurge(nodes: readonly ProxyNode[], notices: readonly string[]): s
  */
 function quantumultxNodeLine(node: ProxyNode): string {
   const parts: string[] = [];
-  const target = `${node.address}:${node.port}`;
+  // QX 写的是「地址:端口」：IPv6 字面量要加方括号，不然它把最后一段当端口、前面当地址。
+  const target = formatHostAddressWithPort(node.address, node.port);
 
   if (node.protocol === "vless") {
     // VLESS 本身不加密，QX 要求 method 固定填 none。
@@ -1130,9 +1172,10 @@ function renderQuantumultX(nodes: readonly ProxyNode[], notices: readonly string
  *                 [Proxy] 只为兼容保留、写法自成一套，所以节点不写进配置，
  *                 仍由节点订阅提供，组按名字引用。
  */
-export const PROXY_SUBSCRIPTION_PROFILE_FORMATS = ["surge", "loon", "quantumultx", "shadowrocket"] as const;
+export const PROXY_SUBSCRIPTION_PROFILE_FORMATS = ["surge", "loon", "quantumultx", "shadowrocket", "egern"] as const;
 
-type IosProfileFormat = (typeof PROXY_SUBSCRIPTION_PROFILE_FORMATS)[number];
+/** Egern 也有「节点订阅 / 完整配置」之分，但它的配置是 YAML，走 proxySubEgern.ts，不走下面这套 INI 式的。 */
+type IosProfileFormat = Exclude<(typeof PROXY_SUBSCRIPTION_PROFILE_FORMATS)[number], "egern">;
 
 export function proxySubscriptionFormatHasProfile(format: ProxySubscriptionFormat): boolean {
   return (PROXY_SUBSCRIPTION_PROFILE_FORMATS as readonly string[]).includes(format);
@@ -1209,7 +1252,7 @@ function iosProfileRules(
   return out;
 }
 
-function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, profileUrl: string, shadowrocketClient = false, prelude = ""): string {
+function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, profileUrl: string, shadowrocketClient = false, prelude = "", modules: readonly ProxySubTemplateModule[] = []): string {
   /**
    * 名字统一收拾一次再渲染：节点行、组行、规则行都按名字引用，三处必须一字不差。
    * Loon / QX / Shadowrocket 没有前置代理的位置，节点名上要带「需手动接」的标记
@@ -1236,7 +1279,8 @@ function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, 
   // 模板的 [General] 段：有就整段替换内置的那几行（模板文本自带 [General] 这一行）。
   const general = prelude.trim() ? prelude.trim().split("\n").map((line) => line.replace(/\s+$/, "")) : null;
   if (format === "surge") return renderSurgeProfile(nodes, groups, rules, header, profileUrl, asShadowrocket, general);
-  if (format === "loon") return renderLoonProfile(nodes, groups, rules, header, asShadowrocket, general);
+  // Shadowrocket 读 Loon 配置时不认 [Plugin]（它的模块是另一套），这时不写。
+  if (format === "loon") return renderLoonProfile(nodes, groups, rules, header, asShadowrocket, general, asShadowrocket ? [] : modules);
   if (format === "quantumultx") return renderQuantumultXProfile(nodes, groups, rules, header, general);
   return renderShadowrocketProfile(groups, rules, header, profileUrl, general);
 }
@@ -1301,6 +1345,7 @@ function renderLoonProfile(
   header: readonly string[],
   shadowrocketClient = false,
   general: readonly string[] | null = null,
+  modules: readonly ProxySubTemplateModule[] = [],
 ): string {
   const lines: string[] = [...header];
   if (general) lines.push(...general);
@@ -1340,6 +1385,8 @@ function renderLoonProfile(
     // 按官方 example.conf 的写法；tag 这个键官方没写，不加。
     if (rule.kind === "list") lines.push(`${rule.url},policy=${rule.target},enabled=true`);
   }
+  // 模板里挂的插件（shared/proxySubModules.ts）；没有就不出这一段，输出和原来一字不差。
+  lines.push(...loonPluginSection(modules));
   return `${lines.join("\n")}\n`;
 }
 
@@ -1462,6 +1509,13 @@ export type RenderProxySubscriptionOptions = {
   infoNodes?: readonly ProxyNode[];
   /** 认出来的客户端：按家族和版本再挡一层节点（REALITY / Hy2 / XHTTP……）。 */
   client?: DetectedProxyClient;
+  /**
+   * 渲染之前就被跳过的节点要说的话（已带 `#`），比如按 IPv6 输出时没有 IPv6 的那几条。
+   * 只有能写注释的格式（Clash、Surge、Loon、QX、Shadowrocket 的配置）写，JSON / base64 不写。
+   */
+  extraNotices?: readonly string[];
+  /** 模板里挂的模块 / 插件。Loon 的完整配置写成 [Plugin]，Egern 的写成 modules，别的格式忽略。 */
+  modules?: readonly ProxySubTemplateModule[];
 };
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u2028\u2029]/g;
@@ -1522,15 +1576,36 @@ export function renderProxySubscription(
   // 信息节点在最前：客户端列表第一眼就是「剩余 x GB」。它们不进组，所以不参与去重和引用检查。
   const infoNodes = sanitizeDocumentForTextFormats({ nodes: [...(options.infoNodes || [])], groups: [], ruleSets: [], rules: [] }).nodes;
   const nodes = infoNodes.length > 0 ? [...infoNodes, ...filtered.nodes] : filtered.nodes;
-  const { groups, ruleSets, rules, notices } = filtered;
+  const { groups, ruleSets, rules } = filtered;
+  const extraNotices = format === "singbox" || format === "base64" || format === "v2rayjson" ? [] : [...(options.extraNotices || [])];
+  const notices = extraNotices.length > 0 ? [...extraNotices, ...filtered.notices] : filtered.notices;
   const prelude = String(options.prelude || "");
   if (format === "clash") return renderClash(nodes, groups, ruleSets, rules, notices, !!options.weightedLoadBalance, prelude, document.providers || []);
   if (format === "singbox") return renderSingbox(nodes, groups, ruleSets, rules, prelude);
   if (format === "v2rayjson") {
     return renderV2rayJsonSubscription(nodes, rules, { testUrl: currentSettings.testUrl }, new Map(ruleSets.map((ref) => [ref.name, { geoKey: ref.geoKey, behavior: ref.behavior }])));
   }
+  if (format === "egern") {
+    /*
+      Egern 和 Surge 一样分两种：节点订阅只有 proxies（挂在它的外部组 / 订阅上），规则订阅是完整配置。
+      规则按 Surge 的那几份规则列表展开：Egern 认 Surge 的规则集，镜像设置也就和 Surge 一样生效。
+      它有 prev_hop，前置代理照常写，名字不用带「需手动接」。
+    */
+    if (!options.profile) return renderEgernNodes(nodes, notices);
+    return renderEgernProfile({
+      nodes,
+      groups,
+      rules: iosProfileRules(rules, ruleSets, "Surge", (target) => target),
+      notices,
+      prelude,
+      profileUrl: options.profileUrl || "",
+      modules: options.modules || [],
+      providers: document.providers || [],
+      settings: currentSettings,
+    });
+  }
   if (options.profile && proxySubscriptionFormatHasProfile(format)) {
-    return renderIosProfile({ ...filtered, nodes }, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient, prelude);
+    return renderIosProfile({ ...filtered, nodes, notices }, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient, prelude, options.modules || []);
   }
   if (format === "loon") return renderLoon(nodes, notices);
   if (format === "surge") return renderSurge(nodes, notices);

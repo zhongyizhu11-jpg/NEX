@@ -35,7 +35,7 @@ export const API_TOKEN_MODULE_DETAILS: Record<ApiTokenModule, string> = {
   proxy: "代理入站、订阅链接",
   users: "用户、推广、工单",
   billing: "套餐、钱包、支付、流量计费",
-  system: "系统设置、插件、公告、Webhook、维护模式",
+  system: "系统设置、DNS 解析记录、插件、界面主题、公告、Webhook、维护模式",
   monitoring: "总览、诊断、事件、运维看板、可用率、流量异常",
   shop: "只给商城回调用：开通、续期、停用套餐（只勾这一项）",
 };
@@ -45,10 +45,12 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
   rules: ["rules.", "lineDiagnostics."],
   hosts: [
     "hosts.",
+    "hostAgent.",
     "agentTokens.",
     "lookingGlass.",
     "ipChange.",
     "netProfile.",
+    "probeCarrier.",
     "agentRuntime.",
     "ops.firewall.",
     "ops.hostSecurity.",
@@ -61,10 +63,10 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
   ],
   lines: ["tunnels.", "forwardGroups.", "nodePools.", "topology.", "tlsInbounds."],
   proxy: ["proxyInbounds.", "proxySubscriptions."],
-  users: ["users.", "referral.", "tickets."],
+  users: ["users.", "referral.", "tickets.", "userTrafficHistory."],
   billing: ["billing.", "plans.", "payment.", "trafficBilling."],
   // shopSync. 下面的设置归系统；商城回调的入口 shopSync.inbound. 单独一档（shop），按最长前缀归属。
-  system: ["system.", "plugins.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries.", "shopSync."],
+  system: ["system.", "dnsRecords.", "plugins.", "uiThemes.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries.", "shopSync."],
   monitoring: [
     "dashboard.",
     "diagnostics.",

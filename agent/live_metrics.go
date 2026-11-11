@@ -97,6 +97,8 @@ func (r *liveMetricsRunner) run(cfg Config, interval time.Duration, send func(ma
 	sent := 0
 	for time.Since(startedAt) < liveMetricsMaxDuration {
 		payload := map[string]any{"m": r.sample()}
+		// 负载是小数、还可能没有，不放进 m（见 load_average.go）
+		addLoadAverageReport(payload)
 		var resp liveMetricsResponse
 		if err := send(payload, &resp); err != nil {
 			errorsInRow++

@@ -23,6 +23,7 @@ import { getDb, insertAndGetId, nowDate } from "../dbRuntime";
 import { deleteExpiredHistoryRows } from "./historyRetention";
 import { normalizeProxySubAlias } from "../../shared/proxySubTokenScope";
 import { parseProxySubCustomGroupsJson, PROXY_SUB_TEMPLATE_TARGETS, type ProxySubTemplate, type ProxySubTemplateTarget } from "../../shared/proxySubTemplates";
+import { parseProxySubTemplateModulesJson } from "../../shared/proxySubModules";
 import { invalidateProxySubCacheAll, invalidateProxySubCacheForUser } from "../proxySubCache";
 
 // ==================== 拉取日志 ====================
@@ -222,6 +223,8 @@ function rowToTemplate(row: any): ProxySubTemplate {
     target: String(row.target || "clash") as ProxySubTemplateTarget,
     prelude: String(row.prelude || ""),
     customGroups: parseProxySubCustomGroupsJson(row.customGroupsJson),
+    customRules: String(row.customRules || ""),
+    modules: parseProxySubTemplateModulesJson(row.modulesJson),
     isDefault: !!row.isDefault,
   };
 }
@@ -240,7 +243,7 @@ export async function getProxySubTemplateById(id: number): Promise<ProxySubTempl
   return rows[0] ? rowToTemplate(rows[0]) : null;
 }
 
-export async function createProxySubTemplate(data: { name: string; target: ProxySubTemplateTarget; prelude: string; customGroupsJson: string | null; isDefault: boolean }) {
+export async function createProxySubTemplate(data: { name: string; target: ProxySubTemplateTarget; prelude: string; customGroupsJson: string | null; customRules?: string | null; modulesJson?: string | null; isDefault: boolean }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (!(PROXY_SUB_TEMPLATE_TARGETS as readonly string[]).includes(data.target)) throw new Error("模板的目标格式不认识");
@@ -250,7 +253,7 @@ export async function createProxySubTemplate(data: { name: string; target: Proxy
   return id;
 }
 
-export async function updateProxySubTemplate(id: number, data: Partial<{ name: string; prelude: string; customGroupsJson: string | null; isDefault: boolean }>) {
+export async function updateProxySubTemplate(id: number, data: Partial<{ name: string; prelude: string; customGroupsJson: string | null; customRules: string | null; modulesJson: string | null; isDefault: boolean }>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const existing = await getProxySubTemplateById(id);

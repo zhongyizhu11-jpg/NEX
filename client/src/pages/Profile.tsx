@@ -3,6 +3,7 @@ import WorkspaceHeader from "@/components/WorkspaceHeader";
 import OpsProfileExtraSections from "@/features/ops/slots/ProfileExtraSections";
 import GoogleAccountSection from "@/features/googleLogin/GoogleAccountSection";
 import DiscordAccountSection from "@/features/discordLogin/DiscordAccountSection";
+import OidcAccountSection from "@/features/oidcLogin/OidcAccountSection";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useLayoutPreference } from "@/hooks/useCompactLayout";
+import { useMotionPreference } from "@/hooks/useUiPreferences";
 import { PERSONALIZATION_LAYOUTS, type PersonalizationLayoutId } from "@shared/personalization";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
@@ -137,6 +139,11 @@ function ProfileContent() {
   });
 
   const layoutPreference = useLayoutPreference();
+  const motionPreference = useMotionPreference();
+  // 存失败时 useUiPreferences 已经提示过、也把缓存退回去了；这里抛出来让开关自己弹回原位
+  const handleMotionChange = async (enabled: boolean) => {
+    if (!(await motionPreference.setEnabled(enabled))) throw new Error("界面动画设置失败");
+  };
 
   const updateAvatarMutation = trpc.users.updateAvatar.useMutation({
     onSuccess: (data) => {
@@ -494,6 +501,21 @@ function ProfileContent() {
                   />
                 )}
               />
+              {/*
+                界面动画（上游 2.3.287）：关了整站不做过渡和动画（lib/uiMotion.ts）。存在账号上，换设备也一样；
+                系统里开了「减少动态效果」的，动画本来就已经收敛过，这个开关是再彻底关掉。
+              */}
+              <SettingRow
+                asLabel
+                label="界面动画"
+                description="页面切换、展开收起、卡片挪动这些过渡效果。关掉后界面直接换到结果，不播动画；加载中的转圈照旧。"
+                control={(
+                  <OptimisticSwitch aria-label="界面动画"
+                    checked={motionPreference.enabled}
+                    onCheckedChangeAsync={handleMotionChange}
+                  />
+                )}
+              />
             </SettingList>
           </CardContent>
         </Card>
@@ -794,6 +816,8 @@ function ProfileContent() {
       <GoogleAccountSection />
 
       <DiscordAccountSection />
+
+      <OidcAccountSection />
       </div>
 
       <OpsProfileExtraSections />

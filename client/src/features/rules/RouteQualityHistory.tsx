@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 
@@ -57,7 +58,7 @@ export function RouteQualityHistory({ ruleId, enabled, activeKey }: { ruleId: nu
   const chartData = useMemo(() => (selected?.points || []).map((point) => ({
     ...point,
     label: formatLatencyTimeLabel(new Date(point.at)),
-    fullLabel: new Date(point.at).toLocaleString("zh-CN", { hour12: false }),
+    fullLabel: new Date(point.at).toLocaleString(getFormatLocale(), { hour12: false }),
   })), [selected]);
   const stats = useMemo(() => routeQualityStats(selected?.points || []), [selected]);
   const yMax = getLatencyYAxisMax(Math.max(0, ...chartData.map((point) => Math.max(point.latencyMs || 0, point.jitterMs || 0))));

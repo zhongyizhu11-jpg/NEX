@@ -17,6 +17,7 @@ import { createTotpSecret, createTotpUri, verifyTotpToken } from "../totp";
 import { clearTwoFactorChallenge, createTwoFactorChallenge, getTwoFactorChallenge, recordTwoFactorChallengeFailure } from "../twoFactorChallenges";
 import { clearTwoFactorSetupChallenge, clearTwoFactorSetupChallengesForUser, createTwoFactorSetupChallenge, getTwoFactorSetupChallenge } from "../twoFactorSetupChallenges";
 import { authCaptcha, CaptchaRefreshRateLimitError } from "../authCaptcha";
+import { captchaChallengeAllowed, readAuthCaptchaMode, verifyAuthCaptcha } from "../authCaptchaMode";
 import {
   authRateLimitState,
   clearAuthAccountFailures,
@@ -32,6 +33,11 @@ import { ipRateLimitScope } from "../ipRateLimitScope";
 import { apiTokenProfileUpdateError } from "../ops/apiTokenPolicy";
 import { revokeAllUserApiTokens } from "../ops/apiTokens";
 import { noteLoginDevice } from "../ops/loginDevices";
+import { endImpersonation } from "../ops/impersonation";
+import { passwordReset, PasswordResetError } from "../ops/passwordReset";
+import { PASSWORD_RESET_RATE_LIMITED_MESSAGE } from "../../shared/passwordReset";
+import { clientIp } from "../clientIp";
+import { mergeUiPreferences, parseUiPreferences, serializeUiPreferences, UI_PREFERENCE_TABLES } from "../../shared/uiPreferences";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -227,12 +233,22 @@ export const authRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
       throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
     }
-    return sanitizeUser(ctx.user);
+    // 代入窗口（管理员进入用户后台）：页面靠这一项显示「正在以 … 的身份查看」的横幅，平时是 null。
+    return {
+      ...sanitizeUser(ctx.user),
+      impersonation: ctx.impersonation
+        ? { adminName: ctx.impersonation.adminName, expiresAt: ctx.impersonation.expiresAt }
+        : null,
+    };
   }),
 
   createCaptcha: publicProcedure
     .input(z.object({ purpose: z.enum(["login", "register"]) }))
-    .mutation(({ input, ctx }) => {
+    .mutation(async ({ input, ctx }) => {
+      // 只有选了图片验证码才发图片挑战（shared/authCaptchaMode.ts）：点击模式下登录 / 注册不认图片答案。
+      if (!captchaChallengeAllowed(await readAuthCaptchaMode(), "image")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "CAPTCHA_MODE_MISMATCH" });
+      }
       try {
         return authCaptcha.createImageChallenge(getRequestIp(ctx), input.purpose);
       } catch (error) {
@@ -255,6 +271,7 @@ export const authRouter = router({
       verifyRegistration: config.enabled && config.verifyRegistration,
       registrationEnabled,
       authCaptchaEnabled: await captchaEnabled(),
+      authCaptchaMode: await readAuthCaptchaMode(),
       referralEnabled: referral.enabled,
       referralForceInvite: referral.enabled && referral.forceInvite,
     };
@@ -300,12 +317,75 @@ export const authRouter = router({
       });
     }),
 
+  /**
+   * 登录页「忘记密码」要显示什么：功能开没开、面板这边有没有配好能发链接的渠道（邮件 / Telegram / Discord
+   * 至少一个 + 面板公开访问地址）。只说面板的配置，不涉及任何账号。
+   */
+  passwordResetOptions: publicProcedure.query(async () => {
+    const [options, captcha, captchaMode] = await Promise.all([passwordReset.options(), captchaEnabled(), readAuthCaptchaMode()]);
+    return { ...options, captchaEnabled: captcha, captchaMode };
+  }),
+
+  /**
+   * 申请重置链接。账号存不存在、有没有找回方式，回的都是同一句话（见 server/ops/passwordReset.ts）。
+   * 开着人机验证时每次都要过一遍（和注册一样，不看失败次数）：这个接口会往外发邮件和消息，不能让脚本白刷。
+   */
+  requestPasswordReset: publicProcedure
+    .input(z.object({
+      identifier: z.string().trim().min(1, "请输入用户名或邮箱").max(ACCOUNT_NAME_MAX_LENGTH, "用户名太长"),
+      captchaId: z.string().max(CHALLENGE_ID_MAX_LENGTH).optional(),
+      captchaAnswer: z.string().trim().min(1).max(12).optional(),
+      capToken: z.string().trim().min(1).max(256).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      ctx.res.setHeader?.("Cache-Control", "no-store");
+      const ip = clientIp(ctx.req, "unknown");
+      // 先看来源额度（不扣），再验人机：已经超了的来源不用再消耗一枚验证令牌。
+      if (passwordReset.requestLimited(ip)) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: PASSWORD_RESET_RATE_LIMITED_MESSAGE });
+      }
+      if (await captchaEnabled()) {
+        // 只认管理员选的那一种（点击 / 图片），另一种的答案当验证失败。
+        const verdict = await verifyAuthCaptcha(authCaptcha, await readAuthCaptchaMode(), ip, "login", input);
+        if (verdict !== "ok") {
+          console.warn(`[Auth] Password reset captcha failed ip=${ip}`);
+          throw new Error(verdict === "missing" ? "CAPTCHA_REQUIRED" : "CAPTCHA_INVALID");
+        }
+      }
+      try {
+        return await passwordReset.request(input.identifier, { ip, userAgent: String(ctx.req.headers?.["user-agent"] || "") });
+      } catch (error) {
+        if (error instanceof PasswordResetError) throw new TRPCError({ code: error.code, message: error.message });
+        throw error;
+      }
+    }),
+
+  /** 拿重置链接里的令牌设新密码。成功后这个人所有登录和 API 令牌都失效，2FA / 通行密钥不动。 */
+  resetPasswordWithToken: publicProcedure
+    .input(z.object({
+      token: z.string().trim().min(1).max(128),
+      newPassword: z.string().max(PASSWORD_INPUT_MAX_LENGTH, "密码太长"),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      ctx.res.setHeader?.("Cache-Control", "no-store");
+      const ip = clientIp(ctx.req, "unknown");
+      try {
+        const result = await passwordReset.reset(input.token, input.newPassword, { ip, userAgent: String(ctx.req.headers?.["user-agent"] || "") });
+        // 这个浏览器里要是还留着谁的登录 cookie（可能就是这个账号的旧会话，已经被撤销了），一起清掉。
+        ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
+        return result;
+      } catch (error) {
+        if (error instanceof PasswordResetError) throw new TRPCError({ code: error.code, message: error.message });
+        throw error;
+      }
+    }),
+
   needsCaptcha: publicProcedure
     .input(z.object({ username: z.string().max(ACCOUNT_NAME_MAX_LENGTH) }))
     .query(async ({ input, ctx }) => {
       const ip = ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
       const enabled = await captchaEnabled();
-      return { enabled, required: enabled && needsCaptcha(ip, input.username) };
+      return { enabled, required: enabled && needsCaptcha(ip, input.username), mode: await readAuthCaptchaMode() };
     }),
 
   login: publicProcedure
@@ -332,19 +412,16 @@ export const authRouter = router({
 
         const useCaptcha = await captchaEnabled();
         if (useCaptcha && needsCaptcha(ip, input.username)) {
-          let captchaValid = false;
-          if (input.capToken) {
-            captchaValid = await authCaptcha.verifyCapToken(ip, "login", input.capToken);
-          } else if (input.captchaId && input.captchaAnswer) {
-            // Keep accepting the image challenge for older clients during the
-            // rollout. New clients use Cap's server-verifiable PoW token.
-            captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "login");
-          }
-          if (!input.capToken && !input.captchaId && !input.captchaAnswer) {
+          /*
+            只认管理员选的那一种（shared/authCaptchaMode.ts）：图片模式下的 Cap 令牌、点击模式下的图片答案
+            都按验证失败算，照样记一次失败。原来两种都收，「换成图片」挡不住专挑 Cap 来刷的脚本。
+          */
+          const verdict = await verifyAuthCaptcha(authCaptcha, await readAuthCaptchaMode(), ip, "login", input);
+          if (verdict === "missing") {
             console.warn(`[Auth] Login requires captcha username=${maskIdentifier(input.username)} ip=${ip}`);
             throw new Error("CAPTCHA_REQUIRED");
           }
-          if (!captchaValid) {
+          if (verdict !== "ok") {
             recordPasswordFail(ip, input.username);
             console.warn(`[Auth] Login captcha failed username=${maskIdentifier(input.username)} ip=${ip}`);
             throw new Error("CAPTCHA_INVALID");
@@ -474,19 +551,13 @@ export const authRouter = router({
       }
       const ip = getRequestIp(ctx);
       if (await captchaEnabled()) {
-        let captchaValid = false;
-        if (input.capToken) {
-          captchaValid = await authCaptcha.verifyCapToken(ip, "register", input.capToken);
-        } else if (input.captchaId && input.captchaAnswer) {
-          // Legacy image challenge compatibility for clients that have not yet
-          // loaded the Cap widget.
-          captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "register");
-        }
-        if (!captchaValid) {
+        const verdict = await verifyAuthCaptcha(authCaptcha, await readAuthCaptchaMode(), ip, "register", input);
+        if (verdict !== "ok") {
           console.warn(`[Auth] Register captcha failed username=${maskIdentifier(input.username)} ip=${ip}`);
-          throw new Error(input.capToken || input.captchaId ? "CAPTCHA_INVALID" : "CAPTCHA_REQUIRED");
+          throw new Error(verdict === "missing" ? "CAPTCHA_REQUIRED" : "CAPTCHA_INVALID");
         }
       }
+
       const emailConfig = await getEmailConfig();
       const usernameEmail = ensureAllowedEmail(input.username, emailConfig);
       const existing = await db.getUserByUsername(usernameEmail);
@@ -528,6 +599,12 @@ export const authRouter = router({
     }),
 
   logout: publicProcedure.mutation(async ({ ctx }) => {
+    // 代入窗口里的「退出」只结束这一次代入：管理员自己的登录 cookie、被代入用户自己的登录都不动。
+    if (ctx.impersonation) {
+      await endImpersonation(ctx.impersonation.id, "exit");
+      console.info(`[Auth] Impersonation ended adminId=${ctx.impersonation.adminUserId} userId=${ctx.user?.id} ip=${getRequestIp(ctx)}`);
+      return { success: true } as const;
+    }
     const cookieOptions = getSessionCookieOptions(ctx.req);
     ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
     if (ctx.user && ctx.authSession?.sid) {
@@ -675,7 +752,34 @@ export const authRouter = router({
       console.info(`[Auth] Profile updated userId=${ctx.user.id}`);
       return { success: true };
     }),
+
+  /**
+   * 按账号保存的界面偏好（shared/uiPreferences.ts）：界面动画、列表的列 / 顺序 / 列宽。
+   * 一次只改一项，在服务端按「读 → 合并 → 写」做，按账号串行：两个标签页一个改列、一个关动画，谁也不盖掉谁。
+   * 列的内容这里只做结构清洗；哪些列还在、哪些必须显示，画表时按当时的列定义算。
+   */
+  updateUiPreferences: protectedProcedure
+    .input(z.object({
+      motion: z.boolean().nullable().optional(),
+      table: z.object({
+        id: z.enum(UI_PREFERENCE_TABLES),
+        columns: z.object({
+          order: z.array(z.string().max(48)).max(64).optional(),
+          hidden: z.array(z.string().max(48)).max(64).optional(),
+          widths: z.record(z.string().max(48), z.number().finite()).optional(),
+        }).nullable(),
+      }).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => withKeyedTaskLock(`ui-preferences:${ctx.user.id}`, async () => {
+      // 从库里重读一次：ctx.user 是请求开始时的那份，排队期间可能已经被另一个请求改过
+      const current = await db.getUserById(ctx.user.id);
+      const merged = mergeUiPreferences(parseUiPreferences(current?.uiPreferences), input);
+      const serialized = serializeUiPreferences(merged);
+      await db.updateUserProfile(ctx.user.id, { uiPreferences: serialized });
+      return { uiPreferences: serialized };
+    })),
 });
+
 
 const emailAuthStoreCleanupTimer = setInterval(() => pruneEmailAuthStores(), 5 * 60 * 1000);
 emailAuthStoreCleanupTimer.unref?.();

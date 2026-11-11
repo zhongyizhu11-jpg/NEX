@@ -47,6 +47,9 @@ export const MIGRATION_TABLES = [
   "proxy_inbound_users",
   "host_tls_inbounds",
   "rule_sni_names",
+  // 转发规则的个人分组（server/ops/ruleGroupsTables.ts）：组在前，成员指向组、规则和用户
+  "rule_groups",
+  "rule_group_members",
   "proxy_sub_tokens",
   "proxy_node_shares",
   "proxy_sub_access_logs",
@@ -119,6 +122,13 @@ export const MIGRATION_TABLES = [
   "host_unlock_checks",
   // 节点池（server/ops/nodePoolTables.ts）：线路里一层候选用的机器分组
   "node_pools",
+  // 已安装的界面主题包（server/ops/uiThemesTables.ts）：站点默认主题的样式在这里，换面板不带着就成了经典
+  "ui_theme_packages",
+  // 网络拓扑上手动标注的外部节点 / 连线（server/ops/topologyManualTables.ts）：节点在前，连线引用它
+  "topology_manual_nodes",
+  "topology_manual_links",
+  // 用户每天的规则流量（server/ops/userTrafficDailyTables.ts，从流量桶汇总来的历史）
+  "user_traffic_daily",
   // 商城对接（server/shopSync/tables.ts）：商城用户绑定和回调记录（幂等键），丢了会重复开通
   "shop_sync_users",
   "shop_sync_orders",
@@ -230,12 +240,14 @@ const tables: TableDef[] = [
       c("expiresAt", "epoch"), c("trafficAutoReset", "bool", { notNull: true, default: false }),
       c("trafficResetDay", "int", { notNull: true, default: 1 }), c("lastTrafficReset", "epoch"), c("lastAutoTrafficReset", "epoch"),
       c("telegramId", "text"), c("telegramUsername", "text"), c("telegramFirstName", "text"), c("telegramLastName", "text"),
-      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("uiLayout", "varchar", { length: 16 }), c("telegramBindCode", "text"),
+      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("uiLayout", "varchar", { length: 16 }), c("uiPreferences", "text"), c("telegramBindCode", "text"),
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
       c("discordId", "varchar", { length: 32 }), c("discordUsername", "text"), c("discordEmail", "text"), c("discordLinkedAt", "epoch"),
       c("discordDmBlockedAt", "epoch"),
+      // 通用 OIDC 登录（server/oidcLoginService.ts）：按 (oidcIssuer, oidcSub) 认人，两列一起建唯一索引。
+      c("oidcIssuer", "varchar", { length: 191 }), c("oidcSub", "varchar", { length: 191 }), c("oidcEmail", "text"), c("oidcLinkedAt", "epoch"),
       c("browserSessionToken", "text"), c("mobileSessionToken", "text"), c("telegramSessionToken", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
@@ -244,7 +256,7 @@ const tables: TableDef[] = [
       // 绑定邀请人的时刻：这之前下的单不返利（老数据为空，按注册时刻算）。
       c("inviterBoundAt", "epoch"),
     ],
-    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"]],
+    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"], ["oidcIssuer", "oidcSub"]],
     indexes: [["inviterId"]],
   },
   {
@@ -297,11 +309,26 @@ const tables: TableDef[] = [
       c("hostStatusNotifyEnabled", "bool", { notNull: true, default: true }),
       // 只放行白名单 IP 的机器：别的机器（包括它自己经公网 IP 绕回来）连不上是正常的，诊断和订阅自动隐藏不拿这个当故障。
       c("ipWhitelistOnly", "bool", { notNull: true, default: false }),
+      // ===== Agent 管理（主机独立面板地址 / 流量阈值关机 / 资源告警覆盖 / 同 Token 换机接管） =====
+      // 这台主机的 Agent 改连哪个面板地址（反代、不同线路）；关着或为空 = 跟随全局「面板公开地址」。
+      c("agentPanelUrlEnabled", "bool", { notNull: true, default: false }), c("agentPanelUrl", "text"),
+      // 流量阈值关机（默认关）：本周期用量到比例后让 Agent 关机。TriggeredAt + CycleMark 记「这个周期已经关过」，
+      // CycleMark 是授权时 host_traffic_counters.resetAt（流量重置一次换一个周期）。
+      c("trafficShutdownEnabled", "bool", { notNull: true, default: false }),
+      c("trafficShutdownThresholdPercent", "int", { notNull: true, default: 100 }),
+      c("trafficShutdownTriggeredAt", "epoch"), c("trafficShutdownCycleMark", "bigint"),
+      // 资源告警的本机覆盖（JSON，见 shared/resourceAlert.ts 的 HostResourceAlertOverride）；NULL = 跟随全局。
+      c("resourceAlertOverride", "text"),
+      // 同 Token 换机接管：当前管理这台主机的 Agent 安装实例，和已经被接管下线的实例（JSON 数组，有上限）。
+      c("agentInstallationId", "varchar", { length: 64 }), c("agentRetiredInstallationIds", "text"),
+      c("agentInstallationChangedAt", "epoch"),
       c("telegramTrafficAlertEnabled", "bool", { notNull: true, default: false }), c("trafficAlertThresholdPercent", "int", { notNull: true, default: 20 }),
       c("telegramRenewalReminderEnabled", "bool", { notNull: true, default: false }), c("renewalReminderDays", "int", { notNull: true, default: 3 }),
       c("trafficAutoReset", "bool", { notNull: true, default: false }), c("trafficResetDay", "int", { notNull: true, default: 1 }),
       c("lastTrafficReset", "epoch"), c("ddnsEnabled", "bool", { notNull: true, default: false }), c("ddnsDomain", "text"),
       c("ddnsRecordType", "varchar", { length: 8, notNull: true, default: "A" }), c("ddnsIpVersion", "varchar", { length: 8, notNull: true, default: "ipv4" }),
+      // 主机 DDNS 的值：primary 只发主 IP（老配置默认就是它，行为不变），all 发检测到的全部地址（shared/hostDdnsPlan）
+      c("ddnsValueMode", "varchar", { length: 8, notNull: true, default: "primary" }),
       c("lastDdnsValue", "text"), c("lastDdnsAt", "epoch"), c("lastDdnsError", "text"), c("networkInterface", "text"), c("sortOrder", "int", { notNull: true, default: 0 }),
       c("geoCountryCode", "varchar", { length: 8 }), c("geoCountryName", "text"), c("geoRegion", "text"), c("geoEmoji", "varchar", { length: 16 }),
       c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("geoUpdatedAt", "epoch"),
@@ -311,6 +338,8 @@ const tables: TableDef[] = [
       c("geoManual", "bool", { notNull: true, default: false }),
       // 「Agent 检测 IP」手改过：心跳不再覆盖 ip / ipv4 / ipv6（agentAddressState）
       c("addressManual", "bool", { notNull: true, default: false }),
+      // Agent 2.2.255 起上报的网卡全部公网地址（JSON）和管理员挑的主 IP（空 = 没挑过），见 shared/hostPublicAddresses
+      c("detectedAddresses", "text"), c("primaryIpv4", "text"), c("primaryIpv6", "text"),
       c("portRangeStart", "int"), c("portRangeEnd", "int"), c("portAllowlist", "text"),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),
@@ -453,6 +482,8 @@ const tables: TableDef[] = [
       c("congestionControl", "text"), c("udpRelayMode", "text"),
       c("disableSni", "bool", { notNull: true, default: false }),
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"), c("xhttpMode", "text"),
+      // socks5 / mieru 的用户名；Mieru 的端口段终点（0 = 单端口）与承载（TCP / UDP / BOTH）。
+      c("username", "text"), c("portRangeEnd", "int", { notNull: true, default: 0 }), c("mieruTransport", "varchar", { length: 8 }),
       c("autoGroup", "varchar", { length: 16, notNull: true, default: "url-test" }), c("includeDirect", "bool", { notNull: true, default: false }), c("frontProxyId", "int", { notNull: true, default: 0 }),
       c("inboundId", "int", { notNull: true, default: 0 }), c("inboundUserId", "int", { notNull: true, default: 0 }),
       // 落地池的节点（2.3.500，server/landingPools.ts）：整个池在订阅里就这一条；poolSharedUserId > 0
@@ -496,6 +527,8 @@ const tables: TableDef[] = [
       c("upMbps", "int", { notNull: true, default: 0 }), c("downMbps", "int", { notNull: true, default: 0 }),
       c("congestionControl", "text"),
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"),
+      // Mieru（由 mita 承担，shared/mieruInbound.ts）：端口段终点（0 = 单端口）与承载（TCP / UDP / BOTH）。
+      c("portRangeEnd", "int", { notNull: true, default: 0 }), c("mieruTransport", "varchar", { length: 8 }),
       c("clonedFromInboundId", "int", { notNull: true, default: 0 }),
       // 落地池的成员入站（2.3.500）：面板照池的配置开的，只读，跟着池走。
       c("nodePoolId", "int", { notNull: true, default: 0 }),
@@ -523,6 +556,14 @@ const tables: TableDef[] = [
       c("name", "text", { notNull: true }), c("uuid", "text"), c("password", "text"),
       c("sharedUserId", "int", { notNull: true, default: 0 }),
       c("sortOrder", "int", { notNull: true, default: 0 }),
+      /*
+        这一份凭据自己跑了多少（字节）。只有能按用户计数的运行时才有：目前是 Mieru（mita 的 per-user 计数，
+        server/mitaTraffic.ts）。sing-box 那几个协议按端口计，分不到人头，这一列一直是 0。
+        mitaCounter* 是上一次见到的 mita 累计值和它属于哪一个 mita 进程（进程换了计数从 0 重来）。
+      */
+      c("trafficUsed", "bigint", { notNull: true, default: 0 }),
+      c("mitaCounterKey", "text"),
+      c("mitaCounterUp", "bigint", { notNull: true, default: 0 }), c("mitaCounterDown", "bigint", { notNull: true, default: 0 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["inboundId"], ["inboundId", "sortOrder"]],
@@ -615,6 +656,8 @@ const tables: TableDef[] = [
     columns: [
       c("id", "id"), c("name", "text", { notNull: true }), c("target", "varchar", { length: 16, notNull: true }),
       c("prelude", "longtext", { notNull: true, default: "" }), c("customGroupsJson", "longtext"),
+      // 模板里的分流规则（文本，和别处的自定义规则同一种写法）和 Loon 插件引用（JSON）；老库自动补列，空 = 没有。
+      c("customRules", "longtext"), c("modulesJson", "longtext"),
       c("isDefault", "bool", { notNull: true, default: false }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
@@ -668,12 +711,17 @@ const tables: TableDef[] = [
       c("chinaHealthCheckMethod", "varchar", { length: 16, notNull: true, default: "tcp" }),
       c("telegramSwitchNotifyEnabled", "bool", { notNull: true, default: false }),
       c("ddnsAutoResolveEnabled", "bool", { notNull: true, default: true }), c("autoFailback", "bool", { notNull: true, default: true }),
+      // 双栈 DDNS：A / AAAA 组同时发另一族，跟着同一批成员走（server/forwardGroupDualStackDdns.ts）。默认关，老组不变。
+      c("ddnsDualStack", "bool", { notNull: true, default: false }),
       // Multi-front-VPS bandwidth aggregation. Off by default so existing entry
       // groups keep publishing one equal record per healthy member.
       c("bandwidthAggregationEnabled", "bool", { notNull: true, default: false }),
       c("bandwidthAggregationStrategy", "varchar", { length: 32, notNull: true, default: "capacity" }),
       c("bandwidthAggregationSlots", "int", { notNull: true, default: 8 }),
       c("bandwidthAggregationMinMembers", "int", { notNull: true, default: 1 }),
+      // 分线路解析（shared/ddnsLines.ts）：线路成员全挂时回落到默认线路还是删掉线路记录；
+      // ddnsLineState 是面板在每条非默认线路上写了什么、服务商记录 ID（运行状态）。
+      c("ddnsLineFallback", "varchar", { length: 16, notNull: true, default: "default" }), c("ddnsLineState", "text"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("activeMemberId", "int"), c("lastDdnsValue", "text"),
       // 成员跟着哪个节点池（2.3.497）：设了就由 server/nodePoolGroups.ts 按池里的机器同步主机成员
       c("poolId", "int"),
@@ -691,6 +739,8 @@ const tables: TableDef[] = [
       // Declared uplink of this front VPS in Mbps (0 = unknown) and its manual
       // aggregation weight (0 = derive the weight from the strategy).
       c("bandwidthMbps", "int", { notNull: true, default: 0 }), c("aggregationWeight", "int", { notNull: true, default: 0 }),
+      // 分到的运营商线路（JSON [{id,name}]，shared/ddnsLines.ts）；null = 只在默认线路。
+      c("ddnsLines", "text"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("healthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }),
       // 线路按时间段启用（shared/memberSchedule.ts）：可用时段，和「是时段让它停的」标记。
       c("activeSchedule", "text"), c("scheduleSuspended", "bool", { notNull: true, default: false }),
@@ -802,7 +852,7 @@ const tables: TableDef[] = [
   // 自动模式学到的限速点也记在这里，下发配置时作为提示值还给 FXP。
   { name: "tunnel_link_shaping", columns: [c("id", "id"), c("tunnelId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("role", "varchar", { length: 16, notNull: true, default: "entry" }), c("direction", "varchar", { length: 8, notNull: true }), c("mode", "varchar", { length: 16, notNull: true, default: "auto" }), c("state", "varchar", { length: 16, notNull: true, default: "watching" }), c("rateMbps", "int", { notNull: true, default: 0 }), c("learnedMbps", "int", { notNull: true, default: 0 }), c("lossPermille", "int", { notNull: true, default: 0 }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["tunnelId", "hostId", "direction"]], indexes: [["hostId"], ["updatedAt"]] },
   { name: "forward_rule_tunnel_exits", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("exitNodeId", "int", { notNull: true }), c("exitSeq", "int", { notNull: true }), c("exitHostId", "int", { notNull: true }), c("tunnelExitPort", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["ruleId", "exitNodeId"], ["ruleId", "exitSeq"]], indexes: [["ruleId"], ["tunnelId"], ["exitHostId"], ["exitHostId", "tunnelExitPort"]] },
-  { name: "host_metrics", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("cpuUsage", "int"), c("memoryUsage", "int"), c("memoryUsed", "bigint"), c("swapUsage", "int"), c("swapUsed", "bigint"), c("swapTotal", "bigint"), c("networkIn", "bigint"), c("networkOut", "bigint"), c("diskUsage", "int"), c("diskUsed", "bigint"), c("diskTotal", "bigint"), c("uptime", "bigint"), c("tcpConnections", "int"), c("udpConnections", "int"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["hostId", "recordedAt"], ["recordedAt", "hostId"]] },
+  { name: "host_metrics", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("cpuUsage", "int"), c("memoryUsage", "int"), c("memoryUsed", "bigint"), c("swapUsage", "int"), c("swapUsed", "bigint"), c("swapTotal", "bigint"), c("networkIn", "bigint"), c("networkOut", "bigint"), c("diskUsage", "int"), c("diskUsed", "bigint"), c("diskTotal", "bigint"), c("uptime", "bigint"), c("tcpConnections", "int"), c("udpConnections", "int"), c("loadAvg1", "int"), c("loadAvg5", "int"), c("loadAvg15", "int"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["hostId", "recordedAt"], ["recordedAt", "hostId"]] },
   { name: "host_traffic_counters", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("lastSystemIn", "bigint"), c("lastSystemOut", "bigint"), c("lastDeltaIn", "bigint", { notNull: true, default: 0 }), c("lastDeltaOut", "bigint", { notNull: true, default: 0 }), c("lastReportedAt", "epoch"), c("resetAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["hostId"]], indexes: [["updatedAt"], ["lastReportedAt"]] },
   // 按 95 计费的主机每 5 分钟一行（server/hostRateBuckets.ts），bucketStart 是 epoch 秒，留 40 天。
   // 不进 MIGRATION_TABLES：迁到新面板后从头记，这个周期的 95 估算会标「样本不足」，不会算错。
@@ -826,8 +876,10 @@ const tables: TableDef[] = [
     indexes: [["dayStart", "id"]],
   },
   { name: "forward_group_latency_stats", columns: [c("id", "id"), c("groupId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["groupId", "recordedAt"], ["recordedAt", "groupId"]] },
-  { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("addressFamily", "varchar", { length: 8, notNull: true, default: "auto" }), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
-  { name: "host_probe_service_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "serviceId"]] },
+  { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("addressFamily", "varchar", { length: 8, notNull: true, default: "auto" }), c("httpTimeoutSeconds", "int", { notNull: true, default: 5 }), c("httpExpectedStatus", "varchar", { length: 128, notNull: true, default: "200-399" }), c("httpSkipTlsVerify", "bool", { notNull: true, default: false }), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    // 三网视图的运营商标签（shared/probeCarrier.ts）：ct 电信 / cu 联通 / cm 移动，空 = 不归哪一网
+    c("carrier", "varchar", { length: 8 })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
+  { name: "host_probe_service_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("failure", "varchar", { length: 16 }), c("httpStatus", "int"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "serviceId"]] },
   {
     // 主机探测按小时汇总，留 30 天（server/repositories/hostProbeHourlyRepository.ts）。
     name: "host_probe_service_hourly",
@@ -863,8 +915,15 @@ const tables: TableDef[] = [
   { name: "user_tunnel_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "tunnelId"]], indexes: [["tunnelId"]] },
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
   { name: "system_settings", columns: [c("key", "varchar", { length: 191, notNull: true }), c("value", "longtext"), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["key"]] },
-  { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("planDurationDays", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"]] },
-  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxProxyInbounds", "int", { notNull: true, default: 0 }), c("maxProxySubTokens", "int", { notNull: true, default: 0 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("allowProxySubscription", "bool", { notNull: true, default: false }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("dedicatedProxyPort", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("referralRateBps", "int", { notNull: true, default: 0 }), c("maxProxyDevices", "int", { notNull: true, default: 0 }), c("proxySubTemplateId", "int", { notNull: true, default: 0 }), c("allowExternalSubSources", "bool", { notNull: true, default: false }), c("showSubInfoNodes", "bool", { notNull: true, default: false })] },
+  { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("planDurationDays", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("stockReserved", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"]] },
+  /*
+    删除的未支付订单留一条「墓碑」（上游 2.3.298 删除未支付订单）：管理员删掉一笔待支付订单时，客户可能还停在
+    收银台、随后真的付了款。网关回调回来找不到订单，以前只能记一行日志，钱就丢了。墓碑记着这笔单是谁的、
+    多少钱、哪个渠道，迟到的回调对得上就把实付转入余额（和已关闭订单收到付款一样，见 server/payment.ts）。
+    只在本库里用，不进备份迁移：迁移走的新面板收不到旧面板那批订单的回调。
+  */
+  { name: "payment_order_tombstones", columns: [c("id", "id"), c("outTradeNo", "varchar", { length: 191, notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("status", "varchar", { length: 32, notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("deletedByUserId", "int"), c("deletedAt", "epoch", { notNull: true, default: "now" }), c("creditedAt", "epoch")], unique: [["outTradeNo"]], indexes: [["deletedAt"]] },
+  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxProxyInbounds", "int", { notNull: true, default: 0 }), c("maxProxySubTokens", "int", { notNull: true, default: 0 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("allowProxySubscription", "bool", { notNull: true, default: false }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("dedicatedProxyPort", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("referralRateBps", "int", { notNull: true, default: 0 }), c("maxProxyDevices", "int", { notNull: true, default: 0 }), c("proxySubTemplateId", "int", { notNull: true, default: 0 }), c("allowExternalSubSources", "bool", { notNull: true, default: false }), c("showSubInfoNodes", "bool", { notNull: true, default: false }), c("stockLimit", "int", { notNull: true, default: 0 }), c("stockUsed", "int", { notNull: true, default: 0 })] },
   // 套餐的多周期定价：一个套餐挂一组「周期 → 价格」。空表示这个套餐只有它自己
   // 那一档（存量数据全是这样），所以升级不需要迁移任何东西。
   { name: "subscription_plan_prices", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("durationDays", "int", { notNull: true }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "durationDays"]], indexes: [["planId"]] },
@@ -876,7 +935,7 @@ const tables: TableDef[] = [
   { name: "user_subscriptions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("planId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "active" }), c("source", "varchar", { length: 32, notNull: true, default: "admin" }), c("paymentOrderNo", "text"), c("planSnapshot", "text"), c("durationDays", "int"), c("portRangeStart", "int"), c("portRangeEnd", "int"), c("nextTrafficResetAt", "epoch"), c("lastTrafficResetAt", "epoch"), c("userDismissedAt", "epoch"), c("adminDismissedAt", "epoch"), c("startedAt", "epoch", { notNull: true, default: "now" }), c("expiresAt", "epoch"), c("autoRenew", "bool", { notNull: true, default: false }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "status", "expiresAt"], ["planId"], ["paymentOrderNo"]] },
   { name: "user_traffic_addons", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("subscriptionId", "int", { notNull: true }), c("planId", "int", { notNull: true }), c("addonId", "int"), c("trafficBytes", "bigint", { notNull: true, default: 0 }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("source", "varchar", { length: 32, notNull: true, default: "user" }), c("status", "varchar", { length: 32, notNull: true, default: "active" }), c("operatorUserId", "int"), c("description", "text"), c("cycleResetAt", "epoch"), c("expiresAt", "epoch"), c("expiredAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "status", "expiresAt"], ["subscriptionId", "status"], ["addonId"]] },
   { name: "balance_transactions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("type", "varchar", { length: 32, notNull: true }), c("amountCents", "bigint", { notNull: true }), c("balanceAfterCents", "bigint", { notNull: true }), c("description", "text"), c("operatorUserId", "int"), c("paymentOrderNo", "text"), c("redemptionCodeId", "int"), c("createdAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "createdAt"], ["paymentOrderNo"]] },
-  { name: "traffic_billing_configs", columns: [c("id", "id"), c("resourceType", "varchar", { length: 16, notNull: true }), c("resourceId", "int", { notNull: true }), c("enabled", "bool", { notNull: true, default: true }), c("requiresPermission", "bool", { notNull: true, default: false }), c("description", "text"), c("pricePerGbCents", "bigint", { notNull: true, default: 0 }), c("pricePerGbMilliCents", "bigint", { notNull: true, default: 0 }), c("multiplier", "int", { notNull: true, default: 100 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["resourceType", "resourceId"]], indexes: [["enabled"], ["requiresPermission"]] },
+  { name: "traffic_billing_configs", columns: [c("id", "id"), c("resourceType", "varchar", { length: 16, notNull: true }), c("resourceId", "int", { notNull: true }), c("enabled", "bool", { notNull: true, default: true }), c("requiresPermission", "bool", { notNull: true, default: false }), c("description", "text"), c("pricePerGbCents", "bigint", { notNull: true, default: 0 }), c("pricePerGbMilliCents", "bigint", { notNull: true, default: 0 }), c("multiplier", "int", { notNull: true, default: 100 }), c("stockLimit", "int", { notNull: true, default: 0 }), c("maxRulesPerUser", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["resourceType", "resourceId"]], indexes: [["enabled"], ["requiresPermission"]] },
   { name: "traffic_billing_records", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("ruleId", "int", { notNull: true }), c("resourceType", "varchar", { length: 16, notNull: true }), c("resourceId", "int", { notNull: true }), c("bytes", "bigint", { notNull: true, default: 0 }), c("billedGb", "int", { notNull: true, default: 0 }), c("pricePerGbCents", "bigint", { notNull: true, default: 0 }), c("pricePerGbMilliCents", "bigint", { notNull: true, default: 0 }), c("multiplier", "int", { notNull: true, default: 100 }), c("amountCents", "bigint", { notNull: true, default: 0 }), c("balanceAfterCents", "bigint", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "createdAt"], ["resourceType", "resourceId", "createdAt"], ["ruleId", "createdAt"]] },
   { name: "traffic_billing_usage", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("resourceType", "varchar", { length: 16, notNull: true }), c("resourceId", "int", { notNull: true }), c("totalBytes", "bigint", { notNull: true, default: 0 }), c("billedGb", "int", { notNull: true, default: 0 }), c("pendingMilliCents", "bigint", { notNull: true, default: 0 }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "resourceType", "resourceId"]], indexes: [["resourceType", "resourceId"]] },
   { name: "traffic_billing_rule_usage", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("ruleId", "int", { notNull: true }), c("resourceType", "varchar", { length: 16, notNull: true }), c("resourceId", "int", { notNull: true }), c("totalBytes", "bigint", { notNull: true, default: 0 }), c("billedGb", "int", { notNull: true, default: 0 }), c("pendingMilliCents", "bigint", { notNull: true, default: 0 }), c("settled", "bool", { notNull: true, default: false }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["ruleId", "resourceType", "resourceId"]], indexes: [["userId", "resourceType", "resourceId"], ["resourceType", "resourceId"]] },

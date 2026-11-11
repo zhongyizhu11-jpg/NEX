@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
 import { createQueryCache } from "../queryCache";
@@ -19,6 +20,9 @@ import {
   MAX_MEMBER_WEIGHT,
 } from "../../shared/bandwidthAggregation";
 import { getLinkAccessScope, visibleForwardGroupMemberIds, type LinkAccessScope } from "../linkAccessView";
+import { DDNS_LINE_FALLBACK_MODES, MAX_MEMBER_DDNS_LINES } from "../../shared/ddnsLines";
+import { listDdnsLinesForGroups } from "../ddnsLineRecords";
+import { DnspodRecordsError } from "../dnspodRecords";
 import {
   anyForwardGroupHasTunnelMember,
   buildForwardGroupAvailabilitySummaryIndex,
@@ -51,6 +55,11 @@ const memberSchema = z.object({
       to: z.string().max(5),
     })).max(8),
   }).nullable().optional(),
+  /** 分到的运营商线路（分线路解析，shared/ddnsLines.ts）；null / [] = 只在默认线路，不传 = 不改。 */
+  ddnsLines: z.array(z.object({
+    id: z.string().trim().min(1).max(64).regex(/^[0-9A-Za-z=_.:-]+$/),
+    name: z.string().trim().max(64),
+  })).max(MAX_MEMBER_DDNS_LINES).nullable().optional(),
 });
 
 import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
@@ -82,6 +91,9 @@ const baseSchema = z.object({
   failoverTargets: z.array(failoverTargetSchema).max(10).optional(),
   domain: z.string().max(255).nullable().optional(),
   recordType: z.enum(["A", "AAAA", "CNAME"]).default("A"),
+  // 双栈 DDNS：A 组同时发 AAAA、AAAA 组同时发 A（跟着同一批成员，见 server/forwardGroupDualStackDdns.ts）
+  // 没传（老客户端、脚本）= 新建时关、编辑时保持原样
+  ddnsDualStack: z.boolean().optional(),
   failoverSeconds: z.number().int().min(10).max(3600).default(60),
   recoverSeconds: z.number().int().min(10).max(3600).default(120),
   rateLimitMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
@@ -95,6 +107,7 @@ const baseSchema = z.object({
   bandwidthAggregationStrategy: z.enum(BANDWIDTH_AGGREGATION_STRATEGIES).optional().default("capacity"),
   bandwidthAggregationSlots: z.number().int().min(1).max(MAX_AGGREGATION_RECORD_SLOTS).optional().default(8),
   bandwidthAggregationMinMembers: z.number().int().min(1).max(5).optional().default(1),
+  ddnsLineFallback: z.enum(DDNS_LINE_FALLBACK_MODES).optional().default("default"),
   autoFailback: z.boolean().default(true),
   isEnabled: z.boolean().default(true),
   // 端口转发挂了入口组时可以没有自己的成员，下限由 service 按形态判
@@ -342,6 +355,21 @@ export const forwardGroupsRouter = router({
       const group = await assertForwardGroupAccess(input.groupId, ctx.user);
       if (String(group.groupMode || "failover") !== "chain") throw new Error("仅转发链支持链路自测");
       return runForwardGroupChainSelfTest(input.groupId);
+    }),
+
+  /**
+   * 组编辑框里「运营商线路」能选什么：服务商支不支持（不支持时给原因，界面据此置灰）、
+   * DNSPod 这个主域名的套餐有哪些线路、哪条是组原来那条记录所在的默认线路。
+   */
+  ddnsLines: adminProcedure
+    .input(z.object({ domain: z.string().trim().max(253).nullable().optional() }))
+    .query(async ({ input }) => {
+      try {
+        return await listDdnsLinesForGroups(input.domain);
+      } catch (error) {
+        if (error instanceof DnspodRecordsError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+        throw error;
+      }
     }),
 
   events: adminProcedure

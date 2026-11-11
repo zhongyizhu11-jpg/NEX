@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UiThemeQuickSwitch } from "@/components/UiThemeQuickSwitch";
+import { LanguageMenuItem } from "@/components/LanguageSwitcher";
 import {
   LayoutDashboard,
   Ellipsis,
@@ -109,6 +110,7 @@ import { useUiTheme } from "@/hooks/useUiTheme";
 import { useLayoutPreference } from "@/hooks/useCompactLayout";
 import { navigateAfterPrefetch, prefetchRoute, prefetchRoutesWhenIdle } from "@/pages/routeChunks";
 import { docsUrl } from "@/lib/docsLinks";
+import RuleBatchJobDock from "@/components/rules/RuleBatchJobDock";
 
 const TWO_FACTOR_SETUP_SECONDS = 5 * 60;
 /*
@@ -1649,8 +1651,8 @@ function DashboardLayoutContent({
                 <div className="flex items-start gap-2">
                   <UserAvatar user={user as any} className="h-8 w-8 shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{accountDisplayName}</p>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">{isAdmin ? "管理员" : "普通用户"} · {accountUsername}</p>
+                    <p className="truncate text-sm font-medium" data-no-translate="">{accountDisplayName}</p>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">{isAdmin ? "管理员" : "普通用户"} · <span data-no-translate="">{accountUsername}</span></p>
                   </div>
                 </div>
               </div>
@@ -1712,6 +1714,8 @@ function DashboardLayoutContent({
                 <span>精简布局</span>
                 {compactLayout ? <Check className="ml-auto h-4 w-4 text-primary" aria-hidden="true" /> : null}
               </DropdownMenuItem>
+              {/* 界面语言：中英互换，记在这台设备上（见 client/src/i18n） */}
+              <LanguageMenuItem />
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleLogout}
@@ -2038,6 +2042,8 @@ function DashboardLayoutContent({
             </MobileNavContext.Provider>
           </div>
         </main>
+        {/* 规则批量任务的进度小窗（右下角）：挂在布局上，换页面也看得到 */}
+        <RuleBatchJobDock />
         {/* 精简布局：页脚那一行链接不占每页的底部（设置 › 关于 里都有） */}
         <footer data-fx-compact-hide="" className="hidden pb-4 text-center text-xs text-muted-foreground md:block">
           <div className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
@@ -2612,7 +2618,7 @@ function DashboardLayoutContent({
           <DialogDescription>关闭后可在公告中查看。</DialogDescription>
           <div
             className="max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
-            dangerouslySetInnerHTML={{ __html: renderMixedHtml(popupAnnouncement?.content || "") }}
+            data-no-translate="" dangerouslySetInnerHTML={{ __html: renderMixedHtml(popupAnnouncement?.content || "") }}
           />
           <DialogFooter>
             <Button onClick={() => popupAnnouncement?.id && dismissAnnouncement.mutate({ id: popupAnnouncement.id })}>我知道了</Button>
@@ -2633,7 +2639,7 @@ function DashboardLayoutContent({
           </DialogDescription>
           <div
             className="max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
-            dangerouslySetInnerHTML={{ __html: renderMixedHtml(upgradeAnnouncement?.content || "") }}
+            data-no-translate="" dangerouslySetInnerHTML={{ __html: renderMixedHtml(upgradeAnnouncement?.content || "") }}
           />
           <DialogFooter>
             <Countdown deadlineMs={upgradeAnnouncementDeadline}>

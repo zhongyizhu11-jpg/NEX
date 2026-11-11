@@ -25,6 +25,7 @@ const PLAIN_CODES: Record<string, string> = {
   CAPTCHA_INVALID: "验证码错误或已过期，请重新输入",
   CAPTCHA_CHALLENGE_UNAVAILABLE: "人机验证服务暂不可用，请稍后重试",
   CAPTCHA_LOAD_FAILED: "人机验证组件加载失败，请检查网络后重试",
+  CAPTCHA_MODE_MISMATCH: "管理员刚换了人机验证方式，请刷新页面后重试",
   TELEGRAM_LOGIN_DISABLED: "Telegram 登录未启用，请改用账号密码登录",
   TELEGRAM_NOT_BOUND: "当前 Telegram 未绑定面板账号，请先使用账号密码登录并在面板完成绑定",
   TELEGRAM_WIDGET_REPLAYED: "Telegram 登录请求已失效，请重新发起登录",

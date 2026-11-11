@@ -32,6 +32,7 @@ import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate, queryR
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolValue, inList, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
+import { clearRuleGroupMembersForHost } from "../ruleGroupRelations";
 import { signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
 import { repairPortForwardRuleHostReferences } from "../portForwardRuleHosts";
 import { dbBool, sqlBool } from "./repositoryUtils";
@@ -784,7 +785,15 @@ export async function deleteHost(id: number) {
   await deleteTlsInboundsForHost(id);
   // 这台机器上的规则整批删行：先把它们发布过的专属域名记进待删表（见 ruleEntryDomainRepository）。
   const retiredRuleDomains = await recordRuleEntryDomainCleanupsBeforeDelete({ hostId: id }).catch(() => 0);
-  await db.delete(forwardRules).where(eq(forwardRules.hostId, id));
+  /*
+    规则行整批删之前，同一个事务里先清它们的个人分组关系（server/ruleGroupRelations.ts）：这里不走
+    finalizeForwardRuleDelete，不清的话每条规则都留下一行指向不存在规则的关系。
+    事务里重新拿一次 db —— 外面那个不一定在这个事务的连接上。
+  */
+  await withDatabaseTransaction(async () => {
+    await clearRuleGroupMembersForHost(id);
+    await (await getDb())!.delete(forwardRules).where(eq(forwardRules.hostId, id));
+  });
   if (retiredRuleDomains > 0) await afterDatabaseCommit(() => signalRuleEntryDomainCleanup("host-deleted"));
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.exitHostId, id));
   await db.delete(agentTokens).where(eq(agentTokens.hostId, id));
@@ -813,6 +822,7 @@ export async function deleteHost(id: number) {
   // 网络画像、解锁检测记录（server/ops/netProfileTables.ts / unlockTables.ts）：表是后加的，老库里可能还没建好，失败不拦删除
   await executeRaw(`DELETE FROM ${quoteIdentifier("host_network_profiles")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
   await executeRaw(`DELETE FROM ${quoteIdentifier("host_unlock_checks")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
+  await executeRaw(`DELETE FROM ${quoteIdentifier("host_ip_intel")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
   await db.delete(trafficBillingConfigs).where(and(
     eq(trafficBillingConfigs.resourceType, "host"),
     eq(trafficBillingConfigs.resourceId, id),
@@ -855,7 +865,8 @@ async function getHostEgressDependentRules(hostId: number) {
   })
     .from(forwardRules)
     .innerJoin(proxyInbounds, eq(proxyInbounds.id, forwardRules.egressInboundId))
-    .where(and(eq(forwardRules.egressType, "ss_host"), eq(proxyInbounds.hostId, hostId)))
+    // ss_host 和 vless_host（VLESS Reality 出口）都指向落地入站。
+    .where(and(inArray(forwardRules.egressType, ["ss_host", "vless_host"]), eq(proxyInbounds.hostId, hostId)))
     .catch(() => [] as any[]);
   return (rows as any[])
     .filter((row) => Number(row.ruleHostId) !== hostId && !dbBool(row.pendingDelete) && !Number(row.forwardGroupRuleId || 0))

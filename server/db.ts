@@ -19,6 +19,7 @@ import { revokeUserAuthSessions } from "./repositories/sessionRepository";
 import { cleanOldTrafficStatBuckets, cleanOldTrafficStats, ensureTrafficStatBucketsBackfilled, ensureUserTrafficCountersBackfilled } from "./repositories/metricsRepository";
 import { getSetting, migrateSecretSettingsToEncrypted, setSetting } from "./repositories/settingsRepository";
 import { ensureBundledDeveloperAnnouncements } from "./repositories/announcementRepository";
+import { ensureSiteUiThemeInstalled } from "./uiThemes";
 import { backfillManualEntitlementsFromEffectiveUsers, repairSubscriptionBillingStateOnce } from "./repositories/billingRepository";
 import { backfillTrafficBillingRuleUsageFromStats } from "./repositories/trafficBillingRepository";
 import { purgeSettledPendingForwardRuleDeletes, repairConflictingProtocolPortRules } from "./repositories/forwardRuleRepository";
@@ -47,6 +48,7 @@ export * from "./repositories/permissionRepository";
 export * from "./repositories/settingsRepository";
 export * from "./repositories/billingRepository";
 export * from "./repositories/trafficBillingRepository";
+export * from "./repositories/productStockRepository";
 export * from "./repositories/announcementRepository";
 export * from "./repositories/ticketRepository";
 export * from "./repositories/forwardGroupRepository";
@@ -580,6 +582,10 @@ export async function initDatabase() {
       }
     }).catch((error) => {
       console.warn("[Database] Subscription billing reconciliation skipped:", error instanceof Error ? error.message : String(error));
+    }));
+    // 站点默认主题是官方主题库里的一套、库里却没装（从主题还是内置的版本升上来）：开机补装，见 server/uiThemes.ts
+    await runInitializationStep("ensure-site-ui-theme", () => ensureSiteUiThemeInstalled().then(() => undefined).catch((error) => {
+      console.warn("[UiTheme] Site theme install skipped:", error instanceof Error ? error.message : String(error));
     }));
     await runInitializationStep("ensure-announcements", () => ensureBundledDeveloperAnnouncements().catch((error) => {
       console.warn("[Announcement] Bundled developer announcements skipped:", error instanceof Error ? error.message : String(error));

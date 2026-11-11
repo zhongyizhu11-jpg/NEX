@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import PearlHeaderBadges from "@/components/PearlHeaderBadges";
@@ -45,7 +46,7 @@ function formatTrafficTime(value: string | Date): string {
 function formatDate(value: string | Date | null | undefined): string {
   if (!value) return "永久有效";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "永久有效" : date.toLocaleDateString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "永久有效" : date.toLocaleDateString(getFormatLocale());
 }
 
 function getExpiryStatus(value: string | Date | null | undefined) {

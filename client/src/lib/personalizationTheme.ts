@@ -5,12 +5,12 @@ import {
   normalizePersonalizationPageTint,
   normalizePersonalizationThemePresetId,
   normalizePersonalizationUiTheme,
-  type PersonalizationUiThemeId,
   personalizationPageTintVars,
   primaryGradientStops,
 } from "@shared/personalization";
 
-import { isUiThemeStyleReady, loadUiThemeStyles } from "./uiThemeStyles";
+import { installedUiThemeIds } from "./installedUiThemes";
+import { isUiThemeStyleReady, isUiThemeStyleUsable, loadUiThemeStyles, syncUiThemePackageSheets } from "./uiThemeStyles";
 
 /*
   预设写到 <html> 上的变量。
@@ -61,9 +61,30 @@ function presetFollowsTokens(preset: unknown) {
   return (preset as { followsTokens?: boolean }).followsTokens === true;
 }
 
+/*
+  设置 › 个性化里点一下「试看」的那一份（配色 / 页面底色 / 卡片风格 / 界面主题）。
+
+  试看只是把草稿挂到页面上，没存。可 PersonalizationLayer 一直盯着 <html> 的 class（深浅色切换要重算底色），
+  每次变化都按**存着的**站点设置重挂一遍 —— 而换主题那一下的淡入本身就会往 class 上加 fx-theme-fading，
+  于是试看刚挂上就被它当场改回去，点了等于没点（2.3.524 及以前一直这样）。
+  现在试看的值记在这里：只要它在，谁来重挂页面上的 <html>，挂的都是试看的这一份；设置页存了或离开时清掉。
+  只管页面上那个 <html>：测试里传进来的假节点不受影响。
+*/
+export type PersonalizationPreview = { theme?: unknown; pageTint?: unknown; cardStyle?: unknown; uiTheme?: unknown };
+let personalizationPreview: PersonalizationPreview | null = null;
+
+export function setPersonalizationPreview(preview: PersonalizationPreview | null) {
+  personalizationPreview = preview ? { ...preview } : null;
+}
+
+function previewFor(target: HTMLElement) {
+  return personalizationPreview && typeof document !== "undefined" && target === document.documentElement ? personalizationPreview : null;
+}
+
 export function applyPersonalizationTheme(value: unknown, root?: HTMLElement) {
   const target = root || (typeof document !== "undefined" ? document.documentElement : null);
-  const id = normalizePersonalizationThemePresetId(value);
+  const previewed = target ? previewFor(target) : null;
+  const id = normalizePersonalizationThemePresetId(previewed && previewed.theme !== undefined ? previewed.theme : value);
   if (!target) return id;
   const preset = getPersonalizationThemePreset(id);
   /*
@@ -137,7 +158,7 @@ export function clearPersonalizationTheme(root?: HTMLElement) {
 const PAGE_TINT_VARS = ["--fx-l0-page", "--fx-l3-control-fill"] as const;
 
 /*
-  界面主题（经典 / 极光 / 墨金 / 玫瑰）是 <html data-ui-theme>，画法全在 theme-*.css。经典不写属性。
+  界面主题（内置的经典 / 珍珠 / 液态玻璃，和装上去的主题包）是 <html data-ui-theme>，画法在各自的样式里。经典不写属性。
   首屏在 publicInfo 回来之前先按经典画，再切到极光会闪一下：所以把选过的主题记进 localStorage，
   index.html 顶部那段内联脚本开机就按它先把属性挂上（和深浅色 forwardx-theme 同一套做法）。
   主题样式现在按需下（uiThemeStyles.ts），main.tsx 也按这个属性先把那一套的样式下完再画第一帧。
@@ -162,12 +183,38 @@ function rememberUiTheme(uiTheme: string) {
 export const UI_THEME_OVERRIDE_STORAGE_KEY = "forwardx-ui-theme-override";
 export const UI_THEME_OVERRIDE_EVENT = "fx-ui-theme-override";
 
-export function readUiThemeOverride(): PersonalizationUiThemeId | null {
+/*
+  主题安全模式：地址带上 ?themeSafe=1，这个浏览器标签页里不挂任何主题包，只认内置的三套。
+  主题包是别人写的样式，写坏了可能把按钮都藏起来；站点默认又是存在服务端的，清本地存储没用。
+  进了安全模式就能照常进设置页把它换掉或卸载。记在 sessionStorage：关掉标签页就恢复，?themeSafe=0 当场退出。
+  index.html 开机那段脚本认同一个开关。
+*/
+export const UI_THEME_SAFE_MODE_KEY = "forwardx-ui-theme-safe";
+
+export function isUiThemeSafeMode(): boolean {
+  try {
+    if (typeof window === "undefined" || typeof sessionStorage === "undefined") return false;
+    const flag = new URLSearchParams(window.location?.search || "").get("themeSafe");
+    if (flag === "1") sessionStorage.setItem(UI_THEME_SAFE_MODE_KEY, "1");
+    else if (flag === "0") sessionStorage.removeItem(UI_THEME_SAFE_MODE_KEY);
+    return sessionStorage.getItem(UI_THEME_SAFE_MODE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 一个主题 id 现在该按哪一套画：内置的、这个面板上装着的主题包都认（安全模式下只认内置的），别的回到经典。 */
+export function resolveUiTheme(value: unknown): string {
+  return normalizePersonalizationUiTheme(value, isUiThemeSafeMode() ? [] : installedUiThemeIds());
+}
+
+export function readUiThemeOverride(): string | null {
   try {
     if (typeof localStorage === "undefined") return null;
     const raw = localStorage.getItem(UI_THEME_OVERRIDE_STORAGE_KEY);
     if (!raw) return null;
-    const id = normalizePersonalizationUiTheme(raw);
+    // 选的那套主题包后来被卸载了：当没选，跟回站点默认（记录留着，装回来又生效）
+    const id = resolveUiTheme(raw);
     return id === raw ? id : null;
   } catch {
     return null;
@@ -177,7 +224,7 @@ export function readUiThemeOverride(): PersonalizationUiThemeId | null {
 export function setUiThemeOverride(value: string | null) {
   try {
     if (typeof localStorage !== "undefined") {
-      if (value) localStorage.setItem(UI_THEME_OVERRIDE_STORAGE_KEY, normalizePersonalizationUiTheme(value));
+      if (value) localStorage.setItem(UI_THEME_OVERRIDE_STORAGE_KEY, resolveUiTheme(value));
       else localStorage.removeItem(UI_THEME_OVERRIDE_STORAGE_KEY);
     }
   } catch {
@@ -245,9 +292,12 @@ function isDocumentRoot(target: HTMLElement) {
   return typeof document !== "undefined" && target === document.documentElement;
 }
 
-function commitUiTheme(target: HTMLElement, uiTheme: string, pageTint: string) {
+function commitUiTheme(target: HTMLElement, requested: string, pageTint: string) {
+  // 主题包的样式没取下来（刚被卸载、面板连不上）：挂它的 id 只会得到没有样式的四不像，退回经典
+  const uiTheme = isDocumentRoot(target) && !isUiThemeStyleUsable(requested) ? "classic" : requested;
   if (uiTheme === "classic") target.removeAttribute("data-ui-theme");
   else target.setAttribute("data-ui-theme", uiTheme);
+  if (isDocumentRoot(target)) syncUiThemePackageSheets(uiTheme);
   const dark = target.classList.contains("dark");
   fadeIfChanged(target, `${uiTheme}|${dark ? "dark" : "light"}|${pageTint}`);
 }
@@ -257,10 +307,12 @@ export function applyPersonalizationSurface(
   root?: HTMLElement,
 ) {
   const target = root || (typeof document !== "undefined" ? document.documentElement : null);
-  const pageTint = normalizePersonalizationPageTint(input.pageTint);
-  const cardStyle = normalizePersonalizationCardStyle(input.cardStyle);
-  const override = input.ignoreOverride ? null : readUiThemeOverride();
-  const uiTheme = override ?? normalizePersonalizationUiTheme(input.uiTheme);
+  const previewed = target ? previewFor(target) : null;
+  const pageTint = normalizePersonalizationPageTint(previewed && previewed.pageTint !== undefined ? previewed.pageTint : input.pageTint);
+  const cardStyle = normalizePersonalizationCardStyle(previewed && previewed.cardStyle !== undefined ? previewed.cardStyle : input.cardStyle);
+  // 试看的是站点默认那一套：和 ignoreOverride 一样绕过顶栏给自己选的
+  const override = input.ignoreOverride || (previewed && previewed.uiTheme !== undefined) ? null : readUiThemeOverride();
+  const uiTheme = override ?? resolveUiTheme(previewed && previewed.uiTheme !== undefined ? previewed.uiTheme : input.uiTheme);
   if (!target) return { pageTint, cardStyle, uiTheme };
   target.setAttribute("data-card-style", cardStyle);
   const ready = !isDocumentRoot(target) || isUiThemeStyleReady(uiTheme);

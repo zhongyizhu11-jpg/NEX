@@ -3,6 +3,9 @@ import { ruleSourcePortEnd, ruleTargetPortEnd } from "@shared/portRange";
 import { isEntryBridgeRuleId } from "@shared/ruleEntryBridge";
 import { GOST_API_DIR } from "@shared/gostRuntimeApi";
 import { isIP } from "net";
+import { buildDockerForwardCompatCleanupCmds, buildDockerForwardCompatCmds, type DockerCompatRule } from "./dockerForwardCompat";
+
+export { buildDockerForwardCompatCleanupCmds, buildDockerForwardCompatCmds } from "./dockerForwardCompat";
 
 type IptablesBinary = "iptables" | "ip6tables";
 
@@ -474,7 +477,20 @@ function nftDeleteCommentedRulesCmd(chain: string, comment: string) {
   return `if nft list table inet ${nftTable} >/dev/null 2>&1; then for h in $(nft -a list chain inet ${nftTable} ${chain} 2>/dev/null | awk -v exact='comment "${comment}"' -v colon='comment "${comment}:' -v dash='comment "${comment}-' 'index($0, exact) || index($0, colon) || index($0, dash) {print $NF}'); do nft delete rule inet ${nftTable} ${chain} handle "$h" 2>/dev/null; true; done; fi; true`;
 }
 
-export function buildNftCleanupCmds(rule: any, options: { removeStateFiles?: boolean; cleanupConntrack?: boolean } = {}): string[] {
+/**
+ * dockerAllowances：要不要顺带删掉这条规则在 DOCKER-USER 里的放行（dockerForwardCompat.ts）。
+ * 默认删（停用、删除、换目标的清理）；原地重建、在两种内核转发之间切换时传 false ——
+ * 接下来的构造器会就地收敛那几条放行，先删再装会让转发断一下。
+ */
+type KernelCleanupOptions = { removeStateFiles?: boolean; cleanupConntrack?: boolean; dockerAllowances?: boolean };
+
+function kernelDockerCleanupCmds(rule: DockerCompatRule, options: { dockerAllowances?: boolean }) {
+  return options.dockerAllowances === false
+    ? []
+    : buildDockerForwardCompatCleanupCmds({ ruleId: Number(rule?.id) || 0, port: Number(rule?.sourcePort), protocol: rule?.protocol });
+}
+
+export function buildNftCleanupCmds(rule: any, options: KernelCleanupOptions = {}): string[] {
   const ruleId = Number(rule.id) || 0;
   const comment = nftComment(rule);
   const cmds = [
@@ -487,6 +503,7 @@ export function buildNftCleanupCmds(rule: any, options: { removeStateFiles?: boo
     nftDeleteCommentedRulesCmd(nftTrafficPreroutingChain, comment),
     nftDeleteCommentedRulesCmd(nftTrafficPostroutingChain, comment),
     nftDeleteCommentedRulesCmd(nftTrafficForwardChain, comment),
+    ...kernelDockerCleanupCmds(rule, options),
     ...buildNftPortRangeMapCleanupCmds(rule),
   ];
   // Tunnel/orphan snapshots can legitimately omit a rule ID. Never target a
@@ -517,24 +534,27 @@ export function buildNftCleanupCmds(rule: any, options: { removeStateFiles?: boo
  */
 export function buildKernelForwardTransitionCleanupCmds(rule: any): string[] {
   return [
-    ...buildIptablesForwardCleanupCmds(rule),
+    ...buildIptablesForwardCleanupCmds(rule, { dockerAllowances: false }),
     // Keep Agent state files intact; the successful apply writes the new owner
     // after the listener is ready, and cleanup of those files is handled by the
     // normal handoff/removal path.
-    ...buildNftCleanupCmds(rule, { removeStateFiles: false }),
+    ...buildNftCleanupCmds(rule, { removeStateFiles: false, dockerAllowances: false }),
+    // 换成用户态转发后不再经过 FORWARD，DOCKER-USER 里的放行留着就是一扇没人管的门。
+    ...kernelDockerCleanupCmds(rule, {}),
   ];
 }
 
 /**
  * Keep native kernel backend rebuilds cheap: each builder already cleans its
  * own backend, so only remove the other backend during a transition.
+ * 两种内核转发共用同一套 DOCKER-USER 放行，切换时由新的构造器收敛，这里不删。
  */
 export function buildNftTransitionCleanupCmds(rule: any): string[] {
-  return buildNftCleanupCmds(rule, { removeStateFiles: false });
+  return buildNftCleanupCmds(rule, { removeStateFiles: false, dockerAllowances: false });
 }
 
 export function buildIptablesTransitionCleanupCmds(rule: any): string[] {
-  return buildIptablesForwardCleanupCmds(rule);
+  return buildIptablesForwardCleanupCmds(rule, { dockerAllowances: false });
 }
 
 export function buildNftForwardCmds(rule: any): string[] {
@@ -556,7 +576,7 @@ export function buildNftForwardCmds(rule: any): string[] {
     nftOptional(`nft add chain inet ${nftTable} postrouting '{ type nat hook postrouting priority srcnat; policy accept; }'`),
     nftOptional(`nft add chain inet ${nftTable} forward '{ type filter hook forward priority filter; policy accept; }'`),
     `if nft list chain inet ${nftTable} prerouting >/dev/null 2>&1 && nft list chain inet ${nftTable} postrouting >/dev/null 2>&1 && nft list chain inet ${nftTable} forward >/dev/null 2>&1; then :; else echo "[nftables] forwarding chains are unavailable"; exit 1; fi`,
-    ...buildNftCleanupCmds(rule),
+    ...buildNftCleanupCmds(rule, { dockerAllowances: false }),
     nftOptional(`nft add table inet ${nftTable}`),
     nftOptional(`nft add chain inet ${nftTable} prerouting '{ type nat hook prerouting priority dstnat; policy accept; }'`),
     nftOptional(`nft add chain inet ${nftTable} postrouting '{ type nat hook postrouting priority srcnat; policy accept; }'`),
@@ -602,6 +622,8 @@ export function buildNftForwardCmds(rule: any): string[] {
     ));
     cmds.push(`nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} ${originalPortMatch} accept comment ${nftCommentLiteral(comment)} || { echo "[nftables] forward selector failed, fallback=fwx-rule-${ruleId}"; ${targetOnlyInAccept}; }`);
   }
+  // 上面这些 ACCEPT 盖不过 Docker 的 FORWARD 默认 DROP（同一 hook 上另一个基础链），要在 DOCKER-USER 里再放一次。
+  cmds.push(...buildDockerForwardCompatCmds(rule));
   return cmds;
 }
 
@@ -654,6 +676,8 @@ export function buildManagedPortCleanupCmds(port: number, targetIp?: string, tar
   return [
     ...buildIptablesForwardPortCleanupCmds(port, protocol),
     ...buildNftPortCleanupCmds(port, protocol),
+    // 端口上不论哪条规则留下的 DOCKER-USER 放行（只删这几种协议的）。
+    ...buildDockerForwardCompatCleanupCmds({ port, protocol }),
     ...legacyServiceCleanup,
     ...protocols.map((proto) => removeManagedServiceCmd(`forwardx-socat-${proto}-${port}`)),
     removeManagedServiceCmd(`forwardx-realm-${normalizedProtocol}-${port}`),
@@ -670,7 +694,7 @@ export function buildManagedPortCleanupCmds(port: number, targetIp?: string, tar
  * 按标记删，转发到同一目标的其它规则各有各的一份，不受影响；旧版本留下的无标记副本
  * 由 iptablesUnreferencedTargetGuard 做引用检查后再删（先删了自己的 DNAT，剩下的 DNAT 都属于别的规则）。
  */
-export function buildIptablesForwardCleanupCmds(rule: any): string[] {
+export function buildIptablesForwardCleanupCmds(rule: any, options: { dockerAllowances?: boolean } = {}): string[] {
   const targetIp = cleanAddress(rule.targetIp);
   const binary = iptablesBinaryForTarget(targetIp);
   const protos = forwardRuleProtocols(rule.protocol);
@@ -694,6 +718,7 @@ export function buildIptablesForwardCleanupCmds(rule: any): string[] {
       iptablesDelete(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${targetPortMatch} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}-j ACCEPT`),
     ]));
   }
+  cmds.push(...kernelDockerCleanupCmds(rule, options));
   return cmds;
 }
 
@@ -723,7 +748,7 @@ export function buildIptablesForwardCmds(rule: any): string[] {
     binary === "ip6tables"
       ? `sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null`
       : `sysctl -w net.ipv4.ip_forward=1 >/dev/null`,
-    ...buildIptablesForwardCleanupCmds(rule),
+    ...buildIptablesForwardCleanupCmds(rule, { dockerAllowances: false }),
   ];
   for (const proto of protos) {
     cmds.push(iptablesEnsure(binary, "nat", `PREROUTING -p ${proto} --dport ${sourcePortMatch} -j DNAT --to-destination ${iptablesDnatTargetForRule(rule)}`, false, appendFlag));
@@ -731,6 +756,12 @@ export function buildIptablesForwardCmds(rule: any): string[] {
     cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${targetPortMatch} ${tagMatch}-j ACCEPT`, false, appendFlag));
     cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${targetPortMatch} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}${tagMatch}-j ACCEPT`, false, appendFlag));
   }
+  /*
+    Docker 主机：上面的 FORWARD 放行装在 Agent 调用的那个 `iptables` 前端里，而 Docker 可能用的是
+    另一个前端（legacy / nft 各一套规则，内核两套都求值），那边的 FORWARD 默认 DROP 照样丢包。
+    DOCKER-USER 放行按每个前端各自判断，和 nftables 模式共用一套。
+  */
+  cmds.push(...buildDockerForwardCompatCmds(rule));
   // 桥接：规则插好之后，把换之前就连着这个端口的老流从 conntrack 里清掉，让它们走新的 DNAT。
   if (appendFlag === "-I") cmds.push(...buildEntryBridgeConntrackFlushCmds(Number(rule.sourcePort), rule.protocol));
   return cmds;

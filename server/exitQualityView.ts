@@ -33,7 +33,10 @@ export type ExitQualityHost = {
   noEgress: boolean;
   unlock: { checkedAt: number; items: { service: string; text: string; status: string }[] } | null;
   /** 解锁检测最近一次的每一项（不只是卡片上那几个）；没测过是 null。 */
-  unlockDetail: { checkedAt: number; family: string; results: { service: string; name: string; status: string; region: string | null }[] } | null;
+  unlockDetail: { checkedAt: number; family: string; results: { service: string; name: string; status: string; region: string | null; detail?: string | null }[] } | null;
+  /** 每个协议族最新的那一次（双栈主机 IPv4、IPv6 分开测，界面分页签看）。 */
+  unlockFamilies?: Array<{ family: string; checkedAt: number; results: { service: string; name: string; status: string; region: string | null; detail?: string | null }[] }>;
+  agentVersion?: string | null;
 };
 
 export const EXIT_QUALITY_TARGETS = SITE_LATENCY_TARGETS.map(({ key, label, host }) => ({ key, label, host }));
@@ -51,21 +54,22 @@ export async function buildHostExitQuality(host: any): Promise<ExitQualityHost> 
   const run = runs[0] || null;
   const order = new Map(UNLOCK_SERVICES.map((service, index) => [service.id, index]));
   const names = new Map(UNLOCK_SERVICES.map((service) => [service.id, service.name]));
+  const viewResults = (results: typeof runs[number]["results"]) => [...results]
+    .sort((left, right) => (order.get(left.service) ?? 99) - (order.get(right.service) ?? 99))
+    .map((item) => ({ service: item.service, name: names.get(item.service) || item.service, status: item.status, region: item.region, detail: item.detail || null }));
+  // 主机行上的国家是 geoCountryCode（落地入站那种行才有 countryCode）：地区上色要拿它比
+  const country = host.countryCode || host.geoCountryCode;
   return {
     id,
     name: String(host.name || `主机 ${id}`),
     online: !!host.isOnline,
-    countryCode: host.countryCode ? String(host.countryCode) : null,
+    countryCode: country ? String(country).toUpperCase() : null,
+    agentVersion: host.agentVersion ? String(host.agentVersion) : null,
+    unlockFamilies: runs.map((item) => ({ family: item.family, checkedAt: item.checkedAt, results: viewResults(item.results) })),
     sites,
     noEgress: siteLatencyNoEgress(sites),
     unlock: summary ? { checkedAt: summary.checkedAt, items: summary.items } : null,
-    unlockDetail: run ? {
-      checkedAt: run.checkedAt,
-      family: run.family,
-      results: [...run.results]
-        .sort((left, right) => (order.get(left.service) ?? 99) - (order.get(right.service) ?? 99))
-        .map((item) => ({ service: item.service, name: names.get(item.service) || item.service, status: item.status, region: item.region })),
-    } : null,
+    unlockDetail: run ? { checkedAt: run.checkedAt, family: run.family, results: viewResults(run.results) } : null,
   };
 }
 

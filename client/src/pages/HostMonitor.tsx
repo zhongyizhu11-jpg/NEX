@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { resolveSiteTitle } from "@shared/brand";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import OpsPublicMonitorExtras from "@/features/ops/slots/PublicMonitorExtras";
@@ -56,6 +57,8 @@ import EmptyState from "@/components/EmptyState";
 import { EntityCard } from "@/components/entity/EntityCard";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
 import { StatusDot } from "@/components/network/StatusDot";
+import { formatHostLoadAverage, hostLoadAverageTooltip } from "@shared/hostLoadAverage";
+import { describeHostProbeFailure, describeHostProbeFailureShort, hostProbeBucketFailureLabel, hostProbeLossLabel } from "@shared/hostProbeService";
 
 type HostMonitorViewMode = "card" | "compact-card" | "table";
 
@@ -125,7 +128,7 @@ function formatMonitorDate(value: unknown) {
       : Date.parse(String(value));
   if (!Number.isFinite(ms)) return "--";
   const date = new Date(ms);
-  const text = date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+  const text = date.toLocaleDateString(getFormatLocale(), { year: "numeric", month: "2-digit", day: "2-digit" });
   return ms < Date.now() ? `${text} 已到期` : text;
 }
 
@@ -190,6 +193,8 @@ function PublicHostCard({
   const cpuUsage = Number(metric?.cpuUsage ?? 0);
   const memoryUsage = Number(metric?.memoryUsage ?? 0);
   const diskUsage = Number(metric?.diskUsage ?? 0);
+  // 1 / 5 / 15 分钟负载（Agent 2.2.255 起）：离线、没报都不画
+  const loadAverageText = isOnline ? formatHostLoadAverage(metric) : null;
   const totalIn = traffic?.bytesIn == null ? 0 : Number(traffic.bytesIn) || 0;
   const totalOut = traffic?.bytesOut == null ? 0 : Number(traffic.bytesOut) || 0;
   const trafficLimit = Math.max(0, Number(host.trafficLimit || 0));
@@ -249,7 +254,11 @@ function PublicHostCard({
         {metricItems.map((item) => {
           const Icon = item.icon;
           return (
-            <div key={item.key} className="grid grid-cols-[18px_minmax(0,1fr)_52px] items-center gap-2 text-meta">
+            <div
+              key={item.key}
+              className="grid grid-cols-[18px_minmax(0,1fr)_52px] items-center gap-2 text-meta"
+              title={item.key === "cpu" && loadAverageText ? `负载（1 / 5 / 15 分钟）：${loadAverageText}` : undefined}
+            >
               <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-label={item.label} />
               <Progress value={item.progress} className={metricUsageProgressClass(item.progress, isOnline)} />
               <span className="text-right font-medium tabular-nums">
@@ -267,6 +276,13 @@ function PublicHostCard({
         <dd className="truncate text-right tabular-nums text-foreground">
           入 {formatNetworkSpeed(metric?.networkSpeedIn)} · 出 {formatNetworkSpeed(metric?.networkSpeedOut)}
         </dd>
+        {/* 标准卡在 CPU 那一组下面写出负载；精简卡（compact）只在悬停 CPU 时给 */}
+        {loadAverageText && !compact ? (
+          <>
+            <dt className="text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟），不是百分比：到 CPU 核数才算满">负载</dt>
+            <dd className="truncate text-right tabular-nums text-foreground">{loadAverageText}</dd>
+          </>
+        ) : null}
         <dt className="text-muted-foreground">累计</dt>
         <dd className="truncate text-right tabular-nums text-foreground" title={`入 ${formatBytes(totalIn)} / 出 ${formatBytes(totalOut)}`}>
           入 {formatBytes(totalIn)} · 出 {formatBytes(totalOut)}
@@ -402,6 +418,12 @@ function PublicHostTable({
                         <span className="shrink-0">国家/地区：</span>
                         <HostRegionBadge host={host} compact />
                       </div>
+                      {isOnline && formatHostLoadAverage(metric) ? (
+                        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟）">
+                          <span className="shrink-0">负载：</span>
+                          <span className="min-w-0 truncate font-medium tabular-nums text-foreground">{formatHostLoadAverage(metric)}</span>
+                        </div>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell className="px-3 py-3">
@@ -409,6 +431,7 @@ function PublicHostTable({
                       icon={Cpu}
                       label="CPU"
                       value={isOnline ? metric?.cpuUsage : undefined}
+                      detail={isOnline ? hostLoadAverageTooltip(metric) ?? undefined : undefined}
                       isOnline={isOnline}
                       formatValue={(value) => (clampPercent(value) === null ? "--" : formatCpuPercent(value, isOnline))}
                     />
@@ -475,11 +498,11 @@ function ServiceChartTooltip({ active, payload, label, services }: any) {
               </span>
               <span className="text-right">
                 <span className={counts.isTimeout ? "font-medium text-destructive" : "font-semibold tabular-nums"}>
-                  {counts.isTimeout ? "超时" : typeof raw?.latencyMs === "number" ? `${raw.latencyMs}ms` : "--"}
+                  {counts.isTimeout ? hostProbeBucketFailureLabel(service.method) : typeof raw?.latencyMs === "number" ? `${raw.latencyMs}ms` : "--"}
                 </span>
                 {counts.probeCount > 1 && counts.probeSuccesses < counts.probeCount ? (
                   <span className="block text-[11px] font-normal text-muted-foreground">
-                    丢包 {counts.probeCount - counts.probeSuccesses}/{counts.probeCount}
+                    {hostProbeLossLabel(service.method)} {counts.probeCount - counts.probeSuccesses}/{counts.probeCount}
                   </span>
                 ) : null}
               </span>
@@ -630,6 +653,7 @@ function HostMonitorDetail({
       <div className="grid max-w-6xl grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-x-8 sm:gap-y-4 lg:grid-cols-6">
         <DetailInfoItem label="状态" value={isOnline ? "在线" : "离线"} className={isOnline ? "text-[var(--fx-healthy-text)]" : "text-destructive"} />
         <DetailInfoItem label="运行时间" value={metric?.uptime == null ? "-" : formatUptime(metric.uptime)} />
+        {isOnline && formatHostLoadAverage(metric) ? <DetailInfoItem label="负载（1/5/15）" value={formatHostLoadAverage(metric) as string} /> : null}
         <DetailInfoItem label="内存" value={formatMetricSizeDetail(metric?.memoryUsed, detailHost?.memoryTotal) || formatUsagePercent(metric?.memoryUsage)} />
         <DetailInfoItem label="磁盘" value={formatMetricSizeDetail(metric?.diskUsed, metric?.diskTotal) || formatUsagePercent(metric?.diskUsage)} />
         <div className="min-w-0 rounded-lg border border-border/30 bg-card/35 px-3 py-2 sm:border-0 sm:bg-transparent sm:p-0">
@@ -673,6 +697,8 @@ function HostMonitorDetail({
                     const latest = service.latest;
                     const timeout = !!latest?.isTimeout;
                     const latency = latest?.latencyMs == null ? "--" : `${latest.latencyMs}ms`;
+                    // URL 连接检测分开说「状态码不符」和「连接失败 / 超时」；Ping / TCPing 照旧「超时」
+                    const failureText = describeHostProbeFailureShort(service.method, latest);
                     return (
                       <button
                         key={service.id}
@@ -689,7 +715,7 @@ function HostMonitorDetail({
                           <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: serviceChartColors[index % serviceChartColors.length] }} />
                           <span className="min-w-0 truncate" title={service.name}>{service.name}</span>
                         </div>
-                        <p className={`mt-2 text-xl font-bold tabular-nums sm:text-2xl ${timeout ? "text-destructive" : ""}`}>{timeout ? "超时" : latency}</p>
+                        <p className={`mt-2 truncate text-xl font-bold tabular-nums sm:text-2xl ${timeout ? "text-destructive" : ""}`} title={timeout ? describeHostProbeFailure(service.method, latest) : undefined}>{timeout ? failureText : latency}</p>
                         <p className="mt-1 truncate text-[11px] text-muted-foreground sm:text-xs">{latest?.recordedAt ? formatFullDateTime(latest.recordedAt) : "暂无上报"}</p>
                       </button>
                     );
