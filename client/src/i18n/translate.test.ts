@@ -41,6 +41,9 @@ test("精确匹配、模板、正则依次尝试；整段对不上就返回 null
   assert.equal(translator.translate("3 分钟前"), "3 minutes ago");
   assert.equal(translator.translate("1 天前"), "1 day ago");
   assert.equal(translator.translate("2天3小时"), "2d3h");
+  assert.equal(translator.translate("每 60 秒"), "every 60 seconds");
+  assert.equal(translator.translate("每1小时"), "every 1 hour");
+  assert.equal(translator.translate("转发规则 · 每 30 秒"), "Forwarding Rules · every 30 seconds");
   assert.equal(translator.translate("转发规则很多"), null);
   assert.equal(translator.translate("Save"), null);
   assert.equal(translator.translate("__proto__"), null);
