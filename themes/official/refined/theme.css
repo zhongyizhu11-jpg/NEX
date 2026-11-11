@@ -1,0 +1,335 @@
+/*
+  ── 界面主题「精修」（设置 › 个性化 › 主题管理 › 官方主题库）──
+
+  由 <html data-ui-theme="refined"> 打开；没有这个属性这个文件一条都不生效。
+  用户 2026-11-11 在三套桌面改版样稿里定下的 B「精修卡片」：**保留卡片，修掉对比度、密度和重复信息**。
+  和经典比，还是「浅灰底托白卡」，可每一处都收紧、压实：
+
+    1. 底   浅灰（#f3f5f8）。顶栏、侧栏和页面同一个底色、不画分隔线，内容像摊在一张桌面上。
+    2. 卡   纯白、一圈 1px #e3e7ed 细线、14px 圆角，投影只有 1px 那么一点（不是彩色光晕）。
+            整张能点的卡，鼠标悬上去线深一档、影子多一层，不抬起。
+    3. 色   主按钮是平的亮蓝 #2563eb 配白字（5.2:1）；链接同一个蓝。侧栏选中项是一张带细圈的白卡，
+            字是深蓝；分类条选中项是一块墨色（#0f172a）配白字，和亮蓝的按钮分开说话。
+            状态色偏沉：绿 #16703a、琥珀 #8a5a00、红 #b42318 做字；提示框是柔和的琥珀底。
+    4. 字   标题 26px / 700；数字 tabular-nums；徽标是圆头小胶囊（在线绿底、注意琥珀底）。
+    5. 深色 蓝黑底（#0f141c）托石板卡（#172030），按钮底还是亮蓝配白字，选中的分类变成浅色块配墨字。
+
+  「默认配色」另选一套时，按钮和选中态照常跟着换（那些值内联在 <html> 上，盖过这里）。
+  只改样式：样稿里卡片下面的走势面积图、每张主机卡里的「稍后提醒」按钮这类要新组件的，主题包做不了。
+*/
+
+html[data-ui-theme="refined"] {
+  --fx-l0-page: #f3f5f8;
+  --fx-l1-surface: #ffffff;
+  --fx-raised: #ffffff;
+  --fx-l2-group: #f8fafc;
+  --fx-l3-control: #ffffff;
+  --fx-l3-control-fill: #e9edf2;
+  --fx-sidebar: #f3f5f8;
+  --fx-hover: rgb(15 23 42 / 4.5%);
+  --fx-pressed: rgb(15 23 42 / 8%);
+  --fx-stroke-weak: #e3e7ed;
+  --fx-stroke-base: #cbd5e1;
+  --fx-stroke-strong: #94a3b8;
+  --fx-control-stroke: #d5dbe3;
+  --fx-text: #0f172a;
+  --fx-text-secondary: #334155;
+  --fx-text-muted: #526072;
+  --fx-refined-ink: #0f172a;
+  --fx-refined-ink-text: #ffffff;
+  --fx-refined-tone: var(--fx-primary-fill);
+  --fx-refined-tone-ink: color-mix(in srgb, var(--fx-primary-fill) 78%, #0f172a);
+  --fx-refined-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 8%, #ffffff);
+  --fx-refined-track: #edf1f5;
+  --fx-refined-lift: 0 1px 2px rgb(15 23 42 / 5%);
+  --fx-refined-lift-hover: 0 1px 2px rgb(15 23 42 / 6%), 0 6px 16px -8px rgb(15 23 42 / 14%);
+  --fx-card-fill: #ffffff;
+  --fx-card-stroke: #e3e7ed;
+  --fx-elevation-card: 0 1px 2px rgb(15 23 42 / 5%);
+  --fx-elevation-control: 0 1px 2px rgb(15 23 42 / 4%);
+  --fx-elevation-popover: 0 14px 36px -12px rgb(15 23 42 / 22%), 0 0 0 1px #e3e7ed;
+  --fx-elevation-modal: 0 28px 72px -24px rgb(15 23 42 / 32%), 0 0 0 1px #e3e7ed;
+  --fx-glass: #f3f5f8;
+  --fx-glass-strong: #ffffff;
+  --fx-radius-control: 10px;
+  --fx-radius-card: 14px;
+  --fx-radius-surface: 14px;
+  --fx-radius-modal: 18px;
+  --fx-radius-inner: 10px;
+  --fx-header-height: 60px;
+  --fx-font: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", Roboto, Arial, sans-serif;
+  --fx-refined-mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --fx-accent: #2563eb;
+  --fx-accent-strong: #1e40af;
+  --fx-accent-soft: #eff4ff;
+  --fx-accent-fill: #2563eb;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #ffffff;
+  --fx-primary-gradient: linear-gradient(#2563eb, #2563eb);
+  --fx-primary-gradient-hover: linear-gradient(#1d4ed8, #1d4ed8);
+  --fx-primary-sheen: none;
+  --fx-primary-fill: #2563eb;
+  --fx-primary-fill-hover: #1d4ed8;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: #2563eb;
+  --fx-primary-shadow: none;
+  --fx-mesh-1: rgb(37 99 235 / 8%);
+  /* 图标方块：淡蓝底、深蓝图标，不要彩色渐变 */
+  --fx-tile-sky: linear-gradient(#eff4ff, #eff4ff);
+  --fx-tile-violet: linear-gradient(#eff4ff, #eff4ff);
+  --fx-tile-teal: linear-gradient(#eff4ff, #eff4ff);
+  --fx-tile-orange: linear-gradient(#eff4ff, #eff4ff);
+  --fx-tile-pink: linear-gradient(#eff4ff, #eff4ff);
+  --fx-tile-green: linear-gradient(#eff4ff, #eff4ff);
+  --fx-tile-text: #1e40af;
+  /* 状态色：点和条用亮的那个，字用沉的那个（白底和各自的淡底上都过 4.5:1） */
+  --fx-healthy: #16a34a;
+  --fx-healthy-soft: #e7f6ec;
+  --fx-healthy-text: #16703a;
+  --fx-warn: #d97706;
+  --fx-warn-soft: #fff3d6;
+  --fx-warn-text: #7a4f00;
+  --fx-down: #d92d20;
+  --fx-down-soft: #feeceb;
+  --fx-down-text: #b42318;
+  --fx-down-fill: #d92d20;
+  --fx-flow-in: #2563eb;
+  --fx-flow-out: #f59e0b;
+}
+html.dark[data-ui-theme="refined"] {
+  --fx-l0-page: #0f141c;
+  --fx-l1-surface: #172030;
+  --fx-raised: #1c2638;
+  --fx-l2-group: #131b28;
+  --fx-l3-control: #172030;
+  --fx-l3-control-fill: #222d40;
+  --fx-sidebar: #0f141c;
+  --fx-hover: rgb(255 255 255 / 5%);
+  --fx-pressed: rgb(255 255 255 / 9%);
+  --fx-stroke-weak: #263043;
+  --fx-stroke-base: #334155;
+  --fx-stroke-strong: #64748b;
+  --fx-control-stroke: #334155;
+  --fx-text: #e5eaf2;
+  --fx-text-secondary: #c0c9d6;
+  --fx-text-muted: #96a2b4;
+  --fx-refined-ink: #e5eaf2;
+  --fx-refined-ink-text: #0f172a;
+  --fx-refined-tone: #7aa7ff;
+  --fx-refined-tone-ink: #a5c4ff;
+  --fx-refined-tone-soft: rgb(122 167 255 / 13%);
+  --fx-refined-track: #263043;
+  --fx-refined-lift: 0 1px 2px rgb(0 0 0 / 30%);
+  --fx-refined-lift-hover: 0 1px 2px rgb(0 0 0 / 35%), 0 8px 20px -10px rgb(0 0 0 / 60%);
+  --fx-card-fill: #172030;
+  --fx-card-stroke: #263043;
+  --fx-elevation-card: 0 1px 2px rgb(0 0 0 / 30%);
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(0 0 0 / 75%), 0 0 0 1px #334155;
+  --fx-elevation-modal: 0 28px 72px -20px rgb(0 0 0 / 80%), 0 0 0 1px #334155;
+  --fx-glass: #0f141c;
+  --fx-glass-strong: #172030;
+  --fx-accent: #7aa7ff;
+  --fx-accent-strong: #a5c4ff;
+  --fx-accent-soft: rgb(122 167 255 / 14%);
+  /* 按钮底仍是亮蓝配白字（5.2:1），字和链接换浅蓝 */
+  --fx-accent-fill: #2563eb;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #ffffff;
+  --fx-primary-gradient: linear-gradient(#2563eb, #2563eb);
+  --fx-primary-gradient-hover: linear-gradient(#1d4ed8, #1d4ed8);
+  --fx-primary-fill: #2563eb;
+  --fx-primary-fill-hover: #1d4ed8;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: #2563eb;
+  --fx-mesh-1: rgb(122 167 255 / 8%);
+  --fx-tile-sky: linear-gradient(#1f2b44, #1f2b44);
+  --fx-tile-violet: linear-gradient(#1f2b44, #1f2b44);
+  --fx-tile-teal: linear-gradient(#1f2b44, #1f2b44);
+  --fx-tile-orange: linear-gradient(#1f2b44, #1f2b44);
+  --fx-tile-pink: linear-gradient(#1f2b44, #1f2b44);
+  --fx-tile-green: linear-gradient(#1f2b44, #1f2b44);
+  --fx-tile-text: #a5c4ff;
+  --fx-healthy: #3fb950;
+  --fx-healthy-soft: rgb(63 185 80 / 14%);
+  --fx-healthy-text: #6fdd8b;
+  --fx-warn: #e3a008;
+  --fx-warn-soft: rgb(227 160 8 / 14%);
+  --fx-warn-text: #f2c94c;
+  --fx-down: #f85149;
+  --fx-down-soft: rgb(248 81 73 / 14%);
+  --fx-down-text: #ff8a80;
+  --fx-down-fill: #dc2626;
+  --fx-flow-in: #7aa7ff;
+  --fx-flow-out: #f2c94c;
+}
+
+/* ── 1. 外壳：顶栏、侧栏和页面同一个底，不画分隔线 ─────────────── */
+html[data-ui-theme="refined"] .workspace-appbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom-color: transparent; box-shadow: none; }
+html[data-ui-theme="refined"] .workspace-layout [data-sidebar="sidebar"],
+html[data-ui-theme="refined"] .workspace-sidebar { background: var(--fx-sidebar); border-right-color: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="refined"] .workspace-appbar-title { font-size: 16px; font-weight: 650; letter-spacing: 0; }
+html[data-ui-theme="refined"] .workspace-appbar-version { border: 0; background: transparent; color: var(--fx-text-muted); font-size: 12px; }
+html[data-ui-theme="refined"] .workspace-appbar-search { border-radius: 10px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .workspace-appbar-search:hover { border-color: var(--fx-stroke-base); background: var(--fx-l1-surface); }
+html[data-ui-theme="refined"] .workspace-appbar-icon,
+html[data-ui-theme="refined"] .workspace-appbar-account,
+html[data-ui-theme="refined"] .workspace-appbar-brand { border-radius: 10px; }
+@media (max-width: 639px) {
+  html[data-ui-theme="refined"] .workspace-appbar-search { border-color: transparent; background: transparent; box-shadow: none; }
+}
+/* 侧栏：选中项是一张带细圈的白卡、深蓝字；其余是灰字，悬停一层淡灰 */
+html[data-ui-theme="refined"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 10px; color: var(--fx-text-secondary); font-weight: 500; }
+html[data-ui-theme="refined"] .workspace-layout [data-sidebar="menu-button"]:hover { background: var(--fx-hover); color: var(--fx-text); }
+html[data-ui-theme="refined"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-l1-surface); background-image: none; color: var(--fx-refined-tone-ink); font-weight: 650; box-shadow: 0 0 0 1px var(--fx-stroke-weak), var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-refined-tone); }
+html[data-ui-theme="refined"] .workspace-layout [data-sidebar="group-label"] { font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: 500; color: var(--fx-text-muted); }
+
+/* ── 2. 卡：纯白、1px 细线、14px、1px 的影子 ──────────────────── */
+html[data-ui-theme="refined"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="refined"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="refined"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="refined"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: var(--fx-refined-lift);
+  transition: border-color 160ms, box-shadow 160ms;
+}
+html[data-ui-theme="refined"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="refined"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="refined"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="refined"]:not([data-card-style]) .fx-card-face[data-tone="down"] {
+  border-color: color-mix(in srgb, var(--fx-card-tone) 35%, var(--fx-card-stroke));
+}
+html[data-ui-theme="refined"] .workspace-main .fx-host-card:hover,
+html[data-ui-theme="refined"] .workspace-main .fx-rule-card:hover { border-color: var(--fx-stroke-base); box-shadow: var(--fx-refined-lift-hover); transform: none; }
+html[data-ui-theme="refined"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid var(--fx-card-stroke); background: var(--fx-card-fill); box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .fx-summary { box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .fx-tile { box-shadow: none; }
+html[data-ui-theme="refined"] .fx-grouped-list { border-color: var(--fx-stroke-weak); box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .fx-grouped-list > .fx-list-row[aria-current="true"] { background: var(--fx-refined-tone-soft); }
+html[data-ui-theme="refined"] .fx-grouped-list > .fx-list-row[aria-current="true"] svg { color: var(--fx-refined-tone); }
+/* 主机卡：系统图标一枚淡灰方块；三个读数标签左、数字右（粗），底下一根 6px 圆头细条 */
+html[data-ui-theme="refined"] .fx-host-card > div:first-child > span:first-child { border-radius: 10px; border: 0; background: var(--fx-l3-control-fill); color: var(--fx-text-secondary); }
+html[data-ui-theme="refined"] .fx-host-card .grid.grid-cols-3 { gap: 16px; }
+html[data-ui-theme="refined"] .fx-host-spec { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 6px; border-radius: 0; background: transparent; padding: 0 0 14px; }
+html[data-ui-theme="refined"] .fx-host-spec > i { font-size: 12.5px; line-height: 18px; }
+html[data-ui-theme="refined"] .fx-host-spec > b { font-size: 14px; line-height: 18px; font-weight: 700; text-align: right; }
+html[data-ui-theme="refined"] .fx-host-spec-bar { left: 0; right: 0; bottom: 2px; height: 6px; border-radius: 999px; background: var(--fx-refined-track); }
+html[data-ui-theme="refined"] .fx-host-spec-bar > span { border-radius: 999px; background: var(--fx-refined-tone); }
+html[data-ui-theme="refined"] .fx-host-spec-bar > span[data-tone="warn"] { background: var(--fx-warn); }
+html[data-ui-theme="refined"] .fx-host-spec-bar > span[data-tone="down"] { background: var(--fx-down); }
+/* 统计条：小灰标签、30px / 700 的大数字 */
+html[data-ui-theme="refined"] .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
+html[data-ui-theme="refined"] .fx-summary-value { font-size: 30px; line-height: 36px; font-weight: 700; letter-spacing: -.02em; }
+@media (max-width: 767px) { html[data-ui-theme="refined"] .fx-summary-value { font-size: 22px; line-height: 28px; } }
+/* 规则卡：流量 22px / 700；地址等宽；细条和走势线用主色 */
+html[data-ui-theme="refined"] .fx-rule-num > b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+html[data-ui-theme="refined"] .fx-rule-num > small { font-size: 11px; font-weight: 500; }
+html[data-ui-theme="refined"] .fx-rule-addr,
+html[data-ui-theme="refined"] .workspace-main .font-mono { font-family: var(--fx-refined-mono); }
+html[data-ui-theme="refined"] .fx-rule-path,
+html[data-ui-theme="refined"] .fx-tunnel-foot { border-top-color: var(--fx-stroke-weak); }
+html[data-ui-theme="refined"] .fx-rule-spark,
+html[data-ui-theme="refined"] .workspace-header-aside .fx-sparkline { color: var(--fx-refined-tone); }
+html[data-ui-theme="refined"] .fx-rule-tag { border-radius: 999px; }
+/* 概览底图：海面一层很淡的蓝灰 */
+html[data-ui-theme="refined"] { --fx-overview-canvas: #e9eef5; }
+html.dark[data-ui-theme="refined"] { --fx-overview-canvas: #131b28; }
+
+/* ── 3. 字：标题 26px / 700，分组标题 16px / 650 ─────────────────── */
+html[data-ui-theme="refined"] .workspace-main .workspace-header-title { font-size: 26px; line-height: 34px; font-weight: 700; letter-spacing: -.02em; }
+html[data-ui-theme="refined"] .fx-navbar-large-title { font-weight: 700; letter-spacing: -.02em; }
+html[data-ui-theme="refined"] .workspace-main .workspace-header-meta { color: var(--fx-text-muted); font-size: 14px; }
+html[data-ui-theme="refined"] .fx-list-section-header,
+html[data-ui-theme="refined"] .workspace-main .fx-list-section-header { font-size: 13px; letter-spacing: 0; text-transform: none; font-weight: 600; color: var(--fx-text-secondary); }
+html[data-ui-theme="refined"] .workspace-main [data-slot="card-title"] { font-weight: 650; letter-spacing: -.01em; }
+
+/* ── 4. 分类条：不要槽，一排字；选中项是一块墨色配白字 ────────────── */
+html[data-ui-theme="refined"] .workspace-tabs,
+html.dark[data-ui-theme="refined"] .workspace-tabs { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tabs-list { gap: 4px; }
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="refined"] .workspace-tabs .workspace-tab {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--fx-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { color: var(--fx-text); background: var(--fx-hover); }
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="refined"] .workspace-tabs .workspace-tab[data-state="active"] { color: var(--fx-refined-ink-text); background: var(--fx-refined-ink); background-image: none; box-shadow: none; font-weight: 600; }
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tab > svg,
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: currentColor; }
+html[data-ui-theme="refined"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: color-mix(in srgb, var(--fx-refined-ink-text) 75%, transparent); }
+html[data-ui-theme="refined"] .workspace-tab-scroll { top: 2px; bottom: 2px; border-radius: 10px; }
+
+/* ── 5. 控件：10px、平的亮蓝主按钮、白底细线的次按钮、圆头徽标 ────── */
+html[data-ui-theme="refined"] .fx-chip { height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); color: var(--fx-text-secondary); font-weight: 500; box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .fx-chip:hover { border-color: var(--fx-stroke-base); color: var(--fx-text); }
+html[data-ui-theme="refined"] .fx-chip-on,
+html[data-ui-theme="refined"] .fx-chip-on:hover { border-color: var(--fx-refined-ink); background: var(--fx-refined-ink); background-image: none; color: var(--fx-refined-ink-text); font-weight: 600; }
+html[data-ui-theme="refined"] .workspace-main [data-slot="input"],
+html[data-ui-theme="refined"] .workspace-main [data-slot="textarea"],
+html[data-ui-theme="refined"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="refined"] .workspace-filter-search input { border-radius: 10px; background: var(--fx-l1-surface); border-color: var(--fx-control-stroke); box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] .fx-search-pill { border-radius: 10px !important; background: var(--fx-l1-surface) !important; border: 1px solid var(--fx-stroke-weak) !important; box-shadow: var(--fx-refined-lift) !important; }
+html[data-ui-theme="refined"] .fx-search-pill:focus-visible { border-color: var(--fx-refined-tone) !important; }
+html[data-ui-theme="refined"] [data-slot="button"]:not([data-icon-button]),
+html[data-ui-theme="refined"] .fx-row-action,
+html[data-ui-theme="refined"] .fx-filter-pill { border-radius: 10px !important; }
+html[data-ui-theme="refined"] .workspace-main [data-icon-button],
+html[data-ui-theme="refined"] .workspace-header-actions [data-slot="button"] { border-radius: 10px !important; }
+html[data-ui-theme="refined"] [data-slot="badge"] { border-radius: 999px; font-weight: 600; }
+html[data-ui-theme="refined"] [data-slot="button"][data-variant="default"]:not(:disabled),
+html[data-ui-theme="refined"] [data-slot="button"]:not([data-variant]):not(:disabled) { background-image: none !important; background-color: var(--fx-primary-fill); color: var(--fx-primary-text); border-color: transparent; box-shadow: var(--fx-refined-lift); font-weight: 600; }
+html[data-ui-theme="refined"] [data-slot="button"][data-variant="default"]:not(:disabled):hover,
+html[data-ui-theme="refined"] [data-slot="button"]:not([data-variant]):not(:disabled):hover { background-color: var(--fx-primary-fill-hover); }
+html[data-ui-theme="refined"] [data-slot="button"]:disabled { box-shadow: none; }
+html[data-ui-theme="refined"] [data-slot="button"][data-variant="outline"] { border-color: var(--fx-stroke-weak); background: var(--fx-l1-surface); color: var(--fx-text); box-shadow: var(--fx-refined-lift); }
+html[data-ui-theme="refined"] [data-slot="button"][data-variant="outline"]:hover { border-color: var(--fx-stroke-base); background: var(--fx-l1-surface); }
+/* 提示框（警告色的那种说明块）：柔和的琥珀底、一圈淡琥珀线、深琥珀字 */
+html[data-ui-theme="refined"] [data-slot="alert"] { border-radius: 12px; }
+
+/* ── 6. 表格：表头小灰字，行高 52px，悬停淡灰 ───────────────────── */
+html[data-ui-theme="refined"] [data-slot="table-head"] { height: 40px; font-size: 12.5px; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="refined"] [data-slot="table"] tbody > tr { height: 52px; border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="refined"] [data-slot="table"] tbody > tr:hover,
+html[data-ui-theme="refined"] .host-table-row:hover,
+html[data-ui-theme="refined"] .host-table-row:hover > .host-table-frozen-cell { background: var(--fx-l2-group); }
+html[data-ui-theme="refined"] .workspace-main [data-slot="card"]:has(> [data-slot="card-content"] > * > [data-slot="table"]),
+html[data-ui-theme="refined"] .workspace-main [data-slot="card"]:has(> [data-slot="card-content"] > [data-slot="table"]) { border-radius: 14px; }
+
+/* ── 7. 页面里其它圆角：收到 10 / 14 两档；圆点、头像、状态灯（rounded-full）不动 ── */
+html[data-ui-theme="refined"] .workspace-main :is(.rounded-md, .rounded-lg) { border-radius: 10px; }
+html[data-ui-theme="refined"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 14px; }
+html[data-ui-theme="refined"] [role="dialog"] :is(.rounded-md, .rounded-lg) { border-radius: 10px; }
+html[data-ui-theme="refined"] [role="dialog"] :is(.rounded-xl, .rounded-2xl) { border-radius: 14px; }
+
+/* ── 8. 手机：顶栏实底，底部标签栏是一条白色通栏 ─────────────────── */
+@media (max-width: 767px) {
+  html[data-ui-theme="refined"] .fx-navbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html[data-ui-theme="refined"] .fx-tabbar {
+    inset-inline: 0;
+    bottom: 0;
+    height: calc(60px + env(safe-area-inset-bottom, 0px));
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-top: 1px solid var(--fx-stroke-weak);
+    border-radius: 0;
+    background: var(--fx-glass-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  html[data-ui-theme="refined"] .fx-tabbar-item { height: 52px; border-radius: 10px; }
+  html[data-ui-theme="refined"] .fx-tabbar-item:active { transform: none; }
+  html[data-ui-theme="refined"] .fx-tabbar-item-active { color: var(--fx-refined-tone-ink); background: transparent; background-image: none; box-shadow: none; }
+  html[data-ui-theme="refined"] .fx-tabbar-item-active > svg { color: var(--fx-refined-tone); }
+}
