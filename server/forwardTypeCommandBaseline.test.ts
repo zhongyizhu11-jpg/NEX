@@ -47,77 +47,77 @@ type Fingerprint = {
 const BASELINE: Record<string, Fingerprint> = {
   "gost:both": {
     commands: 36, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "9cec3278de7012e2",
+    hash: "fcf95825e0f70d7c",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "gost:tcp": {
     commands: 30, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "ed5ad0980be4abad",
+    hash: "b7150c52d8a6a5ae",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "gost:udp": {
     commands: 30, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "6bbb35adc7623ee8",
+    hash: "bb4230ab0ae15bc5",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "iptables:both": {
     commands: 55, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "962abc8e3ce7f4e6",
+    hash: "3428b74ad9034e01",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "iptables:tcp": {
     commands: 43, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "bf42864cf0b684d3",
+    hash: "e9c2ee4e37a992ce",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "iptables:udp": {
     commands: 43, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "c04a9af898b6d618",
+    hash: "f386a277c3d51536",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "nftables:both": {
     commands: 52, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "6e60caef65e5df01",
+    hash: "cad0de68bf576e78",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "nftables:tcp": {
     commands: 42, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "2fe8e61541ace5fc",
+    hash: "636d9fdb42e43e93",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "nftables:udp": {
     commands: 42, preCommands: 0, postCommands: 0, managedConfigs: 0,
-    hash: "6dcac4774942b560",
+    hash: "29bc6a852c1bcd88",
     svcName: "", svcNameExtra: "", serviceHash: "16682bd0d8bc0d18",
   },
   "realm:both": {
     commands: 4, preCommands: 37, postCommands: 0, managedConfigs: 0,
-    hash: "647f06de5c4ca309",
+    hash: "58a0647f712902c3",
     svcName: "forwardx-realm-both-20009", svcNameExtra: "", serviceHash: "da02cadd2fdc6b49",
   },
   "realm:tcp": {
     commands: 4, preCommands: 31, postCommands: 0, managedConfigs: 0,
-    hash: "002bddbf437eb512",
+    hash: "9e275ae3ac4e40ef",
     svcName: "forwardx-realm-tcp-20007", svcNameExtra: "", serviceHash: "c89ac3ef706d6b04",
   },
   "realm:udp": {
     commands: 4, preCommands: 28, postCommands: 0, managedConfigs: 0,
-    hash: "96a5c37d01b7210b",
+    hash: "951d2a0fea79a1d3",
     svcName: "forwardx-realm-udp-20008", svcNameExtra: "", serviceHash: "97741e73c0bd2c00",
   },
   "socat:both": {
     commands: 0, preCommands: 33, postCommands: 4, managedConfigs: 0,
-    hash: "5c42ea79089d84bc",
+    hash: "08096cb434332507",
     svcName: "forwardx-socat-tcp-20012", svcNameExtra: "forwardx-socat-udp-20012", serviceHash: "e95cec455a2fbccb",
   },
   "socat:tcp": {
     commands: 0, preCommands: 28, postCommands: 4, managedConfigs: 0,
-    hash: "31e74a2f3a067947",
+    hash: "24e58d65e3051801",
     svcName: "forwardx-socat-tcp-20010", svcNameExtra: "", serviceHash: "5efc503e7ef202b8",
   },
   "socat:udp": {
     commands: 0, preCommands: 27, postCommands: 4, managedConfigs: 0,
-    hash: "8b1782a8bce1294a",
+    hash: "55999599225e09b9",
     svcName: "forwardx-socat-udp-20011", svcNameExtra: "", serviceHash: "ab0167ebb07532a4",
   },
 };

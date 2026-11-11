@@ -13,7 +13,7 @@
   TOKEN_FORBIDDEN_PATHS 挡着（server/ops/apiTokenPolicy.ts），模块管不到它们，也不需要管。
 */
 
-export const API_TOKEN_MODULES = ["rules", "hosts", "lines", "proxy", "users", "billing", "system", "monitoring"] as const;
+export const API_TOKEN_MODULES = ["rules", "hosts", "lines", "proxy", "users", "billing", "system", "monitoring", "shop"] as const;
 export type ApiTokenModule = (typeof API_TOKEN_MODULES)[number];
 
 export const API_TOKEN_MODULE_LABELS: Record<ApiTokenModule, string> = {
@@ -25,17 +25,19 @@ export const API_TOKEN_MODULE_LABELS: Record<ApiTokenModule, string> = {
   billing: "套餐与计费",
   system: "系统设置",
   monitoring: "监控与事件",
+  shop: "商城对接",
 };
 
 export const API_TOKEN_MODULE_DETAILS: Record<ApiTokenModule, string> = {
   rules: "转发规则、线路诊断",
-  hosts: "主机、Agent 令牌、换 IP、防火墙、主机日志与网络调优",
+  hosts: "主机、Agent 令牌、换 IP、换机器、防火墙、主机日志与网络调优",
   lines: "隧道、转发组、节点池、拓扑、TLS 入口",
   proxy: "代理入站、订阅链接",
   users: "用户、推广、工单",
   billing: "套餐、钱包、支付、流量计费",
   system: "系统设置、DNS 解析记录、插件、界面主题、公告、Webhook、维护模式",
-  monitoring: "总览、诊断、事件、运维看板、可用率",
+  monitoring: "总览、诊断、事件、运维看板、可用率、流量异常",
+  shop: "只给商城回调用：开通、续期、停用套餐（只勾这一项）",
 };
 
 /** 前缀 → 模块。前缀都以 . 结尾，按最长匹配归属。 */
@@ -57,12 +59,14 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
     "ops.hostLogs.",
     "ops.netTune.",
     "ops.resourceAlert.",
+    "hostReplace.",
   ],
   lines: ["tunnels.", "forwardGroups.", "nodePools.", "topology.", "tlsInbounds."],
   proxy: ["proxyInbounds.", "proxySubscriptions."],
   users: ["users.", "referral.", "tickets.", "userTrafficHistory."],
   billing: ["billing.", "plans.", "payment.", "trafficBilling."],
-  system: ["system.", "dnsRecords.", "plugins.", "uiThemes.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries."],
+  // shopSync. 下面的设置归系统；商城回调的入口 shopSync.inbound. 单独一档（shop），按最长前缀归属。
+  system: ["system.", "dnsRecords.", "plugins.", "uiThemes.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries.", "shopSync."],
   monitoring: [
     "dashboard.",
     "diagnostics.",
@@ -73,7 +77,9 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
     "ops.statusAvailability.",
     "ops.digest.",
     "ops.onlineIps.",
+    "ops.trafficAnomaly.",
   ],
+  shop: ["shopSync.inbound."],
 };
 
 /** 勾了模块也照样放行的前缀。 */

@@ -118,7 +118,9 @@ type networkTargetDNSCall struct {
 }
 
 type localRuleState struct {
-	Port        string
+	Port string
+	// PortEnd：端口段规则的最后一个端口（从面板下发的 runningRule 来）；单端口或不知道时为 0。
+	PortEnd     int
 	RuleID      int
 	TunnelID    int
 	ForwardType string
@@ -1939,6 +1941,7 @@ func readLocalRuleStates() []localRuleState {
 		if desired, ok := desiredRunningRuleForStatePort(ruleID, parseStatePort(port)); ok {
 			states = append(states, localRuleState{
 				Port:        port,
+				PortEnd:     runningRulePortEnd(desired),
 				RuleID:      ruleID,
 				TunnelID:    desired.TunnelID,
 				ForwardType: desired.ForwardType,

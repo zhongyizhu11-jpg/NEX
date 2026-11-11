@@ -34,6 +34,9 @@ type failoverProxy struct {
 	// 单独记着，本机的探测结果盖不掉它，规格重下发也不会把它清掉。
 	relayDown       []bool
 	relayDownReason []string
+	// 面板的切换演练（提示原因是 drill）刚撤掉的时刻：演练引起的切走和切回是人故意的，不算进抖动抑制
+	// （drillSwitchLocked）。零值 = 这条没演练过。
+	drillEndedAt []time.Time
 	// 走各条出站的客户端连接：「快速故障转移 / 强制切换」要断旧连接时用。
 	conns []map[net.Conn]struct{}
 	rng   *mathrand.Rand
@@ -443,6 +446,9 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 			p.stats[i] = &routeTargetStats{}
 		}
 	}
+	if len(p.drillEndedAt) != n {
+		p.drillEndedAt = make([]time.Time, n)
+	}
 	if len(p.relayDown) != n {
 		p.relayDown = make([]bool, n)
 		p.relayDownReason = make([]string, n)
@@ -502,7 +508,7 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 	p.activeSince = p.lastSwitchAt
 	p.precheckFailedIndex = -1
 	p.flapHoldReported = false
-	if reason != "pin" {
+	if reason != "pin" && !p.drillSwitchLocked(old, index, p.lastSwitchAt) {
 		p.noteAutoSwitchLocked(p.lastSwitchAt)
 	}
 	next := p.spec.Targets[index]

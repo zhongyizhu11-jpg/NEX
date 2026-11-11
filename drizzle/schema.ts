@@ -335,6 +335,11 @@ export const hosts = table("hosts", {
   expiryHandling: varchar("expiryHandling", { length: 24 }).notNull().default("none"),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
   trafficMeasureMode: varchar("trafficMeasureMode", { length: 16 }).notNull().default("both"),
+  // 主机账本（shared/hostLedger.ts）：每期费用（分，0 = 没填）、币种、固定 / 95 计费、95 单价（分 / Mbps / 月）。
+  costCents: bigint("costCents", { mode: "number" }).notNull().default(0),
+  costCurrency: varchar("costCurrency", { length: 8 }).notNull().default("CNY"),
+  bandwidthBilling: varchar("bandwidthBilling", { length: 16 }).notNull().default("fixed"),
+  p95PriceCents: bigint("p95PriceCents", { mode: "number" }).notNull().default(0),
   // 流量故障转移（shared/hostTrafficPolicy.ts）：用到套餐流量的这个比例后暂停参与转发组 / 入口组 /
   // 出口组 / 多出口隧道。trafficFailoverExcluded 是按 host_traffic_counters 算出来的派生值，
   // 不改任何成员配置。
@@ -467,6 +472,8 @@ export const forwardRules = table("forward_rules", {
   sourcePort: int("sourcePort").notNull(),
   targetIp: text("targetIp").notNull(),
   targetPort: int("targetPort").notNull(),
+  // 端口段（shared/portRange.ts）：空 = 单端口；不空 = 入口段最后一个端口，目标段从 targetPort 起、同样长。
+  sourcePortEnd: int("sourcePortEnd"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
@@ -1284,6 +1291,8 @@ export const tunnels = table("tunnels", {
   linkShapingMode: varchar("linkShapingMode", { length: 16 }).notNull().default("off"),
   /** 抗丢包：UDP 直连额外发纠错包（FXP 的 udp_fec.go）。只对 NEX 隧道有意义，默认关。 */
   udpFec: boolean("udpFec").notNull().default(false),
+  /** 抗丢包传输：V1 隧道的承载从 TCP 换成 UDP 上的 KCP + 纠错（FXP 的 loss_carrier.go），默认关。 */
+  lossTolerant: boolean("lossTolerant").notNull().default(false),
   /** 内核直通：V2 隧道两端都是内核 WireGuard 时，普通 TCP/UDP 规则改走 iptables DNAT 进 nexwg，不经 FXP。默认关。 */
   kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
   // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。
@@ -1412,6 +1421,16 @@ export const hostTrafficCounters = table("host_traffic_counters", {
 });
 export type HostTrafficCounter = typeof hostTrafficCounters.$inferSelect;
 export type InsertHostTrafficCounter = typeof hostTrafficCounters.$inferInsert;
+
+/* 按 95 计费的主机每 5 分钟一行（server/hostRateBuckets.ts）。只走原生 SQL，这里留一份给类型和对照。 */
+export const hostRateBuckets = table("host_rate_buckets", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  bucketStart: int("bucketStart").notNull(),
+  bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0),
+  bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0),
+  coveredSeconds: int("coveredSeconds").notNull().default(0),
+});
 
 export const userTrafficCounters = table("user_traffic_counters", {
   id: serial("id"),

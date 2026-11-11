@@ -38,6 +38,8 @@ import { dnsRecordsRouter } from "./routers/dnsRecords";
 import { hostAgentRouter } from "./routers/hostAgent";
 import { probeCarrierRouter } from "./routers/probeCarrier";
 import { userTrafficHistoryRouter } from "./routers/userTrafficHistory";
+import { hostReplaceRouter } from "./routers/hostReplace";
+import { shopSyncRouter } from "./routers/shopSync";
 
 export const appRouter = router({
   system: systemRouter,
@@ -80,6 +82,8 @@ export const appRouter = router({
   dnsRecords: dnsRecordsRouter,
   probeCarrier: probeCarrierRouter,
   userTrafficHistory: userTrafficHistoryRouter,
+  hostReplace: hostReplaceRouter,
+  shopSync: shopSyncRouter,
 });
 
 export type AppRouter = typeof appRouter;

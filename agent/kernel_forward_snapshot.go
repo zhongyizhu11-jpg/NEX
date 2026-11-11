@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"regexp"
 	"sort"
@@ -58,7 +59,7 @@ func (s *kernelForwardSnapshot) desiredActionConsistent(a action) bool {
 }
 
 func (s *kernelForwardSnapshot) actionApplyReady(a action) bool {
-	return s.kernelRuleApplyPresent(a.ForwardType, a.RuleID, a.SourcePort, a.TargetIP, a.TargetPort, a.Protocol)
+	return s.kernelRuleApplyPresent(a.ForwardType, a.RuleID, a.SourcePort, a.SourcePortEnd, a.TargetIP, a.TargetPort, a.Protocol)
 }
 
 // actionNotReadyReason 说明一次内核转发动作之后还差什么，原因进动作状态，面板上看得到；对得上时返回 ""。
@@ -71,7 +72,7 @@ func (s *kernelForwardSnapshot) actionNotReadyReason(a action) string {
 		if a.SourcePort <= 0 {
 			return "source port is missing"
 		}
-		return s.kernelRuleNotReadyReason(a.ForwardType, a.RuleID, a.SourcePort, a.TargetIP, a.TargetPort, a.Protocol)
+		return s.kernelRuleNotReadyReason(a.ForwardType, a.RuleID, a.SourcePort, a.SourcePortEnd, a.TargetIP, a.TargetPort, a.Protocol)
 	case "remove":
 		if s.actionRemoveDone(a) {
 			return ""
@@ -87,7 +88,7 @@ func (s *kernelForwardSnapshot) actionRemoveDone(a action) bool {
 }
 
 func (s *kernelForwardSnapshot) localRuleStateReady(state localRuleState) bool {
-	return s.kernelRuleApplyPresent(state.ForwardType, state.RuleID, atoi(state.Port), state.TargetIP, state.TargetPort, state.Protocol)
+	return s.kernelRuleApplyPresent(state.ForwardType, state.RuleID, atoi(state.Port), state.PortEnd, state.TargetIP, state.TargetPort, state.Protocol)
 }
 
 func readLocalRuntimeRuleStates() []localRuleState {
@@ -204,20 +205,33 @@ func (s *kernelForwardSnapshot) localResidueStates(existingPorts map[string]bool
 	return out
 }
 
-func (s *kernelForwardSnapshot) kernelRuleApplyPresent(forwardType string, ruleID int, sourcePort int, targetIP string, targetPort int, protocol string) bool {
+func (s *kernelForwardSnapshot) kernelRuleApplyPresent(forwardType string, ruleID int, sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
 	if sourcePort <= 0 {
 		return false
 	}
-	return s.kernelRuleNotReadyReason(forwardType, ruleID, sourcePort, targetIP, targetPort, protocol) == ""
+	return s.kernelRuleNotReadyReason(forwardType, ruleID, sourcePort, sourcePortEnd, targetIP, targetPort, protocol) == ""
 }
 
 // kernelRuleNotReadyReason：动作完成判定、旧动作接管和本地状态上报共用这一个结论，
 // Agent 重启后旧的成功记录也盖不住缺失的那一段。
-func (s *kernelForwardSnapshot) kernelRuleNotReadyReason(forwardType string, ruleID int, sourcePort int, targetIP string, targetPort int, protocol string) string {
+func (s *kernelForwardSnapshot) kernelRuleNotReadyReason(forwardType string, ruleID int, sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) string {
 	switch strings.TrimSpace(forwardType) {
 	case "nftables":
+		if sourcePortEnd > sourcePort {
+			// 端口段：DNAT 整段在不在（server/rulePortRange.ts 下发的那套）；Docker 放行那套还不管端口段
+			if !s.nftForwardRangePresent(ruleID, sourcePort, sourcePortEnd, targetIP, targetPort, protocol) {
+				return fmt.Sprintf("the nftables DNAT rule for ports %d-%d is missing", sourcePort, sourcePortEnd)
+			}
+			return ""
+		}
 		return s.nftForwardRuleNotReadyReason(ruleID, sourcePort, targetIP, targetPort, protocol)
 	case "iptables":
+		if sourcePortEnd > sourcePort {
+			if !s.iptablesForwardRangePresent(sourcePort, sourcePortEnd, targetIP, targetPort, protocol) {
+				return fmt.Sprintf("the iptables forward rules for ports %d-%d are incomplete", sourcePort, sourcePortEnd)
+			}
+			return ""
+		}
 		return s.iptablesForwardRuleNotReadyReason(ruleID, sourcePort, targetIP, targetPort, protocol)
 	default:
 		return ""
@@ -292,10 +306,48 @@ func (s *kernelForwardSnapshot) iptablesChainText(binary string, table string, c
 	return s.iptablesNatRule[key]
 }
 
-// nftForwardRulePresent：整条路径都在才算（DNAT、转发开关、伪装、去回程放行、Docker 放行），
-// 原因见 nftForwardRuleNotReadyReason。
-func (s *kernelForwardSnapshot) nftForwardRulePresent(ruleID int, sourcePort int, targetIP string, targetPort int, protocol string) bool {
-	return s.nftForwardRuleNotReadyReason(ruleID, sourcePort, targetIP, targetPort, protocol) == ""
+// nftForwardRangePresent：端口段规则的 DNAT 整段都在（单端口规则走 nftForwardRuleNotReadyReason）。
+func (s *kernelForwardSnapshot) nftForwardRangePresent(ruleID int, sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
+	text := s.nftTableText()
+	if text == "" {
+		return false
+	}
+	for _, proto := range runtimeProtocols(protocol) {
+		if sourcePortEnd > sourcePort {
+			if !nftDnatRangeLinePresent(text, ruleID, proto, sourcePort, sourcePortEnd, targetIP, targetPort) {
+				return false
+			}
+			continue
+		}
+		if !nftDnatLinePresent(text, ruleID, proto, sourcePort, targetIP, targetPort) {
+			return false
+		}
+	}
+	return true
+}
+
+// nftDnatRangeLinePresent：端口段规则的 DNAT 行（整段 dport + 规则注释 + 目标），平移时映射表也要在。
+func nftDnatRangeLinePresent(text string, ruleID int, proto string, sourcePort int, sourcePortEnd int, targetIP string, targetPort int) bool {
+	if ruleID <= 0 {
+		return false
+	}
+	if targetPort != sourcePort && !nftPortRangeMapPresent(text, ruleID, proto) {
+		return false
+	}
+	marker := "fwx-rule-" + strconv.Itoa(ruleID) + "-in"
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := kernelNormalizeLine(rawLine)
+		if line == "" || !strings.Contains(line, " dnat ") || !strings.Contains(line, marker) {
+			continue
+		}
+		if !kernelLineHasProtoDportSpan(line, proto, sourcePort, sourcePortEnd) {
+			continue
+		}
+		if kernelLineDnatRangeTargetMatches(line, ruleID, proto, sourcePort, sourcePortEnd, targetIP, targetPort) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *kernelForwardSnapshot) nftForwardRuleResiduePresent(ruleID int, sourcePort int, protocol string) bool {
@@ -333,7 +385,8 @@ func nftDnatLinePresent(text string, ruleID int, proto string, sourcePort int, t
 	}
 	for _, rawLine := range strings.Split(text, "\n") {
 		line := kernelNormalizeLine(rawLine)
-		if line == "" || !strings.Contains(line, "dnat") || !kernelLineHasProtoDport(line, proto, sourcePort) {
+		// 只认单端口那一行：同起点的端口段（改单端口之前留下的）不算装好了。
+		if line == "" || !strings.Contains(line, "dnat") || !kernelLineHasProtoDportSpan(line, proto, sourcePort, 0) {
 			continue
 		}
 		if marker != "" && !strings.Contains(line, marker) && !kernelLineDnatTargetMatches(line, targetIP, targetPort) {
@@ -347,13 +400,43 @@ func nftDnatLinePresent(text string, ruleID int, proto string, sourcePort int, t
 	return false
 }
 
-func (s *kernelForwardSnapshot) iptablesForwardRulePresent(ruleID int, sourcePort int, targetIP string, targetPort int, protocol string) bool {
-	return s.iptablesForwardRuleNotReadyReason(ruleID, sourcePort, targetIP, targetPort, protocol) == ""
+func (s *kernelForwardSnapshot) iptablesForwardRangePresent(sourcePort int, sourcePortEnd int, targetIP string, targetPort int, protocol string) bool {
+	target := kernelCleanAddress(targetIP)
+	binary := iptablesAgentBinaryForTarget(target)
+	ranged := sourcePortEnd > sourcePort
+	targetEnd := targetSpanEnd(sourcePort, sourcePortEnd, targetPort)
+	for _, proto := range runtimeProtocols(protocol) {
+		if ranged {
+			if !iptablesDnatRangeLinePresent(s.iptablesNatPreroutingText(binary), proto, sourcePort, sourcePortEnd, target, targetPort) {
+				return false
+			}
+		} else if !iptablesDnatLinePresent(s.iptablesNatPreroutingText(binary), proto, sourcePort, target, targetPort) {
+			return false
+		}
+		// 只有 DNAT 没有 MASQUERADE / FORWARD 放行时流量同样不通：共享目标的规则被删、
+		// 或用户防火墙脚本清掉了这两段，都要让就绪检查失败以触发重下发。
+		// 目标不是 IP（尚未解析）时无法按目标匹配，保持只看 DNAT 的旧行为。
+		if net.ParseIP(target) == nil || targetPort <= 0 {
+			continue
+		}
+		if !iptablesTargetRuleSpanLinePresent(s.iptablesChainText(binary, "nat", "POSTROUTING"), "POSTROUTING", "MASQUERADE", proto, target, targetPort, targetEnd) {
+			return false
+		}
+		if !iptablesTargetRuleSpanLinePresent(s.iptablesChainText(binary, "", "FORWARD"), "FORWARD", "ACCEPT", proto, target, targetPort, targetEnd) {
+			return false
+		}
+	}
+	return true
 }
 
 // iptablesTargetRuleLinePresent 在 `-S` 输出里找 `-A <chain> -d <target> -p <proto> --dport <port> ... -j <jump>`，
 // 带不带 fwx-rule-<id> 注释都算（兼容旧 Agent/面板留下的无标记规则）。
 func iptablesTargetRuleLinePresent(text string, chain string, jump string, proto string, targetIP string, targetPort int) bool {
+	return iptablesTargetRuleSpanLinePresent(text, chain, jump, proto, targetIP, targetPort, targetPort)
+}
+
+// iptablesTargetRuleSpanLinePresent：同上，端口段规则的 --dport 是 `起:止`。
+func iptablesTargetRuleSpanLinePresent(text string, chain string, jump string, proto string, targetIP string, targetPort int, targetPortEnd int) bool {
 	want := net.ParseIP(kernelCleanAddress(targetIP))
 	if want == nil || targetPort <= 0 {
 		return false
@@ -379,7 +462,7 @@ func iptablesTargetRuleLinePresent(text string, chain string, jump string, proto
 			case "-p":
 				protoOK = strings.EqualFold(fields[i+1], proto)
 			case "--dport":
-				portOK = fields[i+1] == strconv.Itoa(targetPort)
+				portOK = fields[i+1] == iptablesPortExpr(targetPort, targetPortEnd)
 			case "-j":
 				jumpOK = fields[i+1] == jump
 			}
@@ -448,10 +531,24 @@ func (s *kernelForwardSnapshot) iptablesForwardRuleResiduePresent(sourcePort int
 	return false
 }
 
+// iptablesDnatRangeLinePresent：端口段规则的 DNAT（--dport 起:止，目标同端口只有地址、平移是 ip:段/起点）。
+func iptablesDnatRangeLinePresent(text string, proto string, sourcePort int, sourcePortEnd int, targetIP string, targetPort int) bool {
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := kernelNormalizeLine(rawLine)
+		if line == "" || !strings.Contains(line, "-j DNAT") || !kernelLineHasProtoDportSpan(line, proto, sourcePort, sourcePortEnd) {
+			continue
+		}
+		if kernelLineDnatRangeTargetMatches(line, 0, proto, sourcePort, sourcePortEnd, targetIP, targetPort) {
+			return true
+		}
+	}
+	return false
+}
+
 func iptablesDnatLinePresent(text string, proto string, sourcePort int, targetIP string, targetPort int) bool {
 	for _, rawLine := range strings.Split(text, "\n") {
 		line := kernelNormalizeLine(rawLine)
-		if line == "" || !strings.Contains(line, "-j DNAT") || !kernelLineHasProtoDport(line, proto, sourcePort) {
+		if line == "" || !strings.Contains(line, "-j DNAT") || !kernelLineHasProtoDportSpan(line, proto, sourcePort, 0) {
 			continue
 		}
 		if kernelLineDnatTargetMatches(line, targetIP, targetPort) {
@@ -489,33 +586,10 @@ func kernelLineDnatTargetMatches(line string, targetIP string, targetPort int) b
 	return kernelCleanAddress(lineTarget) == target && linePort == targetPort
 }
 
+// kernelLineDport 返回这一行匹配的目的端口；端口段返回起始端口（残留清理按起始端口认）。
 func kernelLineDport(line string) (string, int, bool) {
-	for _, proto := range []string{"tcp", "udp"} {
-		prefixes := []string{"--dport ", proto + " dport "}
-		if !strings.Contains(line, "-p "+proto+" ") && !strings.Contains(line, "meta l4proto "+proto) && !strings.Contains(line, proto+" dport ") {
-			continue
-		}
-		for _, prefix := range prefixes {
-			idx := strings.Index(line, prefix)
-			if idx < 0 {
-				continue
-			}
-			rest := strings.TrimSpace(line[idx+len(prefix):])
-			if rest == "" {
-				continue
-			}
-			fields := strings.Fields(rest)
-			if len(fields) == 0 {
-				continue
-			}
-			portText := strings.Trim(fields[0], "[];,")
-			port, err := strconv.Atoi(portText)
-			if err == nil && port > 0 && port <= 65535 {
-				return proto, port, true
-			}
-		}
-	}
-	return "", 0, false
+	proto, start, _, ok := kernelLineDportSpan(line)
+	return proto, start, ok
 }
 
 func kernelLineRuleID(line string) int {

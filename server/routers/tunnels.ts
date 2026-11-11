@@ -41,6 +41,7 @@ import {
 } from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { assertMimicEnvironment } from "../mimicEnvironment";
+import { lossTolerantBlockerMessage, lossTolerantBlockers } from "../../shared/lossTolerantGate";
 import {
   defaultTunnelHostAddress,
   selectEntryGroupTunnelTestAddress,
@@ -101,6 +102,16 @@ async function requireMimicEnvironmentForHosts(hostIds: number[]) {
   assertMimicEnvironment(hosts.map((host, index) => host || { id: ids[index], isOnline: false }));
 }
 
+/** 抗丢包传输两端版本不齐就是直接不通（不会退回 TCP），保存时拦下。 */
+async function requireLossTolerantVersionForHosts(hostIds: number[]) {
+  const ids = Array.from(new Set(hostIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)));
+  const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
+  const blockers = lossTolerantBlockers(hosts as Array<{ id: number; name?: string | null; agentVersion?: string | null; fxpVersion?: string | null } | null | undefined>, ids);
+  if (blockers.length > 0) throw new Error(lossTolerantBlockerMessage(blockers));
+}
+
 function isTunnelProxyProtocolSupported(mode: unknown) {
   const normalized = normalizeTunnelMode(mode);
   return normalized === "forwardx" || ["tls", "wss", "tcp", "mtls", "mwss", "mtcp"].includes(normalized);
@@ -131,6 +142,7 @@ function normalizeTunnelRuntimeOptions(input: any, mode: unknown) {
     linkDownMbps: forwardxMode ? normalizeLinkMbps(input.linkDownMbps) : 0,
     linkShapingMode: forwardxMode ? normalizeTunnelLinkShapingMode(input.linkShapingMode) : "off",
     udpFec: forwardxMode && dbBool(input.udpFec),
+    lossTolerant: forwardxMode && dbBool(input.lossTolerant),
     kernelPassthrough: forwardxMode && dbBool(input.kernelPassthrough),
   };
 }
@@ -998,6 +1010,7 @@ export const tunnelsRouter = router({
         linkDownMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
         linkShapingMode: z.enum(["auto", "manual", "off"]).optional().default("off"),
         udpFec: z.boolean().optional().default(false),
+        lossTolerant: z.boolean().optional().default(false),
         kernelPassthrough: z.boolean().optional().default(false),
         blockHttp: z.boolean().optional().default(false),
         blockSocks: z.boolean().optional().default(false),
@@ -1109,6 +1122,18 @@ export const tunnelsRouter = router({
             entryHostId,
           });
           await requireMimicEnvironmentForHosts([
+            ...entryHostIds,
+            ...(hopHostIds || []),
+            exitHostId,
+            ...extraExitNodes.map((node) => node.hostId),
+          ]);
+        }
+        if (runtimeOptions.lossTolerant) {
+          const entryHostIds = await getTunnelEntryTestHostIds({
+            entryGroupId: input.entryGroupId ?? null,
+            entryHostId,
+          });
+          await requireLossTolerantVersionForHosts([
             ...entryHostIds,
             ...(hopHostIds || []),
             exitHostId,
@@ -1253,6 +1278,7 @@ export const tunnelsRouter = router({
         linkDownMbps: z.number().int().min(0).max(1_000_000).optional(),
         linkShapingMode: z.enum(["auto", "manual", "off"]).optional(),
         udpFec: z.boolean().optional(),
+        lossTolerant: z.boolean().optional(),
         kernelPassthrough: z.boolean().optional(),
         blockHttp: z.boolean().optional(),
         blockSocks: z.boolean().optional(),
@@ -1379,6 +1405,7 @@ export const tunnelsRouter = router({
           "linkDownMbps",
           "linkShapingMode",
           "udpFec",
+          "lossTolerant",
           "kernelPassthrough",
         ] as const;
         const runtimeOptionsProvided = tunnelRuntimeKeys.some((key) => (data as any)[key] !== undefined);
@@ -1618,6 +1645,35 @@ export const tunnelsRouter = router({
             entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId,
           });
           await requireMimicEnvironmentForHosts([
+            ...entryHostIds,
+            ...normalizedRequestedHopIds,
+            exitHostId,
+            ...extraExitNodes.map((node) => node.hostId),
+          ]);
+        }
+        // 抗丢包：刚打开、或开着时换了机器，都要重新核一遍版本。
+        const lossPatch = data as Record<string, unknown>;
+        const lossCurrent = tunnel as Record<string, unknown>;
+        const nextLossTolerant = lossPatch.lossTolerant !== undefined
+          ? dbBool(lossPatch.lossTolerant)
+          : dbBool(lossCurrent.lossTolerant);
+        const lossTolerantActivationChanged = nextLossTolerant && nextModeForRuntime === "forwardx" && (
+          !dbBool(lossCurrent.lossTolerant)
+          || hopChanged
+          || loadBalanceChanged
+          || lossPatch.entryGroupId !== undefined
+          || lossPatch.entryHostId !== undefined
+          || lossPatch.exitHostId !== undefined
+        );
+        if (lossTolerantActivationChanged) {
+          const entryHostIds = await getTunnelEntryTestHostIds({
+            ...tunnel,
+            ...data,
+            entryHostId,
+            exitHostId,
+            entryGroupId: lossPatch.entryGroupId !== undefined ? lossPatch.entryGroupId : lossCurrent.entryGroupId,
+          } as Parameters<typeof getTunnelEntryTestHostIds>[0]);
+          await requireLossTolerantVersionForHosts([
             ...entryHostIds,
             ...normalizedRequestedHopIds,
             exitHostId,

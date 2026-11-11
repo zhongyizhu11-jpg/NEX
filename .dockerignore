@@ -9,3 +9,4 @@ docs
 *.md
 !.dockerignore
 !THIRD_PARTY_NOTICES.md
+e2e/out

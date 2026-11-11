@@ -11,6 +11,7 @@ import { reconcileForwardRuleTunnelExits } from "./repositories/tunnelRepository
 import { insertForwardRuleRouteEvent } from "./repositories/forwardRuleRepository";
 import { syncRouteRelayRulesForRule } from "./routeGroups";
 import { recordRouteAgentStats, recordRouteHopProbe } from "./routeGroupStats";
+import { routeDrillInternals } from "./routeDrill";
 import { insertRoutePathQualityStats, type RoutePathQualityRow } from "./repositories/routePathQualityRepository";
 import { AGENT_VERSION } from "../shared/versions";
 
@@ -1689,10 +1690,24 @@ async function seedLineDemo(adminId: number) {
     await insertAndGetId("traffic_stats", { ruleId: hkt, hostId: po0, bytesIn: Math.round(1.1 * 1024 ** 3), bytesOut: Math.round(1.76 * 1024 ** 3), connections: 300, recordedAt: minutesAgo(i * 60 - 30) });
   }
 
-  // Sg：主线路经 HK2（维护），在走备 1。
+  // 切换演练（2.3.524）：广港hkt 八分钟前演练过主线路（线路详情顶上一张报告卡），切换记录里有开始、结束两笔。
+  routeDrillInternals.seedReport({
+    ruleId: hkt, subjectRuleId: hkt, entryHostId: po0, entryHostName: null, lineKey: "main", lineLabel: "主线路", seconds: 60,
+    startedAt: nowMs - 9 * 60_000, endedAt: nowMs - 8 * 60_000, finishedAt: nowMs - 8 * 60_000 + 3_400, wasActive: true, activeBeforeLabel: "主线路",
+    switched: true, switchMs: 2_100, switchedToLabel: "备用线路", restored: true, restoreMs: 3_400, connectionsBefore: 41, connectionsAfter: 41, events: 4, stoppedEarly: false,
+  });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "drill", fromKey: null, toKey: hktPaths[0]?.key, fromLabel: null, toLabel: "主线路", reason: "drill: start; seconds=60", atSeconds: minutes(9) });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[0]?.key, toKey: hktPaths[1]?.key, fromLabel: "主线路", toLabel: "备用线路", reason: "drill; relay down: drill", atSeconds: minutes(9) + 2 });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "drill; failback", atSeconds: minutes(8) + 3 });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "drill", fromKey: hktPaths[0]?.key, toKey: null, fromLabel: "主线路", toLabel: "备用线路", reason: "drill: done; seconds=60; was=active; switched=2100; to=备用线路; restored=3400; conns=41/41", latencyMs: 2100, atSeconds: minutes(8) + 3 });
+
+  // Sg：主线路经 HK2（维护），在走备 1。机器报的规格和面板配的对不上（面板是聚合，机器还按冷备主备在跑）：
+  // 线路详情顶上出红条「机器上跑的不是面板里这份」。规则的改动时间往前拨，不然还在 20 秒宽限里。
+  await executeRaw(`UPDATE ${quoteDbIdentifier("forward_rules")} SET ${quoteDbIdentifier("updatedAt")} = ? WHERE ${quoteDbIdentifier("id")} = ?`, [minutesAgo(30), sg]);
   const sgPaths = await readPaths(sg);
   recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
-    ruleId: sg, sourcePort: 26310, strategy: "least_load", activeIndex: 1, activeSince: nowMs - 118 * 60_000, prewarmIndex: -1, inboundOk: 410, inboundFailed: 1,
+    ruleId: sg, sourcePort: 26310, strategy: "fallback", activeIndex: 1, activeSince: nowMs - 118 * 60_000, prewarmIndex: -1, inboundOk: 410, inboundFailed: 1,
+    spec: { pinnedIndex: null, minHoldSeconds: 0, preferFastest: false, strategy: "fallback", delivery: "cold", failoverSeconds: 5, recoverSeconds: 180, autoFailback: true, failureThreshold: 3, scoreMargin: 10, scoreHoldSeconds: 120, prewarmSeconds: 0, switchMode: "smooth", targetCount: 2 },
     targets: [
       { index: 0, target: dial(sgPaths[0]), healthy: false, down: true, downReason: "maintenance: HK2", score: 0, latencyMs: -1, lossPct: 100, jitterMs: 0, availabilityPct: 0, consecutiveFailures: 5, connections: 0, samples: 120, lastProbeAt: nowMs - 2000 },
       { index: 1, target: dial(sgPaths[1]), healthy: true, score: 88, latencyMs: 31, lossPct: 0, jitterMs: 2, availabilityPct: 100, consecutiveFailures: 0, connections: 12, samples: 120, lastProbeAt: nowMs - 2000, dialOk: 405, dialFailed: 2 },
@@ -1710,6 +1725,13 @@ async function seedLineDemo(adminId: number) {
   jpPaths.forEach((path) => {
     const hop = path.hops[0];
     if (hop && hop !== hk2) for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: jp, pathKey: path.key, hopIndex: 0, hostId: hop, hostName: names.get(hop) || "中转", nextLabel: "落地", ok: true, latencyMs: 40 });
+  });
+  // 日本：正在演练主线路（刚开始 12 秒，还没切走）：线路详情顶上是进度条那张卡，主线路那行写「演练中」。
+  routeDrillInternals.seedActive({
+    ruleId: jp, subjectRuleId: jp, entryHostId: po0, entryHostName: null, lineKey: "main", lineLabel: "主线路", seconds: 90,
+    startedAt: nowMs - 12_000, endsAt: nowMs + 78_000, phase: "down", wasActive: true, switchedAt: null, switchMs: null, switchedToLabel: null,
+    pathKeys: jpPaths.filter((path) => (path.lineKey || path.key) === "main").map((path) => path.key),
+    pathIndexes: jpPaths.map((path, index) => ((path.lineKey || path.key) === "main" ? index : -1)).filter((index) => index >= 0),
   });
 
   /*
@@ -1764,6 +1786,24 @@ async function seedLineDemo(adminId: number) {
     // Agent 报的切换记在子规则上：线路详情按模板看也得看得到
     await insertForwardRuleRouteEvent({ ruleId: childId, kind: "switch", fromKey: childPaths[1]?.key, toKey: childPaths[0]?.key, fromLabel: "备用 1", toLabel: "主线路", reason: "score", score: 95, latencyMs: 2, fromChainMs: 3, toChainMs: 2, heldSeconds: 30, atSeconds: minutes(40) });
   }
+
+  // 端口段（shared/portRange.ts）：nftables 端口转发上一条 28000-28100 平移到 38000-38100 的规则（游戏 / 媒体）。
+  const rangeGroupId = await insertAndGetId("forward_groups", {
+    userId: adminId, name: "Po0 内核转发", groupType: "host", groupMode: "port", forwardType: "nftables",
+    sourcePort: 28000, protocol: "both", targetIp: "198.18.0.50", targetPort: 38000, lastStatus: "healthy", isEnabled: true, sortOrder: 11,
+    createdAt: now, updatedAt: now,
+  });
+  await insertAndGetId("forward_group_members", {
+    groupId: rangeGroupId, memberType: "host", hostId: po0, priority: 1, isEnabled: true, healthStatus: "healthy",
+    lastLatencyMs: 2, healthySince: minutesAgo(90), lastCheckedAt: now, createdAt: now, updatedAt: now,
+  });
+  await insertAndGetId("forward_rules", {
+    userId: adminId, hostId: po0, name: "游戏端口段", forwardType: "nftables", protocol: "both", sourcePort: 28000, sourcePortEnd: 28100,
+    targetIp: "198.18.0.50", targetPort: 38000, sortOrder: 25, isRunning: true, isEnabled: true, failoverTargets: "[]",
+    tunnelId: null, tunnelExitPort: null, forwardGroupId: rangeGroupId, forwardGroupRuleId: null, forwardGroupMemberId: null,
+    isForwardGroupTemplate: true, createdAt: now, updatedAt: now,
+  });
+  await syncForwardGroupRules(Number(rangeGroupId), { validatePorts: false }).catch((error) => console.warn(`[DevPanel] port range demo: ${error instanceof Error ? error.message : String(error)}`));
 
   // 落地池（2.3.500）：SG 落地 / 东京落地 / SG 原生开同一份 VLESS + REALITY；SG 原生的 443 被它自己的入站占了，换了端口。
   // 「Po0 到亚太落地池」目标是这个池：保存时做成线路组，三台一台一条路径，按负载分。
@@ -2770,6 +2810,32 @@ async function seedSettings() {
     systemAnnouncementEnabled: "true",
     allowMultiDeviceLogin: "true",
   });
+  // 异地自动备份：一套填好的演示配置和几条「最近结果」。开发面板不跑定时任务；手动点「测试连接 /
+  // 立即备份 / 从远端恢复」会真的去连这些地址，地址是假的，只会得到一条失败。
+  const backupAt = (hoursAgo: number) => Date.now() - hoursAgo * 3600 * 1000;
+  await setSettings({
+    "ops.backup.destination": "webdav,s3",
+    "ops.backup.webdav.url": "https://dav.example.com/dav/nex-backup/",
+    "ops.backup.webdav.user": "nex",
+    "ops.backup.webdav.password": "dev-only",
+    "ops.backup.s3.endpoint": "https://demo.r2.cloudflarestorage.com",
+    "ops.backup.s3.region": "auto",
+    "ops.backup.s3.bucket": "nex-backup",
+    "ops.backup.s3.accessKey": "DEVACCESSKEY",
+    "ops.backup.s3.secretKey": "dev-only",
+    "ops.backup.passphrase": "forwardx-dev",
+    "ops.backup.last.s3.successAt": String(backupAt(5)),
+    "ops.backup.last.webdav.successAt": String(backupAt(29)),
+    "ops.backup.last.webdav.attemptAt": String(backupAt(4)),
+    "ops.backup.history": JSON.stringify([
+      { at: backupAt(4), trigger: "schedule", destination: "webdav", ok: false, name: "", size: 0, message: "上传失败，HTTP 507：空间不足" },
+      { at: backupAt(5), trigger: "schedule", destination: "webdav", ok: false, name: "", size: 0, message: "上传失败，HTTP 507：空间不足" },
+      { at: backupAt(5), trigger: "schedule", destination: "s3", ok: true, name: "nex-backup-demo.fwxbak", size: 1_260_000, message: "删掉 1 份旧的" },
+      { at: backupAt(29), trigger: "schedule", destination: "webdav", ok: true, name: "nex-backup-demo.fwxbak", size: 1_254_000, message: "" },
+      { at: backupAt(29), trigger: "schedule", destination: "s3", ok: true, name: "nex-backup-demo.fwxbak", size: 1_254_000, message: "" },
+      { at: backupAt(53), trigger: "manual", destination: "s3", ok: true, name: "nex-backup-demo.fwxbak", size: 1_249_000, message: "" },
+    ]),
+  });
 }
 
 /** lineDemo：线路工作台那套演示（Po0 / Jinx / HK2 …）；只看原来那几台机器的测试传 false。 */
@@ -2890,6 +2956,7 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   await seedAgentTokens(adminId, hostIds);
   await seedHostGroups(adminId, hostIds);
   await seedHostMetrics(hostIds);
+  await (await import("./devPanelHostLedger")).seedHostLedgerDemo(hostIds);
   await seedUnlockChecks(hostIds);
   const resources = await seedTunnelsAndGroups(adminId, hostIds);
   const rules = await seedRules(hostIds, resources, usersSeed);
@@ -2902,7 +2969,9 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   const catalog = await seedCatalog(adminId, resources, hostIds);
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);
+  await import("./ops/trafficAnomalyDemo").then((m) => m.seedTrafficAnomalyDemo(rules.adminRuleIds)).catch((error) => console.warn(`[DevPanel] traffic anomaly demo seed failed: ${error instanceof Error ? error.message : String(error)}`));
   await seedSettings();
+  await (await import("./shopSync/devSeed")).seedShopSyncDevData(catalog).catch((error) => console.warn(`[DevPanel] shop sync demo seed failed: ${error instanceof Error ? error.message : String(error)}`));
   await setSetting("devPanelSeededAt", new Date().toISOString());
 
   console.log(`[DevPanel] Seeded local development data as ${DEV_ADMIN_USERNAME}`);

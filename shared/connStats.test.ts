@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CONN_STAGES,
+  connStageLabel,
   addConnStats,
   connStatsToCsv,
   bytesToMbps,
@@ -58,4 +60,9 @@ test("每一路：via 只认 relay#N / stream#N，速率按 Mbps 算", () => {
   assert.equal(bytesToMbps(125_000_000, 1), 1000);
   assert.equal(bytesToMbps(0, 60), 0);
   assert.equal(formatConnBytes(5 * 1024 * 1024), "5.0 MB");
+});
+
+test("抗丢包传输拨下一跳的那一行有自己的阶段名，面板收得下、显示成中文", () => {
+  assert.ok(CONN_STAGES.some((stage) => stage.key === "carrier"));
+  assert.equal(connStageLabel("carrier"), "抗丢包连接");
 });

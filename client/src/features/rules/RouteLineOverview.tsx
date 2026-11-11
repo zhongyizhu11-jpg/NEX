@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ChevronDown, Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
@@ -92,10 +92,16 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
  * 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命；人工指定了这条，后面带「指定」。
  * 指定了、通着、机器还没切过来：「切换中」—— 以前写「待命 · 指定」，看着像指定了也不走（为什么没切在调度计划里写）。
  */
+/** 面板给的「当成挂了」提示（server/routeDrill）：Agent 原样报回来时是 relay down: drill。 */
+export function isRouteDrillReason(reason: unknown) {
+  return /^(relay down:\s*)?drill\b/i.test(String(reason ?? "").trim());
+}
+
 function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone; text: string; dot?: boolean } {
   const tag = pinned ? " · 指定" : "";
   if (group.paused) return { tone: "gray", text: "已暂停" };
   if (group.active) return { tone: "ok", text: `使用中${tag}`, dot: true };
+  if (group.allDown && isRouteDrillReason(group.reason)) return { tone: "warn", text: `演练中${tag}` };
   if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通"}${tag}` };
   if (pinned) return { tone: "acc", text: "切换中 · 指定" };
   return { tone: "gray", text: "待命" };
@@ -131,6 +137,9 @@ export type RouteLineSwitch = {
   nowMs?: number;
   timeZone?: string;
 };
+
+/** 演练一次把线路当成挂了多久：界面上固定这一档（接口可以给 10–600 秒，server/routeDrill）。 */
+export const ROUTE_DRILL_SECONDS = 60;
 
 /** 手动指定最长多久（防手滑多打一个 0）：30 天，再久就选「不限时」。 */
 const MAX_PIN_MINUTES = 30 * 24 * 60;
@@ -383,6 +392,52 @@ export function routeSwitchChip(status: RouteStatus, events: RouteEvent[], nowMs
   return { tone: "ok", text: `${lineShortClock(latest.at, timeZone)} 切到 ${to >= 0 ? lineLongName(to) : latest.toLabel || "另一条"}` };
 }
 
+// ---------------------------------------------------------------- 期望 vs 实际
+
+/**
+ * 机器上跑的不是面板里这份（Agent 2.2.253 起随心跳报它实际生效的规格，面板按用户配的比）：标红、逐项列差异、
+ * 一键重新下发。2.3.522 线上「切到备用 1 还是走主线路」就是面板存了、机器没拿到 —— 以前只看面板永远发现不了。
+ */
+export function RouteDriftBanner({
+  drift,
+  onResync,
+  resyncing = false,
+  timeZone,
+}: {
+  drift: NonNullable<RouteStatus["drift"]>;
+  onResync?: () => void;
+  resyncing?: boolean;
+  timeZone?: string;
+}) {
+  return (
+    <LineCard className="border border-[var(--fx-down-text)]/35 px-3 py-2.5" data-testid="route-drift">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-[var(--fx-down-text)]">
+          <LineDot tone="down" />机器上跑的不是面板里这份
+        </span>
+        {onResync ? (
+          <LineChipButton className="shrink-0" variant="sel" disabled={resyncing} onClick={onResync} data-testid="route-drift-resync">
+            {resyncing ? "下发中…" : "重新下发"}
+          </LineChipButton>
+        ) : null}
+      </div>
+      <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
+        {drift.fields.map((field) => (
+          <Fragment key={field.key}>
+            <span className="text-muted-foreground">{field.label}</span>
+            <span className="min-w-0">
+              面板 {field.expected}<span className="text-muted-foreground"> · </span><span className="text-[var(--fx-down-text)]">机器 {field.actual}</span>
+            </span>
+          </Fragment>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+        按机器 {lineShortClock(drift.reportedAt, timeZone)} 报的比。改完配置 20 秒内不算；一直这样多半是入口机没收到，点「重新下发」。
+      </p>
+    </LineCard>
+  );
+}
+
 // ---------------------------------------------------------------- 整屏
 
 export function RouteLineDetail({
@@ -398,6 +453,8 @@ export function RouteLineDetail({
   editor,
   lineSwitch,
   settings,
+  onResync,
+  resyncing = false,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -408,6 +465,9 @@ export function RouteLineDetail({
   onToggleDetails: () => void;
   nowMs?: number;
   timeZone?: string;
+  /** 期望 vs 实际对不上时「重新下发」；没给就只显示差异。 */
+  onResync?: () => void;
+  resyncing?: boolean;
   /** 能改的时候：线路这一节直接是编辑器（不再另开「编辑线路组」）；没给就是只读的线路列表。 */
   editor?: ReactNode;
   /** 手动换线路（点状态胶囊）；只读列表用，编辑器里的由编辑器自己带。 */
@@ -423,6 +483,7 @@ export function RouteLineDetail({
   return (
     <div className="fx-line-ui flex min-w-0 flex-col gap-3" data-testid="route-line-overview">
       <RouteLineHero status={status} />
+      {status.drift ? <RouteDriftBanner drift={status.drift} onResync={onResync} resyncing={resyncing} timeZone={timeZone} /> : null}
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
         <LineSec
@@ -487,10 +548,61 @@ export function useRouteLinePause(ruleId: number) {
   };
 }
 
-export function RouteLineTools({ status }: { status: RouteStatus }) {
+/**
+ * 切换演练（server/routeDrill）：把现在走的那条当成挂了一分钟，看切不切。界面上只有「异常明细」里一个小按钮
+ * （2.3.524 第一版在胶囊菜单里加了一节、详情顶上加了进度卡和报告卡，用户嫌臃肿，都去掉了）：进行中那条线路的
+ * 胶囊写「演练中」，结果是「最近切换」里的一行。
+ */
+export function useRouteLineDrill(ruleId: number) {
+  const utils = trpc.useUtils();
+  const refresh = () => {
+    void utils.rules.routeStatus.invalidate({ ruleId });
+    void utils.rules.routeEvents.invalidate({ ruleId });
+  };
+  const start = trpc.lineDiagnostics.lineDrillStart.useMutation({
+    onSuccess: (data) => {
+      refresh();
+      toast.success(`演练开始：当成挂了 ${data.seconds} 秒，结果记在「最近切换」里`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const stop = trpc.lineDiagnostics.lineDrillStop.useMutation({
+    onSuccess: () => {
+      refresh();
+      toast.success("已提前结束，看它切不切回");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  return {
+    onStart: (lineKey: string) => start.mutate({ ruleId, lineKey, seconds: ROUTE_DRILL_SECONDS }),
+    onStop: () => stop.mutate({ ruleId }),
+    pending: start.isPending || stop.isPending,
+  };
+}
+
+/**
+ * 「异常明细」里那个演练按钮该是什么样；不该有就返回 null：没权限改、只有一条线路（没处可切）、按权重分
+ * （没有「走哪条」）。演练的是现在走的那条 —— 演练一条待命的线路什么也看不出来。
+ */
+export function routeDrillAction(status: RouteStatus, canDrill: boolean): { drilling: boolean; lineKey: string | null; label: string; title: string } | null {
+  if (!canDrill || status.policy.mode === "weighted") return null;
+  if (new Set(status.paths.map((path) => path.lineKey || path.key)).size < 2) return null;
+  if (status.drill?.active) return { drilling: true, lineKey: status.drill.active.lineKey, label: "结束演练", title: "提前结束，看它切不切回" };
+  const active = status.paths.find((path) => path.active) || null;
+  return {
+    drilling: false,
+    lineKey: active ? active.lineKey || active.key : null,
+    label: `演练 ${ROUTE_DRILL_SECONDS} 秒`,
+    title: "把现在走的这条当成挂了一分钟（机器上的转发不动），看切不切；结果记在「最近切换」里",
+  };
+}
+
+export function RouteLineTools({ status, canDrill = false }: { status: RouteStatus; /** 能改这条规则的人才有「演练」 */ canDrill?: boolean }) {
   const utils = trpc.useUtils();
   const [runId, setRunId] = useState<string | null>(null);
   const active = status.paths.find((path) => path.active) || status.paths[0];
+  const drill = useRouteLineDrill(status.ruleId);
+  const drillAction = routeDrillAction(status, canDrill);
   const start = trpc.lineDiagnostics.segmentSpeedStart.useMutation({
     onSuccess: (run) => setRunId(String(run.runId)),
     onError: (error) => toast.error(error.message),
@@ -528,6 +640,16 @@ export function RouteLineTools({ status }: { status: RouteStatus }) {
         <LineChipButton disabled={exporting} onClick={() => void exportLine()} data-testid="route-line-export">
           <Download className="h-3.5 w-3.5" />导出 7 天记录
         </LineChipButton>
+        {drillAction ? (
+          <LineChipButton
+            disabled={drill.pending || (!drillAction.drilling && !drillAction.lineKey)}
+            title={drillAction.title}
+            onClick={() => (drillAction.drilling ? drill.onStop() : drillAction.lineKey && drill.onStart(drillAction.lineKey))}
+            data-testid="route-line-drill"
+          >
+            {drillAction.label}
+          </LineChipButton>
+        ) : null}
       </div>
       {/* 结果和网络测试页「iperf3 对拉」是同一个组件（features/network/SegmentSpeedResult），叫法、字段一样 */}
       {data?.segments ? (

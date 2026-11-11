@@ -117,6 +117,10 @@ type tcpListenerSlot struct {
 	connsMu  sync.Mutex
 	conns    map[net.Conn]*trackedConn
 	loopDone chan struct{}
+	// carrier 是同一个端口上的抗丢包监听（只有隧道开了抗丢包传输才有），接进来的连接
+	// 和 TCP 的一样交给当前处理器、一样登记。只由持有 fxpRuntimeManager.mu 的 apply 改。
+	carrier     *lossCarrierListener
+	carrierDone chan struct{}
 }
 
 type udpServerSlot struct {
@@ -137,9 +141,11 @@ type tcpListenPlan struct {
 	host     string
 	port     int
 	fastOpen bool
-	sig      string
-	cfg      config
-	handler  func(m *fxpRuntimeManager) *tcpHandler
+	// lossTolerant：同号的 UDP 端口上再接抗丢包承载（出口、中转）。
+	lossTolerant bool
+	sig          string
+	cfg          config
+	handler      func(m *fxpRuntimeManager) *tcpHandler
 }
 
 type udpServePlan struct {
@@ -196,6 +202,9 @@ func stripUDPOnlyFields(cfg *config) {
 
 func stripTCPOnlyFields(cfg *config) {
 	cfg.TCPFastOpen = false
+	// 抗丢包承载挂在 TCP 处理器上，UDP 直连的读循环只是替它转交认不出的包，开关它不该
+	// 把 UDP 监听连同上面的会话一起重启。
+	cfg.LossTolerant = false
 	// UDP 直连只看 udpTargets；TCP 目标表变了不该把 UDP 监听连同会话一起重启。
 	cfg.StreamTargets = nil
 }
@@ -241,7 +250,7 @@ func buildEntryPlans(entries []config, grouped bool) ([]tcpListenPlan, []udpServ
 		res := &entryResources{
 			cfg:        entry,
 			gate:       newConnGate(entry.MaxConnections, entry.MaxIPs),
-			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key}, entry.ExitStrategy),
+			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant}, entry.ExitStrategy),
 			inLimiter:  newLimiter(entry.LimitIn),
 			outLimiter: newLimiter(entry.LimitOut),
 		}
@@ -321,14 +330,15 @@ func buildExitPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 	var udpPlans []udpServePlan
 	if protocolHas(cfg, "tcp") {
 		tcpPlans = append(tcpPlans, tcpListenPlan{
-			key:      listenSlotKey("tcp", cfg.ListenHost, cfg.ListenPort),
-			label:    "exit",
-			role:     "exit",
-			host:     cfg.ListenHost,
-			port:     cfg.ListenPort,
-			fastOpen: cfg.TCPFastOpen,
-			sig:      fxpComponentSignature(cfg, stripExitTCPFields),
-			cfg:      cfg,
+			key:          listenSlotKey("tcp", cfg.ListenHost, cfg.ListenPort),
+			label:        "exit",
+			role:         "exit",
+			host:         cfg.ListenHost,
+			port:         cfg.ListenPort,
+			fastOpen:     cfg.TCPFastOpen,
+			sig:          fxpComponentSignature(cfg, stripExitTCPFields),
+			cfg:          cfg,
+			lossTolerant: cfg.LossTolerant,
 			handler: func(m *fxpRuntimeManager) *tcpHandler {
 				gates := newListenerConnGates(cfg)
 				return &tcpHandler{
@@ -366,7 +376,33 @@ func buildExitPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 			serve: func(conn *net.UDPConn) error { return serveExitUDPDirect(conn, cfg) },
 		})
 	}
+	udpPlans = appendLossCarrierUDPPlan(udpPlans, cfg, "exit")
 	return tcpPlans, udpPlans, nil
+}
+
+// appendLossCarrierUDPPlan：抗丢包承载要在和 TCP 监听同号的 UDP 端口上收包。那个端口上
+// 已经有 UDP 直连的读循环（隧道跑 UDP、没用 mimic 另配端口）就由它转交，否则单独起一个
+// 只替抗丢包收包的读循环。没开抗丢包的隧道什么都不加。
+func appendLossCarrierUDPPlan(plans []udpServePlan, cfg config, role string) []udpServePlan {
+	if !cfg.LossTolerant || !protocolHas(cfg, "tcp") {
+		return plans
+	}
+	key := lossCarrierListenKey(cfg.ListenHost, cfg.ListenPort)
+	for _, plan := range plans {
+		if plan.key == key {
+			return plans
+		}
+	}
+	return append(plans, udpServePlan{
+		key:   key,
+		label: role + " loss-tolerant",
+		role:  role,
+		host:  cfg.ListenHost,
+		port:  cfg.ListenPort,
+		sig:   "loss-tolerant",
+		cfg:   cfg,
+		serve: func(conn *net.UDPConn) error { return serveLossCarrierUDP(conn, key) },
+	})
 }
 
 func buildRelayPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
@@ -376,18 +412,19 @@ func buildRelayPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 	var tcpPlans []tcpListenPlan
 	var udpPlans []udpServePlan
 	newSelector := func() *exitEndpointSelector {
-		return newExitEndpointSelector(cfg.Exits, exitEndpoint{Host: cfg.RelayExitHost, Port: cfg.RelayExitPort, UDPPort: cfg.UDPRelayExitPort, Key: cfg.RelayKey}, cfg.ExitStrategy)
+		return newExitEndpointSelector(cfg.Exits, exitEndpoint{Host: cfg.RelayExitHost, Port: cfg.RelayExitPort, UDPPort: cfg.UDPRelayExitPort, Key: cfg.RelayKey, lossTolerant: cfg.LossTolerant}, cfg.ExitStrategy)
 	}
 	if protocolHas(cfg, "tcp") {
 		tcpPlans = append(tcpPlans, tcpListenPlan{
-			key:      listenSlotKey("tcp", cfg.ListenHost, cfg.ListenPort),
-			label:    "relay",
-			role:     "relay",
-			host:     cfg.ListenHost,
-			port:     cfg.ListenPort,
-			fastOpen: cfg.TCPFastOpen,
-			sig:      fxpComponentSignature(cfg, stripUDPOnlyFields),
-			cfg:      cfg,
+			key:          listenSlotKey("tcp", cfg.ListenHost, cfg.ListenPort),
+			label:        "relay",
+			role:         "relay",
+			host:         cfg.ListenHost,
+			port:         cfg.ListenPort,
+			fastOpen:     cfg.TCPFastOpen,
+			sig:          fxpComponentSignature(cfg, stripUDPOnlyFields),
+			cfg:          cfg,
+			lossTolerant: cfg.LossTolerant,
 			handler: func(m *fxpRuntimeManager) *tcpHandler {
 				selector := newSelector()
 				downCfg := cfg
@@ -434,6 +471,7 @@ func buildRelayPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 			serve: func(conn *net.UDPConn) error { return serveRelayUDPDirect(conn, cfg, selector) },
 		})
 	}
+	udpPlans = appendLossCarrierUDPPlan(udpPlans, cfg, "relay")
 	return tcpPlans, udpPlans, nil
 }
 
@@ -477,13 +515,29 @@ func (m *fxpRuntimeManager) apply(cfg config) error {
 
 	// 1. 先把新增的 TCP 端口绑上。
 	opened := map[string]net.Listener{}
+	// 新开的抗丢包监听（新端口的，或者已有端口上刚打开这个模式的）。它不占套接字，开不成
+	// 只可能是密钥派生出错，和 TCP 监听一起回滚。
+	openedCarriers := map[string]*lossCarrierListener{}
 	rollback := func() {
 		for _, ln := range opened {
 			_ = ln.Close()
 		}
+		for _, carrier := range openedCarriers {
+			_ = carrier.Close()
+			carrier.finalize()
+		}
 	}
 	for _, plan := range tcpPlans {
-		if m.tcp[plan.key] != nil {
+		existing := m.tcp[plan.key]
+		if plan.lossTolerant && (existing == nil || existing.carrier == nil) {
+			carrier, err := listenLossCarrier(plan.host, plan.port, plan.cfg)
+			if err != nil {
+				rollback()
+				return fmt.Errorf("%s: %s loss-tolerant listen :%d: %w", plan.label, plan.role, plan.port, err)
+			}
+			openedCarriers[plan.key] = carrier
+		}
+		if existing != nil {
 			continue
 		}
 		ln, err := listenTCP(plan.host, plan.port, plan.fastOpen)
@@ -536,9 +590,11 @@ func (m *fxpRuntimeManager) apply(cfg config) error {
 			m.tcp[plan.key] = slot
 			log.Printf("%s tcp listening on :%d tunnel=%d rule=%d", plan.role, plan.port, plan.cfg.TunnelID, plan.cfg.RuleID)
 			go slot.acceptLoop(m, plan.role, plan.cfg)
+			slot.syncCarrier(m, plan, openedCarriers[plan.key])
 			continue
 		}
 		slot := m.tcp[plan.key]
+		slot.syncCarrier(m, plan, openedCarriers[plan.key])
 		current := slot.handler.Load()
 		if current != nil && current.sig == plan.sig {
 			continue
@@ -597,8 +653,46 @@ func (m *fxpRuntimeManager) shutdown() {
 
 func (s *tcpListenerSlot) acceptLoop(m *fxpRuntimeManager, role string, cfg config) {
 	defer close(s.loopDone)
+	s.serveListener(m, s.ln, role, cfg)
+}
+
+// syncCarrier 让这个端口上的抗丢包监听和计划一致：要开的装上（opened 是 apply 第一步
+// 开好的），要关的关掉，开着的跟着换密钥。关掉的监听不再接新会话，已有的会话照常跑完 ——
+// 和 TCP 处理器换掉时旧连接的待遇一样。
+func (s *tcpListenerSlot) syncCarrier(m *fxpRuntimeManager, plan tcpListenPlan, opened *lossCarrierListener) {
+	switch {
+	case opened != nil:
+		s.carrier = opened
+		s.carrierDone = make(chan struct{})
+		log.Printf("%s loss-tolerant (udp) listening on :%d tunnel=%d", plan.role, plan.port, plan.cfg.TunnelID)
+		go func(carrier *lossCarrierListener, done chan struct{}) {
+			defer close(done)
+			s.serveListener(m, carrier, plan.role, plan.cfg)
+		}(opened, s.carrierDone)
+	case plan.lossTolerant && s.carrier != nil:
+		if err := s.carrier.updateKey(plan.cfg); err != nil {
+			log.Printf("%s loss-tolerant key update on :%d failed: %v", plan.role, plan.port, err)
+		}
+	case !plan.lossTolerant && s.carrier != nil:
+		s.closeCarrier()
+		log.Printf("%s loss-tolerant (udp) listener on :%d removed", plan.role, plan.port)
+	}
+}
+
+func (s *tcpListenerSlot) closeCarrier() {
+	if s.carrier == nil {
+		return
+	}
+	_ = s.carrier.Close()
+	<-s.carrierDone
+	s.carrier = nil
+	s.carrierDone = nil
+}
+
+// serveListener 从一个监听上接连接，交给当前处理器。TCP 监听和抗丢包监听共用。
+func (s *tcpListenerSlot) serveListener(m *fxpRuntimeManager, ln net.Listener, role string, cfg config) {
 	for {
-		conn, err := acceptWithRetry(s.ln, role, cfg)
+		conn, err := acceptWithRetry(ln, role, cfg)
 		if err != nil {
 			return
 		}
@@ -673,6 +767,7 @@ func (s *tcpListenerSlot) untrack(conn net.Conn) {
 func (s *tcpListenerSlot) close(kill bool) {
 	_ = s.ln.Close()
 	<-s.loopDone
+	s.closeCarrier()
 	if handler := s.handler.Swap(nil); handler != nil && handler.release != nil {
 		handler.release()
 	}

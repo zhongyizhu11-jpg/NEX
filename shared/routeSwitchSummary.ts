@@ -42,6 +42,11 @@ const DAY_MS = 24 * HOUR_MS;
 const FLAP_WINDOW_MS = 10 * 60_000;
 const FLAP_PER_HOUR = 3;
 
+/** 演练期间的切换（面板入库时打了 drill 标）：是故意的，不算「切得频」，也不算来回漂。 */
+function drillReason(reason: unknown) {
+  return String(reason ?? "").trim().toLowerCase().startsWith("drill");
+}
+
 function manualReason(reason: unknown) {
   const lower = String(reason ?? "").trim().toLowerCase();
   return lower === "pin" || lower === "unpin" || lower === "pin expired";
@@ -49,7 +54,7 @@ function manualReason(reason: unknown) {
 
 export function summarizeRouteSwitches(events: readonly RouteSwitchEventLike[], nowMs = Date.now()): RouteSwitchSummary {
   const switches = events
-    .filter((event) => normalizeRouteEventKind(event.kind) === "switch" && Number.isFinite(event.at) && event.at <= nowMs + 60_000)
+    .filter((event) => normalizeRouteEventKind(event.kind) === "switch" && !drillReason(event.reason) && Number.isFinite(event.at) && event.at <= nowMs + 60_000)
     .sort((left, right) => right.at - left.at);
   const recent24h = switches.filter((event) => nowMs - event.at <= DAY_MS);
   const recent1h = recent24h.filter((event) => nowMs - event.at <= HOUR_MS);

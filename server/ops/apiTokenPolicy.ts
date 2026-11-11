@@ -40,6 +40,9 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 面板性能剖析整个路由：堆快照就是面板进程内存的原样拷贝（会话、密码、密钥都在里面），下载路由也只认网页会话。
   · 进入用户后台（users.enterUserBackend）：那是给网页上的管理员开一个代入窗口，令牌拿到代入凭据等于多了一个没人看着的身份。
   · 找回密码（auth.requestPasswordReset / auth.resetPasswordWithToken）：本来就是没登录时用的，令牌没有理由替谁发重置链接、改密码。
+  · 指标导出整个路由：能看、能换 /metrics 的抓取口令，是另一枚凭据。
+  · 事件推送整个路由：接收地址允许填内网（自建用户要推到内网的 n8n / Home Assistant），泄露的令牌不该能借它
+    让面板往内网任意地址发请求、再从「测试」的返回里探内网；接收地址本身也常带着令牌，不给令牌读。
   auth.updateProfile 改邮箱在过程里单独拦（见 apiTokenProfileUpdateError）：只改昵称这类不受影响。
 */
 const TOKEN_FORBIDDEN_PATHS = [
@@ -49,6 +52,8 @@ const TOKEN_FORBIDDEN_PATHS = [
   "ops.offsiteBackup.",
   "ops.audit.",
   "ops.profiling.",
+  "ops.metricsExport.",
+  "ops.eventWebhooks.",
   "setup.",
   "auth.changePassword",
   "auth.beginTwoFactorSetup",
@@ -89,6 +94,8 @@ const TOKEN_FORBIDDEN_PATHS = [
   "plugins.runAction",
   // 令牌不能给自己（和别的令牌）解除接口限流
   "ops.apiRateLimit.update",
+  // 商城对接页上的「生成对接令牌」：和 ops.apiTokens. 一样，令牌不能再签令牌
+  "shopSync.createToken",
 ];
 
 /** 测试和 MCP 自检用：当前禁止名单（只读副本）。 */

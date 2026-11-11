@@ -15,6 +15,8 @@
  * 判断留在纯函数里，界面只管显示，这样「必填吗」和「拦不拦」不可能再各说各话。
  */
 
+import { parsePortSpec, portRangeShapeError } from "./portRange";
+
 export type ForwardRuleRouteMode = "local" | "tunnel" | "chain" | "group";
 
 export type ForwardRuleFormState = {
@@ -27,6 +29,13 @@ export type ForwardRuleFormState = {
   targetPort: number;
   protocol: string;
   failoverEnabled: boolean;
+  /** 端口段（shared/portRange.ts）：入口段最后一个端口，0 / 不填 = 单端口。 */
+  sourcePortEnd?: number;
+  /** 用户写的目标段结尾，0 / 不填 = 跟着入口段算。 */
+  targetPortEnd?: number;
+  /** 两个端口输入框里的原文（能写 20000-20100）；null / 不填 = 按数字显示，不用再解析。 */
+  sourcePortText?: string | null;
+  targetPortText?: string | null;
 };
 
 export type ForwardRuleFormContext = {
@@ -40,7 +49,15 @@ export type ForwardRuleFormContext = {
   canUseGost: boolean;
   /** 源端口占用探测的结果。 */
   portStatus: "idle" | "checking" | "available" | "used";
+  /** 填了端口段，但这条规则（转发方式 / 线路）用不了端口段的原因；null = 没问题。 */
+  portRangeBlocker?: string | null;
 };
+
+function portTextError(text: string | null | undefined) {
+  if (text == null) return null;
+  const spec = parsePortSpec(text);
+  return spec && "error" in spec ? spec.error : null;
+}
 
 export function isValidForwardPort(port: unknown, allowZero = false): boolean {
   const value = Number(port);
@@ -83,6 +100,9 @@ export function forwardRuleFormBlocker(
   if (form.routeMode === "group" && !context.canUseFailoverGroup) return "没有可用的转发组";
   if (form.routeMode === "tunnel" && !context.canUseGost) return "当前账号没有隧道转发权限";
   if (!context.usesForwardGroup && !form.hostId) return "还没选线路";
+  const sourceTextError = portTextError(form.sourcePortText);
+  if (sourceTextError) return `源端口：${sourceTextError}`;
+  if (context.portRangeBlocker) return context.portRangeBlocker;
   if (context.portStatus === "used") return "源端口已被占用";
   if (!isValidForwardPort(form.sourcePort, !isForwardRuleSourcePortRequired(context))) {
     return isForwardRuleSourcePortRequired(context)
@@ -91,7 +111,16 @@ export function forwardRuleFormBlocker(
   }
   if (!form.targetIp) return "还缺目标地址";
   if (!form.targetPort) return "还缺目标端口";
+  const targetTextError = portTextError(form.targetPortText);
+  if (targetTextError) return `目标端口：${targetTextError}`;
   if (!isValidForwardPort(form.targetPort)) return "目标端口必须在 1-65535 之间";
+  const rangeShapeError = portRangeShapeError({
+    sourcePort: form.sourcePort,
+    sourcePortEnd: form.sourcePortEnd || null,
+    targetPort: form.targetPort,
+    targetPortEnd: form.targetPortEnd || null,
+  });
+  if (rangeShapeError) return rangeShapeError;
   // 线路组不卡协议：UDP、TCP+UDP 由入口 Agent 按会话调度（2.2.199 起，更老的走路径 A）。
   return null;
 }

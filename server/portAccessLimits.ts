@@ -1,4 +1,5 @@
 import { isForwardRuleProtocolTcpEnabled } from "@shared/forwardTypes";
+import { addRulePortSpan } from "@shared/portRange";
 
 /**
  * 普通端口转发（不走隧道）上的用户「单 IP 接入限制」，和上游一致：限制每个来源 IP 的 TCP
@@ -70,7 +71,10 @@ export function portAccessLimitSpecs(
     const maxIPs = nonNegativeInt(limits?.maxIPs);
     if (!maxIPs) continue;
     const spec = users.get(userId) || { userId, maxIPs, ports: [] };
-    spec.ports.push(port);
+    // 端口段规则（shared/portRange.ts）整段都受限：Agent 按 15 个一组用 multiport 匹配，段最长 1000 个端口。
+    const ports = new Set<number>();
+    addRulePortSpan(ports, port, rule.sourcePortEnd);
+    spec.ports.push(...ports);
     users.set(userId, spec);
   }
   return [...users.values()]

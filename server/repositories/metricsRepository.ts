@@ -30,7 +30,7 @@ import { onHostDeleted } from "../entityCleanup";
 import { ignoreErrorWith } from "../ignoredError";
 import { loadAverageFromStored } from "../../shared/hostLoadAverage";
 
-const TRAFFIC_BUCKET_MINUTES = 30;
+export const TRAFFIC_BUCKET_MINUTES = 30;
 const TRAFFIC_BUCKET_SECONDS = TRAFFIC_BUCKET_MINUTES * 60;
 /**
  * 明细与分桶的保留期。导出是因为界面上「近 N 小时」的字样必须跟它一致 ——

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { Pencil } from "lucide-react";
+import { toast } from "sonner";
 import { useLocation } from "wouter";
 
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
@@ -118,6 +119,9 @@ export type RouteStatusPath = {
   consecutiveFailures?: number;
 };
 
+/** 期望 vs 实际对账的一行差异（shared/routeSpecDrift）。 */
+export type RouteSpecDriftField = { key: string; label: string; expected: string; actual: string };
+
 export type RouteStatus = {
   ruleId: number;
   policy: RouteGroupPolicy;
@@ -127,6 +131,10 @@ export type RouteStatus = {
   prewarmIndex: number;
   agentReportedAt: number | null;
   agentStale: boolean;
+  /** 机器上跑的和面板配的对不上（Agent 2.2.253 起）：差在哪、按机器几点报的比；一致 / 老 Agent 是 null。 */
+  drift?: { fields: RouteSpecDriftField[]; reportedAt: number } | null;
+  /** 切换演练（server/routeDrill）：有没有正在进行的；没有就是 null。界面只拿它决定按钮写「演练」还是「结束演练」。 */
+  drill?: { active: { lineKey: string; phase: "down" | "restoring" } | null } | null;
   /** tcp / udp / both */
   protocol?: string;
   /** 这条规则（入口）此刻的速率。 */
@@ -201,6 +209,11 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone }: Rou
         <StatusDot health={reportHealth[report.tone]} className="mt-1.5" />
         <div className="flex min-w-0 flex-col gap-0.5">
           <p className="text-secondary-type font-semibold text-foreground">{report.text}</p>
+          {status?.drift ? (
+            <p className="text-meta text-[var(--fx-down-text)]" data-testid="route-drift-note">
+              机器上跑的不是面板里这份：{status.drift.fields.map((field) => `${field.label}（面板 ${field.expected} / 机器 ${field.actual}）`).join("；")}。
+            </p>
+          ) : null}
           {policy.divergence ? <p className="text-meta text-[var(--fx-warn-text)]">{policy.divergence}</p> : null}
           {report.note ? <p className="text-meta text-muted-foreground">{report.note}</p> : null}
           {status?.agentStale && status.agentReportedAt ? (
@@ -325,6 +338,14 @@ export function RouteGroupSheet({
   const [detailsOpen, setDetailsOpen] = useState(false);
   // 「添加备用线路 / 怎么切 / 高级策略」默认收着（照效果图 ①），点「线路」标题右边那行展开
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 机器上跑的和面板配的对不上：红条上的「重新下发」（不改配置，只再送一遍；几秒后状态刷过来就知道对没对上）
+  const resync = trpc.lineDiagnostics.lineResync.useMutation({
+    onSuccess: () => {
+      toast.success("已重新下发，几秒后看红条消没消");
+      void statusQuery.refetch();
+    },
+    onError: (error) => toast.error(error.message || "下发失败"),
+  });
   /*
     关的那一下（130ms 的动画）调用方已经把规则清掉了，拿上一份接着画 —— 不然面板在
     动画里先塌成只剩标题再消失。
@@ -392,12 +413,14 @@ export function RouteGroupSheet({
               editor={editing.editor}
               lineSwitch={lineSwitch}
               settings={editing.editor ? { open: settingsOpen, onToggle: () => setSettingsOpen(!settingsOpen) } : undefined}
+              onResync={canEdit && ruleId ? () => resync.mutate({ ruleId: Number(ruleId) }) : undefined}
+              resyncing={resync.isPending}
             />
           ) : null}
           {detailsOpen || (status && status.paths.length === 0) ? (
             <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
               <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} />
-              {status ? <RouteLineTools status={status} /> : null}
+              {status ? <RouteLineTools status={status} canDrill={!!canEdit} /> : null}
               <Suspense fallback={<RouteQualityHistoryPlaceholder />}>
                 <RouteQualityHistory
                   ruleId={Number(ruleId) || 0}

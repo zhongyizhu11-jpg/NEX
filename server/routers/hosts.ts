@@ -60,6 +60,7 @@ import { wakeAgentExt } from "../ops/agentExt";
 import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
 import { hostUnlockProcedures } from "./hostUnlock";
 import { hostSpeedTestProcedures } from "./hostSpeedTest";
+import { applyHostCostInput, hostCostInputShape, hostLedgerProcedures } from "./hostLedger";
 import { normalizeHostTrafficFailoverPercent } from "../../shared/hostTrafficPolicy";
 import { deleteHostWithChecks } from "../hostDeletion";
 
@@ -908,6 +909,7 @@ export const hostsRouter = router({
     ...hostUnlockProcedures,
     // 网速测试：speedTestStatus / speedTestHistory / startSpeedTest（见 ./hostSpeedTest.ts）
     ...hostSpeedTestProcedures,
+    ...hostLedgerProcedures,
     publicMonitor: publicProcedure
       .input(z.object({ path: z.string().max(128).optional() }).optional())
       .query(async ({ input }) => {
@@ -1449,6 +1451,7 @@ export const hostsRouter = router({
         expiryHandling: hostExpiryActionSchema.optional(),
         trafficAutoReset: z.boolean().optional(),
         trafficResetDay: z.number().int().min(1).max(31).optional(),
+        ...hostCostInputShape,
         ddnsEnabled: z.boolean().optional(),
         ddnsDomain: hostDdnsDomainSchema,
         ddnsRecordType: hostDdnsRecordTypeSchema.optional(),
@@ -1493,6 +1496,7 @@ export const hostsRouter = router({
         if ((ddnsConfig as any).ddnsEnabled) await assertHostDdnsServiceConfigured();
         // 公网出口整形只有管理员能设：整台机器一起减速，不是租户自己那几条规则的事。
         const egressConfig = ctx.user.role === "admin" ? hostEgressShapingPayload(input) : { egressShapingMode: "off", egressMbps: 0 };
+        applyHostCostInput(input, ctx.user.role === "admin");
         const id = await db.createHost({
           ...input,
           ...trafficConfig,
@@ -1630,6 +1634,7 @@ export const hostsRouter = router({
         expiryHandling: hostExpiryActionSchema.optional(),
         trafficAutoReset: z.boolean().optional(),
         trafficResetDay: z.number().int().min(1).max(31).optional(),
+        ...hostCostInputShape,
         ddnsEnabled: z.boolean().optional(),
         ddnsDomain: hostDdnsDomainSchema,
         ddnsRecordType: hostDdnsRecordTypeSchema.optional(),
@@ -1656,6 +1661,7 @@ export const hostsRouter = router({
           ? normalizePortAllowlist(input.portAllowlist)
           : String((host as any).portAllowlist || "");
         const { id, detectedAddress, primaryIpv4, primaryIpv6, ...data } = input;
+        applyHostCostInput(data, ctx.user.role === "admin");
         let ddnsConfigChanged = false;
         // 公网出口整形：两个字段一起收敛；变了要让这台机器的 Agent 重发 FXP 配置。
         let egressShapingChanged = false;

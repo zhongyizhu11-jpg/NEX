@@ -5,6 +5,7 @@
 import { router } from "../../_core/trpc";
 import { eventsRouter } from "./events";
 import { webhooksRouter } from "./webhooks";
+import { eventWebhooksRouter } from "./eventWebhooks";
 import { digestRouter } from "./digest";
 import { firewallRouter } from "./firewall";
 import { onlineIpsRouter } from "./onlineIps";
@@ -28,11 +29,14 @@ import { auditRouter } from "./audit";
 import { profilingRouter } from "./profiling";
 import { netTuneRouter } from "./netTune";
 import { slowQueriesRouter } from "./slowQueries";
+import { metricsExportRouter } from "./metricsExport";
+import { trafficAnomalyRouter } from "./trafficAnomaly";
 
 export const opsRouter = router({
   audit: auditRouter,
   events: eventsRouter,
   webhooks: webhooksRouter,
+  eventWebhooks: eventWebhooksRouter,
   digest: digestRouter,
   firewall: firewallRouter,
   onlineIps: onlineIpsRouter,
@@ -55,4 +59,6 @@ export const opsRouter = router({
   profiling: profilingRouter,
   netTune: netTuneRouter,
   slowQueries: slowQueriesRouter,
+  metricsExport: metricsExportRouter,
+  trafficAnomaly: trafficAnomalyRouter,
 });

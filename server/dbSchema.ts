@@ -6,6 +6,7 @@ import type pg from "pg";
 import { getDatabaseKind, getPool, getPostgresPool, getSqlite } from "./dbRuntime";
 import { OPS_TABLE_DEFS } from "./ops/opsTables";
 import { IP_CHANGE_TABLE_DEFS } from "./ipChange/tables";
+import { HOST_REPLACE_TABLE_DEFS } from "./hostReplace/tables";
 
 export type ColumnType = "id" | "text" | "longtext" | "varchar" | "int" | "bigint" | "bool" | "epoch";
 
@@ -128,6 +129,9 @@ export const MIGRATION_TABLES = [
   "topology_manual_links",
   // 用户每天的规则流量（server/ops/userTrafficDailyTables.ts，从流量桶汇总来的历史）
   "user_traffic_daily",
+  // 商城对接（server/shopSync/tables.ts）：商城用户绑定和回调记录（幂等键），丢了会重复开通
+  "shop_sync_users",
+  "shop_sync_orders",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
@@ -292,6 +296,9 @@ const tables: TableDef[] = [
       c("billingCycleMonths", "int", { notNull: true, default: 1 }), c("billingMonth", "int", { notNull: true, default: 1 }),
       c("billingDay", "int", { notNull: true, default: 1 }), c("expiryHandling", "varchar", { length: 24, notNull: true, default: "none" }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficMeasureMode", "varchar", { length: 16, notNull: true, default: "both" }),
+      // 主机账本（shared/hostLedger.ts）：每期费用（分，0 = 没填）、币种、固定费用 / 按 95 值计费、95 单价（分 / Mbps / 月）。
+      c("costCents", "bigint", { notNull: true, default: 0 }), c("costCurrency", "varchar", { length: 8, notNull: true, default: "CNY" }),
+      c("bandwidthBilling", "varchar", { length: 16, notNull: true, default: "fixed" }), c("p95PriceCents", "bigint", { notNull: true, default: 0 }),
       c("trafficFailoverEnabled", "bool", { notNull: true, default: false }), c("trafficFailoverThresholdPercent", "int", { notNull: true, default: 100 }),
       c("trafficFailoverExcluded", "bool", { notNull: true, default: false }),
       // 节点维护（2.3.496）：从所有线路、转发组、入口组、出口组的候选里拿掉，经过它的连接先切走。
@@ -378,6 +385,8 @@ const tables: TableDef[] = [
       c("isForwardGroupTemplate", "bool", { notNull: true, default: false }),
       c("sourcePort", "int", { notNull: true }), c("targetIp", "text", { notNull: true }),
       c("targetPort", "int", { notNull: true }),
+      // 端口段（shared/portRange.ts）：空 = 单端口；目标段 = targetPort 起、同样长。只有内核转发能用。
+      c("sourcePortEnd", "int"),
       c("telegramErrorNotifyEnabled", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),
@@ -819,6 +828,8 @@ const tables: TableDef[] = [
       c("linkShapingMode", "varchar", { length: 16, notNull: true, default: "off" }),
       // 抗丢包：NEX 隧道的 UDP 直连额外发 Reed-Solomon 纠错包，默认关。
       c("udpFec", "bool", { notNull: true, default: false }),
+      // 抗丢包传输：NEX V1 隧道入口 / 中转到下一跳改走 UDP 上的 KCP + 纠错（FXP 的 loss_carrier.go），默认关。
+      c("lossTolerant", "bool", { notNull: true, default: false }),
       // 内核直通：V2 隧道两端都是内核 WireGuard 时，普通规则直接 iptables DNAT 进 nexwg，不经 FXP。默认关。
       c("kernelPassthrough", "bool", { notNull: true, default: false }),
       c("multipathReplicate", "bool", { notNull: true, default: false }),
@@ -843,6 +854,9 @@ const tables: TableDef[] = [
   { name: "forward_rule_tunnel_exits", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("exitNodeId", "int", { notNull: true }), c("exitSeq", "int", { notNull: true }), c("exitHostId", "int", { notNull: true }), c("tunnelExitPort", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["ruleId", "exitNodeId"], ["ruleId", "exitSeq"]], indexes: [["ruleId"], ["tunnelId"], ["exitHostId"], ["exitHostId", "tunnelExitPort"]] },
   { name: "host_metrics", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("cpuUsage", "int"), c("memoryUsage", "int"), c("memoryUsed", "bigint"), c("swapUsage", "int"), c("swapUsed", "bigint"), c("swapTotal", "bigint"), c("networkIn", "bigint"), c("networkOut", "bigint"), c("diskUsage", "int"), c("diskUsed", "bigint"), c("diskTotal", "bigint"), c("uptime", "bigint"), c("tcpConnections", "int"), c("udpConnections", "int"), c("loadAvg1", "int"), c("loadAvg5", "int"), c("loadAvg15", "int"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["hostId", "recordedAt"], ["recordedAt", "hostId"]] },
   { name: "host_traffic_counters", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("lastSystemIn", "bigint"), c("lastSystemOut", "bigint"), c("lastDeltaIn", "bigint", { notNull: true, default: 0 }), c("lastDeltaOut", "bigint", { notNull: true, default: 0 }), c("lastReportedAt", "epoch"), c("resetAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["hostId"]], indexes: [["updatedAt"], ["lastReportedAt"]] },
+  // 按 95 计费的主机每 5 分钟一行（server/hostRateBuckets.ts），bucketStart 是 epoch 秒，留 40 天。
+  // 不进 MIGRATION_TABLES：迁到新面板后从头记，这个周期的 95 估算会标「样本不足」，不会算错。
+  { name: "host_rate_buckets", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("bucketStart", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("coveredSeconds", "int", { notNull: true, default: 0 })], unique: [["hostId", "bucketStart"]], indexes: [["bucketStart"]] },
   // 两张计数表的 connections 从不清零，用 BIGINT（老库的升级见 BIGINT_COLUMN_UPGRADES）。
   { name: "user_traffic_counters", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("connections", "bigint", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["userId"]], indexes: [["updatedAt"]] },
   { name: "forward_rule_traffic_counters", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("connections", "bigint", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["ruleId", "hostId"]], indexes: [["userId"], ["ruleId"], ["hostId"], ["updatedAt"]] },
@@ -971,6 +985,7 @@ const tables: TableDef[] = [
   // 第五套主题那批运维功能的表，各功能自己的文件里定义（server/ops/*Tables.ts）。
   ...OPS_TABLE_DEFS,
   ...IP_CHANGE_TABLE_DEFS,
+  ...HOST_REPLACE_TABLE_DEFS,
 ];
 
 const seedSettings = [

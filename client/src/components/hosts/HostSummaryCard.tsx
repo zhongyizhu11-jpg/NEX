@@ -1,4 +1,5 @@
-import { Activity, Coins, Download, Gauge, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { Activity, ArrowRightLeft, Coins, Download, Gauge, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import type { HostReplaceTarget } from "./HostReplaceDialog";
 
 import { formatBytes } from "@shared/formatBytes";
 import { EntityActions, type EntityAction } from "@/components/entity/EntityActions";
@@ -63,6 +64,8 @@ export type HostSummaryCardProps = {
   onCorrectTraffic?: (host: any) => void;
   onEditBilling?: (host: any) => void;
   onViewProbeLatency?: (host: any) => void;
+  /** 换 VPS：把这台上的东西搬到另一台（HostReplaceDialog）。只有管理员那边传。 */
+  onReplace?: (host: HostReplaceTarget) => void;
 };
 
 /** 操作项的组装单独拆出来，详情页要用同一套 —— 两处给出不同的菜单是 bug 不是特性。 */
@@ -78,6 +81,7 @@ export function buildHostActions(
     | "onCorrectTraffic"
     | "onEditBilling"
     | "onViewProbeLatency"
+    | "onReplace"
   > & { onConfirmDelete: () => void },
 ): { primary: EntityAction[]; menu: EntityAction[] } {
   const { host } = props;
@@ -130,6 +134,14 @@ export function buildHostActions(
       label: "按量计费",
       icon: <Coins className="h-4 w-4" />,
       onSelect: () => props.onEditBilling?.(host),
+    });
+  }
+  if (props.onReplace) {
+    menu.push({
+      key: "replace",
+      label: "替换到另一台主机",
+      icon: <ArrowRightLeft className="h-4 w-4" />,
+      onSelect: () => props.onReplace?.(host),
     });
   }
   /*

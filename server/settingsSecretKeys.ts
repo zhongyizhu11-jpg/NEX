@@ -36,6 +36,8 @@ export const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
   "ops.netProfile.ipapiIsKey": "网络画像 · ipapi.is API Key",
   "ops.netProfile.abuseIpdbKey": "网络画像 · AbuseIPDB API Key",
   "ops.netProfile.ipinfoToken": "网络画像 · IPinfo Token",
+  "ops.metrics.token": "指标导出 · 抓取口令",
+  "ops.eventWebhooks.endpoints": "事件推送 · 接收地址与签名密钥",
 };
 
 export const SECRET_SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(SECRET_SETTING_LABELS));

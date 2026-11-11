@@ -263,7 +263,7 @@ export type RouteGroupRule = {
   routeLines?: unknown;
 };
 
-export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold", "slow_dial"] as const;
+export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold", "slow_dial", "drill"] as const;
 
 export type RouteEventKind = (typeof ROUTE_EVENT_KINDS)[number];
 

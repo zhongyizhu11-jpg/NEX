@@ -7,7 +7,7 @@ import { newRouteGroupDraft, routeGroupRuleFields, routePolicyOf, type RouteGrou
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { RouteGroupPanel, type RouteEvent, type RouteStatus, type RouteStatusPath } from "./RouteGroupSheet";
 import { RouteLineDiagram } from "./RouteLineDiagram";
-import { RouteLineDetail, pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
+import { RouteLineDetail, pinDurationSeconds, routeDrillAction, routeLineStatusControls } from "./RouteLineOverview";
 
 // 2026-09-22（星期二）上海 20:00：在「工作日 18:00–01:00」里。
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
@@ -221,6 +221,46 @@ test("手动换线路：点状态胶囊就能切到这条；指定了的那条�
   assert.doesNotMatch(switching, /待命/);
   const plain = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
   assert.doesNotMatch(plain, /route-line-switch/);
+});
+
+test("期望 vs 实际对不上：线路详情顶上出红条，逐项列「面板 / 机器」，有「重新下发」；异常明细里也写一句", () => {
+  const drift = { fields: [{ key: "pin", label: "人工指定", expected: "备用 1 · 到 18:36", actual: "没有" }, { key: "minHold", label: "最短驻留", expected: "1 分钟", actual: "0 秒" }], reportedAt: NOW - 5_000 };
+  let resynced = 0;
+  const html = renderToStaticMarkup(
+    <RouteLineDetail status={status({ drift })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} onResync={() => { resynced += 1; }} />,
+  );
+  assert.match(html, /data-testid="route-drift"[^]*?机器上跑的不是面板里这份/);
+  assert.match(html, /人工指定[^]*?面板 备用 1 · 到 18:36[^]*?机器 没有/);
+  assert.match(html, /最短驻留[^]*?面板 1 分钟[^]*?机器 0 秒/);
+  assert.match(html, /data-testid="route-drift-resync"[^>]*>重新下发/);
+  // 一致（null）就什么都没有：别让人以为老 Agent 也有问题
+  assert.doesNotMatch(renderToStaticMarkup(<RouteLineDetail status={status({ drift: null })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} />), /route-drift/);
+  assert.equal(resynced, 0);
+  assert.match(render({ status: status({ drift }) }), /route-drift-note[^>]*>机器上跑的不是面板里这份：人工指定（面板 备用 1 · 到 18:36 \/ 机器 没有）；最短驻留（面板 1 分钟 \/ 机器 0 秒）。/);
+});
+
+test("切换演练只占一个小按钮：详情顶上没有卡、胶囊菜单里没有演练一节；演练那条的胶囊写「演练中」；按钮在该有的时候才有", () => {
+  const active = { lineKey: group.paths[0].key, phase: "down" as const };
+  // 进行中、没在演练：线路详情第一页都不多出任何东西
+  for (const drill of [{ active }, { active: null }, null]) {
+    const html = renderToStaticMarkup(<RouteLineDetail status={status({ drill })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} />);
+    assert.doesNotMatch(html, /route-drill|演练报告|提前结束/);
+  }
+  const lineSwitch = { pinIndex: null, pinUntilMs: null, pending: false, onPin: noop, onUnpin: noop };
+  assert.doesNotMatch(renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, lineSwitch)}</>), /演练/);
+  // 演练那条的胶囊：面板给的提示原因是 drill，写「演练中」而不是「不通」
+  const drilled = status();
+  drilled.paths = drilled.paths.map((path, index) => (index === 0 ? { ...path, active: false, down: true, downReason: "drill", healthy: false } : { ...path, active: index === 1 }));
+  const pill = renderToStaticMarkup(<>{routeLineStatusControls(drilled, group.paths[0].key, undefined, false, lineSwitch)}</>);
+  assert.match(pill, /演练中/);
+  assert.doesNotMatch(pill, /不通/);
+  // 「异常明细」里的按钮：演练现在走的那条；进行中变成「结束演练」；只能看的人、按权重分的、只有一条线路的没有
+  const inUse = status().paths.find((path) => path.active)!;
+  assert.deepEqual(routeDrillAction(status(), true), { drilling: false, lineKey: inUse.lineKey || inUse.key, label: "演练 60 秒", title: "把现在走的这条当成挂了一分钟（机器上的转发不动），看切不切；结果记在「最近切换」里" });
+  assert.equal(routeDrillAction(status({ drill: { active } }), true)?.label, "结束演练");
+  assert.equal(routeDrillAction(status(), false), null);
+  assert.equal(routeDrillAction(status({ policy: { ...status().policy, mode: "weighted" } }), true), null);
+  assert.equal(routeDrillAction(status({}, [status().paths[0]]), true), null);
 });
 
 test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、超过 30 天都不行", () => {

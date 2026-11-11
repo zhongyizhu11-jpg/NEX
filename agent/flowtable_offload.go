@@ -149,6 +149,10 @@ func flowOffloadCountsState(state localRuleState) bool {
 	if state.RuleID <= 0 || parseStatePort(state.Port) <= 0 {
 		return false
 	}
+	// 端口段规则不进快速路径（见 port_range.go）：集合里只有起始端口，改从 conntrack 计会漏掉段里其余端口。
+	if state.PortEnd > parseStatePort(state.Port) {
+		return false
+	}
 	switch trafficCounterFamilyForForwardType(state.ForwardType) {
 	case trafficCounterFamilyIptables, trafficCounterFamilyNativeNFT:
 		return true

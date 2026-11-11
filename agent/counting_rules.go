@@ -172,10 +172,16 @@ func countingRuleInstallCmds(rule runningRule) []string {
 		return commands
 	}
 	targetPort := strconv.Itoa(rule.TargetPort)
+	origPort := p
+	// 端口段：整段匹配，标记仍是起始端口（和面板 buildCountingChainCmds 生成的逐字一致，-C 才对得上）。
+	if end := runningRulePortEnd(rule); end > 0 {
+		origPort = iptablesPortExpr(rule.SourcePort, end)
+		targetPort = iptablesPortExpr(rule.TargetPort, targetSpanEnd(rule.SourcePort, end, rule.TargetPort))
+	}
 	binary := iptablesAgentBinaryForTarget(target)
 	for _, proto := range runtimeProtocols(rule.Protocol) {
-		inRule := iptablesAgentCountingForwardTargetRule(proto, p, target, targetPort, true) + fmt.Sprintf(` -m comment --comment %q`, inMarker)
-		outRule := iptablesAgentCountingForwardTargetRule(proto, p, target, targetPort, false) + fmt.Sprintf(` -m comment --comment %q`, outMarker)
+		inRule := iptablesAgentCountingForwardTargetRule(proto, origPort, target, targetPort, true) + fmt.Sprintf(` -m comment --comment %q`, inMarker)
+		outRule := iptablesAgentCountingForwardTargetRule(proto, origPort, target, targetPort, false) + fmt.Sprintf(` -m comment --comment %q`, outMarker)
 		commands = append(commands,
 			iptablesAgentEnsure(binary, "mangle", inRule),
 			iptablesAgentEnsure(binary, "mangle", outRule),
@@ -363,6 +369,9 @@ func countingChainRuleSignature(rule runningRule) string {
 	prefix := fmt.Sprintf("%s|%d|%s|%s", countingLayoutVersion, rule.SourcePort, forwardType, normalizeRuntimeProtocol(rule.Protocol))
 	if countingRuleModeForForwardType(forwardType) != countingRuleKernel {
 		return prefix
+	}
+	if end := runningRulePortEnd(rule); end > 0 {
+		return fmt.Sprintf("%s|%s|%d|range-%d", prefix, strings.TrimSpace(rule.TargetIP), rule.TargetPort, end)
 	}
 	return fmt.Sprintf("%s|%s|%d", prefix, strings.TrimSpace(rule.TargetIP), rule.TargetPort)
 }

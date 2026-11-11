@@ -3,6 +3,7 @@ import { withRuleEgressDisplay } from "../ssEgress";
 import { z } from "zod";
 import * as db from "../db";
 import { crudRulesRouter } from "./rules.crud";
+import { batchRulesRouter } from "./rules.batch";
 import { portsRulesRouter } from "./rules.ports";
 import { selfTestRulesRouter } from "./rules.selfTest";
 import { trafficRulesRouter } from "./rules.traffic";
@@ -33,6 +34,7 @@ import { dbBool } from "../repositories/repositoryUtils";
 import { ruleTrafficQueryCache } from "../ruleLatencyQueryCache";
 import { idSetFingerprint } from "../queryCache";
 import { withRulePortWarnings } from "../rulePortOccupancy";
+import { withAnomalyThrottles } from "../ops/trafficAnomalyThrottles";
 
 /** 看一条规则的线路状态：管理员随便看，别人只能看自己的。 */
 async function requireRuleVisible(user: { id: number; role: string }, ruleId: number) {
@@ -280,7 +282,7 @@ export const rulesRouter = router({
         : input.tunnelId === null
           ? rules.filter((rule: any) => !rule.tunnelId)
           : rules.filter((rule: any) => Number(rule.tunnelId || 0) === Number(input.tunnelId));
-      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(filtered))), ctx.user), ctx.user), isAdmin);
+      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(filtered)))), ctx.user), ctx.user), isAdmin);
     }),
   listPage: protectedProcedure
     .input(z.object({
@@ -300,7 +302,7 @@ export const rulesRouter = router({
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const page = await db.getForwardRulesPage({ ...repositoryInput, page: input.page, pageSize: input.pageSize });
-      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page))), ctx.user), ctx.user), ctx.user.role === "admin");
+      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page)))), ctx.user), ctx.user), ctx.user.role === "admin");
     }),
   mapItems: protectedProcedure
     .input(z.object({
@@ -474,6 +476,7 @@ export const rulesRouter = router({
     }),
   ...portsRulesRouter._def.procedures,
   ...crudRulesRouter._def.procedures,
+  ...batchRulesRouter._def.procedures,
   ...trafficRulesRouter._def.procedures,
   ...selfTestRulesRouter._def.procedures,
   // 个人分组（rules.personalGroups / savePersonalGroup / deletePersonalGroup / reorderPersonalGroups / moveToPersonalGroups）

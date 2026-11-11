@@ -1,34 +1,49 @@
 /*
-  异地自动备份（#10）：定时把「设置 › 备份恢复」那份加密备份传到 WebDAV / S3 / Telegram。
+  异地自动备份（#10）：定时把「设置 › 备份恢复」那份加密备份传到 WebDAV / S3 / Telegram（可以同时开几个）。
 
   - 备份内容、加密方式与手动导出完全相同（exportMigrationSnapshot → prune → encryptMigrationSnapshot），
     恢复也走同一条导入路径（system.importPanelBackup）。从不上传未加密的内容。
+    面板没了也能解开：scripts/decrypt-backup.mjs 只用 Node 自带的 crypto。
   - 加密口令存在设置里（定时任务要用），这是管理员自己的选择；界面上写清楚丢了口令备份就打不开。
-  - WebDAV / S3 只允许 HTTPS，并且过 SSRF 检查（不让面板去请求内网地址），不跟随重定向。
   - 只删自己起名的文件（nex-backup-*.fwxbak），目录里的别的东西一律不动。
+  - 每个目的地各记各的「上次成功」：两个都开、其中一个不通时，每小时的重试只补不通的那个，
+    不会往好的那边一小时塞一份、把保留份数里的旧备份挤掉。
+  - 目的地的实现（发请求、SSRF 检查）在 offsiteBackupDestinations.ts。
 */
 import * as db from "../db";
-import { ENV } from "../env";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { encryptMigrationSnapshot, exportMigrationSnapshot, pruneMigrationSnapshotForPanelBackup } from "../migration";
 import { getSettingsByPrefix, setSettings } from "../repositories/settingsRepository";
-import { assertSafeOutboundUrl } from "../ssrf";
-import { sendTelegramMessage } from "../telegramBot";
 import { recordPanelEvent } from "./panelEvents";
 import {
+  describeBackupError,
+  OFFSITE_BACKUP_TARGET_LABELS,
+  OFFSITE_BACKUP_TARGETS,
+  s3Destination,
+  telegramDestination,
+  webdavDestination,
+  type BackupDestination,
+  type OffsiteBackupTarget,
+  type WebdavConfig,
+} from "./offsiteBackupDestinations";
+import {
+  isOffsiteBackupDue,
+  nextBackupAt,
+  OFFSITE_BACKUP_DEFAULT_KEEP,
   offsiteBackupName,
   parseOffsiteBackupName,
   selectBackupsToDelete,
+  shouldReportBackupFailure,
   type OffsiteBackupSchedule,
   type RemoteBackupFile,
 } from "./offsiteBackupLogic";
-import { buildSignedS3Request, normalizeS3Prefix, parseListObjectsV2, parseS3Error, type S3Config } from "./offsiteBackupS3";
-import { basicAuthHeader, parseWebdavPropfind, WEBDAV_PROPFIND_BODY, webdavFileUrl, webdavFolderUrl } from "./offsiteBackupWebdav";
+import type { S3Config } from "./offsiteBackupS3";
 
-export const OFFSITE_BACKUP_DESTINATIONS = ["off", "webdav", "s3", "telegram"] as const;
-export type OffsiteBackupDestination = (typeof OFFSITE_BACKUP_DESTINATIONS)[number];
+export { OFFSITE_BACKUP_TARGETS, type OffsiteBackupTarget } from "./offsiteBackupDestinations";
+
 const PREFIX = "ops.backup.";
 const K = {
+  /** 开着的目的地，逗号分隔（"webdav,s3"）；空串或 "off" 就是没开。 */
   destination: `${PREFIX}destination`,
   webdavUrl: `${PREFIX}webdav.url`,
   webdavUser: `${PREFIX}webdav.user`,
@@ -43,40 +58,45 @@ const K = {
   passphrase: `${PREFIX}passphrase`,
   scheduleMode: `${PREFIX}schedule.mode`,
   scheduleHour: `${PREFIX}schedule.hour`,
+  scheduleWeekday: `${PREFIX}schedule.weekday`,
   scheduleEveryHours: `${PREFIX}schedule.everyHours`,
   keep: `${PREFIX}keep`,
-  lastSuccessAt: `${PREFIX}last.successAt`,
-  lastAttemptAt: `${PREFIX}last.attemptAt`,
-  lastStatus: `${PREFIX}last.status`,
-  lastMessage: `${PREFIX}last.message`,
-  lastName: `${PREFIX}last.name`,
-  lastSize: `${PREFIX}last.size`,
-  telegramFiles: `${PREFIX}telegram.files`,
+  failStreak: `${PREFIX}fail.streak`,
+  failReportedAt: `${PREFIX}fail.reportedAt`,
+  history: `${PREFIX}history`,
 } as const;
+const successAtKey = (target: OffsiteBackupTarget) => `${PREFIX}last.${target}.successAt`;
+const attemptAtKey = (target: OffsiteBackupTarget) => `${PREFIX}last.${target}.attemptAt`;
 
-/** 下载回来的备份最大多大（与手动导入的上限一致）。 */
-const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
-/** Telegram Bot API 只能下载 20 MB 以内的文件。 */
-const TELEGRAM_DOWNLOAD_LIMIT = 20 * 1024 * 1024;
-const REQUEST_TIMEOUT_MS = 30_000;
-const UPLOAD_TIMEOUT_MS = 5 * 60_000;
+/** 「最近结果」留多少条（每个目的地每次一条）。 */
+const HISTORY_LIMIT = 20;
 
 export type OffsiteBackupSettings = {
-  destination: OffsiteBackupDestination;
-  webdav: { url: string; user: string; password: string };
+  destinations: OffsiteBackupTarget[];
+  webdav: WebdavConfig;
   s3: S3Config;
   passphrase: string;
   schedule: OffsiteBackupSchedule;
   keep: number;
 };
 
-export type OffsiteBackupStatus = {
-  lastSuccessAt: number | null;
-  lastAttemptAt: number | null;
-  lastStatus: "success" | "failed" | null;
-  lastMessage: string;
-  lastName: string;
-  lastSize: number;
+export type OffsiteBackupHistoryEntry = {
+  /** 毫秒 */
+  at: number;
+  trigger: "schedule" | "manual";
+  destination: OffsiteBackupTarget;
+  ok: boolean;
+  name: string;
+  size: number;
+  /** 失败原因；成功时是补充说明（删了几份旧的、清理没成功），没有就是空串。 */
+  message: string;
+};
+
+export type OffsiteBackupState = {
+  targets: Record<OffsiteBackupTarget, { successAt: number | null; attemptAt: number | null }>;
+  failStreak: number;
+  failReportedAt: number | null;
+  history: OffsiteBackupHistoryEntry[];
 };
 
 function num(value: unknown, fallback: number, min: number, max: number) {
@@ -89,18 +109,56 @@ function epochMs(value: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export async function readOffsiteBackupSettings(): Promise<{ settings: OffsiteBackupSettings; status: OffsiteBackupStatus }> {
+function parseDestinations(raw: string): OffsiteBackupTarget[] {
+  const wanted = new Set(raw.split(",").map((item) => item.trim()));
+  return OFFSITE_BACKUP_TARGETS.filter((target) => wanted.has(target));
+}
+
+function isTarget(value: unknown): value is OffsiteBackupTarget {
+  return (OFFSITE_BACKUP_TARGETS as readonly unknown[]).includes(value);
+}
+
+function parseHistory(raw: string): OffsiteBackupHistoryEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: OffsiteBackupHistoryEntry[] = [];
+  for (const item of parsed as Array<Partial<OffsiteBackupHistoryEntry> | null>) {
+    if (!item || !isTarget(item.destination) || !epochMs(item.at)) continue;
+    out.push({
+      at: Number(item.at),
+      trigger: item.trigger === "manual" ? "manual" : "schedule",
+      destination: item.destination,
+      ok: item.ok === true,
+      name: String(item.name || ""),
+      size: Number(item.size) || 0,
+      message: String(item.message || ""),
+    });
+  }
+  return out.slice(0, HISTORY_LIMIT);
+}
+
+export async function readOffsiteBackupSettings(): Promise<{ settings: OffsiteBackupSettings; state: OffsiteBackupState }> {
   const raw = await getSettingsByPrefix(PREFIX);
   const get = (key: string) => String(raw[key] ?? "");
-  const destination = (OFFSITE_BACKUP_DESTINATIONS as readonly string[]).includes(get(K.destination))
-    ? (get(K.destination) as OffsiteBackupDestination)
-    : "off";
-  const schedule: OffsiteBackupSchedule = get(K.scheduleMode) === "interval"
+  const hour = num(raw[K.scheduleHour], 4, 0, 23);
+  const mode = get(K.scheduleMode);
+  const schedule: OffsiteBackupSchedule = mode === "interval"
     ? { mode: "interval", everyHours: num(raw[K.scheduleEveryHours], 12, 1, 168) }
-    : { mode: "daily", hour: num(raw[K.scheduleHour], 4, 0, 23) };
+    : mode === "weekly"
+      ? { mode: "weekly", weekday: num(raw[K.scheduleWeekday], 1, 0, 6), hour }
+      : { mode: "daily", hour };
+  const targets = {} as OffsiteBackupState["targets"];
+  for (const target of OFFSITE_BACKUP_TARGETS) {
+    targets[target] = { successAt: epochMs(raw[successAtKey(target)]), attemptAt: epochMs(raw[attemptAtKey(target)]) };
+  }
   return {
     settings: {
-      destination,
+      destinations: parseDestinations(get(K.destination)),
       webdav: { url: get(K.webdavUrl), user: get(K.webdavUser), password: get(K.webdavPassword) },
       s3: {
         endpoint: get(K.s3Endpoint),
@@ -113,21 +171,19 @@ export async function readOffsiteBackupSettings(): Promise<{ settings: OffsiteBa
       },
       passphrase: get(K.passphrase),
       schedule,
-      keep: num(raw[K.keep], 7, 1, 100),
+      keep: num(raw[K.keep], OFFSITE_BACKUP_DEFAULT_KEEP, 1, 100),
     },
-    status: {
-      lastSuccessAt: epochMs(raw[K.lastSuccessAt]),
-      lastAttemptAt: epochMs(raw[K.lastAttemptAt]),
-      lastStatus: get(K.lastStatus) === "success" ? "success" : get(K.lastStatus) === "failed" ? "failed" : null,
-      lastMessage: get(K.lastMessage),
-      lastName: get(K.lastName),
-      lastSize: Number(raw[K.lastSize] || 0) || 0,
+    state: {
+      targets,
+      failStreak: num(raw[K.failStreak], 0, 0, 1_000_000),
+      failReportedAt: epochMs(raw[K.failReportedAt]),
+      history: parseHistory(get(K.history)),
     },
   };
 }
 
 export type OffsiteBackupSettingsInput = {
-  destination: OffsiteBackupDestination;
+  destinations: readonly OffsiteBackupTarget[];
   webdav?: { url?: string; user?: string; password?: string };
   s3?: { endpoint?: string; region?: string; bucket?: string; prefix?: string; accessKeyId?: string; secretAccessKey?: string; pathStyle?: boolean };
   /** 空串 = 不改 */
@@ -139,12 +195,16 @@ export type OffsiteBackupSettingsInput = {
 /** 密钥类字段传空串表示「保持原值」—— 界面上拿到的只是是否已设置，不是原文。 */
 export async function saveOffsiteBackupSettings(input: OffsiteBackupSettingsInput) {
   const map: Record<string, string | null> = {
-    [K.destination]: input.destination,
+    [K.destination]: OFFSITE_BACKUP_TARGETS.filter((target) => input.destinations.includes(target)).join(","),
     [K.scheduleMode]: input.schedule.mode,
-    [K.keep]: String(num(input.keep, 7, 1, 100)),
+    [K.keep]: String(num(input.keep, OFFSITE_BACKUP_DEFAULT_KEEP, 1, 100)),
   };
-  if (input.schedule.mode === "daily") map[K.scheduleHour] = String(num(input.schedule.hour, 4, 0, 23));
-  else map[K.scheduleEveryHours] = String(num(input.schedule.everyHours, 12, 1, 168));
+  if (input.schedule.mode === "interval") {
+    map[K.scheduleEveryHours] = String(num(input.schedule.everyHours, 12, 1, 168));
+  } else {
+    map[K.scheduleHour] = String(num(input.schedule.hour, 4, 0, 23));
+    if (input.schedule.mode === "weekly") map[K.scheduleWeekday] = String(num(input.schedule.weekday, 1, 0, 6));
+  }
   if (input.webdav) {
     if (input.webdav.url !== undefined) map[K.webdavUrl] = input.webdav.url.trim();
     if (input.webdav.user !== undefined) map[K.webdavUser] = input.webdav.user.trim();
@@ -165,9 +225,14 @@ export async function saveOffsiteBackupSettings(input: OffsiteBackupSettingsInpu
 
 /** 给界面看的版本：密钥只说有没有设置。 */
 export async function readOffsiteBackupSettingsForClient() {
-  const { settings, status } = await readOffsiteBackupSettings();
+  const { settings, state } = await readOffsiteBackupSettings();
+  const now = Date.now();
+  // 开了几个目的地就各算各的，取最早的那个；没设口令时定时任务不会跑，也就没有「下次」。
+  const nextRuns = settings.passphrase.length >= 8
+    ? settings.destinations.map((target) => nextBackupAt(settings.schedule, now, state.targets[target].successAt, state.targets[target].attemptAt))
+    : [];
   return {
-    destination: settings.destination,
+    destinations: settings.destinations,
     webdav: { url: settings.webdav.url, user: settings.webdav.user, hasPassword: !!settings.webdav.password },
     s3: {
       endpoint: settings.s3.endpoint,
@@ -181,342 +246,80 @@ export async function readOffsiteBackupSettingsForClient() {
     hasPassphrase: !!settings.passphrase,
     schedule: settings.schedule,
     keep: settings.keep,
-    status,
+    history: state.history,
+    nextRunAt: nextRuns.length > 0 ? Math.min(...nextRuns) : null,
   };
 }
 
-// ==================== 网络 ====================
-
-function describeError(error: unknown, secrets: string[] = []): string {
-  let message = error instanceof Error ? error.message : String(error);
-  if (error instanceof Error && error.name === "TimeoutError") message = "请求超时";
-  if (error instanceof Error && (error as any).cause?.code) message = `${message}（${(error as any).cause.code}）`;
-  for (const secret of secrets) if (secret) message = message.split(secret).join("***");
-  return message.slice(0, 300);
-}
-
-/** 对外请求：只许 HTTPS、过 SSRF 检查、不跟随重定向（防止被 30x 带去内网）、带超时。 */
-async function safeFetch(url: string, init: RequestInit & { timeoutMs?: number }, purpose: string): Promise<Response> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:") throw new Error(`${purpose} 只支持 HTTPS 地址`);
-  await assertSafeOutboundUrl(url, { purpose });
-  const { timeoutMs, ...rest } = init;
-  const response = await fetch(url, { ...rest, redirect: "manual", signal: AbortSignal.timeout(timeoutMs ?? REQUEST_TIMEOUT_MS) });
-  if (response.status >= 300 && response.status < 400) {
-    throw new Error(`${purpose} 返回了重定向（${response.status}），为安全起见不跟随，请直接填最终地址`);
-  }
-  return response;
-}
-
-async function readLimitedText(response: Response, limit = MAX_BACKUP_BYTES): Promise<string> {
-  const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > limit) throw new Error(`备份文件过大（${Math.round(declared / 1024 / 1024)} MB）`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > limit) throw new Error(`备份文件过大（${Math.round(buffer.length / 1024 / 1024)} MB）`);
-  return buffer.toString("utf8");
-}
-
-function httpError(purpose: string, status: number, detail = "") {
-  const hint = status === 401 || status === 403 ? "：账号、密码或权限不对" : status === 404 ? "：路径不存在" : "";
-  return new Error(`${purpose} 失败，HTTP ${status}${hint}${detail ? `（${detail.slice(0, 160)}）` : ""}`);
-}
-
-type Destination = {
-  label: string;
-  upload(name: string, body: Buffer): Promise<void>;
-  list(): Promise<RemoteBackupFile[]>;
-  download(name: string): Promise<string>;
-  remove(name: string): Promise<void>;
-  test(): Promise<string>;
-  secrets: string[];
-};
-
-function webdavDestination(config: OffsiteBackupSettings["webdav"]): Destination {
-  if (!config.url) throw new Error("请填写 WebDAV 地址");
-  const folder = webdavFolderUrl(config.url);
-  const auth = basicAuthHeader(config.user, config.password);
-  const purpose = "WebDAV";
-  const list = async () => {
-    const response = await safeFetch(folder, {
-      method: "PROPFIND",
-      headers: { authorization: auth, depth: "1", "content-type": "application/xml; charset=utf-8" },
-      body: WEBDAV_PROPFIND_BODY,
-    }, purpose);
-    if (response.status !== 207 && response.status !== 200) throw httpError("WebDAV 列目录", response.status);
-    return parseWebdavPropfind(await response.text())
-      .filter((entry) => !entry.isCollection && entry.name)
-      .map((entry) => ({ name: entry.name, size: entry.size, modifiedAt: entry.modifiedAt }));
-  };
-  const upload = async (name: string, body: Buffer) => {
-    const response = await safeFetch(webdavFileUrl(folder, name), {
-      method: "PUT",
-      headers: { authorization: auth, "content-type": "application/octet-stream" },
-      body: new Uint8Array(body),
-      timeoutMs: UPLOAD_TIMEOUT_MS,
-    }, purpose);
-    if (![200, 201, 204].includes(response.status)) throw httpError("WebDAV 上传", response.status);
-  };
-  const remove = async (name: string) => {
-    const response = await safeFetch(webdavFileUrl(folder, name), { method: "DELETE", headers: { authorization: auth } }, purpose);
-    if (![200, 202, 204, 404].includes(response.status)) throw httpError("WebDAV 删除", response.status);
-  };
-  return {
-    label: "WebDAV",
-    secrets: [config.password],
-    list,
-    upload,
-    remove,
-    async download(name) {
-      const response = await safeFetch(webdavFileUrl(folder, name), { method: "GET", headers: { authorization: auth }, timeoutMs: UPLOAD_TIMEOUT_MS }, purpose);
-      if (response.status !== 200) throw httpError("WebDAV 下载", response.status);
-      return readLimitedText(response);
-    },
-    async test() {
-      let created = false;
-      const probe = await safeFetch(folder, {
-        method: "PROPFIND",
-        headers: { authorization: auth, depth: "0", "content-type": "application/xml; charset=utf-8" },
-        body: WEBDAV_PROPFIND_BODY,
-      }, purpose);
-      if (probe.status === 404) {
-        const mk = await safeFetch(folder, { method: "MKCOL", headers: { authorization: auth } }, purpose);
-        if (![200, 201].includes(mk.status)) throw httpError("WebDAV 建目录", mk.status);
-        created = true;
-      } else if (probe.status !== 207 && probe.status !== 200) {
-        throw httpError("WebDAV 连接", probe.status);
-      }
-      // 试写一个小文件再删掉：只读账号能列目录，却存不了备份。
-      const testName = "nex-backup-connection-test.txt";
-      await upload(testName, Buffer.from("NEX offsite backup connection test\n"));
-      await remove(testName);
-      return created ? "连接正常，目录不存在，已新建" : "连接正常，可以写入";
-    },
-  };
-}
-
-function s3Destination(config: S3Config): Destination {
-  if (!config.endpoint || !config.bucket) throw new Error("请填写 S3 地址和存储桶");
-  if (!config.accessKeyId || !config.secretAccessKey) throw new Error("请填写 Access Key 和 Secret Key");
-  const prefix = normalizeS3Prefix(config.prefix);
-  const purpose = "S3";
-  const send = async (request: Parameters<typeof buildSignedS3Request>[1], timeoutMs = REQUEST_TIMEOUT_MS) => {
-    const signed = buildSignedS3Request(config, request);
-    return safeFetch(signed.url, {
-      method: request.method,
-      headers: signed.headers,
-      body: request.body ? new Uint8Array(request.body) : undefined,
-      timeoutMs,
-    }, purpose);
-  };
-  const failure = async (action: string, response: Response) => {
-    const text = await response.text().catch(() => "");
-    return httpError(`S3 ${action}`, response.status, parseS3Error(text));
-  };
-  const list = async () => {
-    const out: RemoteBackupFile[] = [];
-    let token: string | null = null;
-    for (let page = 0; page < 20; page += 1) {
-      const query: Array<[string, string]> = [["list-type", "2"], ["prefix", prefix]];
-      if (token) query.push(["continuation-token", token]);
-      const response = await send({ method: "GET", key: "", query });
-      if (response.status !== 200) throw await failure("列目录", response);
-      const parsed = parseListObjectsV2(await response.text());
-      for (const object of parsed.objects) {
-        const name = object.key.slice(prefix.length);
-        if (!name || name.includes("/")) continue;
-        out.push({ name, size: object.size, modifiedAt: object.lastModified });
-      }
-      if (!parsed.isTruncated || !parsed.nextToken) break;
-      token = parsed.nextToken;
-    }
-    return out;
-  };
-  const upload = async (name: string, body: Buffer) => {
-    const response = await send({ method: "PUT", key: `${prefix}${name}`, body, contentType: "application/octet-stream" }, UPLOAD_TIMEOUT_MS);
-    if (response.status !== 200) throw await failure("上传", response);
-  };
-  const remove = async (name: string) => {
-    const response = await send({ method: "DELETE", key: `${prefix}${name}` });
-    if (![200, 204, 404].includes(response.status)) throw await failure("删除", response);
-  };
-  return {
-    label: "S3",
-    secrets: [config.secretAccessKey],
-    list,
-    upload,
-    remove,
-    async download(name) {
-      const response = await send({ method: "GET", key: `${prefix}${name}` }, UPLOAD_TIMEOUT_MS);
-      if (response.status !== 200) throw await failure("下载", response);
-      return readLimitedText(response);
-    },
-    async test() {
-      await list();
-      const testName = "nex-backup-connection-test.txt";
-      await upload(testName, Buffer.from("NEX offsite backup connection test\n"));
-      await remove(testName);
-      return "连接正常，可以写入";
-    },
-  };
-}
-
-type TelegramBackupRecord = {
-  name: string;
-  size: number;
-  at: number;
-  fileId: string;
-  messages: Array<{ chatId: string; messageId: number }>;
-};
-
-async function telegramToken(): Promise<string> {
-  const settings = await db.getAllSettings();
-  return ENV.telegramBotToken.trim() || String(settings.telegramBotToken || "").trim();
-}
-
-async function readTelegramRecords(): Promise<TelegramBackupRecord[]> {
-  const raw = (await getSettingsByPrefix(K.telegramFiles))[K.telegramFiles];
-  try {
-    const parsed = JSON.parse(String(raw || "[]"));
-    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item.name === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writeTelegramRecords(records: TelegramBackupRecord[]) {
-  await setSettings({ [K.telegramFiles]: JSON.stringify(records.slice(0, 200)) });
-}
-
-async function telegramCall<T = any>(token: string, method: string, body: Record<string, unknown> | FormData, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
-  const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST",
-    headers: isForm ? undefined : { "content-type": "application/json" },
-    body: isForm ? (body as FormData) : JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const json = await response.json().catch(() => null) as any;
-  if (!response.ok || !json?.ok) {
-    throw new Error(`Telegram ${method} 失败：${String(json?.description || `HTTP ${response.status}`).slice(0, 200)}`);
-  }
-  return json.result as T;
-}
-
-function telegramDestination(): Destination {
-  const secrets: string[] = [];
-  const context = async () => {
-    const token = await telegramToken();
-    if (!token) throw new Error("还没有配置 Telegram 机器人（设置 › Telegram）");
-    secrets.push(token);
-    const recipients = ((await db.getTelegramAdminRecipients()) as any[])
-      .map((user) => String(user.telegramId || "").trim())
-      .filter(Boolean);
-    if (recipients.length === 0) throw new Error("没有绑定了 Telegram 的管理员，备份无处可发");
-    return { token, recipients };
-  };
-  return {
-    label: "Telegram",
-    secrets,
-    async upload(name, body) {
-      const { token, recipients } = await context();
-      if (body.length > 50 * 1024 * 1024) throw new Error("备份超过 50 MB，Telegram 机器人发不了，请改用 WebDAV 或 S3");
-      const record: TelegramBackupRecord = { name, size: body.length, at: Date.now(), fileId: "", messages: [] };
-      for (const chatId of recipients) {
-        const form = new FormData();
-        form.append("chat_id", chatId);
-        form.append("caption", `NEX 异地备份 ${name}（已加密，恢复时需要备份口令）`);
-        form.append("document", new Blob([new Uint8Array(body)], { type: "application/octet-stream" }), name);
-        const result = await telegramCall<any>(token, "sendDocument", form, UPLOAD_TIMEOUT_MS);
-        if (!record.fileId) record.fileId = String(result?.document?.file_id || "");
-        record.messages.push({ chatId, messageId: Number(result?.message_id || 0) });
-      }
-      const records = (await readTelegramRecords()).filter((item) => item.name !== name);
-      await writeTelegramRecords([record, ...records]);
-    },
-    async list() {
-      return (await readTelegramRecords()).map((item) => ({ name: item.name, size: item.size, modifiedAt: item.at }));
-    },
-    async download(name) {
-      const { token } = await context();
-      const record = (await readTelegramRecords()).find((item) => item.name === name);
-      if (!record?.fileId) throw new Error("找不到这份备份在 Telegram 里的记录");
-      if (record.size > TELEGRAM_DOWNLOAD_LIMIT) {
-        throw new Error("Telegram 机器人只能取回 20 MB 以内的文件：请在 Telegram 里手动下载这份备份，到「备份恢复」里导入");
-      }
-      const file = await telegramCall<any>(token, "getFile", { file_id: record.fileId });
-      const filePath = String(file?.file_path || "");
-      if (!filePath) throw new Error("Telegram 没有返回文件地址");
-      const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`, { signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
-      if (!response.ok) throw new Error(`Telegram 下载失败，HTTP ${response.status}`);
-      return readLimitedText(response);
-    },
-    async remove(name) {
-      const records = await readTelegramRecords();
-      const record = records.find((item) => item.name === name);
-      if (record) {
-        const token = await telegramToken();
-        // Telegram 只允许删 48 小时内的消息；删不掉就留在聊天里，只是不再算进「保留最新 N 份」。
-        for (const message of record.messages) {
-          if (!token || !message.messageId) continue;
-          await telegramCall(token, "deleteMessage", { chat_id: message.chatId, message_id: message.messageId }).catch(() => undefined);
-        }
-      }
-      await writeTelegramRecords(records.filter((item) => item.name !== name));
-    },
-    async test() {
-      const { token, recipients } = await context();
-      await telegramCall(token, "getMe", {});
-      for (const chatId of recipients) {
-        await sendTelegramMessage(chatId, "NEX 异地备份：连接测试成功，之后的备份会以文件形式发到这里。");
-      }
-      return `连接正常，备份会发给 ${recipients.length} 位管理员`;
-    },
-  };
-}
-
-function destinationFor(settings: OffsiteBackupSettings): Destination {
-  if (settings.destination === "webdav") return webdavDestination(settings.webdav);
-  if (settings.destination === "s3") return s3Destination(settings.s3);
-  if (settings.destination === "telegram") return telegramDestination();
-  throw new Error("异地备份未开启");
+function destinationFor(target: OffsiteBackupTarget, settings: OffsiteBackupSettings): BackupDestination {
+  if (target === "webdav") return webdavDestination(settings.webdav);
+  if (target === "s3") return s3Destination(settings.s3);
+  return telegramDestination();
 }
 
 // ==================== 对外操作 ====================
 
+/** 把开着的目的地挨个测一遍。有一个不通就抛错，报错里写清哪个通、哪个不通。 */
 export async function testOffsiteBackupConnection(): Promise<string> {
   const { settings } = await readOffsiteBackupSettings();
-  const destination = destinationFor(settings);
-  try {
-    return await destination.test();
-  } catch (error) {
-    throw new Error(describeError(error, destination.secrets));
+  if (settings.destinations.length === 0) throw new Error("异地备份未开启");
+  const lines: string[] = [];
+  let failed = false;
+  for (const target of settings.destinations) {
+    const label = OFFSITE_BACKUP_TARGET_LABELS[target];
+    let destination: BackupDestination | null = null;
+    try {
+      destination = destinationFor(target, settings);
+      lines.push(`${label}：${await destination.test()}`);
+    } catch (error) {
+      failed = true;
+      lines.push(`${label} 不通：${withoutLabel(label, describeBackupError(error, destination?.secrets))}`);
+    }
   }
+  const message = lines.join("；");
+  if (failed) throw new Error(message);
+  return message;
 }
 
-export async function listOffsiteBackups(): Promise<Array<RemoteBackupFile & { ours: boolean }>> {
+export type OffsiteBackupRemoteList = {
+  destination: OffsiteBackupTarget;
+  label: string;
+  files: RemoteBackupFile[];
+  /** 这个目的地读不到时的原因；读到了是 null。 */
+  error: string | null;
+};
+
+/** 每个开着的目的地上，面板自己传上去的备份（新的在前）。一个读不到不影响另一个。 */
+export async function listOffsiteBackups(): Promise<OffsiteBackupRemoteList[]> {
   const { settings } = await readOffsiteBackupSettings();
-  if (settings.destination === "off") return [];
-  const destination = destinationFor(settings);
-  try {
-    const files = await destination.list();
-    return files
-      .filter((file) => parseOffsiteBackupName(file.name) !== null)
-      .map((file) => ({ ...file, ours: true, modifiedAt: parseOffsiteBackupName(file.name) ?? file.modifiedAt }))
-      .sort((a, b) => (b.modifiedAt || 0) - (a.modifiedAt || 0));
-  } catch (error) {
-    throw new Error(describeError(error, destination.secrets));
+  const out: OffsiteBackupRemoteList[] = [];
+  for (const target of settings.destinations) {
+    const label = OFFSITE_BACKUP_TARGET_LABELS[target];
+    let destination: BackupDestination | null = null;
+    try {
+      destination = destinationFor(target, settings);
+      const files = (await destination.list())
+        .filter((file) => parseOffsiteBackupName(file.name) !== null)
+        .map((file) => ({ ...file, modifiedAt: parseOffsiteBackupName(file.name) ?? file.modifiedAt }))
+        .sort((a, b) => (b.modifiedAt || 0) - (a.modifiedAt || 0));
+      out.push({ destination: target, label, files, error: null });
+    } catch (error) {
+      out.push({ destination: target, label, files: [], error: describeBackupError(error, destination?.secrets) });
+    }
   }
+  return out;
 }
 
 /** 下载一份远端备份的原文（加密的 JSON），交给 system.importPanelBackup 去解密、导入。 */
-export async function downloadOffsiteBackup(name: string): Promise<string> {
+export async function downloadOffsiteBackup(target: OffsiteBackupTarget, name: string): Promise<string> {
   if (parseOffsiteBackupName(name) === null) throw new Error("只能恢复面板自己传上去的备份");
   const { settings } = await readOffsiteBackupSettings();
-  const destination = destinationFor(settings);
+  let destination: BackupDestination | null = null;
   try {
+    destination = destinationFor(target, settings);
     return await destination.download(name);
   } catch (error) {
-    throw new Error(describeError(error, destination.secrets));
+    throw new Error(describeBackupError(error, destination?.secrets));
   }
 }
 
@@ -525,72 +328,148 @@ function formatSize(bytes: number) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+/** 报错里多半已经带着目的地的名字（「WebDAV 上传失败…」）；没带的（超时、连不上）补在前面。 */
+function withLabel(label: string, message: string) {
+  return message.includes(label) ? message : `${label}：${message}`;
+}
+
+/** 反过来：已经单独标了目的地的地方（「最近结果」、测试连接），去掉报错开头重复的那个名字。 */
+function withoutLabel(label: string, message: string) {
+  return message.startsWith(label) ? message.slice(label.length).trim() : message;
+}
+
+export type OffsiteBackupRunResult = { name: string; size: number; deleted: number; message: string };
+
+type TargetResult = { target: OffsiteBackupTarget; label: string; ok: boolean; deleted: number; message: string };
+
+/** 传到一个目的地，再按保留份数清理它上面的旧备份。不抛错，结果里说成没成。 */
+async function uploadToTarget(target: OffsiteBackupTarget, settings: OffsiteBackupSettings, name: string, body: Buffer): Promise<TargetResult> {
+  const label = OFFSITE_BACKUP_TARGET_LABELS[target];
+  let destination: BackupDestination | null = null;
+  try {
+    destination = destinationFor(target, settings);
+    await destination.upload(name, body);
+  } catch (error) {
+    return { target, label, ok: false, deleted: 0, message: describeBackupError(error, destination?.secrets) };
+  }
+  // 清理旧备份失败不算备份失败：新的已经传上去了，只记一句。
+  let deleted = 0;
+  try {
+    const stale = selectBackupsToDelete(await destination.list(), settings.keep);
+    for (const file of stale) {
+      await destination.remove(file.name);
+      deleted += 1;
+    }
+  } catch (error) {
+    return { target, label, ok: true, deleted, message: `清理旧备份失败：${describeBackupError(error, destination.secrets)}` };
+  }
+  return { target, label, ok: true, deleted, message: deleted > 0 ? `删掉 ${deleted} 份旧的` : "" };
+}
+
 /**
- * 做一次备份：导出 → 加密 → 上传 → 按保留份数清理旧的。
+ * 做一次备份：导出 → 加密 → 传到各个目的地 → 各自按保留份数清理旧的。
  *
- * 同一时刻只跑一份（定时与「立即备份」撞上时后来的等前一个跑完）。成功、失败都记一条
- * ops.backup 事件；失败那条是 warn，写明原因。
+ * - 手动（manual）：传到所有开着的目的地。定时（schedule）：只传到这一刻「该跑了」的那些，
+ *   并且是拿到锁之后才算 —— 定时任务排在一次手动备份后面时，手动那次已经算数，不再传一遍。
+ *   没有该跑的返回 null。
+ * - 同一时刻只跑一份（定时与「立即备份」撞上时后来的等前一个跑完）。
+ * - 开跑前先记「试过了」：面板中途被杀、或另一个面板进程也在看同一个库时，一小时内不会再来一遍。
+ * - 每个目的地成没成都进「最近结果」。事件时间线（会被 Webhook / Telegram 转发）成功记一条；
+ *   失败只在这一轮失败的第一次、以及之后每满一天记一条，见 shouldReportBackupFailure。
+ * - 有任何一个目的地失败就抛错（报错里写明哪个成了、哪个没成）。
  */
-export async function runOffsiteBackup(trigger: "schedule" | "manual") {
+export async function runOffsiteBackup(trigger: "manual"): Promise<OffsiteBackupRunResult>;
+export async function runOffsiteBackup(trigger: "schedule"): Promise<OffsiteBackupRunResult | null>;
+export async function runOffsiteBackup(trigger: "schedule" | "manual"): Promise<OffsiteBackupRunResult | null> {
   return withKeyedTaskLock("ops-offsite-backup", async () => {
     const startedAt = Date.now();
-    const { settings } = await readOffsiteBackupSettings();
-    let destination: Destination | null = null;
+    const { settings, state } = await readOffsiteBackupSettings();
+    if (settings.destinations.length === 0) {
+      if (trigger === "schedule") return null;
+      throw new Error("异地备份未开启");
+    }
+    if (settings.passphrase.length < 8) {
+      if (trigger === "schedule") return null;
+      throw new Error("还没有设置备份口令（至少 8 位）");
+    }
+    const targets = trigger === "manual"
+      ? settings.destinations
+      : settings.destinations.filter((target) => isOffsiteBackupDue({
+        schedule: settings.schedule,
+        nowMs: startedAt,
+        lastSuccessAt: state.targets[target].successAt,
+        lastAttemptAt: state.targets[target].attemptAt,
+      }));
+    if (targets.length === 0) return null;
+    await setSettings(Object.fromEntries(targets.map((target) => [attemptAtKey(target), String(startedAt)])));
+
+    const name = offsiteBackupName(startedAt);
+    let size = 0;
+    let results: TargetResult[];
     try {
-      if (settings.destination === "off") throw new Error("异地备份未开启");
-      if (settings.passphrase.length < 8) throw new Error("还没有设置备份口令（至少 8 位）");
-      destination = destinationFor(settings);
       const all = await db.getAllSettings();
       const snapshot = await exportMigrationSnapshot(String(all.panelPublicUrl || "") || undefined);
       const encrypted = encryptMigrationSnapshot(pruneMigrationSnapshotForPanelBackup(snapshot), settings.passphrase);
       const body = Buffer.from(JSON.stringify(encrypted), "utf8");
-      const name = offsiteBackupName(startedAt);
-      await destination.upload(name, body);
-
-      // 清理旧备份失败不算备份失败：新的已经传上去了，只记一句。
-      let deleted = 0;
-      let cleanupWarning = "";
-      try {
-        const stale = selectBackupsToDelete(await destination.list(), settings.keep);
-        for (const file of stale) {
-          await destination.remove(file.name);
-          deleted += 1;
-        }
-      } catch (error) {
-        cleanupWarning = `清理旧备份失败：${describeError(error, destination.secrets)}`;
-      }
-
-      const message = `异地备份完成：${name}（${formatSize(body.length)}，${destination.label}）${deleted > 0 ? `，删掉 ${deleted} 份旧的` : ""}${cleanupWarning ? `；${cleanupWarning}` : ""}`;
-      await setSettings({
-        [K.lastSuccessAt]: String(Date.now()),
-        [K.lastAttemptAt]: String(Date.now()),
-        [K.lastStatus]: "success",
-        [K.lastMessage]: message,
-        [K.lastName]: name,
-        [K.lastSize]: String(body.length),
-      });
-      await recordPanelEvent({
-        kind: "ops.backup",
-        level: cleanupWarning ? "warn" : "info",
-        message,
-        data: { trigger, destination: settings.destination, name, size: body.length, deleted },
-      });
-      return { name, size: body.length, deleted, message };
+      size = body.length;
+      results = [];
+      for (const target of targets) results.push(await uploadToTarget(target, settings, name, body));
     } catch (error) {
-      const reason = describeError(error, destination?.secrets || []);
-      const message = `异地备份失败：${reason}`;
-      await setSettings({
-        [K.lastAttemptAt]: String(Date.now()),
-        [K.lastStatus]: "failed",
-        [K.lastMessage]: message,
-      }).catch(() => undefined);
+      // 导出 / 加密这一步就没过：哪儿都没传成。
+      const reason = `导出备份失败：${describeBackupError(error)}`;
+      results = targets.map((target) => ({ target, label: OFFSITE_BACKUP_TARGET_LABELS[target], ok: false, deleted: 0, message: reason }));
+    }
+
+    const succeeded = results.filter((result) => result.ok);
+    const failed = results.filter((result) => !result.ok);
+    const deleted = results.reduce((sum, result) => sum + result.deleted, 0);
+    const finishedAt = Date.now();
+    const history: OffsiteBackupHistoryEntry[] = [
+      ...results.map((result) => ({
+        at: startedAt,
+        trigger,
+        destination: result.target,
+        ok: result.ok,
+        name: result.ok ? name : "",
+        size: result.ok ? size : 0,
+        message: withoutLabel(result.label, result.message),
+      })),
+      ...state.history,
+    ].slice(0, HISTORY_LIMIT);
+    const updates: Record<string, string | null> = { [K.history]: JSON.stringify(history) };
+    for (const result of succeeded) updates[successAtKey(result.target)] = String(finishedAt);
+
+    const okLabels = succeeded.map((result) => result.label).join("、");
+    const data = { trigger, name, size, deleted, succeeded: succeeded.map((result) => result.target), failed: failed.map((result) => result.target) };
+
+    if (failed.length === 0) {
+      const notes = succeeded.filter((result) => result.message).map((result) => withLabel(result.label, result.message)).join("；");
+      const cleanupFailed = succeeded.some((result) => result.message.startsWith("清理旧备份失败"));
+      const recovered = state.failStreak > 0 ? `（此前连续失败 ${state.failStreak} 次，已恢复）` : "";
+      const message = `异地备份完成：${name}（${formatSize(size)}，${okLabels}）${notes ? `；${notes}` : ""}${recovered}`;
+      updates[K.failStreak] = "0";
+      updates[K.failReportedAt] = "";
+      await setSettings(updates);
+      await recordPanelEvent({ kind: "ops.backup", level: cleanupFailed ? "warn" : "info", message, data });
+      return { name, size, deleted, message };
+    }
+
+    const streak = state.failStreak + 1;
+    const message = `异地备份失败：${failed.map((result) => withLabel(result.label, result.message)).join("；")}${okLabels ? `（${okLabels} 已成功）` : ""}`;
+    const report = shouldReportBackupFailure({ streak, lastReportedAt: state.failReportedAt, nowMs: finishedAt });
+    updates[K.failStreak] = String(streak);
+    if (report) updates[K.failReportedAt] = String(finishedAt);
+    // 状态写不进去也要把失败报出去：库本身出问题时这里正是最需要有人看见的地方。
+    await setSettings(updates).catch(() => undefined);
+    console.warn(`[OffsiteBackup] ${message}${streak > 1 ? `（已连续失败 ${streak} 次）` : ""}`);
+    if (report) {
       await recordPanelEvent({
         kind: "ops.backup",
         level: "warn",
-        message,
-        data: { trigger, destination: settings.destination },
+        message: `${message}${streak > 1 ? `（已连续失败 ${streak} 次）` : ""}`,
+        data: { ...data, streak },
       });
-      throw new Error(message);
     }
+    throw new Error(message);
   });
 }

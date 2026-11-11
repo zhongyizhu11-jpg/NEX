@@ -3,11 +3,12 @@
   阶段叫什么、分档怎么换算成 P50 / P95、汇总行怎么算成功率和平均耗时、导出 CSV。
 */
 
-export type ConnStage = "pool" | "tcp" | "handshake" | "target" | "leg";
+export type ConnStage = "pool" | "tcp" | "carrier" | "handshake" | "target" | "leg";
 
 export const CONN_STAGES: ReadonlyArray<{ key: ConnStage; label: string; description: string }> = [
   { key: "pool", label: "连接池", description: "从预热好的连接池直接拿到下一跳连接，不用拨号" },
   { key: "tcp", label: "TCP 连接", description: "拨下一跳的 TCP" },
+  { key: "carrier", label: "抗丢包连接", description: "开了抗丢包传输的隧道：拨下一跳的 UDP 承载，连不上时这里写着原因" },
   { key: "handshake", label: "加密握手", description: "和下一跳完成加密握手确认（从开始拨号算起）" },
   { key: "target", label: "连目标", description: "出口拨目标地址" },
   { key: "leg", label: "每一路", description: "单连接叠加：入口拨每一路并报到，外加这一路实际跑了多少" },

@@ -47,7 +47,7 @@ export const settingsTabDetail: Record<string, string> = {
   email: "SMTP 发信、注册验证与提醒邮件",
   backup: "迁移、数据库切换、导出与导入",
   logs: "运行日志与导出",
-  advanced: "流量用尽时的处理、维护模式、API 令牌与 MCP、接口限流",
+  advanced: "流量用尽时的处理、维护模式、API 令牌与 MCP、事件推送、商城对接、接口限流、指标导出",
   webhook: "把告警推到 Discord、Slack 或任意地址",
 };
 

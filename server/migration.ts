@@ -215,6 +215,8 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "topology_manual_nodes",
   "topology_manual_links",
   "user_traffic_daily",
+  "shop_sync_users",
+  "shop_sync_orders",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -947,6 +949,9 @@ const IMPORT_TABLE_ORDER = [
   "topology_manual_links",
   // 用户流量日历史：依赖用户、规则
   "user_traffic_daily",
+  // 商城对接：绑定和回调记录指向用户、订阅和套餐，排在它们后面
+  "shop_sync_users",
+  "shop_sync_orders",
   "system_settings",
 ] as const;
 
@@ -1753,6 +1758,18 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.planId = mapOptionalId(maps, "subscription_plans", source.planId);
       // 幂等键：同一笔来源只该有一条返利。
       return { row, existingWhere: { sourceType: row.sourceType, sourceRef: row.sourceRef } };
+
+    case "shop_sync_users":
+      row.localUserId = mapOptionalId(maps, "users", source.localUserId);
+      row.subscriptionId = mapOptionalId(maps, "user_subscriptions", source.subscriptionId);
+      return { row, existingWhere: { externalUserId: row.externalUserId } };
+
+    case "shop_sync_orders":
+      // 幂等键：同一个商城订单号只该有一条，迁过去以后商城重发也不会再开一次。
+      row.localUserId = mapOptionalId(maps, "users", source.localUserId);
+      row.subscriptionId = mapOptionalId(maps, "user_subscriptions", source.subscriptionId);
+      row.planId = mapOptionalId(maps, "subscription_plans", source.planId);
+      return { row, existingWhere: { orderId: row.orderId } };
 
     case "balance_transactions":
       row.userId = mapRequiredId(maps, "users", source.userId);

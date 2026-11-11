@@ -4,7 +4,8 @@ import * as db from "./db";
 import { timestampMillis } from "../shared/timestamp";
 import { failoverLineEndpoints } from "../shared/failoverActiveLine";
 import { normalizeRouteEventKind, routePathLabel, routePathsOf, type RouteEventKind, type RouteGroupRule } from "../shared/routeGroup";
-import { recordRouteAgentStats } from "./routeGroupStats";
+import { getRouteStatus, recordRouteAgentStats } from "./routeGroupStats";
+import { hasRouteDrillOnHost, isRouteDrillActive, noteRouteDrillAgentEvent, noteRouteDrillAgentStats } from "./routeDrill";
 import { recordRoutePathQuality } from "./routePathQualityHistory";
 import { notifyRouteSwitch } from "./routeSwitchNotifier";
 import { recordRouteHealthEvent, recordRouteSwitchEvent } from "./ops/eventHooks";
@@ -65,6 +66,12 @@ export function agentReportedSeconds(value: unknown, nowMs = Date.now()) {
   return Math.floor(ms / 1000);
 }
 
+/** 和 agentReportedSeconds 一样认秒 / 毫秒，只是不丢毫秒（演练算「几秒切完」要）。 */
+function agentReportedMillis(value: unknown, nowMs = Date.now()) {
+  const ms = timestampMillis(value);
+  return ms > 0 && ms <= nowMs + 86_400_000 ? ms : nowMs;
+}
+
 type ReportedLine = { target: string; at: number };
 
 function snapshotSignature(snapshot: unknown[]) {
@@ -106,7 +113,9 @@ export async function ingestFailoverLineReports(input: {
   const previous = lastSnapshotByHost.get(hostId);
   const snapshotNeedsCheck = snapshot !== null
     && (!previous || previous.signature !== signature || nowMs - previous.checkedAt >= SNAPSHOT_RECHECK_MS);
-  const statsDue = stats !== null && nowMs - (lastStatsAtByHost.get(hostId) || 0) >= STATS_RECORD_INTERVAL_MS;
+  // 切换演练期间（server/routeDrill）每份评分快照都收：几秒切完、连接剩几个都靠它。
+  const drilling = stats !== null && hasRouteDrillOnHost(hostId);
+  const statsDue = stats !== null && (drilling || nowMs - (lastStatsAtByHost.get(hostId) || 0) >= STATS_RECORD_INTERVAL_MS);
   if (events.length === 0 && !snapshotNeedsCheck && !statsDue) return { written: 0, events: 0 };
 
   const rules = await input.loadHostRules();
@@ -123,6 +132,14 @@ export async function ingestFailoverLineReports(input: {
   if (stats && (statsDue || events.length > 0)) {
     recordRouteAgentStats({ hostId, reports: stats, isAllowed: (ruleId) => rulesById.has(ruleId), nowMs });
     lastStatsAtByHost.set(hostId, nowMs);
+    if (drilling) {
+      for (const item of stats as Array<{ ruleId?: unknown }>) {
+        const ruleId = Math.floor(Number(item?.ruleId || 0));
+        if (!ruleId || !isRouteDrillActive(ruleId)) continue;
+        const agent = getRouteStatus(ruleId, nowMs).agent;
+        if (agent) noteRouteDrillAgentStats(agent);
+      }
+    }
     // 质量历史：每条路径最多一分钟落一行（routePathQualityHistory 自己节流，写失败只记日志）。
     const reportedRules = Array.from(new Set((stats as any[]).map((item) => Math.floor(Number(item?.ruleId || 0)))))
       .map((ruleId) => rulesById.get(ruleId))
@@ -177,6 +194,9 @@ export async function ingestFailoverLineReports(input: {
     const fromIndex = reportedIndex(rawEvent?.fromIndex, fromTarget, endpoints);
     const toLabel = toIndex >= 0 ? routePathLabel(paths[toIndex], toIndex) : (toTarget || null);
     const fromLabel = fromIndex >= 0 ? routePathLabel(paths[fromIndex], fromIndex) : (fromTarget || null);
+    // 切换演练期间的切换是故意的：入库时打上标，界面注明「（演练）」，24h 切换次数、来回漂都不数它。
+    const drillingRule = isRouteDrillActive(ruleId);
+    const storedReason = drillingRule && kind === "switch" ? `drill; ${reason || "relay down"}` : (reason || null);
     try {
       await db.insertForwardRuleRouteEvent({
         ruleId,
@@ -185,7 +205,7 @@ export async function ingestFailoverLineReports(input: {
         toKey: toIndex >= 0 ? paths[toIndex]?.key : null,
         fromLabel,
         toLabel,
-        reason: reason || null,
+        reason: storedReason,
         score,
         latencyMs: latencyMs > 0 ? latencyMs : null,
         fromChainMs,
@@ -197,6 +217,7 @@ export async function ingestFailoverLineReports(input: {
     } catch (error) {
       appendPanelLog("warn", `[Failover] host=${hostId} rule=${ruleId} 切换记录写入失败: ${String((error as any)?.message || error)}`);
     }
+    if (drillingRule) noteRouteDrillAgentEvent(ruleId, { kind, fromIndex, toIndex, atMs: agentReportedMillis(rawEvent?.occurredAt, nowMs) });
     recordRouteSwitchEvent({ rule, hostId, kind, fromLabel, toLabel, reason }); // 事件时间线（与 TG 开关无关）
     if (kind === "unhealthy" || kind === "recovered") {
       // 某一条路径坏了 / 好了：Agent 把那条路径放在 to 上。也进时间线，故障看板据此数异常和恢复。
