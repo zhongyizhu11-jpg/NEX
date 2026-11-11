@@ -48,6 +48,7 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
     "lookingGlass.",
     "ipChange.",
     "netProfile.",
+    "probeCarrier.",
     "agentRuntime.",
     "ops.firewall.",
     "ops.hostSecurity.",
@@ -59,7 +60,7 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
   ],
   lines: ["tunnels.", "forwardGroups.", "nodePools.", "topology.", "tlsInbounds."],
   proxy: ["proxyInbounds.", "proxySubscriptions."],
-  users: ["users.", "referral.", "tickets."],
+  users: ["users.", "referral.", "tickets.", "userTrafficHistory."],
   billing: ["billing.", "plans.", "payment.", "trafficBilling."],
   system: ["system.", "dnsRecords.", "plugins.", "uiThemes.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries."],
   monitoring: [

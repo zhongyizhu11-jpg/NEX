@@ -26,6 +26,7 @@ import {
   type UnlockServiceResult,
 } from "../../shared/unlockCheck";
 import { wakeAgentExt, type AgentExtHost } from "./agentExt";
+import { getHostNetProfile } from "./netProfile";
 
 const q = quoteDbIdentifier;
 const TABLE = "host_unlock_checks";
@@ -103,6 +104,25 @@ export function startUnlockCheck(
   });
   wakeAgentExt(hostId, "unlock-check");
   return { runId, reused: false };
+}
+
+/**
+ * 这台主机该按哪几个出口测：网络画像测到 IPv4、IPv6 都能出站 → 两个分开测（v4、v6 出口的解锁情况
+ * 经常不一样，比如 v6 走的是隧道 / WARP）；否则就是 auto 一次。画像没测过也按 auto。
+ */
+export async function unlockFamiliesForHost(hostId: number): Promise<UnlockFamily[]> {
+  const stored = await getHostNetProfile(hostId).catch(() => null);
+  const profile = stored?.profile;
+  return profile?.ipv4?.ok && profile?.ipv6?.ok ? ["ipv4", "ipv6"] : ["auto"];
+}
+
+/** 「检测双栈」：IPv4、IPv6 各排一次（各自独立的 runId，Agent 那边排队一个一个跑）。 */
+export function startDualStackUnlockCheck(
+  host: { id: number; agentVersion?: string | null; isOnline?: unknown },
+  input: { trigger?: UnlockTrigger; requestedBy?: number | null },
+) {
+  const runs = (["ipv4", "ipv6"] as const).map((family) => ({ family, ...startUnlockCheck(host, { ...input, family }) }));
+  return { runId: runs[0].runId, reused: runs.every((run) => run.reused), runs };
 }
 
 export function unlockDirectiveFor(hostId: number) {
@@ -324,7 +344,10 @@ async function runUnlockScheduleTick() {
   const last = new Map<number, number>(rows.map((row) => [Number(row.hostId), Number(row.last) || 0]));
   for (const host of pickScheduledUnlockHosts(hosts, last, schedule)) {
     try {
-      startUnlockCheck(host, { family: "auto", trigger: "schedule" });
+      // 双栈主机 v4、v6 分开测（见 unlockFamiliesForHost）
+      for (const family of await unlockFamiliesForHost(Number(host.id))) {
+        startUnlockCheck(host, { family, trigger: "schedule" });
+      }
     } catch (error) {
       console.warn(`[Unlock] scheduled check host=${host.id} skipped: ${error instanceof Error ? error.message : String(error)}`);
     }

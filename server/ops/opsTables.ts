@@ -11,6 +11,9 @@ import { offsiteBackupTables, offsiteBackupMigrationTables } from "./offsiteBack
 import { webhooksTables, webhooksMigrationTables } from "./webhooksTables";
 import { statusAvailabilityTables, statusAvailabilityMigrationTables } from "./statusAvailabilityTables";
 import { netProfileTables, netProfileMigrationTables } from "./netProfileTables";
+import { ipIntelTables } from "./ipIntelTables";
+import { topologyManualTables, topologyManualMigrationTables } from "./topologyManualTables";
+import { userTrafficDailyTables, userTrafficDailyMigrationTables } from "./userTrafficDailyTables";
 import { unlockTables, unlockMigrationTables } from "./unlockTables";
 import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
 import { nodeCheckTables, nodeCheckMigrationTables } from "./nodeCheckTables";
@@ -35,6 +38,7 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...webhooksTables,
   ...statusAvailabilityTables,
   ...netProfileTables,
+  ...ipIntelTables,
   ...unlockTables,
   ...connStatsTables,
   ...nodeCheckTables,
@@ -45,6 +49,8 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...uiThemesTables,
   ...impersonationTables,
   ...passwordResetTables,
+  ...topologyManualTables,
+  ...userTrafficDailyTables,
 ];
 
 export const OPS_MIGRATION_TABLES: string[] = [
@@ -70,4 +76,6 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...uiThemesMigrationTables,
   ...impersonationMigrationTables,
   ...passwordResetMigrationTables,
+  ...topologyManualMigrationTables,
+  ...userTrafficDailyMigrationTables,
 ];

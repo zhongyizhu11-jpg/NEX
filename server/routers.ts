@@ -36,6 +36,8 @@ import { agentRuntimeRouter } from "./routers/agentRuntime";
 import { uiThemesRouter } from "./routers/uiThemes";
 import { dnsRecordsRouter } from "./routers/dnsRecords";
 import { hostAgentRouter } from "./routers/hostAgent";
+import { probeCarrierRouter } from "./routers/probeCarrier";
+import { userTrafficHistoryRouter } from "./routers/userTrafficHistory";
 
 export const appRouter = router({
   system: systemRouter,
@@ -76,6 +78,8 @@ export const appRouter = router({
   agentRuntime: agentRuntimeRouter,
   uiThemes: uiThemesRouter,
   dnsRecords: dnsRecordsRouter,
+  probeCarrier: probeCarrierRouter,
+  userTrafficHistory: userTrafficHistoryRouter,
 });
 
 export type AppRouter = typeof appRouter;

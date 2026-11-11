@@ -1586,6 +1586,8 @@ export const hostProbeServices = table("host_probe_services", {
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+  /** 三网视图的运营商标签：ct 电信 / cu 联通 / cm 移动（shared/probeCarrier.ts），空 = 不归哪一网。 */
+  carrier: varchar("carrier", { length: 8 }),
 });
 export type HostProbeService = typeof hostProbeServices.$inferSelect;
 export type InsertHostProbeService = typeof hostProbeServices.$inferInsert;

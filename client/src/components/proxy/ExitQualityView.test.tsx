@@ -30,8 +30,8 @@ test("出口检测：每站一格，没连上写原因、丢失写比例，解�
   assert.match(html, /没连上 12.5%/);
   assert.match(html, /42 ms/);
   assert.match(html, /Netflix/);
-  assert.match(html, /可用 · HK/);
-  assert.match(html, /不可用/);
+  assert.match(html, /解锁<\/span><span[^>]*>HK</);
+  assert.match(html, /屏蔽/);
 });
 
 test("出口检测：DNS 被污染写出来，不显示假的毫秒数", () => {
@@ -47,4 +47,22 @@ test("出口检测：出不去的机器收成一句话，不铺四格红", () =>
   const html = renderToStaticMarkup(<ExitHostPanel host={host({ noEgress: true, sites: [down, { ...down, key: "google" }] })} targets={targets} />);
   assert.match(html, /data-testid="exit-no-egress"/);
   assert.equal((html.match(/data-testid="exit-quality-site"/g) || []).length, 0);
+});
+
+test("出口检测：双栈分页签，地区按主机所在地上色，老 Agent 提示新项目要升级", () => {
+  const html = renderToStaticMarkup(<ExitHostPanel host={host({
+    countryCode: "JP",
+    agentVersion: "2.2.252",
+    unlockFamilies: [
+      { family: "ipv6", checkedAt: 1_700_000_000, results: [{ service: "netflix", name: "Netflix", status: "partial", region: "US" }] },
+      { family: "ipv4", checkedAt: 1_700_000_000, results: [{ service: "netflix", name: "Netflix", status: "ok", region: "JP" }, { service: "tiktok", name: "TikTok", status: "ok", region: "CN" }] },
+    ],
+  })} targets={targets} />);
+  assert.match(html, /IPv4/);
+  assert.match(html, /IPv6/);
+  // 默认先看 IPv4
+  assert.match(html, /data-region-tone="match"[^>]*>JP</);
+  assert.match(html, /data-region-tone="china"[^>]*>CN</);
+  assert.doesNotMatch(html, /仅自制/);
+  assert.match(html, /Prime Video、Spotify 注册、Steam 商店、Bilibili 港澳台 要 Agent 2\.2\.253/);
 });

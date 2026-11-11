@@ -12,7 +12,7 @@ import type {
   都是纯函数，页面只负责把结果画出来。
 */
 
-export const TOPOLOGY_EDGE_KINDS: readonly TopologyEdgeKind[] = ["rule", "tunnel", "chain", "routePath", "subscription", "group"];
+export const TOPOLOGY_EDGE_KINDS: readonly TopologyEdgeKind[] = ["rule", "tunnel", "chain", "routePath", "subscription", "group", "manual"];
 
 export type TopologyFilters = {
   kinds: ReadonlySet<TopologyEdgeKind>;
@@ -52,7 +52,9 @@ export function filterTopology(graph: Pick<TopologyGraph, "nodes" | "edges">, fi
     return nodeById.has(edge.from) && nodeById.has(edge.to);
   });
   const used = new Set(edges.flatMap((edge) => [edge.from, edge.to]));
-  return { nodes: graph.nodes.filter((node) => used.has(node.id)), edges };
+  // 手动标注的外部节点还没连线时也要看得见（刚画上去，正准备连）
+  const keepExternal = filters.kinds.has("manual");
+  return { nodes: graph.nodes.filter((node) => used.has(node.id) || (keepExternal && node.kind === "external")), edges };
 }
 
 /** 聚焦一条规则 / 隧道 / 组：它经过的边和节点。认不出时返回 null（不聚焦）。 */
@@ -95,7 +97,8 @@ export function topologyEdgeWidth(ruleCount: number) {
 }
 
 /** 节点主色按哪个角色：入口 > 中转 > 出口 > 落地；不是主机的按种类。 */
-export function topologyNodeTone(node: Pick<TopologyNode, "kind" | "roles" | "masked">): "entry" | "relay" | "exit" | "landing" | "target" | "inbound" | "group" | "masked" | "idle" {
+export function topologyNodeTone(node: Pick<TopologyNode, "kind" | "roles" | "masked">): "entry" | "relay" | "exit" | "landing" | "target" | "inbound" | "group" | "external" | "masked" | "idle" {
+  if (node.kind === "external") return "external";
   if (node.kind === "target") return "target";
   if (node.kind === "inbound") return "inbound";
   if (node.kind === "group") return "group";
@@ -105,6 +108,7 @@ export function topologyNodeTone(node: Pick<TopologyNode, "kind" | "roles" | "ma
 }
 
 export function topologyRoleText(node: Pick<TopologyNode, "kind" | "roles">) {
+  if (node.kind === "external") return "手动标注的外部节点";
   if (node.kind === "target") return "外部目标";
   if (node.kind === "inbound") return "落地入站";
   if (node.kind === "group") return "入口组 / 转发组";

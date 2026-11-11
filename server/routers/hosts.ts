@@ -17,6 +17,7 @@ import {
   parseHostProbeHttpExpectedStatus,
 } from "../../shared/hostProbeService";
 import { loadAverageFromStored } from "../../shared/hostLoadAverage";
+import { PROBE_CARRIERS } from "../../shared/probeCarrier";
 import { githubRepoParts } from "@shared/githubAccelerator";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -146,6 +147,8 @@ const hostProbeServiceFieldsSchema = z.object({
   httpTimeoutSeconds: z.number().int().min(HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS).max(HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS).default(HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS),
   httpExpectedStatus: z.string().trim().max(HOST_PROBE_HTTP_EXPECTED_STATUS_MAX_LENGTH).default(""),
   httpSkipTlsVerify: z.boolean().default(false),
+  // 三网视图的运营商标签（shared/probeCarrier.ts）；不传 = 不改
+  carrier: z.enum(PROBE_CARRIERS).nullable().optional(),
   hostScope: z.enum(["all", "exclude", "specific"]).default("all"),
   hostIds: hostProbeIdsSchema,
   excludeHostIds: hostProbeIdsSchema,

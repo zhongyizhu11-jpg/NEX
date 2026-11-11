@@ -209,6 +209,7 @@ export function topologyColumnLabels(
     if (infos.length === 0) return "";
     if (infos.every((info) => info.kind === "target" || info.kind === "inbound")) return "目标";
     if (infos.every((info) => info.kind === "group")) return "入口组";
+    if (infos.every((info) => info.kind === "external")) return "外部（手动标注）";
     const count = (role: "entry" | "relay" | "exit" | "landing") => infos.filter((info) => info.roles?.[role]).length;
     const entry = count("entry");
     const relay = count("relay");

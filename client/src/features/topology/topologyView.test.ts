@@ -72,3 +72,12 @@ test("边上的药丸：有延迟写延迟，没延迟有流量写速率，停�
   assert.equal(formatEdgeRate(1.5 * 1024 * 1024), "1.5 MB/s");
   assert.equal(formatEdgeRate(900), "900 B/s");
 });
+
+test("手动标注的外部节点：还没连线也留着；关掉「手动标注」这一种连线就一起藏起来", async () => {
+  const { mergeTopologyManual } = await import("@shared/topologyManual");
+  const merged = mergeTopologyManual(graph, { nodes: [{ id: 1, label: "IPLC 端", note: null, country: null }], links: [] }, new Map());
+  const shown = filterTopology(merged, { kinds: new Set(TOPOLOGY_EDGE_KINDS), showTargets: true });
+  assert.ok(shown.nodes.some((node) => node.id === "manual:1"));
+  const hidden = filterTopology(merged, { kinds: new Set(TOPOLOGY_EDGE_KINDS.filter((kind) => kind !== "manual")), showTargets: true });
+  assert.equal(hidden.nodes.some((node) => node.id === "manual:1"), false);
+});

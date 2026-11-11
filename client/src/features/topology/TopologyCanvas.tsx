@@ -23,6 +23,7 @@ export const TOPOLOGY_KIND_COLORS: Record<TopologyEdge["kind"], string> = {
   routePath: "var(--fx-cat-orange)",
   subscription: "var(--fx-cat-teal)",
   group: "var(--fx-cat-indigo)",
+  manual: "var(--fx-cat-teal)",
 };
 
 const STATUS_COLORS = { failed: "var(--fx-down)", degraded: "var(--fx-warn)" } as const;
@@ -38,6 +39,7 @@ export const TOPOLOGY_TONE_COLORS: Record<ReturnType<typeof topologyNodeTone>, s
   target: "var(--fx-standby)",
   inbound: "var(--fx-cat-teal)",
   group: "var(--fx-cat-indigo)",
+  external: "var(--fx-cat-teal)",
   masked: FADED_GRAY,
   idle: FADED_GRAY,
 };
@@ -54,6 +56,8 @@ function edgeDash(edge: Pick<TopologyEdge, "kind" | "status" | "activePath">) {
   if (edge.activePath === false) return "3 4";
   if (edge.kind === "subscription") return "2 3";
   if (edge.kind === "group") return "5 3";
+  // 手动标注：长虚线，一眼看出这是人画上去的、不是面板测出来的
+  if (edge.kind === "manual") return "8 4";
   return undefined;
 }
 

@@ -34,6 +34,7 @@ import {
 import { isPrivateOrReservedAddress } from "../../shared/ipAddress";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier, rawAffectedRows } from "../dbRuntime";
 import { wakeAgentExt, type AgentExtHost } from "./agentExt";
+import { agentIntelDirective, ingestAgentIpIntel, scheduleHostIpIntelRefresh } from "./ipIntel";
 
 const q = quoteDbIdentifier;
 const TABLE = "host_network_profiles";
@@ -215,6 +216,8 @@ async function agentCheckedAtFor(hostId: number) {
 export async function netProfileDirectiveFor(host: AgentExtHost) {
   const hostId = Number(host.id);
   const state = netProfileRunState(hostId);
+  // IP 信息（Agent 2.2.253 起）：缓存过期或手动重新检测时才带，见 ipIntel.ts
+  const intel = await agentIntelDirective(host, state.pending).catch(() => []);
   return {
     intervalSeconds: NETPROFILE_INTERVAL_SECONDS,
     lastCheckedAt: await agentCheckedAtFor(hostId),
@@ -224,6 +227,7 @@ export async function netProfileDirectiveFor(host: AgentExtHost) {
     smtpTargets: [...SMTP25_TARGETS],
     ipv4Urls: [...NETPROFILE_IPV4_URLS],
     ipv6Urls: [...NETPROFILE_IPV6_URLS],
+    ...(intel.length > 0 ? { intel } : {}),
   };
 }
 
@@ -241,6 +245,12 @@ export async function ingestNetProfileReport(host: AgentExtHost, raw: unknown) {
     const normalized = normalizeNetProfileReport(report.result);
     if (!normalized) return;
     await saveAgentNetProfile(hostId, normalized);
+    // IP 信息：Agent 查回来的原始响应先存，再让面板在后台补查注册地和带 Key 的几家（不等它）
+    await ingestAgentIpIntel(hostId, (report.result as Record<string, unknown>).intel).catch((error) => {
+      console.warn(`[NetProfile] host=${hostId} IP 信息入库失败：${error instanceof Error ? error.message : String(error)}`);
+    });
+    const manual = !!(pending && runId && pending.runId === runId);
+    scheduleHostIpIntelRefresh(host, normalized, { force: manual });
   }
   if (resultId) lastResultIds.set(hostId, resultId);
   // 只有带着这次 runId 的结果才算「重新检测」完成：定时那轮的结果碰巧这时候交上来不算

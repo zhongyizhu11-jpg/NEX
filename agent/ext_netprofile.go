@@ -14,6 +14,11 @@ package main
 //
 // 结果先留在内存里，每轮上报，直到指令里的回执（ackResultId，或 lastCheckedAt 追上它）说
 // 面板存好了才丢掉，一次上报失败不会把结果弄丢。
+//
+// 2.2.253 起指令里可能带 intel 列表（IP 信息的几家公开数据库，见 shared/ipIntel.ts）：双栈测通以后，
+// 对每个测通的协议族、强制 tcp4 / tcp6 去 GET 一遍，原始响应（32KB 封顶）随结果上报，由面板解读。
+// 只请求白名单里的域名（netProfileIntelAllowedHosts）—— 面板就算被人改了指令，也指使不了 Agent 去
+// 请求别的地址。不要 Key 的几家才走这里，带 Key 的由面板自己查，Key 不下发。
 
 import (
 	"bufio"
@@ -25,6 +30,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -37,7 +43,17 @@ const (
 	netProfileHTTPTimeout     = 8 * time.Second
 	netProfileSMTPTimeout     = 5 * time.Second
 	netProfileDNSBLTimeout    = 5 * time.Second
+	netProfileIntelTimeout    = 8 * time.Second
+	netProfileIntelMaxBody    = 32 << 10
+	netProfileIntelMaxSources = 6
 )
+
+// netProfileIntelAllowedHosts：intel 只许请求这几个域名（和 shared/ipIntel.ts 的 IP_INTEL_AGENT_SOURCES 对应）。
+var netProfileIntelAllowedHosts = map[string]bool{
+	"api.ipapi.is":  true,
+	"ipinfo.io":     true,
+	"proxycheck.io": true,
+}
 
 var (
 	netProfileDefaultDNSBL       = []string{"zen.spamhaus.org", "bl.spamcop.net", "b.barracudacentral.org", "cbl.abuseat.org"}
@@ -55,6 +71,23 @@ type netProfileDirective struct {
 	SMTPTargets     []string `json:"smtpTargets"`
 	IPv4URLs        []string `json:"ipv4Urls"`
 	IPv6URLs        []string `json:"ipv6Urls"`
+	// 2.2.253 起：IP 信息的数据源，url 里的 {ip} 换成这个协议族测到的出口地址
+	Intel []netProfileIntelSource `json:"intel"`
+}
+
+type netProfileIntelSource struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+type netProfileIntelEntry struct {
+	Source  string `json:"source"`
+	Family  int    `json:"family"`
+	Address string `json:"address,omitempty"`
+	Status  int    `json:"status,omitempty"`
+	Body    string `json:"body,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Ms      int64  `json:"ms,omitempty"`
 }
 
 type netProfileFamily struct {
@@ -95,6 +128,7 @@ type netProfileResult struct {
 	SMTP25       netProfileSMTP         `json:"smtp25"`
 	DNSBL        []netProfileDNSBLEntry `json:"dnsbl"`
 	DNSBLAddress string                 `json:"dnsblAddress,omitempty"`
+	Intel        []netProfileIntelEntry `json:"intel,omitempty"`
 	RunID        string                 `json:"-"`
 }
 
@@ -108,6 +142,7 @@ type netProfileExtModule struct {
 
 	// 测试里替换
 	httpGet       func(ctx context.Context, network, url string) (string, error)
+	intelGet      func(ctx context.Context, network, url string) (int, string, error)
 	dial          func(ctx context.Context, network, addr string) (net.Conn, error)
 	lookupHost    func(ctx context.Context, name string) ([]string, error)
 	hasGlobalIPv6 func() bool
@@ -120,6 +155,7 @@ func newNetProfileExtModule() *netProfileExtModule {
 	dialer := &net.Dialer{}
 	return &netProfileExtModule{
 		httpGet:       netProfileHTTPGet,
+		intelGet:      netProfileIntelHTTPGet,
 		dial:          dialer.DialContext,
 		lookupHost:    net.DefaultResolver.LookupHost,
 		hasGlobalIPv6: netProfileHasGlobalIPv6,
@@ -267,12 +303,21 @@ func (m *netProfileExtModule) runChecks(d netProfileDirective) *netProfileResult
 	} else if m.fallbackIPv4 != nil {
 		address = strings.TrimSpace(m.fallbackIPv4())
 	}
+	var intelWG sync.WaitGroup
+	if len(d.Intel) > 0 {
+		intelWG.Add(1)
+		go func() {
+			defer intelWG.Done()
+			result.Intel = m.checkIntel(d.Intel, result.IPv4, result.IPv6)
+		}()
+	}
 	if ip := net.ParseIP(address); ip != nil && ip.To4() != nil && !ip.IsPrivate() && !ip.IsLoopback() {
 		result.DNSBLAddress = ip.To4().String()
 		result.DNSBL = m.checkDNSBL(result.DNSBLAddress, orDefault(d.DNSBL, netProfileDefaultDNSBL))
 	} else {
 		result.DNSBL = []netProfileDNSBLEntry{}
 	}
+	intelWG.Wait()
 	finished := m.now()
 	result.CheckedAt = finished.Unix()
 	result.ResultID = fmt.Sprintf("%x", finished.UnixNano())
@@ -546,6 +591,118 @@ func interpretDNSBLEntry(entry *netProfileDNSBLEntry) {
 		entry.Listed = true
 		entry.Code = strings.Join(codes, ",")
 	}
+}
+
+// ---------------------------------------------------------------- IP 信息（2.2.253 起）
+
+// netProfileIntelURL 把 {ip} 换成出口地址，检查协议和域名在白名单里。不合格返回 ""。
+func netProfileIntelURL(raw, address string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > 512 {
+		return ""
+	}
+	filled := strings.ReplaceAll(raw, "{ip}", url.PathEscape(address))
+	parsed, err := url.Parse(filled)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil {
+		return ""
+	}
+	if !netProfileIntelAllowedHosts[strings.ToLower(parsed.Hostname())] || (parsed.Port() != "" && parsed.Port() != "443") {
+		return ""
+	}
+	return parsed.String()
+}
+
+// checkIntel 对每个测通的协议族、每个数据源 GET 一次。数据源之间并发（最多 6 个 × 2 族），一个失败不影响别的。
+func (m *netProfileExtModule) checkIntel(sources []netProfileIntelSource, v4, v6 netProfileFamily) []netProfileIntelEntry {
+	if len(sources) > netProfileIntelMaxSources {
+		sources = sources[:netProfileIntelMaxSources]
+	}
+	type job struct {
+		source  netProfileIntelSource
+		family  int
+		network string
+		address string
+	}
+	jobs := []job{}
+	for _, fam := range []struct {
+		check   netProfileFamily
+		family  int
+		network string
+	}{{v4, 4, "tcp4"}, {v6, 6, "tcp6"}} {
+		if !fam.check.OK || fam.check.Address == "" {
+			continue
+		}
+		for _, source := range sources {
+			id := strings.TrimSpace(source.ID)
+			if id == "" || len(id) > 32 {
+				continue
+			}
+			jobs = append(jobs, job{source: netProfileIntelSource{ID: id, URL: source.URL}, family: fam.family, network: fam.network, address: fam.check.Address})
+		}
+	}
+	entries := make([]netProfileIntelEntry, len(jobs))
+	var wg sync.WaitGroup
+	for i, j := range jobs {
+		wg.Add(1)
+		go func(i int, j job) {
+			defer wg.Done()
+			entry := netProfileIntelEntry{Source: j.source.ID, Family: j.family, Address: j.address}
+			target := netProfileIntelURL(j.source.URL, j.address)
+			if target == "" {
+				entry.Error = "地址不在允许的数据源里"
+				entries[i] = entry
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), netProfileIntelTimeout)
+			defer cancel()
+			start := m.now()
+			status, body, err := m.intelGet(ctx, j.network, target)
+			entry.Ms = m.now().Sub(start).Milliseconds()
+			if err != nil {
+				entry.Error = netProfileShortError(err)
+			} else {
+				entry.Status = status
+				entry.Body = body
+			}
+			entries[i] = entry
+		}(i, j)
+	}
+	wg.Wait()
+	return entries
+}
+
+// netProfileIntelHTTPGet 和 netProfileHTTPGet 一样强制地址族、不走代理，但读 32KB、把状态码交回去（429 之类要让面板看见）。
+func netProfileIntelHTTPGet(ctx context.Context, network, rawURL string) (int, string, error) {
+	dialer := &net.Dialer{Timeout: netProfileIntelTimeout}
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, addr)
+		},
+		TLSHandshakeTimeout: netProfileIntelTimeout,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		DisableKeepAlives:   true,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   netProfileIntelTimeout,
+		// 不跟跳转：数据源都是直接回 JSON 的接口，跳走了多半是被拦了，原样交给面板判断
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("User-Agent", "NEX-Agent/"+Version)
+	req.Header.Set("Accept", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, netProfileIntelMaxBody))
+	return res.StatusCode, string(body), nil
 }
 
 // ---------------------------------------------------------------- 小工具

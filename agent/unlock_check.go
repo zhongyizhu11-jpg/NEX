@@ -24,6 +24,17 @@ package main
   Grok / Perplexity  打开首页：地区封锁页 → 不支持；Cloudflare 人机验证 → 无法判断；正常打开 → 支持。
   TikTok    www.tiktok.com 页面里的 "region":"XX" → 支持；拿不到地区 → 无法判断。
 
+2.2.253 起又加了四项（照 RegionRestrictionCheck 的判断方法，不带任何第三方凭据）：
+
+  Prime Video  www.primevideo.com 页面里有 isServiceRestricted → 这个地区不提供服务；
+               有 "currentTerritory":"XX" → 可用，地区就是它。
+  Spotify      www.spotify.com/signup 会按出口 IP 跳到 /<市场>-<语言>/signup：跳到 select-your-country
+               或页面说「not available in your country」→ 不能注册；有市场路径 → 可以注册，地区取市场。
+               （社区脚本走的是带网页内嵌 key 的注册接口，这里只看网页跳转。）
+  Steam        store.steampowered.com 一个付费游戏的商店页里的 priceCurrency → 商店币种（地区字段写币种）。
+  Bilibili     港澳台限定番剧（ep 183799）的 playurl 接口：code 0 → 港澳台可看；-10403 → 仅限港澳台，
+               这个出口不在。
+
 这些都是猜：服务一改页面，标记就可能失效，所以每一项只给 ok / partial / blocked / unknown 四种结论
 加一句说明，拿不准的一律 unknown，绝不 panic。每个请求 10 秒超时、最多跟 5 次跳转、桌面 Chrome UA，
 不走系统代理（要测的就是这台机器自己的出口），同时最多跑 unlockConcurrency 个服务。
@@ -83,6 +94,11 @@ var unlockServices = []unlockService{
 	{ID: "grok", Check: unlockCheckGrok},
 	{ID: "perplexity", Check: unlockCheckPerplexity},
 	{ID: "tiktok", Check: unlockCheckTikTok},
+	// 2.2.253 起
+	{ID: "prime_video", Check: unlockCheckPrimeVideo},
+	{ID: "spotify", Check: unlockCheckSpotify},
+	{ID: "steam", Check: unlockCheckSteam},
+	{ID: "bilibili_hmt", Check: unlockCheckBilibiliHMT},
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -613,6 +629,111 @@ func unlockCheckTikTok(ctx context.Context, p *unlockProbe) unlockResult {
 		return unlockResult{Service: id, Status: unlockStatusOK, Region: m[1], Detail: "可用"}
 	}
 	return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "页面里没有地区信息，无法判断"}
+}
+
+var unlockPrimeTerritoryRe = regexp.MustCompile(`"currentTerritory"\s*:\s*"([A-Z]{2})"`)
+
+func unlockCheckPrimeVideo(ctx context.Context, p *unlockProbe) unlockResult {
+	const id = "prime_video"
+	r, err := p.get(ctx, "https://www.primevideo.com/", nil)
+	if err != nil {
+		return unlockFail(id, err)
+	}
+	region := ""
+	if m := unlockPrimeTerritoryRe.FindStringSubmatch(r.Body); m != nil {
+		region = m[1]
+	}
+	if strings.Contains(r.Body, "isServiceRestricted") {
+		return unlockResult{Service: id, Status: unlockStatusBlocked, Region: region, Detail: "这个地区不提供服务"}
+	}
+	if unlockIsCloudflareChallenge(r) {
+		return unlockResult{Service: id, Status: unlockStatusUnknown, Region: region, Detail: "被人机验证拦下，无法判断"}
+	}
+	if r.Status == http.StatusOK && region != "" {
+		return unlockResult{Service: id, Status: unlockStatusOK, Region: region, Detail: "可用"}
+	}
+	if r.Status == http.StatusForbidden {
+		return unlockResult{Service: id, Status: unlockStatusBlocked, Region: region, Detail: "IP 被拒绝（403）"}
+	}
+	return unlockResult{Service: id, Status: unlockStatusUnknown, Region: region, Detail: "页面里没有地区信息，无法判断"}
+}
+
+var unlockSpotifyMarketRe = regexp.MustCompile(`^/([a-z]{2})(?:-[a-z]{2,4})?/`)
+
+func unlockCheckSpotify(ctx context.Context, p *unlockProbe) unlockResult {
+	const id = "spotify"
+	r, err := p.get(ctx, "https://www.spotify.com/signup", nil)
+	if err != nil {
+		return unlockFail(id, err)
+	}
+	finalPath := ""
+	if r.FinalURL != nil {
+		finalPath = strings.ToLower(r.FinalURL.Path)
+	}
+	lower := strings.ToLower(r.Body)
+	if strings.Contains(finalPath, "select-your-country") || strings.Contains(lower, "not available in your country") || strings.Contains(lower, "isn't available in your country") {
+		return unlockResult{Service: id, Status: unlockStatusBlocked, Detail: "这个地区不能注册"}
+	}
+	if unlockIsCloudflareChallenge(r) {
+		return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "被人机验证拦下，无法判断"}
+	}
+	if m := unlockSpotifyMarketRe.FindStringSubmatch(finalPath); m != nil && r.Status == http.StatusOK && unlockHostIs(r.FinalURL, "spotify.com") {
+		return unlockResult{Service: id, Status: unlockStatusOK, Region: strings.ToUpper(m[1]), Detail: "可以注册（按注册页跳到的市场判断）"}
+	}
+	if r.Status == http.StatusForbidden {
+		return unlockResult{Service: id, Status: unlockStatusBlocked, Detail: "IP 被拒绝（403）"}
+	}
+	return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "注册页没有跳到哪个市场，无法判断"}
+}
+
+var unlockSteamCurrencyRe = regexp.MustCompile(`(?:itemprop="priceCurrency"\s+content="|"priceCurrency"\s*:\s*")([A-Z]{3})"`)
+
+func unlockCheckSteam(ctx context.Context, p *unlockProbe) unlockResult {
+	const id = "steam"
+	// 带上过年龄验证的 Cookie，不然部分地区先跳年龄确认页，页面里没有价格
+	r, err := p.get(ctx, "https://store.steampowered.com/app/761830", map[string]string{
+		"Cookie": "birthtime=0; lastagecheckage=1-January-1970; wants_mature_content=1; Steam_Language=english",
+	})
+	if err != nil {
+		return unlockFail(id, err)
+	}
+	if m := unlockSteamCurrencyRe.FindStringSubmatch(r.Body); m != nil && r.Status == http.StatusOK {
+		return unlockResult{Service: id, Status: unlockStatusOK, Region: m[1], Detail: "商店币种 " + m[1]}
+	}
+	if r.Status == http.StatusForbidden {
+		return unlockResult{Service: id, Status: unlockStatusBlocked, Detail: "IP 被拒绝（403）"}
+	}
+	return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "商店页里没有价格信息，无法判断"}
+}
+
+var unlockBilibiliCodeRe = regexp.MustCompile(`"code"\s*:\s*(-?\d+)`)
+
+func unlockCheckBilibiliHMT(ctx context.Context, p *unlockProbe) unlockResult {
+	const id = "bilibili_hmt"
+	// 港澳台限定的一集番剧：社区脚本同款的 avid / cid / ep_id
+	const api = "https://api.bilibili.com/pgc/player/web/playurl?avid=18281381&cid=29892777&qn=0&type=&otype=json&ep_id=183799&fourk=1&fnver=0&fnval=16&module=bangumi"
+	r, err := p.get(ctx, api, map[string]string{
+		"Accept":  "application/json, text/plain, */*",
+		"Referer": "https://www.bilibili.com/",
+		"Origin":  "https://www.bilibili.com",
+	})
+	if err != nil {
+		return unlockFail(id, err)
+	}
+	m := unlockBilibiliCodeRe.FindStringSubmatch(r.Body)
+	if m == nil {
+		if r.Status == http.StatusPreconditionFailed || r.Status == http.StatusForbidden {
+			return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "被 B 站风控拦下（HTTP " + strconv.Itoa(r.Status) + "），无法判断"}
+		}
+		return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "接口返回和预期不一样，无法判断"}
+	}
+	switch m[1] {
+	case "0":
+		return unlockResult{Service: id, Status: unlockStatusOK, Detail: "港澳台限定番剧可看"}
+	case "-10403":
+		return unlockResult{Service: id, Status: unlockStatusBlocked, Detail: "仅限港澳台地区"}
+	}
+	return unlockResult{Service: id, Status: unlockStatusUnknown, Detail: "接口返回 code " + m[1] + "，无法判断"}
 }
 
 // ---------------------------------------------------------------- 跑一轮

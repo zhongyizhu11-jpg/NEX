@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Crosshair, ExternalLink, Maximize2, Minus, Network, Plus, Search, X, XCircle } from "lucide-react";
+import { Crosshair, ExternalLink, Maximize2, Minus, Network, PenLine, Plus, Search, X, XCircle } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
 
 import DataSectionError from "@/components/DataSectionError";
@@ -33,6 +33,7 @@ import { TOPOLOGY_KIND_COLORS, TopologyCanvas, type TopologyCanvasHandle } from 
 import { MyLinesSection } from "@/features/links/MyLinesSection";
 import { lineDetailHref } from "@/features/links/lineLinks";
 import { layoutTopology, topologyColumnLabels } from "@/features/topology/topologyLayout";
+import { TopologyManualEditor } from "@/features/topology/TopologyManualEditor";
 import {
   TOPOLOGY_EDGE_KINDS,
   filterTopology,
@@ -52,6 +53,8 @@ import {
   外部目标、落地入站、入口组都画出来，点一下就知道哪些规则、隧道、转发链用着它。
   深链接 ?rule= / ?tunnel= / ?group= 打开时直接聚焦那一条的路径（规则、隧道、转发组页上的
   「查看拓扑」就是这么跳过来的）。
+  「标注外部专线」：自己画上没装 Agent 的外部节点和连线（长虚线、青色），只是展示，不改任何配置
+  （features/topology/TopologyManualEditor.tsx、shared/topologyManual.ts）。
 */
 
 const KIND_STORAGE_KEY = "forwardx.topology.kinds";
@@ -87,6 +90,8 @@ function readStoredKinds(): Set<TopologyEdgeKind> {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         const kinds = parsed.filter((kind): kind is TopologyEdgeKind => (TOPOLOGY_EDGE_KINDS as readonly string[]).includes(kind));
+        // 「手动标注」是后加的一种：以前存下的筛选里没有它，除非明确关过（记成 -manual），默认打开
+        if (!parsed.includes("manual") && !parsed.includes("-manual")) kinds.push("manual");
         if (kinds.length > 0) return new Set(kinds);
       }
     }
@@ -164,6 +169,7 @@ export default function TopologyPage() {
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<Selection>(null);
   const canvasRef = useRef<TopologyCanvasHandle | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
   const [view, setViewState] = useState<TopologyView>(readStoredView);
   const setView = (next: TopologyView) => {
     setViewState(next);
@@ -220,7 +226,7 @@ export default function TopologyPage() {
       if (next.has(kind)) next.delete(kind);
       else next.add(kind);
       if (next.size === 0) return current;
-      store(KIND_STORAGE_KEY, JSON.stringify(Array.from(next)));
+      store(KIND_STORAGE_KEY, JSON.stringify([...Array.from(next), ...(next.has("manual") ? [] : ["-manual"])]));
       return next;
     });
   };
@@ -329,7 +335,14 @@ export default function TopologyPage() {
             ))}
           </PanelSection>
         ) : null}
-        {panelRuleIds.length + panelTunnelIds.length + panelGroupIds.length === 0 ? (
+        {selectedNode?.kind === "external" || selectedEdge?.kind === "manual" ? (
+          <div className="space-y-2 px-2">
+            <p className="text-meta text-muted-foreground">这是你手动标注的{selectedEdge ? "连线" : "外部节点"}，只用来展示，不对应任何转发配置，也没有探测数据。</p>
+            <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => setManualOpen(true)}>
+              <PenLine className="h-3.5 w-3.5" />编辑标注
+            </Button>
+          </div>
+        ) : panelRuleIds.length + panelTunnelIds.length + panelGroupIds.length === 0 ? (
           <p className="px-2 text-meta text-muted-foreground">没有规则、隧道或组经过这里。</p>
         ) : null}
       </div>
@@ -417,6 +430,9 @@ export default function TopologyPage() {
                 </SelectContent>
               </Select>
             ) : null}
+            <Button type="button" variant="outline" size="sm" className="h-8 shrink-0 text-xs" onClick={() => setManualOpen(true)} title="画上没装 Agent 的外部节点和连线，只是展示">
+              <PenLine className="h-3.5 w-3.5" />标注外部专线
+            </Button>
             <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
               <Switch
                 checked={showTargets}
@@ -493,7 +509,7 @@ export default function TopologyPage() {
               <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#7c3aed]" />中转</span>
               <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#d97706]" />出口</span>
               <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#059669]" />落地</span>
-              <span>虚线 = 已停用 · 细虚线 = 线路组备用路径 · 流动 = 此刻有流量 · 红 = 异常 · 橙 = 部分异常 · 越粗规则越多</span>
+              <span>虚线 = 已停用 · 细虚线 = 线路组备用路径 · 青色长虚线 = 手动标注（只是展示）· 流动 = 此刻有流量 · 红 = 异常 · 橙 = 部分异常 · 越粗规则越多</span>
             </div>
           ) : null}
         </div>
@@ -515,6 +531,7 @@ export default function TopologyPage() {
           {panel}
         </div>
       ) : null}
+      <TopologyManualEditor open={manualOpen} onOpenChange={setManualOpen} graphNodes={graph?.nodes || []} />
       </>
       )}
     </div>

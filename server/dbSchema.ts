@@ -123,6 +123,11 @@ export const MIGRATION_TABLES = [
   "node_pools",
   // 已安装的界面主题包（server/ops/uiThemesTables.ts）：站点默认主题的样式在这里，换面板不带着就成了经典
   "ui_theme_packages",
+  // 网络拓扑上手动标注的外部节点 / 连线（server/ops/topologyManualTables.ts）：节点在前，连线引用它
+  "topology_manual_nodes",
+  "topology_manual_links",
+  // 用户每天的规则流量（server/ops/userTrafficDailyTables.ts，从流量桶汇总来的历史）
+  "user_traffic_daily",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
@@ -857,7 +862,9 @@ const tables: TableDef[] = [
     indexes: [["dayStart", "id"]],
   },
   { name: "forward_group_latency_stats", columns: [c("id", "id"), c("groupId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["groupId", "recordedAt"], ["recordedAt", "groupId"]] },
-  { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("addressFamily", "varchar", { length: 8, notNull: true, default: "auto" }), c("httpTimeoutSeconds", "int", { notNull: true, default: 5 }), c("httpExpectedStatus", "varchar", { length: 128, notNull: true, default: "200-399" }), c("httpSkipTlsVerify", "bool", { notNull: true, default: false }), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
+  { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("addressFamily", "varchar", { length: 8, notNull: true, default: "auto" }), c("httpTimeoutSeconds", "int", { notNull: true, default: 5 }), c("httpExpectedStatus", "varchar", { length: 128, notNull: true, default: "200-399" }), c("httpSkipTlsVerify", "bool", { notNull: true, default: false }), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    // 三网视图的运营商标签（shared/probeCarrier.ts）：ct 电信 / cu 联通 / cm 移动，空 = 不归哪一网
+    c("carrier", "varchar", { length: 8 })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
   { name: "host_probe_service_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("failure", "varchar", { length: 16 }), c("httpStatus", "int"), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "serviceId"]] },
   {
     // 主机探测按小时汇总，留 30 天（server/repositories/hostProbeHourlyRepository.ts）。

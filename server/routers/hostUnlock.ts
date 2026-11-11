@@ -8,7 +8,9 @@ import {
   listUnlockHistory,
   pendingUnlockRunsForHost,
   setUnlockSchedule,
+  startDualStackUnlockCheck,
   startUnlockCheck,
+  unlockFamiliesForHost,
   UnlockCheckError,
 } from "../ops/unlock";
 import { UNLOCK_FAMILIES, UNLOCK_SCHEDULES } from "@shared/unlockCheck";
@@ -19,7 +21,8 @@ import { buildHostExitQuality, EXIT_QUALITY_TARGETS } from "../exitQualityView";
 
   unlockStatus      最新结果（每个 family 一份）、在等的检测、是否支持；能用这台主机的人都能看
   unlockHistory     最近 10 次；同上
-  startUnlockCheck  「检测解锁」按钮，只给管理员（每次都要从主机去请求一串第三方站点）
+  startUnlockCheck  「检测解锁」按钮，只给管理员（每次都要从主机去请求一串第三方站点）；
+                    family = both 时 IPv4、IPv6 各排一次（双栈主机两个出口分开测）
   unlockSchedule / setUnlockSchedule  计划检测（关闭 / 每天 / 每周），全局一个设置，只给管理员
 */
 const hostInput = z.object({ hostId: z.number().int().positive() });
@@ -50,9 +53,13 @@ export const hostUnlockProcedures = {
         latestUnlockRuns(input.hostId),
         isAdmin ? getUnlockSchedule() : Promise.resolve(null),
       ]);
+      const families = await unlockFamiliesForHost(input.hostId);
       return {
         agentVersion: host.agentVersion ? String(host.agentVersion) : null,
         online: !!host.isOnline,
+        // 地区上色用的「主机在哪」，以及要不要给「检测双栈」按钮
+        hostCountry: host.geoCountryCode ? String(host.geoCountryCode).toUpperCase() : null,
+        dualStack: families.length > 1,
         canManage: isAdmin,
         schedule,
         pending: pendingUnlockRunsForHost(input.hostId).map((run) => ({
@@ -73,10 +80,11 @@ export const hostUnlockProcedures = {
     }),
 
   startUnlockCheck: adminProcedure
-    .input(hostInput.extend({ family: z.enum(UNLOCK_FAMILIES).default("auto") }))
+    .input(hostInput.extend({ family: z.enum([...UNLOCK_FAMILIES, "both"]).default("auto") }))
     .mutation(async ({ input, ctx }) => {
       const host: any = await accessibleHost(ctx, input.hostId);
       try {
+        if (input.family === "both") return startDualStackUnlockCheck(host, { trigger: "manual", requestedBy: Number(ctx.user.id) });
         return startUnlockCheck(host, { family: input.family, trigger: "manual", requestedBy: Number(ctx.user.id) });
       } catch (error) {
         if (error instanceof UnlockCheckError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message });
