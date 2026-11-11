@@ -22,6 +22,8 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
+import { buildVlessEgressBridgePlan, collectVlessEgressBridges, planVlessEgressBridgePorts } from "./vlessEgress";
+import { isVlessEgressAgentSupported } from "../shared/vlessEgress";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
 import {
@@ -901,6 +903,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       而入口机没报这项能力时规则按停用下发（绝不退回直连）；能跑的规则带上 egressRuntime，下面生成 gost 配置时挂出口链。只管这台主机自己的规则。
     */
     let egressRuntimeContext = await loadEgressRuntimeContext(rawRules as any[]);
+    // VLESS Reality 出口的本机 sing-box 桥接端口（server/vlessEgress.ts）：下面协议守卫分端口时当作已占用。
+    const vlessBridgePorts = await planVlessEgressBridgePorts(Number(host.id), rawRules, hostTunnels);
     const egressRuntimeView = <T extends Record<string, any>>(rule: T): T => (Number(rule?.hostId) === Number(host.id)
       ? ruleEgressRuntimeView(rule, {
         entryHostId: Number(host.id),
@@ -910,6 +914,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         entryAgentCapabilities: (host as any).agentCapabilities,
         entryRuntimeVersion: (host as any).runtimeVersion,
         context: egressRuntimeContext,
+        vlessBridgePorts,
       })
       : rule);
     const gatedRules = (await gateForwardRulesForRuntime(rawRules as any[])).map(sniRuntimeView).map(egressRuntimeView);
@@ -1840,6 +1845,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const port = Number(value || 0);
       if (Number.isInteger(port) && port > 0 && port <= 65535) reservedProtocolGuardPorts.add(port);
     };
+    for (const port of vlessBridgePorts.ports()) reserveProtocolGuardPort(port);
     for (const rule of agentAllRules as any[]) {
       reserveProtocolGuardPort(rule?.udpOverTcpPort);
       reserveProtocolGuardPort(rule?.gostRelayPort);
@@ -4768,6 +4774,36 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         AGENT_GOST_RUNTIME_RECONCILE_MS,
       )) {
         actions.push(singboxAction);
+      }
+      /*
+        VLESS Reality 出口的本机桥接（server/vlessEgress.ts）：单独一个 sing-box 服务，规则改了不打断上面的落地入站。
+        只发给 2.2.253 起的 Agent（旧 Agent 上这类规则本来就按停用下发，也就没有桥接）；没有桥接时发一份收尾。
+      */
+      if (isVlessEgressAgentSupported(effectiveAgentVersion)) {
+        const bridgePlan = buildVlessEgressBridgePlan({
+          bridges: collectVlessEgressBridges(rules, Number(host.id)),
+          accelerator: await getSingboxAccelerator(),
+          panelRelayBase: singboxAssetRelayBase(panelUrl),
+        });
+        const bridgeAction = {
+          statusType: "runtime",
+          ruleId: 0,
+          tunnelId: 0,
+          op: "apply",
+          forwardType: "singbox-egress-runtime-sync",
+          sourcePort: 0,
+          targetIp: "",
+          targetPort: 0,
+          protocol: "tcp",
+          knownRunning: false,
+          forceRuntimeSync: true,
+          preCommands: bridgePlan.preCommands,
+          commands: bridgePlan.commands,
+          managedConfigs: bridgePlan.managedConfigs,
+        };
+        if (shouldSendRuntimeSyncAction(Number(host.id), bridgeAction, runtimeSyncBootstrap, responseIssuedAt, AGENT_GOST_RUNTIME_RECONCILE_MS)) {
+          actions.push(bridgeAction);
+        }
       }
     }
     if (!deferActionsForLocalState && mimicRuntimeSyncWanted) {

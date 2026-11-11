@@ -29,6 +29,8 @@ export type LandingInbound = {
   id: number;
   name: string;
   port: number;
+  /** shadowsocks / vless（VLESS Reality 出口，2.3.525）。老面板不带这个字段，按 shadowsocks 算。 */
+  protocol?: "shadowsocks" | "vless";
   method: string;
   methodError: string | null;
   isEnabled: boolean;
@@ -72,6 +74,11 @@ export type LandingPickerProps = {
   emptyMessage?: string;
   /** 让 aria-label 能区分同一页上的多个选择器（例如「第 2 条分流」）。 */
   labelPrefix?: string;
+  /**
+   * 列哪几种协议的入站。默认只有 Shadowsocks（分流只会走 SS 落地）；转发规则的出口还能选 VLESS Reality。
+   * 不在里面的入站整个不列（而不是灰着）：分流编辑器里一排选不了的 VLESS 只会让人以为能用。
+   */
+  protocols?: Array<"shadowsocks" | "vless">;
   disabled?: boolean;
   className?: string;
 };
@@ -127,13 +134,22 @@ export function LandingPicker({
   compact = false,
   emptyMessage,
   labelPrefix = "",
+  protocols,
   disabled = false,
   className,
 }: LandingPickerProps) {
   const utils = trpc.useUtils();
   const options = useLandingOptions();
   const excluded = useMemo(() => new Set((excludeHostIds || []).map(Number)), [excludeHostIds]);
-  const hosts = useMemo(() => options.hosts.filter((host) => !excluded.has(Number(host.hostId))), [excluded, options.hosts]);
+  const protocolKey = (protocols && protocols.length > 0 ? protocols : ["shadowsocks"]).join(",");
+  const multiProtocol = protocolKey.includes(",");
+  const hosts = useMemo(() => {
+    const wanted = new Set(protocolKey.split(","));
+    return options.hosts
+      .filter((host) => !excluded.has(Number(host.hostId)))
+      .map((host) => ({ ...host, inbounds: host.inbounds.filter((inbound) => wanted.has(inbound.protocol || "shadowsocks")) }));
+  }, [excluded, options.hosts, protocolKey]);
+  const inboundNoun = multiProtocol ? "可用入站" : "SS 入站";
   const blockReason = (inbound: LandingInbound, host: LandingHost): string | null => {
     if (filterInbound) return filterInbound(inbound, host);
     if (inbound.methodError) return "不支持做出口";
@@ -186,7 +202,7 @@ export function LandingPicker({
               {!host.isOnline
                 ? <span className="text-muted-foreground">（离线）</span>
                 : host.inbounds.length === 0
-                  ? <span className="text-muted-foreground">（无 SS 入站）</span>
+                  ? <span className="text-muted-foreground">（无{inboundNoun}）</span>
                   : null}
             </span>
           </SelectItem>
@@ -200,8 +216,8 @@ export function LandingPicker({
       disabled={disabled || !selectedHost || selectedHost.inbounds.length === 0}
       onValueChange={(next) => onChange({ hostId: selectedHost ? selectedHost.hostId : hostId, inboundId: Number(next) })}
     >
-      <SelectTrigger className={triggerClass} aria-label={`${labelPrefix}Shadowsocks 入站`}>
-        <SelectValue placeholder={selectedHost && selectedHost.inbounds.length === 0 ? "这台主机还没有 SS 入站" : "选择入站"} />
+      <SelectTrigger className={triggerClass} aria-label={`${labelPrefix}${multiProtocol ? "落地入站" : "Shadowsocks 入站"}`}>
+        <SelectValue placeholder={selectedHost && selectedHost.inbounds.length === 0 ? `这台主机还没有${inboundNoun}` : "选择入站"} />
       </SelectTrigger>
       <SelectContent>
         {(selectedHost?.inbounds || []).map((inbound) => {
@@ -231,7 +247,7 @@ export function LandingPicker({
         )}
         {compact ? inboundSelect : (
           <FormField className="min-w-0 space-y-1.5">
-            <Label>Shadowsocks 入站</Label>
+            <Label>{multiProtocol ? "落地入站" : "Shadowsocks 入站"}</Label>
             {inboundSelect}
           </FormField>
         )}

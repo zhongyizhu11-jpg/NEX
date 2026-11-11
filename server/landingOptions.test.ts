@@ -47,6 +47,13 @@ test("落地选择器清单：按主机分组、按权限过滤、带最新解�
     await inbound(6, 4, 1, { name: "日本私有" });
     await inbound(7, 4, 1, { name: "日本 vless", protocol: "vless" });
     await inbound(8, 2, 1, { name: "美西停用", enabled: false });
+    // VLESS + REALITY + Vision（2.3.525 起能做出口）：列出来，带 protocol；ws 传输的照列、带原因。
+    const reality = (id, transport) => exec(
+      'INSERT INTO proxy_inbounds (id, "userId", "hostId", name, protocol, port, transport, security, flow, "serverName", "realityPublicKey", "isEnabled") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, 1, 2, "美西 REALITY " + transport, "vless", 30000 + id, transport, "reality", "xtls-rprx-vision", "dl.google.com", "TiSmUw53M68pgep1_Cc7AXzh1QpUzeBM74jRZbWHj3Q", 1],
+    );
+    await reality(9, "tcp");
+    await reality(10, "ws");
     const result = (status) => [{ service: "netflix", status, region: "US", detail: "", ms: 1 }];
     await unlock.recordUnlockRun({ hostId: 4, family: "auto", runId: "a", trigger: "manual", requestedBy: 1, checkedAt: 1000, results: result("blocked") });
     await unlock.recordUnlockRun({ hostId: 4, family: "auto", runId: "b", trigger: "manual", requestedBy: 1, checkedAt: 2000, results: result("ok") });
@@ -55,7 +62,10 @@ test("落地选择器清单：按主机分组、按权限过滤、带最新解�
     const admin = await landing.listLandingOptions({ id: 1, role: "admin" });
     assert.deepEqual(admin.map((host) => host.hostId).sort(), [1, 2, 3, 4]);
     const west = admin.find((host) => host.hostId === 2);
-    assert.deepEqual(west.inbounds.map((row) => row.id), [2, 3, 8]);
+    assert.deepEqual(west.inbounds.map((row) => row.id), [2, 3, 8, 9, 10]);
+    assert.deepEqual(west.inbounds.map((row) => row.protocol), ["shadowsocks", "shadowsocks", "shadowsocks", "vless", "vless"]);
+    assert.equal(west.inbounds[3].methodError, null);
+    assert.match(west.inbounds[4].methodError, /RAW\/TCP/);
     assert.equal(west.isOnline, true);
     assert.equal(west.canCreateInbound, true);
     assert.equal(west.inbounds[0].methodError, null);
@@ -81,7 +91,9 @@ test("落地选择器清单：按主机分组、按权限过滤、带最新解�
     assert.deepEqual(bobOwn.inbounds.map((row) => row.id), [4]);
     assert.equal(bobOwn.canCreateInbound, true);
 
-    // 旧接口：同样的内容、旧的字段名
+    // 旧接口：同样的内容、旧的字段名；只认 Shadowsocks，VLESS 入站不给它
+    const legacyAdmin = await egress.listEgressLandingOptions({ id: 1, role: "admin" });
+    assert.deepEqual(legacyAdmin.find((host) => host.hostId === 2).inbounds.map((row) => row.id), [2, 3, 8]);
     const legacy = await egress.listEgressLandingOptions({ id: 2, role: "user" });
     assert.deepEqual(legacy.map((host) => [host.hostId, host.hostName, host.online]).sort(), [[3, "bob 的机器", true], [4, "日本", false]]);
     assert.deepEqual(Object.keys(legacy.find((host) => host.hostId === 4).inbounds[0]).sort(), ["id", "isEnabled", "landingEgress", "method", "methodError", "name", "port"]);

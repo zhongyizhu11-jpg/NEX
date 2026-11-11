@@ -13,3 +13,4 @@ import "./hostLogsAgent";
 import "./nodeCheckAgent";
 import "./netTuneAgent";
 import "./agentRuntimeAgent";
+import "./realityCheckAgent";

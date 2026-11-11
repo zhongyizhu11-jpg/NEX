@@ -351,28 +351,31 @@ async function planEgressPath(plan: PlanBuilder, rule: any, entryHostId: number,
     entryRuntimeVersion: entryHost?.runtimeVersion,
     context,
   });
-  const landingHostId = type === "ss_host" ? Number(evaluation?.landingHost?.id || 0) : 0;
+  const viaInbound = type === "ss_host" || type === "vless_host";
+  const vless = type === "vless_host" || type === "vless_link";
+  const landingHostId = viaInbound ? Number(evaluation?.landingHost?.id || 0) : 0;
   if (landingHostId > 0) {
     await plan.loadHosts([landingHostId]);
     plan.role(landingHostId, "落地出口");
   }
-  const endpoint = evaluation?.endpoint || null;
-  const where = type === "ss_host"
+  const endpoint = evaluation?.endpoint || evaluation?.vlessEndpoint || null;
+  const label = vless ? "VLESS" : "SS";
+  const where = viaInbound
     ? `落地「${landingHostId > 0 ? plan.name(landingHostId) : "?"}」`
-    : endpoint ? `外部 SS ${formatHostPort(endpoint.server, endpoint.port)}` : "外部 SS";
+    : endpoint ? `外部 ${label} ${formatHostPort(endpoint.server, endpoint.port)}` : `外部 ${label}`;
   const state = evaluation?.state || "config_invalid";
   const status = state === "running" ? "pass" : state === "paused" ? "warn" : "fail";
   plan.panel({
     key: `egress:${rule.id}`,
     group: "link",
-    title: "Shadowsocks 出口",
+    title: vless ? "VLESS Reality 出口" : "Shadowsocks 出口",
     status,
     summary: state === "running" ? `经 ${where} 出口` : (evaluation?.message || "出口配置无效"),
     hint: status === "fail" ? "出口失效时规则按停用下发、不会退回直连；按提示修好出口或在规则里改掉出口" : undefined,
     source: "panel",
   });
   if (endpoint) {
-    plan.agent(entryHostId, "link", `「${plan.name(entryHostId)}」→ SS 出口 ${formatHostPort(endpoint.server, endpoint.port)}`, {
+    plan.agent(entryHostId, "link", `「${plan.name(entryHostId)}」→ ${label} 出口 ${formatHostPort(endpoint.server, endpoint.port)}`, {
       kind: "dial", host: endpoint.server, port: endpoint.port, protocol: "tcp",
     }, "hop");
   }
@@ -380,7 +383,7 @@ async function planEgressPath(plan: PlanBuilder, rule: any, entryHostId: number,
     // 目标那一段由落地主机去连（UDP 出口时目标多半是 UDP 服务，TCP 拨测只能当参考）
     planTargetDial(plan, landingHostId, target, targetPort, "tcp");
   } else {
-    plan.panel({ key: `egress-target:${rule.id}`, group: "target", title: "目标连通（经外部 SS）", status: "skip", summary: "目标由外部 SS 服务器去连，面板查不到这一段", source: "panel" });
+    plan.panel({ key: `egress-target:${rule.id}`, group: "target", title: `目标连通（经外部 ${label}）`, status: "skip", summary: `目标由外部 ${label} 服务器去连，面板查不到这一段`, source: "panel" });
   }
   return true;
 }

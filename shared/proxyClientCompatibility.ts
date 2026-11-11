@@ -79,6 +79,8 @@ const ALL_PROTOCOLS_YES: Record<ProxyInboundProtocol, Fact> = {
   snell: Y,
   // SOCKS5 各家客户端都有，是最老的那一档。
   socks5: Y,
+  // Mixed 入站派生成 SOCKS5 节点进订阅（judge 里按 socks5 判），这一格只是给类型补齐。
+  mixed: Y,
 };
 
 /** sing-box 内核、但走通用 Base64 订阅的客户端（Hiddify / NekoBox）。 */
@@ -335,7 +337,8 @@ function protocolLabel(protocol: string): string {
 
 /** 一家客户端：第一层看客户端本身，第二层看订阅格式。 */
 function judge(family: ProxyClientFamily, inbound: CompatInboundInput): Omit<ProxyClientCompatResult, "id" | "label"> {
-  const protocol = str(inbound.protocol) as ProxyInboundProtocol;
+  // Mixed 入站进订阅的是它的 SOCKS5 那一面（shared/proxyInbound.ts 的 proxyNodeFromInbound），按 SOCKS5 判。
+  const protocol = (str(inbound.protocol) === "mixed" ? "socks5" : str(inbound.protocol)) as ProxyInboundProtocol;
   const transport = (str(inbound.transport) || "tcp") as ProxyNodeTransport;
   const security = str(inbound.security);
   const facts = family.facts;

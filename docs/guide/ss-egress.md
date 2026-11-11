@@ -1,6 +1,8 @@
-# 落地主机与 Shadowsocks 出口
+# 落地主机与出口（Shadowsocks / VLESS Reality）
 
-普通的端口转发是入口机自己去连目标，目标看到的来源 IP 就是入口机。给规则设一个 **Shadowsocks 出口** 之后，入口机不再直接连目标，而是经 Shadowsocks 让另一台服务器（「落地」）代为连接：流量从落地出去，目标看到的是落地的 IP。
+普通的端口转发是入口机自己去连目标，目标看到的来源 IP 就是入口机。给规则设一个 **出口** 之后，入口机不再直接连目标，而是经 Shadowsocks 或 VLESS Reality 让另一台服务器（「落地」）代为连接：流量从落地出去，目标看到的是落地的 IP。
+
+页面前半部分讲 Shadowsocks 出口；VLESS Reality 出口（面板 2.3.525 起）和它的不同之处见下面的 [VLESS Reality 出口](#vless-reality)。
 
 ```text
 客户端 ──▶ 入口机:端口（gost 监听，计数、限速都在这里）
@@ -64,8 +66,8 @@
 | 选项 | 说明 |
 | --- | --- |
 | 直接连接 | 默认。入口机自己连目标 |
-| 落地主机 | 选一台落地主机，再选它上面的 Shadowsocks 入站 |
-| 外部 SS 链接 | 粘贴 `ss://` 链接 |
+| 落地主机 | 选一台落地主机，再选它上面的 Shadowsocks 入站或 VLESS Reality 入站 |
+| 外部链接 | 粘贴 `ss://` 或 `vless://` 链接（按开头自动认是哪一种） |
 
 选了出口之后，表单会自动做这几件事（因为出口是 gost 的转发链实现的）：
 
@@ -93,6 +95,46 @@
 | 落地入站已删除 / 已停用 | 出口用的入站没了或被停用，规则没有下发 |
 | 加密方式不支持 | 入站或链接的加密方式不能做出口，规则没有下发 |
 | 出口配置失效 | 例如外部链接无法解密（面板迁移到了新服务器），请重新粘贴链接 |
+
+---
+
+## VLESS Reality 出口 {#vless-reality}
+
+面板 2.3.525 起，出口也可以是 **VLESS + REALITY + Vision**：选落地主机上的 VLESS Reality 入站（「落地入站」页面开的那种），或者粘贴一条外部 `vless://` 链接。
+
+```text
+客户端 ──▶ 入口机:端口（gost 监听，计数、限速都在这里）
+              │  本机 127.0.0.1 上的 sing-box（只给 gost 用，带随机凭据）
+              │  VLESS + REALITY + Vision
+              ▼
+          落地 ──▶ 目标
+```
+
+为什么多了一个 sing-box：入口机上转发用的 gost 运行时没有 VLESS / REALITY 客户端，往里移植一份等于自己维护一个 REALITY 实现。面板给落地入站本来就装着 sing-box，入口机上就再起一个（服务名 `forwardx-singbox-egress`，配置 `/etc/forwardx/singbox/egress.json`），只听 127.0.0.1、每条规则一个 socks 入口 → 一个 VLESS 出站；gost 把它当成出口链上的一个 SOCKS5 节点。它和落地入站用的那个 sing-box 是两个服务：改规则不会让这台机器上开着的落地节点断线。
+
+和 Shadowsocks 出口的不同：
+
+- **需要入口机 Agent 2.2.253 或更新**。旧 Agent 上这种规则按停用下发（不退回直连），卡片显示「需要升级 Agent」。Agent 写入桥接配置前会再查一遍：只许听回环地址、只许 VLESS + REALITY 出站、没有直连出站 —— 配错了宁可不跑，也不会让流量从入口机自己出去。落地主机不需要升级。
+- **只转 TCP**。协议只能选 TCP（TCP+UDP 是灰的）。gost 的 SOCKS5 转 UDP 和 sing-box 的互通没验过，不发。
+- **不接隧道**。走 NEX / GOST 隧道的规则只能接 Shadowsocks 出口；VLESS Reality 出口用在直连规则和端口转发资源上（端口转发资源不是 gost 时，这一条规则照样自动改用 gost 跑）。
+- 落地入站要是 **VLESS + RAW/TCP + REALITY + `xtls-rprx-vision`**。多用户的入站用入站主人自己的那份 UUID（分享给别人的凭据收回时不受影响）。入站换密钥、改端口后规则自动跟上；正在被当作出口的入站不能删、不能改成别的传输 / 安全层 / 流控，也不能换主机。
+
+### 外部 vless:// 链接
+
+只收能原样表示的那一种，别的直接拒绝并说清楚是哪一项：
+
+| 收 | 不收 |
+| --- | --- |
+| `type=tcp` / `raw`（或不写） | ws / grpc / xhttp / httpupgrade 传输、`headerType=http` |
+| `security=reality`，带 `pbk`、`sni`，`sid` 可选 | 普通 TLS、不加密 |
+| `flow=xtls-rprx-vision` | 不带 Vision、其它流控 |
+| `encryption=none`（或不写） | VLESS 的 `encryption=mlkem…` |
+| `fp`：chrome / firefox / safari / edge / ios / android / 360 / qq / random / randomized（不写按 chrome） | 其它指纹 |
+| `spx` 只能是 `/` 或不写 | 别的 spiderX、`pqv`（后量子校验）、`alpn`、不认识的参数 |
+
+UUID 要是标准 UUID（Xray 那种任意字符串 ID sing-box 不认）；整段 base64 的 Shadowrocket 写法也不收，请导出标准链接。链接和 SS 链接一样用面板密钥加密保存，界面只显示 `vless://******@主机:端口?security=reality&sni=…`。
+
+规则卡片上写 **「经 落地主机 东京 VLESS 出口」** 或 **「经 外部 VLESS 出口」**，状态和上面的表一样；落地入站不再是 VLESS + REALITY + Vision 时显示「落地入站不能做出口」。
 
 ---
 
@@ -184,4 +226,5 @@ nex3 修的是 gost 自己的几处 bug（UDP 会话的存取用了两个不同�
 | 卡片显示「落地离线」 | 检查落地主机的 Agent 和网络；Shadowsocks 服务本身可能还在跑 |
 | 规则运行但连不上目标 | 检查落地主机的防火墙 / 安全组是否放行了落地入站的 TCP 端口；在落地上确认它能访问目标 |
 | 删除落地入站时报错 | 报错里列出了依赖它的规则，把这些规则的出口改成其他方式或删掉规则 |
-| 外部链接报「不支持」 | 换一条用 `aes-256-gcm` / `aes-128-gcm` / `chacha20-ietf-poly1305` / `2022-blake3-aes-*-gcm`、不带插件的链接 |
+| 外部链接报「不支持」 | 换一条用 `aes-256-gcm` / `aes-128-gcm` / `chacha20-ietf-poly1305` / `2022-blake3-aes-*-gcm`、不带插件的链接；`vless://` 链接看报错里说的是哪一项（见上面「外部 vless:// 链接」） |
+| VLESS 出口规则运行但连不上 | 在入口机上看 `forwardx-singbox-egress` 服务在不在跑（`systemctl status forwardx-singbox-egress`）；在落地入站的「REALITY 高级」里点「检查目标」，确认握手目标从落地机连得上 |

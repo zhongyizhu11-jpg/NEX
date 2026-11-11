@@ -42,9 +42,22 @@ export const PROXY_INBOUND_PROTOCOLS = [
   "anytls",
   "snell",
   "socks5",
+  /*
+    Mixed（2.3.525）：sing-box 的 mixed 入站，同一个端口既是 HTTP 代理也是 SOCKS5。它不是一种「节点协议」：
+    派生给客户端的节点按 SOCKS5 写（同一组用户名密码，SOCKS5 那一面各家客户端都能导入，见 proxyNodeFromInbound），
+    HTTP 那一面不进订阅 —— 订阅里写 HTTP 代理节点的客户端各家字段不一，没核实就不发。
+  */
+  "mixed",
 ] as const;
 
 export type ProxyInboundProtocol = (typeof PROXY_INBOUND_PROTOCOLS)[number];
+
+/** 入站协议给人看的名字：节点协议照 PROXY_NODE_PROTOCOL_LABELS，Mixed 只有入站这一侧有。 */
+export function proxyInboundProtocolLabel(protocol: unknown): string {
+  const value = String(protocol ?? "");
+  if (value === "mixed") return "Mixed（HTTP + SOCKS5）";
+  return PROXY_NODE_PROTOCOL_LABELS[value as ProxyNodeProtocol] || value;
+}
 
 export const PROXY_INBOUND_SECURITIES = ["reality", "acme", "tls", "none"] as const;
 
@@ -79,7 +92,7 @@ export const PROXY_INBOUND_REALITY_PROTOCOLS: readonly ProxyInboundProtocol[] = 
 const ALWAYS_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["trojan", "hysteria2", "tuic", "anytls"];
 
 /** 压根没有 TLS 层的协议，安全层只能选「无」。 */
-const NO_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["shadowsocks", "snell", "socks5"];
+const NO_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["shadowsocks", "snell", "socks5", "mixed"];
 
 /**
  * sing-box 的 Snell 入站只收 v5 和 v6 —— 注意这和出站不是一回事，出站收的是
@@ -186,6 +199,8 @@ export const PROXY_INBOUND_MULTI_USER_PROTOCOLS: readonly ProxyInboundProtocol[]
   "anytls",
   // SOCKS5：每个用户一组用户名（存在 uuid 上，生成的随机串）+ 密码。
   "socks5",
+  // Mixed：和 SOCKS5 一样，HTTP 的 Basic 认证和 SOCKS5 的用户名密码是同一组。
+  "mixed",
 ];
 
 export function proxyInboundSupportsMultiUser(protocol: unknown): boolean {
@@ -221,7 +236,7 @@ export function createEmptyProxyInboundUser(): ProxyInboundUser {
 /** 这个协议的每用户凭据是哪一种。决定要生成 UUID 还是密码。 */
 export function proxyInboundUserCredentialKinds(protocol: ProxyInboundProtocol): Array<"uuid" | "password"> {
   if (protocol === "vless" || protocol === "vmess") return ["uuid"];
-  if (protocol === "tuic" || protocol === "socks5") return ["uuid", "password"];
+  if (protocol === "tuic" || protocol === "socks5" || protocol === "mixed") return ["uuid", "password"];
   if (proxyInboundSupportsMultiUser(protocol)) return ["password"];
   return [];
 }
@@ -400,7 +415,7 @@ export function proxyInboundEnumFieldError(inbound: ProxyInbound): string {
  * 一句连接失败，看不出是配置本身不成立。
  */
 export function validateProxyInbound(inbound: ProxyInbound): string {
-  const label = PROXY_NODE_PROTOCOL_LABELS[inbound.protocol as ProxyNodeProtocol] || inbound.protocol;
+  const label = proxyInboundProtocolLabel(inbound.protocol);
   if (!toPort(inbound.port)) return "监听端口不合法";
 
   if (!proxyInboundSecurities(inbound.protocol).includes(inbound.security)) {
@@ -628,6 +643,10 @@ export function buildSingboxInbound(inbound: ProxyInbound, tag: string): Record<
     // sing-box 的 SOCKS 入站 type 叫 socks，users 是 username / password（不是 name）。
     base.type = "socks";
     base.users = inbound.users.map((user) => ({ username: user.uuid, password: user.password }));
+  } else if (inbound.protocol === "mixed") {
+    // mixed 入站：users 和 socks 一样是 username / password，HTTP 的 Basic 认证也认这一组。
+    base.type = "mixed";
+    base.users = inbound.users.map((user) => ({ username: user.uuid, password: user.password }));
   } else {
     // Snell：psk 在顶层，版本决定是 obfs_mode 还是 mode。
     base.version = inbound.snellVersion || PROXY_INBOUND_SNELL_DEFAULT_VERSION;
@@ -750,14 +769,15 @@ export function proxyNodeFromInbound(
    */
   const target = user ?? (proxyInboundSupportsMultiUser(inbound.protocol) ? inbound.users[0] : undefined);
   const node = createEmptyProxyNode();
-  node.protocol = inbound.protocol as ProxyNodeProtocol;
+  // Mixed 入站派生成 SOCKS5 节点：同一个端口、同一组凭据，SOCKS5 那一面各家客户端都能导入。
+  node.protocol = (inbound.protocol === "mixed" ? "socks5" : inbound.protocol) as ProxyNodeProtocol;
   node.name = text(options.name) || proxyInboundNodeName(inbound, target);
   node.address = text(options.address);
   node.port = inbound.port;
   // 多用户协议下凭据来自用户；单用户协议（Shadowsocks / Snell）来自入站本身。
   node.uuid = target ? text(target.uuid) : inbound.uuid;
   node.password = target ? text(target.password) : inbound.password;
-  if (inbound.protocol === "socks5") {
+  if (inbound.protocol === "socks5" || inbound.protocol === "mixed") {
     // SOCKS5 的用户名存在用户的 uuid 上。UDP ASSOCIATE 会让客户端去连服务端另开的随机端口，
     // 中转只转发了这一个端口，所以派生出来的节点不开 UDP，免得客户端以为能用。
     node.username = node.uuid;

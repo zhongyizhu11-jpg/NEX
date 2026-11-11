@@ -1,5 +1,8 @@
 /**
- * 规则编辑器里的「出口」一段：直接连接 / 落地主机（Shadowsocks）/ 外部 Shadowsocks 链接。
+ * 规则编辑器里的「出口」一段：直接连接 / 落地主机 / 外部链接。落地主机上的入站可以是 Shadowsocks，也可以是
+ * VLESS + REALITY + Vision（2.3.525）；外部链接粘 ss:// 或 vless://。具体存成哪种出口（ss_host / vless_host、
+ * ss_link / vless_link）跟着选中的入站 / 粘的链接走，三个按钮不用变成五个。VLESS 出口只转 TCP、不接隧道，
+ * 入口机 Agent 要 2.2.253 起（shared/vlessEgress.ts）。
  *
  * 规则（能用哪些方法、UDP / SS2022 要入口机有什么能力、规则形态的限制）都在 shared/ssEgress.ts，
  * 和服务端同一份；这里只负责选和提示。最终以服务端校验为准。落地主机 / 入站的下拉和「一键创建」
@@ -21,11 +24,15 @@ import { trpc } from "@/lib/trpc";
 import {
   isSs2022Method,
   parseSsEgressLink,
+  ruleEgressProtocolOf,
+  ruleEgressUsesInbound,
+  ruleEgressUsesLink,
   RULE_EGRESS_TYPE_LABELS,
   SS_EGRESS_METHODS,
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressType,
 } from "@shared/ssEgress";
+import { parseVlessEgressLink, VLESS_EGRESS_AGENT_VERSION } from "@shared/vlessEgress";
 
 export type RuleEgressFormValue = {
   egressType: RuleEgressType;
@@ -74,6 +81,9 @@ export type EgressEntryCapabilities = {
   /** 不能时第一台撑不起的机器的原因。 */
   udpReason: string | null;
   ss2022Reason: string | null;
+  /** 每台入口机都能用 VLESS Reality 出口（Agent 2.2.253 起）。 */
+  vless: boolean;
+  vlessReason: string | null;
 };
 
 /**
@@ -88,70 +98,111 @@ export function useEgressEntryCapabilities(entryHostIds: number[], enabled: bool
     refetchOnWindowFocus: false,
   });
   return useMemo(() => {
-    const rows = (query.data || []) as Array<{ udp: boolean; ss2022: boolean; udpMessage: string | null; ss2022Message: string | null }>;
+    const rows = (query.data || []) as Array<{ udp: boolean; ss2022: boolean; udpMessage: string | null; ss2022Message: string | null; vless?: boolean; vlessMessage?: string | null }>;
     if (!enabled || hostIds.length === 0 || query.isLoading || !query.data) {
       const reason = hostIds.length === 0 ? `请先选择${role}` : `正在检查${role}的 Agent / 运行时…`;
-      return { loading: enabled && hostIds.length > 0 && query.isLoading, udp: false, ss2022: false, udpReason: reason, ss2022Reason: reason };
+      return { loading: enabled && hostIds.length > 0 && query.isLoading, udp: false, ss2022: false, udpReason: reason, ss2022Reason: reason, vless: false, vlessReason: reason };
     }
     const udpMissing = rows.find((row) => !row.udp);
     const ss2022Missing = rows.find((row) => !row.ss2022);
+    const vlessMissing = rows.find((row) => row.vless !== true);
     return {
       loading: false,
       udp: SS_EGRESS_UDP_SUPPORTED && rows.length > 0 && !udpMissing,
       ss2022: rows.length > 0 && !ss2022Missing,
       udpReason: udpMissing ? udpMissing.udpMessage || `${role}还不支持 UDP 走出口` : null,
       ss2022Reason: ss2022Missing ? ss2022Missing.ss2022Message || `${role}还不支持 SS2022 出口` : null,
+      vless: rows.length > 0 && !vlessMissing,
+      vlessReason: vlessMissing ? vlessMissing.vlessMessage || `${role}的 Agent 需要升级到 ${VLESS_EGRESS_AGENT_VERSION} 才能用 VLESS Reality 出口` : null,
     };
   }, [enabled, hostIds.length, query.data, query.isLoading, role]);
 }
 
-const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server }> = [
-  { type: "none", short: "直接连接", icon: ArrowRightLeft },
-  { type: "ss_host", short: "落地主机", icon: Server },
-  { type: "ss_link", short: "外部 SS 链接", icon: Link2 },
+type EgressMode = "none" | "host" | "link";
+
+const OPTIONS: Array<{ mode: EgressMode; short: string; title: string; icon: typeof Server }> = [
+  { mode: "none", short: "直接连接", title: RULE_EGRESS_TYPE_LABELS.none, icon: ArrowRightLeft },
+  { mode: "host", short: "落地主机", title: "落地主机（Shadowsocks / VLESS Reality）", icon: Server },
+  { mode: "link", short: "外部链接", title: "外部 Shadowsocks / VLESS Reality 链接", icon: Link2 },
 ];
+
+function egressModeOf(type: RuleEgressType): EgressMode {
+  if (ruleEgressUsesInbound(type)) return "host";
+  if (ruleEgressUsesLink(type)) return "link";
+  return "none";
+}
+
+/** 粘的链接是哪种出口：vless:// 是 VLESS Reality，其余按 Shadowsocks（解析时会说清楚哪里不对）。 */
+export function egressLinkType(link: string): RuleEgressType {
+  return /^\s*vless:\/\//i.test(link) ? "vless_link" : "ss_link";
+}
 
 export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, runtimeNote, entryHostIds, viaTunnel = false, isAdmin }: Props) {
   // 谁去连 SS 落地：直连规则是入口机，走隧道的规则是隧道出口机。
   const dialer = viaTunnel ? "隧道出口机" : "入口机";
-  const options = useLandingOptions(value.egressType === "ss_host");
+  const mode = egressModeOf(value.egressType);
+  const vless = ruleEgressProtocolOf(value.egressType) === "vless";
+  const options = useLandingOptions(mode === "host");
   const capabilities = useEgressEntryCapabilities(entryHostIds, value.egressType !== "none", viaTunnel ? "隧道出口机" : "入口主机");
   const entrySet = useMemo(() => new Set(entryHostIds.map(Number)), [entryHostIds]);
   const hosts = useMemo(() => options.hosts.filter((host) => !entrySet.has(Number(host.hostId))), [entrySet, options.hosts]);
   const selectedHost = hosts.find((host) => Number(host.hostId) === Number(value.egressHostId)) || null;
   // SS2022 入站要每台入口机都有 ssEgress2022 能力；撑不起时照样列出来，但不能选。
   const inboundBlockReason = (inbound: LandingInbound): string | null => {
-    if (inbound.methodError) return "不支持做出口";
+    if (inbound.methodError) return inbound.protocol === "vless" ? inbound.methodError : "不支持做出口";
     if (!inbound.isEnabled) return "已停用";
+    if (inbound.protocol === "vless") {
+      // VLESS 出口不接隧道、要入口机 Agent 2.2.253：撑不起时照样列出来，但不能选。
+      if (viaTunnel) return "隧道规则只能接 Shadowsocks 出口";
+      if (!capabilities.vless && !capabilities.loading) return `${dialer}需升级 Agent 到 ${VLESS_EGRESS_AGENT_VERSION}`;
+      return null;
+    }
     if (isSs2022Method(inbound.method) && !capabilities.ss2022) return `${dialer}需升级才能用 SS2022`;
     return null;
   };
   const usableInbounds = (selectedHost?.inbounds || []).filter((inbound) => !inboundBlockReason(inbound));
   const selectedInbound = (selectedHost?.inbounds || []).find((inbound) => Number(inbound.id) === Number(value.egressInboundId)) || null;
   const linkPreview = value.egressType === "ss_link" && value.egressLink.trim() ? parseSsEgressLink(value.egressLink) : null;
+  const vlessLinkPreview = value.egressType === "vless_link" && value.egressLink.trim() ? parseVlessEgressLink(value.egressLink) : null;
 
-  const pick = (type: RuleEgressType) => {
-    if (type === value.egressType) return;
-    if (type !== "none" && blockedReason) return;
+  const pick = (next: EgressMode) => {
+    if (next === mode) return;
+    if (next !== "none" && blockedReason) return;
+    const type: RuleEgressType = next === "host" ? "ss_host" : next === "link" ? egressLinkType(value.egressLink) : "none";
     onChange({ egressType: type, egressUdp: false });
     if (type !== "none") onEgressEnabled(type);
+  };
+  /** 选中的入站是 VLESS 时出口跟着变成 vless_host（反过来也一样）；UDP 只有 SS 能走。 */
+  const pickInbound = (next: { hostId: number | null; inboundId: number | null }) => {
+    const host = hosts.find((item) => Number(item.hostId) === Number(next.hostId));
+    const inbound = host?.inbounds.find((item) => Number(item.id) === Number(next.inboundId));
+    const type: RuleEgressType = inbound?.protocol === "vless" ? "vless_host" : "ss_host";
+    onChange({
+      egressHostId: next.hostId,
+      egressInboundId: next.inboundId,
+      ...(type !== value.egressType ? { egressType: type, egressUdp: false } : {}),
+    });
+  };
+  const changeLink = (link: string) => {
+    const type = egressLinkType(link);
+    onChange({ egressLink: link, ...(type !== value.egressType ? { egressType: type, egressUdp: false, egressLinkMasked: "" } : {}) });
   };
 
   return (
     // 标题和折叠在外面（规则编辑框的 RuleFormCollapsible「出口」），这里只放里面的内容。
     <section className="space-y-2.5" data-testid="rule-egress-section">
       <p className="text-meta text-muted-foreground">目标看到的来源 IP 是谁</p>
-      <SegmentedControl<RuleEgressType>
+      <SegmentedControl<EgressMode>
         ariaLabel="出口"
         listClassName="grid grid-cols-3 gap-1"
         optionClassName="px-1.5"
-        value={value.egressType}
+        value={mode}
         options={OPTIONS.map((option) => {
           const Icon = option.icon;
           return {
-            value: option.type,
-            title: RULE_EGRESS_TYPE_LABELS[option.type],
-            disabled: option.type !== "none" && !!blockedReason && value.egressType !== option.type,
+            value: option.mode,
+            title: option.title,
+            disabled: option.mode !== "none" && !!blockedReason && mode !== option.mode,
             icon: <Icon className="hidden h-4 w-4 shrink-0 sm:block" />,
             label: <span className="truncate">{option.short}</span>,
           };
@@ -163,7 +214,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
         <p className="text-meta leading-5 text-muted-foreground">
           {blockedReason
             ? <>{dialer}自己连接目标。{blockedReason}</>
-            : <>{dialer}自己连接目标。选「落地主机」或「外部 SS 链接」后，{dialer}经 Shadowsocks 让落地去连目标，流量从落地出去。</>}
+            : <>{dialer}自己连接目标。选「落地主机」或「外部链接」后，{dialer}经 Shadowsocks 或 VLESS Reality 让落地去连目标，流量从落地出去。</>}
         </p>
       )}
 
@@ -171,41 +222,47 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
         <p className="text-meta leading-5 text-muted-foreground">{runtimeNote}</p>
       ) : null}
 
-      {value.egressType === "ss_host" && (
+      {mode === "host" && (
         <div className="space-y-2">
           <LandingPicker
             value={{ hostId: value.egressHostId, inboundId: value.egressInboundId }}
-            onChange={(next) => onChange({ egressHostId: next.hostId, egressInboundId: next.inboundId })}
+            onChange={pickInbound}
             excludeHostIds={entryHostIds}
             filterInbound={inboundBlockReason}
+            protocols={["shadowsocks", "vless"]}
             allowCreate
             emptyMessage={isAdmin ? `除了${viaTunnel ? "隧道出口机" : "入口主机"}之外还没有别的主机可以当落地。` : undefined}
           />
           {selectedInbound && isSs2022Method(selectedInbound.method) && !capabilities.ss2022 && !capabilities.loading && (
             <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.ss2022Reason}</p>
           )}
+          {selectedInbound?.protocol === "vless" && !capabilities.vless && !capabilities.loading && (
+            <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.vlessReason}</p>
+          )}
           {!(selectedHost && usableInbounds.length === 0) && (
             <p className="text-meta leading-5 text-muted-foreground">
-              {dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。
+              {vless
+                ? `${dialer}上起一个只听本机的 sing-box，经这个 VLESS Reality 入站让落地去连目标（只转 TCP）；入站换密钥、改端口后规则自动跟上。`
+                : `${dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。`}
             </p>
           )}
         </div>
       )}
 
-      {value.egressType === "ss_link" && (
+      {mode === "link" && (
         <div className="space-y-1.5">
           <FormField className="min-w-0 space-y-1.5">
             <Label className="flex items-baseline gap-1.5">
-              ss:// 链接
-              <span className="text-xs font-normal text-muted-foreground">密码由面板加密保存</span>
+              ss:// 或 vless:// 链接
+              <span className="text-xs font-normal text-muted-foreground">凭据由面板加密保存</span>
             </Label>
             <Input
               value={value.egressLink}
               placeholder={value.egressLinkMasked || "ss://YWVzLTI1Ni1nY206cGFzcw@1.2.3.4:8388#落地"}
               autoComplete="off"
               spellCheck={false}
-              onChange={(event) => onChange({ egressLink: event.target.value })}
-              className={linkPreview && !linkPreview.ok ? "border-destructive" : undefined}
+              onChange={(event) => changeLink(event.target.value)}
+              className={(linkPreview && !linkPreview.ok) || (vlessLinkPreview && !vlessLinkPreview.ok) ? "border-destructive" : undefined}
             />
           </FormField>
           {value.egressLinkMasked && !value.egressLink.trim() && (
@@ -223,8 +280,17 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
           {linkPreview && linkPreview.ok && isSs2022Method(linkPreview.endpoint.method) && !capabilities.ss2022 && !capabilities.loading && (
             <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.ss2022Reason}</p>
           )}
+          {vlessLinkPreview && !vlessLinkPreview.ok && <p className="text-xs text-destructive">{vlessLinkPreview.error}</p>}
+          {vlessLinkPreview && vlessLinkPreview.ok && (
+            <p className="min-w-0 truncate text-meta text-muted-foreground">
+              {vlessLinkPreview.endpoint.server}:{vlessLinkPreview.endpoint.port} · REALITY · {vlessLinkPreview.endpoint.serverName}
+            </p>
+          )}
+          {vless && !capabilities.vless && !capabilities.loading && (
+            <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.vlessReason}</p>
+          )}
           <p className="text-meta leading-5 text-muted-foreground">
-            支持 {SS_EGRESS_METHODS.join(" / ")}，不支持带插件的链接。链接里的密码由面板加密保存，能接触到面板密钥的服务器管理员可以解出它。
+            Shadowsocks 支持 {SS_EGRESS_METHODS.join(" / ")}，不支持带插件的链接；VLESS 只收 RAW/TCP + REALITY + xtls-rprx-vision（只转 TCP）。链接里的密码 / UUID 由面板加密保存，能接触到面板密钥的服务器管理员可以解出它。
           </p>
         </div>
       )}
@@ -233,7 +299,10 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
         UDP 走不走出口由上面的「协议」决定（TCP+UDP 时走，TCP 时只转 TCP），这里不再单放一个勾，
         只在需要的时候说一句：选了 TCP+UDP 要落地开着 UDP；入口机撑不起时说清楚是哪台、要升级什么。
       */}
-      {value.egressType !== "none" && SS_EGRESS_UDP_SUPPORTED && (() => {
+      {vless && (
+        <p data-testid="rule-egress-udp" className="text-meta leading-5 text-muted-foreground">VLESS Reality 出口只转发 TCP，协议只能选 TCP。</p>
+      )}
+      {value.egressType !== "none" && !vless && SS_EGRESS_UDP_SUPPORTED && (() => {
         if (capabilities.loading) return null;
         const udpAvailable = capabilities.udp;
         if (value.egressUdp) {
