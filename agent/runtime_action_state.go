@@ -127,6 +127,15 @@ func desiredRunningRuleForStatePort(ruleID int, port int) (runningRule, bool) {
 	return runningRule{}, false
 }
 
+func isKernelForwardType(forwardType string) bool {
+	switch strings.TrimSpace(forwardType) {
+	case "iptables", "nftables":
+		return true
+	default:
+		return false
+	}
+}
+
 func cleanupKernelForwardPortBeforeApply(a action) {
 	if a.Op != "apply" || a.SourcePort <= 0 {
 		return
@@ -154,6 +163,11 @@ func cleanupKernelForwardPortBeforeApply(a action) {
 	}
 	if changedFromKernelForward && a.ForwardType != "nftables" {
 		_ = runShell(nftPortCleanupCmd(port, cleanupProtocol))
+	}
+	// 从内核转发换成用户态转发：流量不再经过 FORWARD，上一任留在 DOCKER-USER 里的放行收掉。
+	// 换成另一种内核转发时由面板命令就地收敛，这里不删（先删再装会断一下）。
+	if isKernelForwardType(localForwardType) && !isKernelForwardType(a.ForwardType) && localRuleID > 0 {
+		cleanupDockerCompatAllowances(localRuleID, a.SourcePort, runtimeProtocols(cleanupProtocol))
 	}
 	switch a.ForwardType {
 	case "iptables":

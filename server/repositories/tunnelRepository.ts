@@ -42,6 +42,7 @@ import {
 import { resolveRuleProxyProtocolOptions } from "../gostProxyProtocol";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
 import { opsReservedPortsOnHost } from "../ops/opsReservedPorts";
+import { knownOccupiedPortsOnHost } from "../rulePortOccupancy";
 import { LINK_PROBE_FRESH_MS, LINK_PROBE_MAX_FUTURE_SKEW_MS } from "../../shared/linkProbePolicy";
 
 // The Agent uses the tunnel row's listener for the lowest-id active GOST
@@ -2352,6 +2353,9 @@ export async function findAvailablePort(
     const port = Number(reservedPort);
     if (Number.isInteger(port) && port > 0 && port <= 65535) usedPorts.add(port);
   }
+  // 最近见过被主机上别的进程占着的端口（Agent 的端口核对、绑定失败回执，见 rulePortOccupancy.ts）：
+  // 只影响随机挑选，不拦用户手填 —— 手填的端口照旧能建，建完在规则卡上告警。
+  for (const port of knownOccupiedPortsOnHost(hostId, protocol)) usedPorts.add(port);
   return pickAvailablePort(policy, usedPorts, { start: 10000, end: 65535 });
 }
 

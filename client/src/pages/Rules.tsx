@@ -781,6 +781,7 @@ type RuleCardUi = {
   renderSniRuleBadge: (rule: RuleCardRule) => ReactNode;
   renderEgressBadge: (rule: RuleCardRule) => ReactNode;
   renderKernelForwardWarningBadge: (rule: RuleCardRule) => ReactNode;
+  renderPortWarningBadge: (rule: RuleCardRule) => ReactNode;
   renderTunnelFxpIssueBadge: (rule: RuleCardRule) => ReactNode;
   renderSubscriptionBadge: (rule: RuleCardRule) => ReactNode;
   renderSubscriptionMark: (rule: RuleCardRule) => ReactNode;
@@ -847,6 +848,7 @@ function createRuleCardUiDispatcher(ref: { current: RuleCardUi | null }): RuleCa
     renderSniRuleBadge: (rule) => latest().renderSniRuleBadge(rule),
     renderEgressBadge: (rule) => latest().renderEgressBadge(rule),
     renderKernelForwardWarningBadge: (rule) => latest().renderKernelForwardWarningBadge(rule),
+    renderPortWarningBadge: (rule) => latest().renderPortWarningBadge(rule),
     renderTunnelFxpIssueBadge: (rule) => latest().renderTunnelFxpIssueBadge(rule),
     renderSubscriptionBadge: (rule) => latest().renderSubscriptionBadge(rule),
     renderSubscriptionMark: (rule) => latest().renderSubscriptionMark(rule),
@@ -990,6 +992,7 @@ function deriveRuleView({
     ui.renderSniRuleBadge(rule),
     ui.renderEgressBadge(rule),
     ui.renderKernelForwardWarningBadge(rule),
+    ui.renderPortWarningBadge(rule),
     rule?.tunnelId ? ui.renderTunnelFxpIssueBadge(rule) : null,
     ui.renderSubscriptionBadge(rule),
     !supported ? (
@@ -7503,6 +7506,36 @@ function RulesContent() {
       </Badge>
     );
   };
+  /*
+    端口占用告警（server/rulePortOccupancy.ts）：和规则的运行状态分开的一枚。
+    黄 = Agent 核对到入口端口上有别的程序在监听（内核转发不绑端口，只能这样发现）；
+    红 = 绑定失败或内核转发没装全，后面跟着 Agent 报的原因。冲突消失后下一轮就不再带这个字段。
+  */
+  const renderPortWarningBadge = (rule: { portWarnings?: unknown }) => {
+    const warnings = (Array.isArray(rule?.portWarnings) ? rule.portWarnings : []) as Array<{ level: string; label: string; message: string }>;
+    if (warnings.length === 0) return null;
+    const error = warnings.find((item) => item.level === "error");
+    const head = error || warnings[0];
+    const title = warnings.map((item) => item.message).join("\n");
+    return (
+      <Badge
+        key="port-warning"
+        variant="outline"
+        data-testid="rule-port-warning"
+        data-level={error ? "error" : "warn"}
+        className={cn(
+          "h-5 w-fit max-w-full truncate px-1.5 text-[11px]",
+          error
+            ? "border-destructive/30 text-destructive"
+            : "border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]",
+        )}
+        title={title}
+      >
+        <AlertTriangle className="mr-1 h-3 w-3" aria-hidden="true" />
+        {head.label}{warnings.length > 1 ? ` · ${warnings.length}` : ""}
+      </Badge>
+    );
+  };
   /**
    * 「在订阅里」这一小块。没绑就什么都不显示 —— 大多数转发跟订阅无关，
    * 给每一行都挂个「未加入订阅」只是噪音。
@@ -7623,7 +7656,8 @@ function RulesContent() {
     const kernelWarning = getRuleKernelForwardWarning(rule);
     const kernelWarningBadge = renderKernelForwardWarningBadge(kernelWarning);
     const fxpIssueBadge = renderTunnelFxpIssueBadge(tunnel);
-    const warningBadge = kernelWarningBadge || fxpIssueBadge ? <>{kernelWarningBadge}{fxpIssueBadge}</> : null;
+    const portWarningBadge = renderPortWarningBadge(rule);
+    const warningBadge = kernelWarningBadge || fxpIssueBadge || portWarningBadge ? <>{kernelWarningBadge}{fxpIssueBadge}{portWarningBadge}</> : null;
     const badge = (
       <Badge
         variant="outline"
@@ -8272,6 +8306,7 @@ function RulesContent() {
     renderSniRuleBadge,
     renderEgressBadge,
     renderKernelForwardWarningBadge: (rule) => renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
+    renderPortWarningBadge,
     renderTunnelFxpIssueBadge: (rule) => renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))),
     renderSubscriptionBadge: (rule) => renderSubscriptionBadge(rule, "card"),
     renderSubscriptionMark,

@@ -208,6 +208,14 @@ func reconcileRemovePort(port string) {
 	if forwardType == "nftables" && ruleID > 0 {
 		_ = runShell(nftRuleCleanupCmd(ruleID))
 	}
+	if isKernelForwardType(forwardType) {
+		// 面板已经不列这条规则，没有面板命令来收它在 DOCKER-USER 里的放行，Agent 自己收。
+		protocols := []string{"tcp", "udp"}
+		if _, _, protocol, ok := readTargetInfo(port); ok {
+			protocols = runtimeProtocols(protocol)
+		}
+		cleanupDockerCompatAllowances(ruleID, atoi(port), protocols)
+	}
 	for _, cmd := range managedPortCleanupCmds(port) {
 		_ = runShell(cmd)
 	}
