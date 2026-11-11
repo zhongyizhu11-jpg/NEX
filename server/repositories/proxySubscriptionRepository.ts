@@ -1211,7 +1211,7 @@ async function applyEffectiveEntryHosts(db: Awaited<ReturnType<typeof getDb>>, r
  * 一次订阅拉取白跑三条。客户端十二小时刷一次不觉得，可有人把间隔调到几分钟、
  * 一个商家几百个租户时，白跑的就是几百倍。
  */
-export async function buildProxySubscriptionContextForUser(userId: number, options: { withLatency?: boolean } = {}): Promise<{
+export async function buildProxySubscriptionContextForUser(userId: number, options: { withLatency?: boolean; withAddressFamilies?: boolean } = {}): Promise<{
   plan: ProxySubscriptionPlan;
   templates: any[];
 }> {
@@ -1317,6 +1317,9 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
       .where(inArray(hosts.id, hostIds))
     : [];
 
+  // 按 IPv4 / IPv6 输出时才查：落地池节点的两种地址看池成员（平时一条查询都不多跑）。
+  if (options.withAddressFamilies) await attachLandingPoolFamilyAddresses(db, templates);
+
   const { activeSuffix } = await getRuleEntryDomainRuntimeSettings();
   const boundRuleIds = rules.filter((rule: any) => Number(rule.proxyNodeId || 0) > 0).map((rule: any) => Number(rule.id));
   const unreachableRuleIds = await getProxySubHideUnreachable(userId)
@@ -1347,6 +1350,36 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
     }),
     templates,
   };
+}
+
+/**
+ * 落地池节点没有「所在机器」（池是几台一起开的），订阅要按 IPv4 / IPv6 输出时，按池成员把两种地址
+ * 填在模板行上（怎么挑见 shared/proxySubIpVersion.ts 的 landingPoolFamilyEntryAddresses）。
+ */
+async function attachLandingPoolFamilyAddresses(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, templates: Array<Record<string, unknown>>) {
+  const poolTemplates = templates.filter((template) => Number(template?.nodePoolId || 0) > 0 && !(Number(template?.hostId || 0) > 0));
+  if (poolTemplates.length === 0) return;
+  const { getNodePool } = await import("../nodePools");
+  const { landingPoolFamilyEntryAddresses } = await import("../../shared/proxySubIpVersion");
+  const memberIdsByPool = new Map<number, number[]>();
+  for (const poolId of new Set(poolTemplates.map((template) => Number(template.nodePoolId)))) {
+    const pool = await getNodePool(poolId).catch(() => null);
+    memberIdsByPool.set(poolId, (pool?.hostIds || []).map(Number).filter((id) => id > 0));
+  }
+  const memberIds = Array.from(new Set(Array.from(memberIdsByPool.values()).flat()));
+  if (memberIds.length === 0) return;
+  const rows = await db
+    .select({ id: hosts.id, ip: hosts.ip, ipv4: hosts.ipv4, ipv6: hosts.ipv6, entryIp: hosts.entryIp, ddnsEnabled: hosts.ddnsEnabled, ddnsDomain: hosts.ddnsDomain })
+    .from(hosts)
+    .where(inArray(hosts.id, memberIds));
+  type PoolMemberHost = { id: unknown; ip: unknown; ipv4: unknown; ipv6: unknown; entryIp: unknown; ddnsEnabled: unknown; ddnsDomain: unknown };
+  const hostById = new Map((rows as PoolMemberHost[]).map((row) => [Number(row.id), row]));
+  for (const template of poolTemplates) {
+    const members = (memberIdsByPool.get(Number(template.nodePoolId)) || []).map((id) => hostById.get(id)).filter((host): host is NonNullable<typeof host> => !!host);
+    const addresses = landingPoolFamilyEntryAddresses(template.address, members);
+    template.entryIpv4 = addresses.ipv4;
+    template.entryIpv6 = addresses.ipv6;
+  }
 }
 
 /*
@@ -1416,7 +1449,7 @@ export async function buildProxySubscriptionForToken(
   userId: number,
   input: Omit<ProxySubPipelineInput, "plan" | "templates" | "providers" | "unlockStatuses">,
 ): Promise<ProxySubPipelineDocument> {
-  const { plan, templates } = await buildProxySubscriptionContextForUser(userId, { withLatency: input.options.sortMode === "latency" });
+  const { plan, templates } = await buildProxySubscriptionContextForUser(userId, { withLatency: input.options.sortMode === "latency", withAddressFamilies: !!input.ipVersion });
   // 透传模式的外部订阅：不存节点，写成 proxy-providers 让客户端自己拉。
   const { listProxySubSourcesByUser } = await import("./proxySubExtraRepository");
   const providers = (await listProxySubSourcesByUser(userId) as any[])

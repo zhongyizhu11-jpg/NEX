@@ -606,6 +606,8 @@ const tables: TableDef[] = [
     columns: [
       c("id", "id"), c("name", "text", { notNull: true }), c("target", "varchar", { length: 16, notNull: true }),
       c("prelude", "longtext", { notNull: true, default: "" }), c("customGroupsJson", "longtext"),
+      // 模板里的分流规则（文本，和别处的自定义规则同一种写法）和 Loon 插件引用（JSON）；老库自动补列，空 = 没有。
+      c("customRules", "longtext"), c("modulesJson", "longtext"),
       c("isDefault", "bool", { notNull: true, default: false }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],

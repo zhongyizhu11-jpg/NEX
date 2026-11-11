@@ -17,6 +17,7 @@ import { greatCircleKm, type ProxySubVisitorGeo } from "./proxySubGeo";
 import type { ProxySubscriptionEntry, ProxySubscriptionPlan } from "./proxySubscriptionPlan";
 import { guessProxySubRegionCode, proxySubRegionFlag, proxySubRegionName, stripProxySubRegionFlag } from "./proxySubRegion";
 import type { ProxySubSettings } from "./proxySubSettings";
+import { selectProxySubPlanAddressFamily, type ProxySubIpVersion } from "./proxySubIpVersion";
 import {
   makeLooseMatcher,
   resolveTriState,
@@ -266,11 +267,18 @@ export type ProxySubProcessorInput = {
   settings: ProxySubSettings;
   /** 拉订阅的访客在哪（服务端用离线库查的）；只有「按访客就近」用它，没有就按地区。 */
   visitor?: ProxySubVisitorGeo | null;
+  /** 地址上要的 ipVersion（4 / 6）；不给 = 照旧。见 shared/proxySubIpVersion.ts。 */
+  ipVersion?: ProxySubIpVersion | null;
 };
 
 /** 按固定顺序跑完所有条目级处理器。 */
 export function runProxySubEntryProcessors(plan: ProxySubscriptionPlan, input: ProxySubProcessorInput): ProxySubscriptionPlan {
   let next = applyProxySubScope(plan, input.scope);
+  /*
+    地址族挑在作用域之后：作用域本来就挡掉的不算「因为没有 IPv6 被跳过」，条数才对得上；
+    又在去重之前：去重按地址比，得先换成真正要发的那种地址。
+  */
+  next = selectProxySubPlanAddressFamily(next, input.ipVersion);
   next = applyProxySubNaming(next, { options: input.options, settings: input.settings });
   if (input.options.dedupe) next = dedupeProxySubEntries(next);
   next = sortProxySubEntries(next, input.options.sortMode, input.visitor);

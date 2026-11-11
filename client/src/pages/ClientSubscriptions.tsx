@@ -127,6 +127,7 @@ import {
 import ProxySubSourcesSection from "@/components/proxy/ProxySubSourcesSection";
 import ProxyNodeReorderDialog from "@/components/proxy/ProxyNodeReorderDialog";
 import { proxySubRegionLabel } from "@shared/proxySubRegion";
+import { PROXY_SUB_IP_VERSIONS, PROXY_SUB_IP_VERSION_LABELS, type ProxySubIpVersion } from "@shared/proxySubIpVersion";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -189,8 +190,9 @@ function subscriptionUrl(
   format: ProxySubscriptionFormat,
   kind: ProxySubscriptionKind,
   pinFormat = false,
+  ipVersion: ProxySubIpVersion | null = null,
 ) {
-  return buildProxySubscriptionUrl({ origin: mobileAuth.panelOrigin(), token, format, kind, pinFormat });
+  return buildProxySubscriptionUrl({ origin: mobileAuth.panelOrigin(), token, format, kind, pinFormat, ipVersion });
 }
 
 async function copyText(value: string, message: string) {
@@ -380,6 +382,8 @@ export default function ClientSubscriptionsPage() {
   // 一键订阅面板默认折叠，同一时间只展开一个，免得页面被撑得很长。
   const [importOpenTokenId, setImportOpenTokenId] = useState<number | null>(null);
   const [importKind, setImportKind] = useState<ProxySubscriptionKind>("nodes");
+  // 地址按哪种 IP 出：默认照旧（域名 / 首选地址），选了就固定带上 ipVersion，服务端不会退回另一种。
+  const [importIpVersion, setImportIpVersion] = useState<ProxySubIpVersion | null>(null);
   const [qrTarget, setQrTarget] = useState<{ title: string; url: string; hint?: string } | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [showAllClients, setShowAllClients] = useState(false);
@@ -1229,7 +1233,7 @@ export default function ClientSubscriptionsPage() {
                   const preset = normalizeProxyRulePreset(token.rulePreset);
                   // 手动复制的地址刻意不带 format：让服务端按客户端标识协商，
                   // 这样同一条地址粘到哪个客户端都能拿到对的格式。
-                  const manualUrl = subscriptionUrl(token.token, "base64", kind);
+                  const manualUrl = subscriptionUrl(token.token, "base64", kind, false, importIpVersion);
                   return (
                   <div key={token.id} className="fx-sub-token space-y-3 rounded-lg border p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1329,6 +1333,32 @@ export default function ClientSubscriptionsPage() {
                           {PROXY_SUBSCRIPTION_KIND_HINTS[kind]}
                         </p>
 
+                        {/* 只走 v6 的家宽、v4 很烂的手机流量：地址上钉死一种 IP。下面所有地址、图标、二维码一起变。 */}
+                        <div className="space-y-1 rounded-md border bg-background px-2 py-1.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-xs text-muted-foreground">节点地址</span>
+                            <Select
+                              value={importIpVersion || "default"}
+                              onValueChange={(value) => setImportIpVersion(value === "4" || value === "6" ? value : null)}
+                            >
+                              <SelectTrigger aria-label="节点地址按哪种 IP 输出" className="h-7 w-28 text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="default">默认</SelectItem>
+                                {PROXY_SUB_IP_VERSIONS.map((item) => (
+                                  <SelectItem key={item} value={item}>{PROXY_SUB_IP_VERSION_LABELS[item]}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {importIpVersion ? (
+                            <p data-fx-help="" className="text-xs text-muted-foreground">
+                              地址带上 ipVersion={importIpVersion}：每个节点用入口机器真实的 IPv{importIpVersion} 地址，没有 IPv{importIpVersion} 的节点直接跳过，不会悄悄换成另一种；一个都不剩时客户端会收到「没有可用的 IPv{importIpVersion} 节点」。
+                            </p>
+                          ) : null}
+                        </div>
+
                         {kind === "rules" && (
                           <div className="space-y-1.5 rounded-md border bg-background px-2 py-1.5">
                             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1369,7 +1399,7 @@ export default function ClientSubscriptionsPage() {
                             const importer = proxyClientImportFor(target, kind);
                             // 从客户端图标点进去时已经知道是哪个客户端了，钉死格式，
                             // 不让它掉到令牌默认格式上。
-                            const url = subscriptionUrl(token.token, target.format, kind, true);
+                            const url = subscriptionUrl(token.token, target.format, kind, true, importIpVersion);
                             const importName = proxySubscriptionProfileName(String(token.name || ""), kind, String(me?.username || ""));
                             const { icon: Icon, className: iconClass } = clientIcon(target);
                             // 运行时的优先：放在服务器上就能换图，不必重新构建。
@@ -1519,7 +1549,7 @@ export default function ClientSubscriptionsPage() {
                               </div>
                             ) : null}
                             {(subSettingsQuery.data?.domains || []).map((origin) => {
-                              const alt = subscriptionUrl(token.token, "base64", kind).replace(/^https?:\/\/[^/]+/, origin);
+                              const alt = subscriptionUrl(token.token, "base64", kind, false, importIpVersion).replace(/^https?:\/\/[^/]+/, origin);
                               return (
                                 <div key={origin} className="flex items-center gap-2">
                                   <span className="shrink-0 text-xs text-muted-foreground">备用</span>

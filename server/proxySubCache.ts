@@ -27,6 +27,8 @@ export type ProxySubPreparedBody = {
   /** 和 express 自己算的一模一样的弱 ETag（etag 包：utf8 长度的十六进制 + sha1 的 base64 前 27 位）。 */
   etag: string;
   compressed: Partial<Record<ProxySubBodyEncoding, Promise<Buffer>>>;
+  /** 按 IPv4 / IPv6 输出时跳过的条数（命中缓存时照样要发 X-ForwardX-Skipped-Entries）。 */
+  skippedEntries?: number;
 };
 
 export type ProxySubBodyEncoding = "gzip" | "br";

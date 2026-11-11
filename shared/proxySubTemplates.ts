@@ -16,11 +16,21 @@
  *   - Base64 / Xray JSON 没有模板（前者没有位置，后者的 DNS / 入站由客户端自己管）。
  *
  * 占位符：{{app_name}} {{panel_url}} {{sub_url}} {{username}} {{expire_date}} {{data_left}} {{test_url}}。
+ *
+ * 另外两样（都只进规则订阅）：
+ *   - 分流规则：和全局 / 用户 / 令牌的自定义规则同一种文本（shared/proxySubCustomRules.ts），
+ *     排在全局前置之后。停用的规则存成注释行（`# DOMAIN,…`），文本里看得见、渲染时跳过。
+ *   - 模块 / 插件：目前是 Loon 的 [Plugin]（shared/proxySubModules.ts）。
+ *
+ * 管理员界面上有可视化编辑（client/src/components/proxy/ProxySubTemplateVisualEditor.tsx），
+ * 存的还是这几样原始数据：可视化只是换个方式改它们，不另存一份。
  */
 
 import type { ProxySubCustomGroup } from "./proxySubscriptionPlan";
 import { normalizeProxySubGroupMatch, validateProxySubGroupFilter } from "./proxySubGroupFilter";
-import type { ProxySubscriptionFormat } from "./proxySubscription";
+import { PROXY_SUBSCRIPTION_GROUP_NAME, type ProxySubscriptionFormat } from "./proxySubscription";
+import { parseProxyCustomRules } from "./proxySubCustomRules";
+import { proxySubModuleProblem, PROXY_SUB_TEMPLATE_MODULE_LIMITS, type ProxySubTemplateModule } from "./proxySubModules";
 
 export const PROXY_SUB_TEMPLATE_TARGETS = ["clash", "singbox", "surge", "loon", "quantumultx", "shadowrocket"] as const;
 
@@ -45,8 +55,21 @@ export type ProxySubTemplate = {
   target: ProxySubTemplateTarget;
   prelude: string;
   customGroups: ProxySubCustomGroup[];
+  /** 模板里的分流规则文本；空串 = 没有。 */
+  customRules: string;
+  /** 模块 / 插件引用；目前只有 Loon 模板用得上。 */
+  modules: ProxySubTemplateModule[];
   isDefault?: boolean;
 };
+
+/** 哪些目标格式的模板能挂模块 / 插件（界面据此显示那一块，保存时据此校验）。 */
+export const PROXY_SUB_TEMPLATE_MODULE_TARGETS: readonly ProxySubTemplateTarget[] = ["loon"];
+
+/** 模板分流规则文本的长度上限（条数上限和别处的自定义规则一样，见 parseProxyCustomRules）。 */
+export const PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH = 60_000;
+
+/** 自定义组点名成员的上限。 */
+export const PROXY_SUB_CUSTOM_GROUP_MAX_MEMBERS = 50;
 
 /** 内置的开头部分。改这里等于改所有没自定义模板的用户的订阅，要慎重。 */
 export const PROXY_SUB_BUILTIN_PRELUDES: Record<ProxySubTemplateTarget, string> = {
@@ -179,7 +202,7 @@ const CLASH_RESERVED_KEYS = /^(proxies|proxy-groups|rule-providers|rules|proxy-p
 
 export type ProxySubTemplateValidation = { ok: true } | { ok: false; error: string };
 
-export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "target" | "prelude" | "customGroups">): ProxySubTemplateValidation {
+export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "target" | "prelude" | "customGroups"> & Partial<Pick<ProxySubTemplate, "customRules" | "modules">>): ProxySubTemplateValidation {
   const prelude = String(template.prelude || "");
   if (prelude.length > 60_000) return { ok: false, error: "模板太长（上限 60000 字符）" };
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(prelude)) return { ok: false, error: "模板里有控制字符" };
@@ -205,7 +228,8 @@ export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "targe
   if (template.target === "quantumultx" && prelude.trim() && !/^\s*\[general\]/i.test(prelude)) {
     return { ok: false, error: "Quantumult X 模板要以 [general] 开头" };
   }
-  for (const group of template.customGroups || []) {
+  const groups = template.customGroups || [];
+  for (const group of groups) {
     const name = String(group.name || "").trim();
     if (!name) return { ok: false, error: "自定义策略组要有名字" };
     if (name.length > 64 || /[,=\u0000-\u001f]/.test(name)) return { ok: false, error: `策略组名「${name}」不合法（不能含逗号、等号）` };
@@ -213,20 +237,118 @@ export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "targe
     if (String(group.filter || "").length > 200) return { ok: false, error: `策略组「${name}」的筛选表达式太长` };
     const problem = validateProxySubGroupFilter(String(group.filter || ""), normalizeProxySubGroupMatch(group.match));
     if (problem) return { ok: false, error: `策略组「${name}」的筛选表达式有问题：${problem}` };
+    const members = Array.isArray(group.members) ? group.members : [];
+    if (members.length > PROXY_SUB_CUSTOM_GROUP_MAX_MEMBERS) return { ok: false, error: `策略组「${name}」点名的成员太多（上限 ${PROXY_SUB_CUSTOM_GROUP_MAX_MEMBERS} 个）` };
+    for (const raw of members) {
+      const member = String(raw || "").trim();
+      if (!member || member.length > 64 || /[,=\u0000-\u001f]/.test(member)) return { ok: false, error: `策略组「${name}」的成员「${member}」不合法（不能含逗号、等号）` };
+      if (member === name) return { ok: false, error: `策略组「${name}」不能把自己列成成员` };
+      if (member === "REJECT") return { ok: false, error: `策略组「${name}」不能放 REJECT（sing-box 里没有这个出站），要拦截请写分流规则` };
+      if (member === PROXY_SUBSCRIPTION_GROUP_NAME || member.toUpperCase() === "PROXY") {
+        return { ok: false, error: `策略组「${name}」不能引用主选择器「${PROXY_SUBSCRIPTION_GROUP_NAME}」：主选择器本来就列着它，会成环` };
+      }
+    }
+    if (group.includeNodes === false && members.length === 0 && !group.includeGroups) {
+      return { ok: false, error: `策略组「${name}」既不挑节点、也没点名成员，会是个空组` };
+    }
+  }
+  const cycle = findProxySubCustomGroupCycle(groups);
+  if (cycle) return { ok: false, error: `策略组互相引用成了环：${cycle.join(" → ")}` };
+
+  const rulesText = String(template.customRules || "");
+  if (rulesText.length > PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH) return { ok: false, error: `分流规则太长（上限 ${PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH} 字符）` };
+  if (rulesText.trim()) {
+    const parsed = parseProxyCustomRules(rulesText);
+    if (parsed.errors.length > 0) return { ok: false, error: `分流规则第 ${parsed.errors[0].line} 行：${parsed.errors[0].message}` };
+  }
+
+  const modules = template.modules || [];
+  if (modules.length > 0 && !PROXY_SUB_TEMPLATE_MODULE_TARGETS.includes(template.target)) {
+    return { ok: false, error: "只有 Loon 模板能挂插件" };
+  }
+  if (modules.length > PROXY_SUB_TEMPLATE_MODULE_LIMITS.count) return { ok: false, error: `插件最多 ${PROXY_SUB_TEMPLATE_MODULE_LIMITS.count} 个` };
+  for (const [index, module] of modules.entries()) {
+    const problem = proxySubModuleProblem(module, index);
+    if (problem) return { ok: false, error: problem };
   }
   return { ok: true };
+}
+
+/** 自定义组之间的引用有没有成环；有就返回环上的组名（首尾相同），没有返回 null。 */
+export function findProxySubCustomGroupCycle(groups: readonly Pick<ProxySubCustomGroup, "name" | "members">[]): string[] | null {
+  const names = groups.map((group) => String(group.name || "").trim());
+  const byName = new Map<string, number>();
+  names.forEach((name, index) => { if (name && !byName.has(name)) byName.set(name, index); });
+  const state = names.map(() => 0);
+  const stack: number[] = [];
+  const visit = (index: number): string[] | null => {
+    state[index] = 1;
+    stack.push(index);
+    for (const raw of groups[index].members || []) {
+      const target = byName.get(String(raw || "").trim());
+      if (target === undefined || target === index) continue;
+      if (state[target] === 1) return [...stack.slice(stack.indexOf(target)).map((item) => names[item]), names[target]];
+      if (state[target] === 0) {
+        const found = visit(target);
+        if (found) return found;
+      }
+    }
+    stack.pop();
+    state[index] = 2;
+    return null;
+  };
+  for (let index = 0; index < names.length; index += 1) {
+    if (state[index] !== 0 || !names[index]) continue;
+    const found = visit(index);
+    if (found) return found;
+  }
+  return null;
+}
+
+const KNOWN_GROUP_KEYS = new Set(["name", "type", "filter", "match", "includeGroups", "members", "includeNodes"]);
+
+/**
+ * 认不出的字段原样留下（见 ProxySubCustomGroup 的说明），但要有个度：键名像个标识符、最多 20 个、
+ * 序列化后不超过 2000 字符，超了就一个都不留 —— 这是给「别处来的几个附加字段」留的位置，不是存储桶。
+ */
+function preservedExtras(item: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  let count = 0;
+  for (const [key, value] of Object.entries(item)) {
+    if (KNOWN_GROUP_KEYS.has(key) || !/^[A-Za-z_][\w-]{0,40}$/.test(key) || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    if (value === undefined || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") continue;
+    out[key] = value;
+    count += 1;
+    if (count >= 20) break;
+  }
+  if (count === 0) return {};
+  try {
+    const json = JSON.stringify(out);
+    return json.length <= 2000 ? JSON.parse(json) : {};
+  } catch {
+    return {};
+  }
 }
 
 export function normalizeProxySubCustomGroups(input: unknown): ProxySubCustomGroup[] {
   if (!Array.isArray(input)) return [];
   return input
-    .map((item: any) => ({
-      name: String(item?.name || "").trim().slice(0, 64),
-      type: (["select", "url-test", "fallback", "load-balance"].includes(item?.type) ? item.type : "select") as ProxySubCustomGroup["type"],
-      filter: String(item?.filter || "").trim().slice(0, 200),
-      match: normalizeProxySubGroupMatch(item?.match),
-      includeGroups: item?.includeGroups === true,
-    }))
+    .map((item: any): ProxySubCustomGroup => {
+      const members = Array.isArray(item?.members)
+        ? Array.from(new Set((item.members as unknown[]).map((member) => String(member ?? "").trim().slice(0, 64)).filter(Boolean))).slice(0, PROXY_SUB_CUSTOM_GROUP_MAX_MEMBERS)
+        : [];
+      return {
+        ...(item && typeof item === "object" ? preservedExtras(item) : {}),
+        name: String(item?.name || "").trim().slice(0, 64),
+        type: (["select", "url-test", "fallback", "load-balance"].includes(item?.type) ? item.type : "select") as ProxySubCustomGroup["type"],
+        filter: String(item?.filter || "").trim().slice(0, 200),
+        match: normalizeProxySubGroupMatch(item?.match),
+        includeGroups: item?.includeGroups === true,
+        // 两个新字段只在用到时才写：老模板存回去和原来一个字都不差。
+        ...(members.length > 0 ? { members } : {}),
+        ...(item?.includeNodes === false ? { includeNodes: false } : {}),
+      };
+    })
     .filter((item) => item.name)
     .slice(0, 30);
 }

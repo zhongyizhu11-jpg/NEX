@@ -101,6 +101,32 @@ const GOLDEN: Record<string, string> = {
   "ua:unknown": "45441 14e2c6334d8e9ffb29ea72cf text/yaml b181-uggA4iXsVyVSEC88hBEMHKY2TUM",
   "alias/mihomo": "39629 775b31b4c592629a34d2a938 text/yaml 9acd-Q0WpdouPBnBZrQi5CtOhJlegoX0",
   "query/emoji-region": "18519 a14a6e0976a137d5230129ba text/yaml 4857-BJ17vsxosOo8PaFhg9YhPaA3XKM",
+  // ipVersion=4 / 6（后加的几份，上面那些一个字节都没变）：只用入口真实的那一种地址，没有的跳过并计数。
+  "query/ipv6-clash": "13275 8995a1a7ef5839a65f9f6c0a text/yaml 33db-0BKh4gyAOA/oP0i9oXHsSRXJDLk",
+  "query/ipv6-base64": "360 fdaee11de08039213cc1cac3 text/plain 168-mIbGRZJ1FwQyfNrbnRdPnJCE9zM",
+  "query/ipv6-quantumultx": "7661 73cbee39b9c20880a85bf601 text/plain 1ded-YJxd7p8Z4givQPlF0ouCNsTxF8w",
+  "query/ipv6-singbox": "1055 be51e9f1f38165eb91c1444f application/json 41f-yFCWbt4oKG6lSLUJ8/7gHxDj614",
+  "query/ipv4-surge": "17006 d3929b6615cafa9d9a0c3887 text/plain 426e-E7OVJeOD9CIDILLeenz052hVV+c",
+  "query/ipv6-none": "131 c81403fc1a78c5cb53d299c7 text/plain 83-WNQCHsuydKfbFcIVF8HG4M712vw",
+  "query/ipversion-invalid": "27 bec05d82c3acf69c55f6d72c text/plain 1b-jMa2b09t8FykHuI7RcGFgWLauwE",
+};
+
+/**
+ * 不是 200 的那几条（ipVersion：一个不剩回 422、写错回 400），没列的都必须是 200。
+ * 带 ipVersion 的还要对上 X-ForwardX-Skipped-Entries（跳过几条）；不带的不许有这个头。
+ */
+const EXPECTED_STATUS: Record<string, number> = {
+  "query/ipv6-none": 422,
+  "query/ipversion-invalid": 400,
+};
+const EXPECTED_SKIPPED: Record<string, string> = {
+  "query/ipv6-clash": "60",
+  "query/ipv6-base64": "60",
+  "query/ipv6-quantumultx": "60",
+  "query/ipv6-singbox": "60",
+  "query/ipv4-surge": "5",
+  "query/ipv6-none": "42",
+  "query/ipversion-invalid": "",
 };
 
 test("订阅金样：每种格式 × 客户端 × 令牌的输出逐字节不变（gzip 解压后也一样）", () => {
@@ -124,7 +150,8 @@ test("订阅金样：每种格式 × 客户端 × 令牌的输出逐字节不变
     for (const row of rows) {
       if (row.label === "counts" || row.label === "warm") continue;
       seen.add(row.label);
-      assert.equal(row.status, 200, `${row.label} 没拉到`);
+      assert.equal(row.status, EXPECTED_STATUS[row.label] ?? 200, `${row.label} 的状态码不对`);
+      assert.equal(row.skipped, EXPECTED_SKIPPED[row.label] ?? "", `${row.label} 的 X-ForwardX-Skipped-Entries 不对`);
       assert.equal(row.gzipSame, true, `${row.label}：gzip 解压后和不压的不一样`);
       assert.match(row.type, /; charset=utf-8$/, row.label);
       const actual = `${row.bytes} ${row.sha256.slice(0, 24)} ${row.type.split(";")[0]} ${row.etag.replace(/^W\/"/, "").replace(/"$/, "")}`;

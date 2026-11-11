@@ -42,9 +42,12 @@ import { PROXY_SUB_REGION_GROUP_TYPES } from "../../shared/proxySubRegion";
 import {
   normalizeProxySubCustomGroups,
   PROXY_SUB_BUILTIN_PRELUDES,
+  PROXY_SUB_CUSTOM_GROUP_MAX_MEMBERS,
+  PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH,
   PROXY_SUB_TEMPLATE_TARGETS,
   validateProxySubTemplate,
 } from "../../shared/proxySubTemplates";
+import { normalizeProxySubTemplateModules, PROXY_SUB_TEMPLATE_MODULE_LIMITS } from "../../shared/proxySubModules";
 import { normalizeProxySubSourceInterval, normalizeProxySubSourceUrl, PROXY_SUB_SOURCE_MODES } from "../../shared/proxySubSource";
 import { PROXY_CLIENT_FAMILY_LABELS } from "../../shared/proxyClientUserAgent";
 import { PROXY_SUBSCRIPTION_SKIP_LABELS as SKIP_LABELS } from "../../shared/proxySubscriptionPlan";
@@ -62,6 +65,29 @@ import { buildSubscriptionRouteView } from "../subscriptionRouteView";
  * 订阅令牌够长才安全：地址里带着全部节点凭据，一旦可猜就等于把节点送人。
  */
 const SUBSCRIPTION_TOKEN_LENGTH = db.PROXY_SUB_TOKEN_LENGTH;
+
+/**
+ * 模板的自定义组：认得的字段照规矩校验；认不得的字段放行（passthrough），由
+ * normalizeProxySubCustomGroups 按上限留下 —— 可视化编辑器存回来的组可能带着别处导入的附加字段，
+ * 在这一层被 zod 剥掉就等于改一次模板丢一次数据。
+ */
+const templateCustomGroupsInput = z.array(z.object({
+  name: z.string().trim().max(64),
+  type: z.enum(["select", "url-test", "fallback", "load-balance"]),
+  filter: z.string().trim().max(200).default(""),
+  match: z.enum(["regex", "any", "all"]).default("regex"),
+  includeGroups: z.boolean().default(false),
+  members: z.array(z.string().trim().max(64)).max(PROXY_SUB_CUSTOM_GROUP_MAX_MEMBERS).optional(),
+  includeNodes: z.boolean().optional(),
+}).passthrough()).max(30);
+
+/** 模板挂的插件（目前只有 Loon）。地址的协议、字符在 validateProxySubTemplate 里查。 */
+const templateModulesInput = z.array(z.object({
+  url: z.string().trim().max(PROXY_SUB_TEMPLATE_MODULE_LIMITS.url),
+  enabled: z.boolean().default(true),
+  tag: z.string().trim().max(PROXY_SUB_TEMPLATE_MODULE_LIMITS.tag).default(""),
+  argument: z.string().trim().max(PROXY_SUB_TEMPLATE_MODULE_LIMITS.argument).default(""),
+})).max(PROXY_SUB_TEMPLATE_MODULE_LIMITS.count);
 
 function nodeToRow(node: ProxyNode, sourceLink: string) {
   return {
@@ -1141,24 +1167,23 @@ export const proxySubscriptionsRouter = router({
       name: z.string().trim().min(1).max(64),
       target: z.enum(PROXY_SUB_TEMPLATE_TARGETS),
       prelude: z.string().max(60000),
-      customGroups: z.array(z.object({
-        name: z.string().trim().max(64),
-        type: z.enum(["select", "url-test", "fallback", "load-balance"]),
-        filter: z.string().trim().max(200).default(""),
-        match: z.enum(["regex", "any", "all"]).default("regex"),
-        includeGroups: z.boolean().default(false),
-      })).max(30).default([]),
+      customGroups: templateCustomGroupsInput.default([]),
+      customRules: z.string().max(PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH).default(""),
+      modules: templateModulesInput.default([]),
       isDefault: z.boolean().default(false),
     }))
     .mutation(async ({ input }) => {
       const customGroups = normalizeProxySubCustomGroups(input.customGroups);
-      const verdict = validateProxySubTemplate({ target: input.target, prelude: input.prelude, customGroups });
+      const modules = normalizeProxySubTemplateModules(input.modules);
+      const verdict = validateProxySubTemplate({ target: input.target, prelude: input.prelude, customGroups, customRules: input.customRules, modules });
       if (!verdict.ok) throw new Error(verdict.error);
       const id = await db.createProxySubTemplate({
         name: input.name,
         target: input.target,
         prelude: input.prelude,
         customGroupsJson: customGroups.length > 0 ? JSON.stringify(customGroups) : null,
+        customRules: input.customRules.trim() ? input.customRules : null,
+        modulesJson: modules.length > 0 ? JSON.stringify(modules) : null,
         isDefault: input.isDefault,
       });
       return { id };
@@ -1169,25 +1194,25 @@ export const proxySubscriptionsRouter = router({
       id: z.number().int().positive(),
       name: z.string().trim().min(1).max(64).optional(),
       prelude: z.string().max(60000).optional(),
-      customGroups: z.array(z.object({
-        name: z.string().trim().max(64),
-        type: z.enum(["select", "url-test", "fallback", "load-balance"]),
-        filter: z.string().trim().max(200).default(""),
-        match: z.enum(["regex", "any", "all"]).default("regex"),
-        includeGroups: z.boolean().default(false),
-      })).max(30).optional(),
+      customGroups: templateCustomGroupsInput.optional(),
+      customRules: z.string().max(PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH).optional(),
+      modules: templateModulesInput.optional(),
       isDefault: z.boolean().optional(),
     }))
     .mutation(async ({ input }) => {
       const existing = await db.getProxySubTemplateById(input.id);
       if (!existing) throw new Error("模板不存在");
       const customGroups = input.customGroups !== undefined ? normalizeProxySubCustomGroups(input.customGroups) : existing.customGroups;
-      const verdict = validateProxySubTemplate({ target: existing.target, prelude: input.prelude ?? existing.prelude, customGroups });
+      const customRules = input.customRules ?? existing.customRules;
+      const modules = input.modules !== undefined ? normalizeProxySubTemplateModules(input.modules) : existing.modules;
+      const verdict = validateProxySubTemplate({ target: existing.target, prelude: input.prelude ?? existing.prelude, customGroups, customRules, modules });
       if (!verdict.ok) throw new Error(verdict.error);
       await db.updateProxySubTemplate(input.id, {
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.prelude !== undefined ? { prelude: input.prelude } : {}),
         ...(input.customGroups !== undefined ? { customGroupsJson: customGroups.length > 0 ? JSON.stringify(customGroups) : null } : {}),
+        ...(input.customRules !== undefined ? { customRules: customRules.trim() ? customRules : null } : {}),
+        ...(input.modules !== undefined ? { modulesJson: modules.length > 0 ? JSON.stringify(modules) : null } : {}),
         ...(input.isDefault !== undefined ? { isDefault: input.isDefault } : {}),
       });
       return { success: true };
