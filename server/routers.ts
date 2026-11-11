@@ -33,6 +33,7 @@ import { discordAuthRouter } from "./routers/discordAuth";
 import { netProfileRouter } from "./routers/netProfile";
 import { agentRuntimeRouter } from "./routers/agentRuntime";
 import { probeCarrierRouter } from "./routers/probeCarrier";
+import { userTrafficHistoryRouter } from "./routers/userTrafficHistory";
 
 export const appRouter = router({
   system: systemRouter,
@@ -69,6 +70,7 @@ export const appRouter = router({
   netProfile: netProfileRouter,
   agentRuntime: agentRuntimeRouter,
   probeCarrier: probeCarrierRouter,
+  userTrafficHistory: userTrafficHistoryRouter,
 });
 
 export type AppRouter = typeof appRouter;

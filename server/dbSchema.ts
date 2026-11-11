@@ -121,6 +121,8 @@ export const MIGRATION_TABLES = [
   // 网络拓扑上手动标注的外部节点 / 连线（server/ops/topologyManualTables.ts）：节点在前，连线引用它
   "topology_manual_nodes",
   "topology_manual_links",
+  // 用户每天的规则流量（server/ops/userTrafficDailyTables.ts，从流量桶汇总来的历史）
+  "user_traffic_daily",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";

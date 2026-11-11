@@ -50,6 +50,7 @@ import { runPanelEventsDailyMaintenance } from "./ops/eventHooks";
 import { startStatusAvailabilityJob } from "./ops/statusAvailabilityJob";
 import { startOffsiteBackupJob } from "./ops/offsiteBackupJob";
 import { startUnlockScheduleJob } from "./ops/unlock";
+import { startUserTrafficDailyJob } from "./userTrafficHistory";
 import { applyLinkShapingDefaultOffOnce } from "./linkShapingDefaultOff";
 import { runProxySubSourceSync } from "./proxySubSourceSync";
 import { loadProxySubSettings } from "./proxySubSettings";
@@ -1231,6 +1232,8 @@ export function startScheduler() {
   startStatusAvailabilityJob();
   startOffsiteBackupJob();
   startUnlockScheduleJob();
+  // 用户流量日历史：每 10 分钟把最近 3 天的流量桶汇总成按天的行（用户管理 → 流量历史）
+  startUserTrafficDailyJob();
   // 链路整形改成默认关：把还停在旧默认值「自动」的隧道关掉一次（见 server/linkShapingDefaultOff.ts）。
   void applyLinkShapingDefaultOffOnce().catch((error) => {
     console.warn("[LinkShaping] default-off migration skipped:", error instanceof Error ? error.message : String(error));

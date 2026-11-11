@@ -2,6 +2,7 @@ import { FormField } from "@/components/ui/form-field";
 import UserProxySubConfig from "@/components/proxy/UserProxySubConfig";
 import OpsUserMenuItems from "@/features/ops/slots/UserMenuItems";
 import { UserOnlineIpsDialogHost } from "@/features/ops/online/UserOnlineIpsMenuItem";
+import { UserTrafficHistoryDialogHost } from "@/components/users/UserTrafficHistory";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError from "@/components/DataSectionError";
@@ -3041,6 +3042,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
       <UserOnlineIpsDialogHost />
+      <UserTrafficHistoryDialogHost />
     </div>
   );
 

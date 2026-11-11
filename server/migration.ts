@@ -210,6 +210,7 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   // 网络拓扑的手动标注：老面板没有这两张表 = 还没画过
   "topology_manual_nodes",
   "topology_manual_links",
+  "user_traffic_daily",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -249,6 +250,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "config_audit_events",
   "ip_change_events",
   "host_unlock_checks",
+  "user_traffic_daily",
 ]);
 
 export type MigrationSnapshotExportProgress = {
@@ -934,6 +936,8 @@ const IMPORT_TABLE_ORDER = [
   // 拓扑手动标注：依赖用户、主机；连线引用节点，节点先导
   "topology_manual_nodes",
   "topology_manual_links",
+  // 用户流量日历史：依赖用户、规则
+  "user_traffic_daily",
   "system_settings",
 ] as const;
 
@@ -959,6 +963,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "ip_change_events",
   "host_network_profiles",
   "host_unlock_checks",
+  "user_traffic_daily",
   "system_settings",
 ]);
 
@@ -1847,6 +1852,11 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "topology_manual_nodes":
       row.userId = mapRequiredId(maps, "users", source.userId);
       return { row };
+    case "user_traffic_daily":
+      // 规则删了的那几行 ruleId 记 0（名字显示「未知规则」），用户的总量照样对得上
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      row.ruleId = mapId(maps, "forward_rules", source.ruleId) || 0;
+      return { row, existingWhere: { userId: row.userId, ruleId: row.ruleId, dayStart: row.dayStart } };
     case "topology_manual_links": {
       // 引用里的主机 / 标注节点 ID 换成新库的；那一头没导进来（主机被删了）这条线就不要了
       row.userId = mapRequiredId(maps, "users", source.userId);
