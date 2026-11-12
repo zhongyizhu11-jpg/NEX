@@ -37,7 +37,7 @@ import { endImpersonation } from "../ops/impersonation";
 import { passwordReset, PasswordResetError } from "../ops/passwordReset";
 import { PASSWORD_RESET_RATE_LIMITED_MESSAGE } from "../../shared/passwordReset";
 import { clientIp } from "../clientIp";
-import { mergeUiPreferences, parseUiPreferences, serializeUiPreferences, UI_PREFERENCE_TABLES } from "../../shared/uiPreferences";
+import { mergeUiPreferences, parseUiPreferences, serializeUiPreferences, UI_PREFERENCE_TABLES, UI_PREFERENCE_VIEW_DEVICES, UI_PREFERENCE_VIEW_IDS } from "../../shared/uiPreferences";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -754,7 +754,7 @@ export const authRouter = router({
     }),
 
   /**
-   * 按账号保存的界面偏好（shared/uiPreferences.ts）：界面动画、列表的列 / 顺序 / 列宽。
+   * 按账号保存的界面偏好（shared/uiPreferences.ts）：界面动画、列表的列 / 顺序 / 列宽、列表页选的视图。
    * 一次只改一项，在服务端按「读 → 合并 → 写」做，按账号串行：两个标签页一个改列、一个关动画，谁也不盖掉谁。
    * 列的内容这里只做结构清洗；哪些列还在、哪些必须显示，画表时按当时的列定义算。
    */
@@ -768,6 +768,12 @@ export const authRouter = router({
           hidden: z.array(z.string().max(48)).max(64).optional(),
           widths: z.record(z.string().max(48), z.number().finite()).optional(),
         }).nullable(),
+      }).optional(),
+      // 列表页选的视图（主机页的卡片 / 列表 / 地图）；取值在 mergeUiPreferences 里按那一页认的清单再过一遍
+      view: z.object({
+        id: z.enum(UI_PREFERENCE_VIEW_IDS),
+        device: z.enum(UI_PREFERENCE_VIEW_DEVICES),
+        mode: z.string().max(32).nullable(),
       }).optional(),
     }))
     .mutation(async ({ input, ctx }) => withKeyedTaskLock(`ui-preferences:${ctx.user.id}`, async () => {

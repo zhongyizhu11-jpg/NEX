@@ -38,13 +38,13 @@ const PRIMARY_CONTROL_VARS = [
   "--fx-primary-shadow",
 ];
 
-test("选了薰衣草：按钮的渐变、字色、描边都换成薰衣草", () => {
+test("选了薰衣草：按钮的底色（两端同色）、字色、描边都换成薰衣草", () => {
   const { root, props, attrs } = fakeRoot();
   applyPersonalizationTheme("lavender", root);
   for (const name of PRIMARY_CONTROL_VARS) assert.ok(props.has(name), name);
   assert.equal(
     props.get("--fx-primary-gradient"),
-    "linear-gradient(135deg, color-mix(in oklab, #6e56cf 65%, white) 0%, #6e56cf 100%)",
+    "linear-gradient(135deg, #6e56cf 0%, #6e56cf 100%)",
   );
   assert.equal(props.get("--fx-primary-fill"), "#6e56cf");
   assert.equal(props.get("--fx-primary-text"), "#ffffff");
@@ -57,7 +57,7 @@ test("深色下用预设的深色主色和字色（松石深色是浅青底、�
   applyPersonalizationTheme("teal", root);
   assert.equal(
     props.get("--fx-primary-gradient"),
-    "linear-gradient(135deg, oklch(0.72 0.14 180) 0%, color-mix(in oklab, oklch(0.72 0.14 180) 75%, black) 100%)",
+    "linear-gradient(135deg, oklch(0.72 0.14 180) 0%, oklch(0.72 0.14 180) 100%)",
   );
   assert.equal(props.get("--fx-primary-text"), "oklch(0.12 0.02 190)");
 });
@@ -69,7 +69,7 @@ test("墨色：渐变从主色（正文色）推，按钮反黑", () => {
   assert.equal(props.get("--fx-primary-text"), "var(--fx-text-inverse)");
 });
 
-test("换回面板默认：主色控件的变量全部撤掉，令牌文件里的天蓝渐变生效", () => {
+test("换回面板默认：主色控件的变量全部撤掉，令牌文件里的实色深蓝生效", () => {
   const { root, props } = fakeRoot();
   applyPersonalizationTheme("sakura", root);
   assert.ok(props.size > 0);

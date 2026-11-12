@@ -1,0 +1,346 @@
+/*
+  ── 界面主题「深色运维」（设置 › 个性化 › 主题管理 › 官方主题库）──
+
+  由 <html data-ui-theme="nightops"> 打开；没有这个属性这个文件一条都不生效。
+  用户 2026-11-11 在三套桌面改版样稿里定下的 C：**深色底、等宽数字，适合长开大屏**。
+  配色照 GitHub 深色那一组：
+
+    1. 底   页面 #0d1117、面板 #151b23、线 #262e38；侧栏再深一档（#0a0d12）。不投影、不打光、不模糊。
+    2. 字   正文 #e6edf3、次要 #9aa6b2（面板上 6.9:1）；流量、百分比、地址、版本号一律等宽字
+            （JetBrains Mono → 系统自带的等宽字，不下载字体）。
+    3. 色   主按钮 #1f6feb 配白字（4.6:1），链接和选中的字是亮蓝 #58a6ff；状态点 绿 #3fb950 / 琥珀 #d29922 /
+            红 #f85149，小字用更亮的 #56d364 / #e3b341 / #ff7b72。出了事的卡整张染一层暗红 / 暗琥珀。
+    4. 控件 8px 圆角；分类条选中项是一块带蓝边的深蓝底、亮蓝字；侧栏选中项是深蓝灰底、亮蓝字。
+            主机表格每一行是一块带边的面板，行与行之间空 8px。
+
+  **不管顶栏的深浅开关选哪边都是深色**：这一套就是给常开的大屏用的，浅色版没有意义。
+  做法是浅色时（<html> 上没有 .dark）也把深色那一整套令牌写上 —— 面板几乎全靠令牌上色，
+  少数写死在「.dark …」下的规则（概览底图、对话框遮罩、弹出菜单、表格冻结列的阴影）这里照抄一份。
+  深浅开关仍然有用：切到别的主题时它照常生效，这一套只是两边看着一样。
+
+  「默认配色」另选一套时，按钮和选中态照常跟着换（那些值内联在 <html> 上，盖过这里）。
+  只改样式：样稿里左边那条图标导航（窄栏）、每行的 60 分钟流量走势、事件时间线、按 CPU 上色的主机格子，
+  要改页面结构或新数据，主题包做不了；窄栏可以用顶栏左上角的按钮把侧栏收成图标。
+*/
+
+/* 这一段不带 .dark：深浅两边都用它（html[data-ui-theme] 比面板默认令牌的「.dark」特指度高，深色下照样盖得过） */
+html[data-ui-theme="nightops"] {
+  color-scheme: dark;
+  --fx-l0-page: #0d1117;
+  --fx-l1-surface: #151b23;
+  --fx-raised: #1c2430;
+  --fx-l2-group: #11161d;
+  --fx-l3-control: #151b23;
+  --fx-l3-control-fill: #1f262f;
+  --fx-sidebar: #0a0d12;
+  --fx-hover: rgb(177 186 196 / 8%);
+  --fx-pressed: rgb(177 186 196 / 14%);
+  --fx-stroke-weak: #262e38;
+  --fx-stroke-base: #3d444d;
+  --fx-stroke-strong: #6e7681;
+  --fx-control-stroke: #3d444d;
+  --fx-text: #e6edf3;
+  --fx-text-secondary: #c9d1d9;
+  --fx-text-muted: #9aa6b2;
+  --fx-text-inverse: #0d1117;
+  --fx-nightops-link: #58a6ff;
+  --fx-nightops-select: #1c2533;
+  --fx-nightops-select-text: #79b8ff;
+  --fx-nightops-track: #1f262f;
+  --fx-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --fx-font: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", Roboto, Arial, sans-serif;
+  --fx-card-fill: #151b23;
+  --fx-card-stroke: #262e38;
+  --fx-elevation-flat: none;
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(1 4 9 / 85%), 0 0 0 1px #30363d;
+  --fx-elevation-modal: 0 32px 80px -24px rgb(1 4 9 / 90%), 0 0 0 1px #30363d;
+  --fx-focus-ring: 0 0 0 3px rgb(56 139 253 / 40%);
+  --fx-glass: #0d1117;
+  --fx-glass-strong: #0a0d12;
+  --fx-glass-blur: none;
+  --fx-radius-control: 8px;
+  --fx-radius-card: 10px;
+  --fx-radius-surface: 10px;
+  --fx-radius-modal: 12px;
+  --fx-radius-inner: 6px;
+  --fx-header-height: 56px;
+  --fx-accent: #58a6ff;
+  --fx-accent-strong: #79b8ff;
+  --fx-accent-soft: rgb(56 139 253 / 15%);
+  --fx-accent-fill: #1f6feb;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #ffffff;
+  --fx-primary-gradient: linear-gradient(#1f6feb, #1f6feb);
+  --fx-primary-gradient-hover: linear-gradient(#1b62d4, #1b62d4);
+  --fx-primary-sheen: none;
+  --fx-primary-fill: #1f6feb;
+  --fx-primary-fill-hover: #1b62d4;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: #1f6feb;
+  --fx-primary-shadow: none;
+  --fx-path: #58a6ff;
+  --fx-path-soft: rgb(56 139 253 / 15%);
+  --fx-path-text: #79b8ff;
+  --fx-beam: #58a6ff;
+  --fx-beam-glow: rgb(88 166 255 / 45%);
+  --fx-mesh-1: rgb(56 139 253 / 10%);
+  --fx-mesh-2: rgb(63 185 80 / 6%);
+  --fx-mesh-3: rgb(163 113 247 / 6%);
+  --fx-tile-sky: linear-gradient(#1f262f, #1f262f);
+  --fx-tile-violet: linear-gradient(#1f262f, #1f262f);
+  --fx-tile-teal: linear-gradient(#1f262f, #1f262f);
+  --fx-tile-orange: linear-gradient(#1f262f, #1f262f);
+  --fx-tile-pink: linear-gradient(#1f262f, #1f262f);
+  --fx-tile-green: linear-gradient(#1f262f, #1f262f);
+  --fx-tile-text: #9aa6b2;
+  --fx-healthy: #3fb950;
+  --fx-healthy-soft: rgb(46 160 67 / 15%);
+  --fx-healthy-text: #56d364;
+  --fx-warn: #d29922;
+  --fx-warn-soft: rgb(187 128 9 / 15%);
+  --fx-warn-text: #e3b341;
+  --fx-down: #f85149;
+  --fx-down-soft: rgb(248 81 73 / 14%);
+  --fx-down-text: #ff7b72;
+  --fx-down-fill: #da3633;
+  --fx-standby: #8b949e;
+  --fx-standby-soft: rgb(139 148 158 / 14%);
+  --fx-delivery: #db61a2;
+  --fx-delivery-soft: rgb(219 97 162 / 15%);
+  --fx-delivery-text: #ff9bce;
+  --fx-cat-indigo: #a5a3ff;
+  --fx-cat-indigo-soft: rgb(165 163 255 / 15%);
+  --fx-cat-teal: #39c5cf;
+  --fx-cat-teal-soft: rgb(57 197 207 / 15%);
+  --fx-cat-orange: #f0883e;
+  --fx-cat-orange-soft: rgb(240 136 62 / 15%);
+  --fx-cat-pink: #f778ba;
+  --fx-cat-pink-soft: rgb(247 120 186 / 15%);
+  --fx-chart-1: #58a6ff;
+  --fx-chart-2: #39c5cf;
+  --fx-chart-3: #a5a3ff;
+  --fx-chart-4: #db61a2;
+  --fx-chart-5: #3fb950;
+  --fx-chart-6: #a5a3ff;
+  --fx-chart-7: #f0883e;
+  --fx-chart-8: #a3e635;
+  --fx-chart-9: #f778ba;
+  --fx-flow-in: #58a6ff;
+  --fx-flow-out: #d29922;
+  --fx-overview-canvas: #11161d;
+}
+/*
+  深色开关下：上面那一段已经全盖住了，这里只把按钮上的字再写一遍 ——
+  每套主题的深浅两段都要自己定 --fx-on-accent（client/src/styles/onAccentToken.test.ts），两边一样。
+*/
+html.dark[data-ui-theme="nightops"] {
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #ffffff;
+  --fx-primary-text: #ffffff;
+}
+
+/*
+  浅色开关下也是深色：下面这些原来只写在「.dark …」下面（client/src/index.css、workspace.css），
+  浅色时 <html> 上没有 .dark，这里照抄一份。
+*/
+html[data-ui-theme="nightops"] body { background: var(--fx-l0-page); color: var(--fx-text); }
+html[data-ui-theme="nightops"] .dialog-overlay { --dialog-overlay-tint: rgb(1 4 9 / 0.7); }
+html[data-ui-theme="nightops"] .dialog-panel { border-color: var(--fx-stroke-base); box-shadow: var(--fx-elevation-modal); }
+html[data-ui-theme="nightops"] .action-menu-content { background: var(--fx-raised); border-color: var(--fx-stroke-base); box-shadow: var(--fx-elevation-popover); }
+html[data-ui-theme="nightops"] [data-mobile-header="true"] { background: color-mix(in oklch, var(--background) 94%, transparent); }
+html[data-ui-theme="nightops"] .host-table-frozen-left::after { background: linear-gradient(to right, rgb(1 4 9 / 40%), transparent); }
+html[data-ui-theme="nightops"] .host-table-frozen-right::before { background: linear-gradient(to left, rgb(1 4 9 / 40%), transparent); }
+html[data-ui-theme="nightops"] .fx-overview-canvas { background: linear-gradient(180deg, #121821 0%, var(--fx-overview-canvas) 100%); }
+html[data-ui-theme="nightops"] .fx-overview-shore { stroke: #58a6ff; stroke-opacity: 0.08; }
+html[data-ui-theme="nightops"] .fx-overview-graticule line { stroke: #ffffff; stroke-opacity: 0.04; }
+html[data-ui-theme="nightops"] .fx-overview-land { fill: #1f262f; stroke: #30363d; }
+html[data-ui-theme="nightops"] .fx-overview-borders { stroke: #30363d; }
+html[data-ui-theme="nightops"] .fx-overview-label-box { stroke: var(--fx-stroke-base); stroke-width: 1px; filter: drop-shadow(0 3px 10px rgb(1 4 9 / 50%)); }
+
+/* ── 1. 外壳：顶栏和页面同色、一道暗线；侧栏再深一档 ─────────────── */
+html[data-ui-theme="nightops"] .workspace-appbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom: 1px solid #1f262f; box-shadow: none; }
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="sidebar"],
+html[data-ui-theme="nightops"] .workspace-sidebar { background: var(--fx-sidebar); border-right-color: #1f262f; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="nightops"] .workspace-appbar-title { font-size: 15px; font-weight: 600; letter-spacing: 0; }
+html[data-ui-theme="nightops"] .workspace-appbar-version { border: 1px solid var(--fx-stroke-weak); border-radius: 6px; background: transparent; color: var(--fx-text-muted); font-family: var(--fx-font-mono); font-size: 11.5px; }
+html[data-ui-theme="nightops"] .workspace-appbar-search { border-radius: 8px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); }
+html[data-ui-theme="nightops"] .workspace-appbar-search:hover { border-color: var(--fx-stroke-strong); background: var(--fx-l1-surface); }
+html[data-ui-theme="nightops"] .workspace-appbar-kbd { font-family: var(--fx-font-mono); }
+html[data-ui-theme="nightops"] .workspace-appbar-icon,
+html[data-ui-theme="nightops"] .workspace-appbar-account,
+html[data-ui-theme="nightops"] .workspace-appbar-brand { border-radius: 8px; }
+@media (max-width: 639px) {
+  html[data-ui-theme="nightops"] .workspace-appbar-search { border-color: transparent; background: transparent; }
+}
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 8px; color: var(--fx-text-muted); font-weight: 500; }
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="menu-button"]:hover { background: var(--fx-hover); color: var(--fx-text); }
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-nightops-select); background-image: none; color: var(--fx-nightops-select-text); font-weight: 600; box-shadow: none; }
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-nightops-select-text); }
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="group-label"] { font-size: 11px; letter-spacing: .06em; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="nightops"] .workspace-layout [data-sidebar="separator"] { background: #1f262f; }
+
+/* ── 2. 面板：#151b23、1px 暗线、10px、不投影；出了事的整张染一层 ───── */
+html[data-ui-theme="nightops"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="nightops"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="nightops"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="nightops"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: none;
+  transition: border-color 120ms;
+}
+html[data-ui-theme="nightops"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="nightops"]:not([data-card-style]) .fx-card-face[data-tone="warn"] { border-color: #4d3a12; background: #1f1b12; }
+html[data-ui-theme="nightops"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="nightops"]:not([data-card-style]) .fx-card-face[data-tone="down"] { border-color: #5c2226; background: #2a1416; }
+html[data-ui-theme="nightops"] .workspace-main .fx-host-card:hover,
+html[data-ui-theme="nightops"] .workspace-main .fx-rule-card:hover { border-color: var(--fx-stroke-strong); box-shadow: none; transform: none; }
+html[data-ui-theme="nightops"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid var(--fx-card-stroke); background: var(--fx-card-fill); box-shadow: none; }
+html[data-ui-theme="nightops"] .fx-summary { box-shadow: none; }
+html[data-ui-theme="nightops"] .fx-tile { box-shadow: none; }
+html[data-ui-theme="nightops"] .fx-grouped-list { border-color: var(--fx-stroke-weak); box-shadow: none; }
+html[data-ui-theme="nightops"] .fx-grouped-list > .fx-list-row[aria-current="true"] { background: var(--fx-nightops-select); }
+html[data-ui-theme="nightops"] .fx-grouped-list > .fx-list-row[aria-current="true"] svg { color: var(--fx-nightops-select-text); }
+/* 主机卡：系统图标一枚深灰方块；读数标签左、等宽数字右，底下一根 4px 细条 */
+html[data-ui-theme="nightops"] .fx-host-card > div:first-child > span:first-child { border-radius: 6px; border: 0; background: var(--fx-l3-control-fill); color: var(--fx-text-secondary); }
+html[data-ui-theme="nightops"] .fx-host-card .grid.grid-cols-3 { gap: 14px; }
+html[data-ui-theme="nightops"] .fx-host-spec { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 6px; border-radius: 0; background: transparent; padding: 0 0 10px; }
+html[data-ui-theme="nightops"] .fx-host-spec > i { font-size: 12px; line-height: 18px; }
+html[data-ui-theme="nightops"] .fx-host-spec > b { font-family: var(--fx-font-mono); font-size: 13px; line-height: 18px; font-weight: 500; text-align: right; }
+html[data-ui-theme="nightops"] .fx-host-spec-bar { left: 0; right: 0; bottom: 0; height: 4px; border-radius: 2px; background: var(--fx-nightops-track); }
+html[data-ui-theme="nightops"] .fx-host-spec-bar > span { border-radius: 2px; background: var(--fx-primary-fill); }
+html[data-ui-theme="nightops"] .fx-host-spec-bar > span[data-tone="warn"] { background: var(--fx-warn); }
+html[data-ui-theme="nightops"] .fx-host-spec-bar > span[data-tone="down"] { background: var(--fx-down); }
+
+/* ── 3. 数：统计、流量、地址、页头读数一律等宽 ─────────────────── */
+html[data-ui-theme="nightops"] .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
+html[data-ui-theme="nightops"] .fx-summary-cell > span:first-child { font-size: 12.5px; color: var(--fx-text-muted); }
+html[data-ui-theme="nightops"] .fx-summary-value { font-family: var(--fx-font-mono); font-size: 28px; line-height: 34px; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 767px) { html[data-ui-theme="nightops"] .fx-summary-value { font-size: 21px; line-height: 28px; } }
+html[data-ui-theme="nightops"] .fx-rule-num > b { font-family: var(--fx-font-mono); font-size: 20px; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+html[data-ui-theme="nightops"] .fx-rule-num > small { font-family: var(--fx-font-mono); font-size: 11px; font-weight: 400; }
+html[data-ui-theme="nightops"] .fx-rule-addr,
+html[data-ui-theme="nightops"] .workspace-main .font-mono,
+html[data-ui-theme="nightops"] .workspace-main code { font-family: var(--fx-font-mono); }
+html[data-ui-theme="nightops"] .fx-rule-path,
+html[data-ui-theme="nightops"] .fx-tunnel-foot { border-top-color: var(--fx-stroke-weak); }
+html[data-ui-theme="nightops"] .fx-rule-spark,
+html[data-ui-theme="nightops"] .workspace-header-aside .fx-sparkline { color: var(--fx-nightops-link); }
+html[data-ui-theme="nightops"] .fx-rule-tag { border-radius: 4px; font-family: var(--fx-font-mono); }
+html[data-ui-theme="nightops"] .workspace-header-aside,
+html[data-ui-theme="nightops"] .workspace-header-chips { font-family: var(--fx-font-mono); font-size: 12px; }
+html[data-ui-theme="nightops"] [data-slot="table"] { font-variant-numeric: tabular-nums; }
+
+/* ── 4. 字：标题 20px / 600，说明小灰字 ──────────────────────────── */
+html[data-ui-theme="nightops"] .workspace-main .workspace-header-title { font-size: 21px; line-height: 28px; font-weight: 600; letter-spacing: 0; }
+html[data-ui-theme="nightops"] .fx-navbar-large-title { font-weight: 600; letter-spacing: 0; }
+html[data-ui-theme="nightops"] .workspace-main .workspace-header-meta { color: var(--fx-text-muted); }
+html[data-ui-theme="nightops"] .fx-list-section-header,
+html[data-ui-theme="nightops"] .workspace-main .fx-list-section-header { font-size: 12px; letter-spacing: .04em; text-transform: none; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="nightops"] .workspace-main [data-slot="card-title"] { font-weight: 600; letter-spacing: 0; }
+html[data-ui-theme="nightops"] .workspace-main a:not([data-slot="button"]):not([data-sidebar]) { color: var(--fx-nightops-link); }
+
+/* ── 5. 分类条：一排字；选中项一块带蓝边的深蓝底、亮蓝字 ──────────── */
+html[data-ui-theme="nightops"] .workspace-tabs { padding: 0 0 10px; border: 0; border-bottom: 1px solid #1f262f; border-radius: 0; background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tabs-list { gap: 6px; }
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tab {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--fx-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { color: var(--fx-text); background: var(--fx-hover); }
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="nightops"] .workspace-tabs .workspace-tab[data-state="active"] { border-color: #1f6feb; color: var(--fx-nightops-select-text); background: #142338; background-image: none; box-shadow: none; font-weight: 600; }
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tab > svg,
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: currentColor; }
+html[data-ui-theme="nightops"] .workspace-tab-count { font-family: var(--fx-font-mono); }
+html[data-ui-theme="nightops"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-nightops-select-text); }
+html[data-ui-theme="nightops"] .workspace-tab-scroll { top: 0; bottom: 10px; border-radius: 8px; }
+
+/* ── 6. 控件：8px、平的蓝色主按钮、深底暗线的次按钮 ──────────────── */
+html[data-ui-theme="nightops"] .fx-chip { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); color: var(--fx-text-secondary); font-weight: 500; box-shadow: none; }
+html[data-ui-theme="nightops"] .fx-chip:hover { border-color: var(--fx-stroke-strong); color: var(--fx-text); }
+html[data-ui-theme="nightops"] .fx-chip-on,
+html[data-ui-theme="nightops"] .fx-chip-on:hover { border-color: #1f6feb; background: #142338; background-image: none; color: var(--fx-nightops-select-text); font-weight: 600; }
+html[data-ui-theme="nightops"] .workspace-main [data-slot="input"],
+html[data-ui-theme="nightops"] .workspace-main [data-slot="textarea"],
+html[data-ui-theme="nightops"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="nightops"] .workspace-filter-search input { border-radius: 8px; background: var(--fx-l1-surface); border-color: var(--fx-stroke-weak); box-shadow: none; }
+html[data-ui-theme="nightops"] .fx-search-pill { border-radius: 8px !important; background: var(--fx-l1-surface) !important; border: 1px solid var(--fx-stroke-weak) !important; box-shadow: none !important; }
+html[data-ui-theme="nightops"] .fx-search-pill:focus-visible { border-color: #388bfd !important; }
+html[data-ui-theme="nightops"] [data-slot="button"]:not([data-icon-button]),
+html[data-ui-theme="nightops"] .fx-row-action,
+html[data-ui-theme="nightops"] .fx-filter-pill { border-radius: 8px !important; }
+html[data-ui-theme="nightops"] .workspace-main [data-icon-button],
+html[data-ui-theme="nightops"] .workspace-header-actions [data-slot="button"] { border-radius: 8px !important; }
+html[data-ui-theme="nightops"] [data-slot="badge"] { border-radius: 4px; }
+html[data-ui-theme="nightops"] [data-slot="button"][data-variant="default"]:not(:disabled),
+html[data-ui-theme="nightops"] [data-slot="button"]:not([data-variant]):not(:disabled) { background-image: none !important; background-color: var(--fx-primary-fill); color: var(--fx-primary-text); border-color: transparent; box-shadow: none; font-weight: 600; }
+html[data-ui-theme="nightops"] [data-slot="button"][data-variant="default"]:not(:disabled):hover,
+html[data-ui-theme="nightops"] [data-slot="button"]:not([data-variant]):not(:disabled):hover { background-color: var(--fx-primary-fill-hover); }
+html[data-ui-theme="nightops"] [data-slot="button"]:disabled { box-shadow: none; }
+html[data-ui-theme="nightops"] [data-slot="button"][data-variant="outline"],
+html[data-ui-theme="nightops"] [data-slot="button"][data-variant="secondary"] { border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); color: var(--fx-text); box-shadow: none; }
+html[data-ui-theme="nightops"] [data-slot="button"][data-variant="outline"]:hover,
+html[data-ui-theme="nightops"] [data-slot="button"][data-variant="secondary"]:hover { border-color: var(--fx-stroke-strong); background: var(--fx-raised); }
+
+/* ── 7. 表格：表头小灰字；主机表每一行是一块带边的面板 ─────────────── */
+html[data-ui-theme="nightops"] [data-slot="table-head"] { height: 36px; font-size: 12px; font-weight: 500; letter-spacing: .02em; color: var(--fx-text-muted); }
+html[data-ui-theme="nightops"] [data-slot="table"] tbody > tr { height: 52px; border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="nightops"] [data-slot="table"] tbody > tr:hover,
+html[data-ui-theme="nightops"] .host-table-row:hover,
+html[data-ui-theme="nightops"] .host-table-row:hover > .host-table-frozen-cell { background: #1a212b; }
+/*
+  主机表（Hosts.tsx 的 .host-management-table）：外面那张卡去掉，行与行之间空 8px，
+  每一行一圈 1px 暗线、8px 圆角 —— 样稿里「一台一块」的画法。冻结列的底跟着行走。
+*/
+html[data-ui-theme="nightops"] .workspace-main .host-table-shell[data-slot="card"],
+html[data-ui-theme="nightops"] .workspace-main [data-slot="card"]:has(.host-management-table) { border-color: transparent; background: transparent; }
+html[data-ui-theme="nightops"] .host-management-table { border-collapse: separate; border-spacing: 0 8px; margin-top: -8px; }
+html[data-ui-theme="nightops"] .host-management-table thead tr { border-bottom: 0; }
+html[data-ui-theme="nightops"] .host-management-table thead th { background: var(--fx-l0-page); }
+html[data-ui-theme="nightops"] .host-management-table tbody > tr { border-bottom: 0; }
+html[data-ui-theme="nightops"] .host-management-table tbody > tr > td { background: var(--fx-l1-surface); border-top: 1px solid var(--fx-stroke-weak); border-bottom: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="nightops"] .host-management-table tbody > tr > td:first-child { border-left: 1px solid var(--fx-stroke-weak); border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+html[data-ui-theme="nightops"] .host-management-table tbody > tr > td:last-child { border-right: 1px solid var(--fx-stroke-weak); border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+html[data-ui-theme="nightops"] .host-management-table tbody > tr:hover > td { background: #1a212b; border-color: var(--fx-stroke-strong); }
+html[data-ui-theme="nightops"] .host-management-table .host-table-frozen-left::after,
+html[data-ui-theme="nightops"] .host-management-table .host-table-frozen-right::before { display: none; }
+
+/* ── 8. 页面里其它圆角：收到 6 / 10 两档；圆点、头像、状态灯（rounded-full）不动 ── */
+html[data-ui-theme="nightops"] .workspace-main :is(.rounded-md, .rounded-lg) { border-radius: 6px; }
+html[data-ui-theme="nightops"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 10px; }
+html[data-ui-theme="nightops"] [role="dialog"] :is(.rounded-md, .rounded-lg) { border-radius: 6px; }
+html[data-ui-theme="nightops"] [role="dialog"] :is(.rounded-xl, .rounded-2xl) { border-radius: 10px; }
+
+/* ── 9. 手机：顶栏实底、底部标签栏贴底通栏 ─────────────────────── */
+@media (max-width: 767px) {
+  html[data-ui-theme="nightops"] .fx-navbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html[data-ui-theme="nightops"] .fx-tabbar {
+    inset-inline: 0;
+    bottom: 0;
+    height: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-top: 1px solid #1f262f;
+    border-radius: 0;
+    background: var(--fx-glass-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  html[data-ui-theme="nightops"] .fx-tabbar-item { height: 50px; border-radius: 8px; }
+  html[data-ui-theme="nightops"] .fx-tabbar-item:active { transform: none; }
+  html[data-ui-theme="nightops"] .fx-tabbar-item-active { color: var(--fx-nightops-select-text); background: transparent; background-image: none; box-shadow: none; }
+  html[data-ui-theme="nightops"] .fx-tabbar-item-active > svg { color: var(--fx-nightops-select-text); }
+}

@@ -463,6 +463,11 @@ test("database-backed list queries page, search, scope, and hydrate only request
       assert.equal(rulePage.page, 3);
       assert.deepEqual(rulePage.categoryCounts, { all: 5, local: 3, tunnel: 1, chain: 1, group: 0 });
       assert.equal(rulePage.items.length, 1);
+      // 页头「运行中 · 未运行 · 已暂停」三个数加起来就是启用的条数（和首页同一口径，见 forwardRuleStatusCountsSql）
+      assert.equal(rulePage.runningItems + rulePage.stalledItems + rulePage.pausedItems, rulePage.activeItems);
+      const ruleSummary = await rules.getForwardRuleSummarySelection(visibleRuleInput);
+      assert.equal(ruleSummary.runningItems, rulePage.runningItems);
+      assert.equal(ruleSummary.stalledItems, rulePage.stalledItems);
 
       const tunnelSearch = await rules.getForwardRulesPage({
         ...visibleRuleInput,

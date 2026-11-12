@@ -4,6 +4,8 @@
   · motion：界面动画（个人资料 › 界面，上游 2.3.287），默认开；关了整站不做过渡和动画
     （<html data-motion="off">，见 client/src/lib/uiMotion.ts）。
   · tables：列表显示列、顺序、列宽（主机列表、转发规则的列表视图，上游 2.3.287）。
+  · views：列表页选的视图（主机页的卡片 / 精简卡片 / 列表 / 地图，2026-11）。手机和电脑各记一份
+    （client/src/lib/viewModeStorage.ts 也是这么分的：两种屏幕适合的视图本来就不一样）。
 
   布局密度（标准 / 精简）早就单独存在 users.uiLayout，这里不重复。
 
@@ -32,9 +34,20 @@ export type TableColumnPreference = {
   widths: Record<string, number>;
 };
 
+/** 记得住视图的页面，和每一页认的取值（不在里面的值存不进去、读出来也当没有）。 */
+export const UI_PREFERENCE_VIEWS = {
+  hosts: ["card", "compact-card", "table", "map", "flat-map"],
+} as const;
+export type UiPreferenceView = keyof typeof UI_PREFERENCE_VIEWS;
+export const UI_PREFERENCE_VIEW_IDS = Object.keys(UI_PREFERENCE_VIEWS) as [UiPreferenceView, ...UiPreferenceView[]];
+export const UI_PREFERENCE_VIEW_DEVICES = ["desktop", "mobile"] as const;
+export type UiPreferenceViewDevice = (typeof UI_PREFERENCE_VIEW_DEVICES)[number];
+export type ViewModePreference = Partial<Record<UiPreferenceViewDevice, string>>;
+
 export type UiPreferences = {
   motion?: boolean;
   tables?: Partial<Record<UiPreferenceTable, TableColumnPreference>>;
+  views?: Partial<Record<UiPreferenceView, ViewModePreference>>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +90,20 @@ export function sanitizeTableColumnPreference(value: unknown): TableColumnPrefer
   return { order, hidden, widths };
 }
 
+function isViewMode(view: UiPreferenceView, mode: unknown): mode is string {
+  return typeof mode === "string" && (UI_PREFERENCE_VIEWS[view] as readonly string[]).includes(mode);
+}
+
+/** 一页的视图偏好：只留认得的设备和取值；什么都没剩就是 null。 */
+function sanitizeViewModePreference(view: UiPreferenceView, value: unknown): ViewModePreference | null {
+  if (!isRecord(value)) return null;
+  const result: ViewModePreference = {};
+  for (const device of UI_PREFERENCE_VIEW_DEVICES) {
+    if (isViewMode(view, value[device])) result[device] = value[device] as string;
+  }
+  return Object.keys(result).length ? result : null;
+}
+
 /** 库里那段文本（或已经解析好的对象）→ 偏好。坏 JSON、不认识的字段都当没有。 */
 export function parseUiPreferences(raw: unknown): UiPreferences {
   let value: unknown = raw;
@@ -99,24 +126,34 @@ export function parseUiPreferences(raw: unknown): UiPreferences {
     }
     if (Object.keys(tables).length) result.tables = tables;
   }
+  if (isRecord(value.views)) {
+    const views: UiPreferences["views"] = {};
+    for (const view of UI_PREFERENCE_VIEW_IDS) {
+      const pref = sanitizeViewModePreference(view, value.views[view]);
+      if (pref) views[view] = pref;
+    }
+    if (Object.keys(views).length) result.views = views;
+  }
   return result;
 }
 
 /** 存回库里的文本；全是默认就存 null。 */
 export function serializeUiPreferences(preferences: UiPreferences): string | null {
   const clean = parseUiPreferences(preferences);
-  if (clean.motion === undefined && !clean.tables) return null;
+  if (clean.motion === undefined && !clean.tables && !clean.views) return null;
   return JSON.stringify(clean);
 }
 
 export type UiPreferencesPatch = {
   motion?: boolean | null;
   table?: { id: UiPreferenceTable; columns: Partial<TableColumnPreference> | null };
+  /** 某一页在某类设备上选的视图；mode 为 null = 回到默认。 */
+  view?: { id: UiPreferenceView; device: UiPreferenceViewDevice; mode: string | null };
 };
 
 /** 只改这次提交的那一项，别的照旧（两个标签页一个改列、一个关动画，谁也不覆盖谁）。null = 恢复默认。 */
 export function mergeUiPreferences(current: UiPreferences, patch: UiPreferencesPatch): UiPreferences {
-  const next: UiPreferences = { ...current, tables: { ...(current.tables || {}) } };
+  const next: UiPreferences = { ...current, tables: { ...(current.tables || {}) }, views: { ...(current.views || {}) } };
   if (patch.motion === null) delete next.motion;
   else if (patch.motion !== undefined) next.motion = patch.motion;
   if (patch.table) {
@@ -124,8 +161,22 @@ export function mergeUiPreferences(current: UiPreferences, patch: UiPreferencesP
     if (pref) next.tables![patch.table.id] = pref;
     else delete next.tables![patch.table.id];
   }
+  if (patch.view && (UI_PREFERENCE_VIEW_IDS as readonly string[]).includes(patch.view.id)) {
+    const { id, device, mode } = patch.view;
+    const pref: ViewModePreference = { ...(next.views![id] || {}) };
+    if (mode !== null && isViewMode(id, mode)) pref[device] = mode;
+    else if (mode === null) delete pref[device];
+    if (Object.keys(pref).length) next.views![id] = pref;
+    else delete next.views![id];
+  }
   if (!Object.keys(next.tables!).length) delete next.tables;
+  if (!Object.keys(next.views!).length) delete next.views;
   return next;
+}
+
+/** 这个账号在这类设备上给这一页选过的视图；没选过（或选的值现在不认了）是 null。 */
+export function readViewModePreference(user: { uiPreferences?: unknown } | null | undefined, view: UiPreferenceView, device: UiPreferenceViewDevice) {
+  return parseUiPreferences(user?.uiPreferences).views?.[view]?.[device] ?? null;
 }
 
 /** 这个账号开没开界面动画：没设过 = 开。 */

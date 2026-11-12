@@ -1,9 +1,15 @@
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
+
 import { NetworkOverview } from "@/components/network/NetworkOverview";
 import type { NetworkMapData } from "@/features/network/networkMapData";
 import { useNetworkMapModelFromData, type NetworkMapModel } from "@/features/network/networkMapModel";
 import { buildOverviewEdges, clusterOverview, clusterOverviewBundles, overviewCounts, projectOverview } from "@/features/network/networkOverview";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
+import { cn } from "@/lib/utils";
+
+import { readNetworkMapCollapsed, writeNetworkMapCollapsed } from "./networkMapCollapse";
 
 /**
  * 首页的「概览」：这个账号看得到的主机，按真实经纬度落在一张裁到它们范围的矢量世界底图上（挨太近的合成一个点），主机之间的
@@ -18,18 +24,31 @@ export { buildNetworkMapModel, useNetworkMapModel } from "@/features/network/net
 export type { NetworkMapModel } from "@/features/network/networkMapModel";
 
 /** Slot lazy 进来的卡片：拿 Slot 已经取到的数据建模型（数据没变不重算） */
-export default function NetworkMapSection({ data, onOpen }: { data: NetworkMapData; onOpen: (href: string) => void }) {
+export default function NetworkMapSection({ data, onOpen, collapsible = false }: { data: NetworkMapData; onOpen: (href: string) => void; collapsible?: boolean }) {
   const model = useNetworkMapModelFromData(data);
   if (model.nodes.length === 0) return null;
-  return <NetworkOverviewSection model={model} forwardLinks={data.forwardLinks} onOpen={onOpen} />;
+  return <NetworkOverviewSection model={model} forwardLinks={data.forwardLinks} onOpen={onOpen} collapsible={collapsible} />;
 }
 
-/** 卡片本身：拿到模型就能画，node 里 renderToStaticMarkup 也能测 */
-export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
+/**
+ * 卡片本身：拿到模型就能画，node 里 renderToStaticMarkup 也能测。
+ *
+ * collapsible：首页默认布局（2026-11 起地图排在数字和「需要关注」下面）。画布矮一截，标题行右边一个
+ * 「收起 / 展开」，收起后只剩标题那一行；收没收记在这个浏览器里（networkMapCollapse.ts）。深空主题不传。
+ */
+export function NetworkOverviewSection({ model, forwardLinks, onOpen, collapsible = false }: {
   model: NetworkMapModel;
   forwardLinks: readonly ForwardMapLink[];
   onOpen: (href: string) => void;
+  collapsible?: boolean;
 }) {
+  const [collapsedState, setCollapsedState] = useState(() => collapsible && readNetworkMapCollapsed());
+  const collapsed = collapsible && collapsedState;
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setCollapsedState(next);
+    writeNetworkMapCollapsed(next);
+  };
   const counts = overviewCounts(model, forwardLinks);
   const drawable = model.links.length + forwardLinks.length;
   // 图例按真正画出来的线：同城的主机合成一个点，两头都在一个点里的线不画（状态进了点的颜色），
@@ -56,15 +75,31 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
           <span className="shrink-0 whitespace-nowrap text-primary-type font-semibold text-foreground">概览</span>
           <span className="truncate text-meta tabular-nums text-muted-foreground">{model.nodes.length} 台主机 · {placed.length} 个地点</span>
         </span>
-        {drawable > 0 || counts.tunnels > 0 ? (
-          <span className="fx-overview-verdict tabular-nums" data-tone={verdict.tone}>
-            <span aria-hidden="true" className="fx-overview-verdict-dot" />
-            {verdict.text}
-          </span>
-        ) : null}
+        <span className="flex shrink-0 items-center gap-2">
+          {drawable > 0 || counts.tunnels > 0 ? (
+            <span className="fx-overview-verdict tabular-nums" data-tone={verdict.tone}>
+              <span aria-hidden="true" className="fx-overview-verdict-dot" />
+              {verdict.text}
+            </span>
+          ) : null}
+          {collapsible ? (
+            <button
+              type="button"
+              className="inline-flex h-7 items-center gap-1 rounded-[var(--fx-radius-control)] px-2 text-meta font-medium text-muted-foreground hover:bg-[var(--fx-hover)] hover:text-foreground focus-visible:shadow-[var(--fx-focus-ring)] focus-visible:outline-none"
+              aria-expanded={!collapsed}
+              onClick={toggleCollapsed}
+              data-netmap-toggle=""
+            >
+              {collapsed ? "展开地图" : "收起"}
+              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !collapsed && "rotate-180")} aria-hidden="true" />
+            </button>
+          ) : null}
+        </span>
       </div>
+      {collapsed ? null : (
+      <>
       <div className="fx-overview-canvas mx-2.5">
-        <NetworkOverview model={model} forwardLinks={forwardLinks} onOpen={onOpen} />
+        <NetworkOverview model={model} forwardLinks={forwardLinks} onOpen={onOpen} short={collapsible} />
       </div>
       {/*
         图例只说线的画法，不再自己数一遍：总数在页头（N 条线路 · N 条转发），状态在右上角的胶囊，
@@ -80,6 +115,8 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
       ) : drawable === 0 ? (
         <div data-fx-help="" className="px-4 pb-3 text-meta text-muted-foreground">还没有连线。建一条隧道，或者把转发指向另一台主机，这里就会连起来。</div>
       ) : null}
+      </>
+      )}
     </section>
   );
 }

@@ -18,6 +18,11 @@ function isMobileViewport() {
   }
 }
 
+/** 这台设备算手机还是电脑：按账号记视图（shared/uiPreferences.ts 的 views）时用同一条线分。 */
+export function viewModeDevice(): "desktop" | "mobile" {
+  return isMobileViewport() ? "mobile" : "desktop";
+}
+
 /** 这台设备用哪个 key：手机带 `.mobile` 后缀。导出给测试和想要固定设备的调用方。 */
 export function viewModeStorageKey(key: string, mobile = isMobileViewport()) {
   return mobile ? `${key}.mobile` : key;

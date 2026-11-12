@@ -27,8 +27,8 @@ export const UI_THEME_API_VERSION = 1;
 export const BUILTIN_UI_THEME_IDS = ["classic", "pearl", "liquid-glass"] as const;
 export type BuiltinUiThemeId = typeof BUILTIN_UI_THEME_IDS[number];
 
-/** 官方主题库里的那几套（原来内置的）。顺序就是主题库里的显示顺序。 */
-export const OFFICIAL_UI_THEME_IDS = ["deepspace", "gilt", "rose", "cinnabar", "indigo"] as const;
+/** 官方主题库里的那几套：前五套原来内置，后三套（控制台 / 精修 / 深色运维）2.3.525 之后新加。顺序就是主题库里的显示顺序。 */
+export const OFFICIAL_UI_THEME_IDS = ["deepspace", "gilt", "rose", "cinnabar", "indigo", "console", "refined", "nightops"] as const;
 export type OfficialUiThemeId = typeof OFFICIAL_UI_THEME_IDS[number];
 
 export const UI_THEME_LIMITS = {

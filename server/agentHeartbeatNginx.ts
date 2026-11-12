@@ -26,6 +26,12 @@ export type NginxStreamServerOptions = {
   proto: "tcp" | "udp";
   upstream: string;
   loopbackOnly?: boolean;
+  /**
+   * 这台机器能不能开 IPv6 监听（shared/hostIpv6Listen.ts）。不传 / true：`listen [::]:端口 … ipv6only=off`，
+   * 和以前一样；false：`listen 0.0.0.0:端口`（内核关了 IPv6 时 nginx 开不了 [::] 的套接字，整份配置都起不来）。
+   * 写成 0.0.0.0:端口 而不是只写端口：Agent 按「地址:端口」从配置里认监听（managed_runtime_listens.go）。
+   */
+  ipv6Listen?: boolean;
   sslServer?: {
     certPath: string;
     keyPath: string;
@@ -37,21 +43,30 @@ export type NginxStreamServerOptions = {
 
 const nginxConfigQuote = (value: unknown) => String(value || "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
 
-const nginxListenLine = (port: number, proto: "tcp" | "udp", loopbackOnly = false) => {
-  const parts = [`listen ${loopbackOnly ? "127.0.0.1" : "[::]"}:${port}`];
+/** 监听地址和要不要 ipv6only=off：回环只听 127.0.0.1；对外的有 IPv6 就双栈，没有就只听 IPv4。 */
+const nginxListenTarget = (loopbackOnly = false, ipv6Listen = true) => {
+  if (loopbackOnly) return { host: "127.0.0.1", dualStack: false };
+  if (ipv6Listen === false) return { host: "0.0.0.0", dualStack: false };
+  return { host: "[::]", dualStack: true };
+};
+
+const nginxListenLine = (port: number, proto: "tcp" | "udp", loopbackOnly = false, ipv6Listen = true) => {
+  const target = nginxListenTarget(loopbackOnly, ipv6Listen);
+  const parts = [`listen ${target.host}:${port}`];
   if (proto === "udp") parts.push("udp", "reuseport");
   else parts.push("so_keepalive=60s:15s:4");
-  if (!loopbackOnly) parts.push("ipv6only=off");
+  if (target.dualStack) parts.push("ipv6only=off");
   return `${parts.join(" ")};`;
 };
 
 export function buildNginxStreamServerBlock(options: NginxStreamServerOptions) {
+  const target = nginxListenTarget(options.loopbackOnly, options.ipv6Listen);
   const lines = [
     "  server {",
     `    # ${nginxConfigQuote(options.name)}`,
     options.sslServer && options.proto === "tcp"
-      ? `    listen ${options.loopbackOnly ? "127.0.0.1" : "[::]"}:${options.listenPort} ssl so_keepalive=60s:15s:4${options.loopbackOnly ? "" : " ipv6only=off"};`
-      : `    ${nginxListenLine(options.listenPort, options.proto, options.loopbackOnly)}`,
+      ? `    listen ${target.host}:${options.listenPort} ssl so_keepalive=60s:15s:4${target.dualStack ? " ipv6only=off" : ""};`
+      : `    ${nginxListenLine(options.listenPort, options.proto, options.loopbackOnly, options.ipv6Listen)}`,
     "    proxy_connect_timeout 10s;",
     options.proto === "udp" ? "    proxy_timeout 2m;" : "    proxy_timeout 24h;",
   ];
@@ -90,6 +105,8 @@ export function buildNginxStreamConfig(options: {
   upstreams: string[];
   servers: string[];
   certFingerprints?: string[];
+  /** false：这台机器没有 IPv6，运行时解析域名只要 A 记录（解析出 AAAA 也连不出去）。 */
+  ipv6Listen?: boolean;
 }) {
   const hasServers = options.servers.length > 0;
   return [
@@ -113,7 +130,7 @@ export function buildNginxStreamConfig(options: {
       "  tcp_nodelay on;",
       // 默认 16k：每搬 16k 就一次读写，高带宽下系统调用翻几倍。64k 和其他转发方式一致。
       "  proxy_buffer_size 64k;",
-      "  resolver 1.1.1.1 8.8.8.8 valid=60s ipv6=on;",
+      `  resolver 1.1.1.1 8.8.8.8 valid=60s ipv6=${options.ipv6Listen === false ? "off" : "on"};`,
       "",
       ...options.upstreams.flatMap((block) => [block, ""]),
       ...options.servers.flatMap((block) => [block, ""]),

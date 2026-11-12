@@ -374,6 +374,9 @@ export const rulesRouter = router({
       return {
         totalItems: selection.totalItems,
         activeItems: selection.activeItems,
+        runningItems: selection.runningItems,
+        stalledItems: selection.stalledItems,
+        pausedItems: selection.pausedItems,
         totalTraffic: traffic.totalTraffic,
         dailyTraffic: traffic.dailyTraffic,
       };

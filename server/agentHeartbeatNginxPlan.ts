@@ -32,6 +32,7 @@ import {
   reloadNginxIfConfigChangedCmd,
 } from "./agentHeartbeatNginx";
 import type { HeartbeatRequestContext, HeartbeatRow, HeartbeatRuleRow } from "./agentHeartbeatContext";
+import { hostIpv6ListenAvailable } from "@shared/hostIpv6Listen";
 
 /*
   nginx stream 运行时这一次心跳的同步计划：本机的 nginx 规则、nginx 隧道的入口 / 出口 / 探测端口拼成一份配置，
@@ -76,6 +77,8 @@ export function createNginxRuntimeSyncPlanBuilder(ctx: HeartbeatRequestContext, 
     tunnelExitHostAddress,
     tunnelExtraExitNodes,
   } = deps;
+  // 内核关了 IPv6 的机器只听 0.0.0.0（shared/hostIpv6Listen.ts）；有 IPv6 的配置一个字节不变。
+  const ipv6Listen = hostIpv6ListenAvailable(host);
   const buildNginxRuntimeSyncPlan = async () => {
     const startedAt = Date.now();
     const nginxManagedConfigs: any[] = [];
@@ -136,7 +139,7 @@ export function createNginxRuntimeSyncPlanBuilder(ctx: HeartbeatRequestContext, 
       if (!options.listenPort || !options.upstream) return;
       if (options.sslClient && options.proto === "tcp") tlsClientServers += 1;
       if (options.sslServer && options.proto === "tcp") tlsServerServers += 1;
-      servers.push(buildNginxStreamServerBlock(options));
+      servers.push(buildNginxStreamServerBlock({ ...options, ipv6Listen }));
     };
 
     for (const rule of agentHostRules as any[]) {
@@ -276,7 +279,7 @@ export function createNginxRuntimeSyncPlanBuilder(ctx: HeartbeatRequestContext, 
         logNginxRoute(`[NginxRuntime] host=${host.id} routeDetailsOmitted=${routeSummaries.length - 20}`);
       }
     }
-    const config = buildNginxStreamConfig({ upstreams, servers, certFingerprints });
+    const config = buildNginxStreamConfig({ upstreams, servers, certFingerprints, ipv6Listen });
     const encodedConfig = Buffer.from(config, "utf8").toString("base64");
     const setupCmds = [
       `mkdir -p ${shQuote(NGINX_CONFIG_DIR)} ${shQuote(NGINX_CERT_DIR)} /var/log/forwardx-agent`,

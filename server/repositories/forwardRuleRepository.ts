@@ -286,6 +286,41 @@ function forwardRuleListFromSql() {
   ].join("\n");
 }
 
+/**
+ * 规则页页头那一行「运行中 · 未运行 · 已暂停」的三个数，和首页（dashboardRepository 的 getSystemHealthSummary）
+ * 同一个口径：只数启用的；转发组模板看它的子规则有没有在跑；主人被暂停转发（到期、超额、欠费）的另算「已暂停」，
+ * 不算「未运行」。以前页头写的是「运行 N」，数的其实是**启用**的条数 —— 首页说 4 条没在跑，
+ * 规则页却写「运行 7」，同一份数据两处说法对不上（2026-11 走查）。
+ * 拼在 SELECT 后面（FROM 是 forwardRuleListFromSql：r = 规则、u = 主人）。
+ */
+function forwardRuleStatusCountsSql() {
+  const yes = boolLiteral(true);
+  const no = boolLiteral(false);
+  const enabled = ruleColumn("r", "isEnabled") + " = " + yes;
+  const childRunning = "EXISTS (SELECT 1 FROM " + quoteIdentifier("forward_rules") + " c"
+    + " WHERE " + ruleColumn("c", "forwardGroupRuleId") + " = " + ruleColumn("r", "id")
+    + " AND " + ruleColumn("c", "isRunning") + " = " + yes
+    + " AND " + ruleColumn("c", "pendingDelete") + " = " + no + ")";
+  const running = "(" + ruleColumn("r", "isRunning") + " = " + yes
+    + " OR (COALESCE(" + ruleColumn("r", "isForwardGroupTemplate") + ", " + no + ") = " + yes + " AND " + childRunning + "))";
+  const ownerPaused = "(" + ruleColumn("u", "id") + " IS NOT NULL AND " + ruleColumn("u", "role") + " <> 'admin'"
+    + " AND " + ruleColumn("u", "canAddRules") + " = " + no + ")";
+  const sum = (condition: string, name: string) => ", COALESCE(SUM(CASE WHEN " + condition + " THEN 1 ELSE 0 END), 0) AS " + quoteIdentifier(name);
+  return sum(enabled + " AND " + running, "runningItems")
+    + sum(enabled + " AND NOT " + running + " AND NOT " + ownerPaused, "stalledItems")
+    + sum(enabled + " AND NOT " + running + " AND " + ownerPaused, "pausedItems");
+}
+
+type ForwardRuleStatusCountRow = { runningItems?: unknown; stalledItems?: unknown; pausedItems?: unknown };
+
+function forwardRuleStatusCounts(row: ForwardRuleStatusCountRow | undefined) {
+  return {
+    runningItems: Number(row?.runningItems || 0),
+    stalledItems: Number(row?.stalledItems || 0),
+    pausedItems: Number(row?.pausedItems || 0),
+  };
+}
+
 function pushForwardRuleLike(clauses: string[], params: any[], expression: string, pattern: string) {
   clauses.push("LOWER(COALESCE(" + expression + ", '')) LIKE ? ESCAPE '!'");
   params.push(pattern);
@@ -862,6 +897,7 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
       ...pageResult([], 0, input),
       scopeTotalItems: 0,
       activeItems: 0,
+      ...forwardRuleStatusCounts(undefined),
       categoryCounts: emptyForwardRuleCategoryCounts(),
     };
   }
@@ -889,10 +925,11 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
         + scopeFilter.fromSql + "\nWHERE " + scopeFilter.whereSql,
       scopeFilter.params,
     ),
-    queryRaw<{ totalItems: number; activeItems: number }>(
+    queryRaw<{ totalItems: number; activeItems: number } & ForwardRuleStatusCountRow>(
       "SELECT COUNT(*) AS " + quoteIdentifier("totalItems")
         + ", COALESCE(SUM(CASE WHEN " + ruleColumn("r", "isEnabled") + " = " + boolLiteral(true)
-        + " THEN 1 ELSE 0 END), 0) AS " + quoteIdentifier("activeItems") + "\n"
+        + " THEN 1 ELSE 0 END), 0) AS " + quoteIdentifier("activeItems")
+        + forwardRuleStatusCountsSql() + "\n"
         + filtered.fromSql + "\nWHERE " + filtered.whereSql,
       filtered.params,
     ),
@@ -941,6 +978,7 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
     ...pageResult(items, totalItems, window),
     scopeTotalItems: Number(scopeRows[0]?.totalItems || 0),
     activeItems,
+    ...forwardRuleStatusCounts(totalRows[0]),
     categoryCounts,
   };
 }
@@ -985,10 +1023,11 @@ export async function getForwardRuleMapBatch(
 export async function getForwardRuleSummarySelection(input: ForwardRuleListQuery) {
   const filtered = buildForwardRuleSqlFilter(input);
   const [summaryRows, idRows] = await Promise.all([
-    queryRaw<{ totalItems: number; activeItems: number }>(
+    queryRaw<{ totalItems: number; activeItems: number } & ForwardRuleStatusCountRow>(
       "SELECT COUNT(*) AS " + quoteIdentifier("totalItems")
         + ", COALESCE(SUM(CASE WHEN " + ruleColumn("r", "isEnabled") + " = " + boolLiteral(true)
-        + " THEN 1 ELSE 0 END), 0) AS " + quoteIdentifier("activeItems") + "\n"
+        + " THEN 1 ELSE 0 END), 0) AS " + quoteIdentifier("activeItems")
+        + forwardRuleStatusCountsSql() + "\n"
         + filtered.fromSql + "\nWHERE " + filtered.whereSql,
       filtered.params,
     ),
@@ -1001,6 +1040,7 @@ export async function getForwardRuleSummarySelection(input: ForwardRuleListQuery
   return {
     totalItems: Number(summaryRows[0]?.totalItems || 0),
     activeItems: Number(summaryRows[0]?.activeItems || 0),
+    ...forwardRuleStatusCounts(summaryRows[0]),
     ruleIds: idRows.map((row) => Number(row.id)).filter((id) => id > 0),
   };
 }

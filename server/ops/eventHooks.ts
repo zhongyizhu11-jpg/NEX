@@ -16,6 +16,7 @@ import { afterDatabaseCommit, quoteDbIdentifier, queryRaw } from "../dbRuntime";
 import { describeRouteReason } from "../../shared/routeGroup";
 import { formatOutageDuration } from "../../shared/opsEvents";
 import { listPanelEvents, prunePanelEvents, recordPanelEvent, type PanelEventInput } from "./panelEvents";
+import { ruleRuntimeFailureReason } from "../ruleRuntimeFailureText";
 
 const EVENT_RETAIN_DAYS = 90;
 
@@ -175,7 +176,10 @@ export function recordRuleStatusEvent(input: { rule: any; host: any; wasRunning:
     recordSoon({ kind: "rule.recovered", level: "info", hostId, userId, ruleId, message: `规则${ruleLabel(rule)}（${where}）恢复运行` });
     return;
   }
-  const reason = String(input.message || "").trim().replace(/\s+/g, " ").slice(0, 200);
+  // Agent 报的英文原因换成中文（监听没起来：IPv6 不可用 / 运行时没安装 / 端口被谁占着……），认不出的照旧是原文。
+  const reason = ruleRuntimeFailureReason(input.message, Number(rule?.sourcePort) || 0, { agentVersion: input.host?.agentVersion })
+    .replace(/\s+/g, " ")
+    .slice(0, 300);
   if (!input.wasRunning && !reason) return;
   const previous = erroredRules.get(ruleId);
   const now = Date.now();

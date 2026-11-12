@@ -146,6 +146,7 @@ import {
 } from "@shared/tunnelParallelStreams";
 import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
+import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "@shared/hostIpv6Listen";
 import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { recordHostRateSample } from "./hostRateBuckets";
 import { forwardXExitStrategy } from "./tunnelExitStrategy";
@@ -519,6 +520,16 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const agentLastReceivedHash = normalizeAgentText(req.body?.agentLastReceivedHash, 64);
     const agentLastAppliedHash = normalizeAgentText(req.body?.agentLastAppliedHash, 64);
     const reportedDefaultNetworkInterface = normalizeNetworkInterface(req.body?.defaultNetworkInterface);
+    /*
+      Agent 2.2.256 起每次心跳带 ipv6Listen：这台机器能不能开 IPv6 监听（agent/ipv6_listen.go）。报了就记到
+      主机上（没报的老 Agent 不动，按能用算）；生效的结论（null 和 true 都算能用）一变，期望状态要重算：
+      realm / socat / nginx 的监听在 [::] 和 0.0.0.0 之间换。
+    */
+    const reportedIpv6Listen = parseReportedIpv6Listen(req.body?.ipv6Listen);
+    const ipv6ListenStoredChanged = reportedIpv6Listen !== null
+      && reportedIpv6Listen !== (host.ipv6ListenAvailable ?? null);
+    const ipv6ListenEffectiveChanged = reportedIpv6Listen !== null
+      && reportedIpv6Listen !== hostIpv6ListenAvailable(host);
     const previousHost = { ...(host as any) };
     const observedAddress = observedAgentAddress(req);
     const reportedAddress = mergeAgentReportedAddress(req.body, host, observedAddress);
@@ -623,6 +634,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || fxpVersionChanged
       || capabilitiesChanged
       || runtimeVersionChanged
+      || ipv6ListenStoredChanged
       || (!!nextCpuInfo && nextCpuInfo !== String(previousHost.cpuInfo || ""))
       || (Number(memoryTotal || 0) > 0 && Number(memoryTotal) !== Number(previousHost.memoryTotal || 0))
       || (!!agentBootId && agentBootId !== normalizeAgentText(previousHost.agentBootId, 128))
@@ -647,6 +659,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       ...(nextFxpVersion ? { fxpVersion: nextFxpVersion } : {}),
       ...(reportedCapabilities !== null ? { agentCapabilities: reportedCapabilities } : {}),
       ...(reportedRuntimeVersion !== null ? { runtimeVersion: reportedRuntimeVersion || null } : {}),
+      ...(ipv6ListenStoredChanged ? { ipv6ListenAvailable: reportedIpv6Listen } : {}),
       cpuInfo: nextCpuInfo || (host as any).cpuInfo || null,
       memoryTotal: memoryTotal || (host as any).memoryTotal || null,
       ...(agentBootId ? { agentBootId } : {}),
@@ -697,6 +710,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (reportedRuntimeVersion !== null) (host as any).runtimeVersion = reportedRuntimeVersion || null;
       if (capabilitiesChanged && !agentVersionChanged) {
         invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
+      }
+    }
+    if (ipv6ListenStoredChanged) {
+      host.ipv6ListenAvailable = reportedIpv6Listen;
+      if (ipv6ListenEffectiveChanged) {
+        appendPanelLog("info", `[AgentHost] host=${host.id} ipv6Listen=${reportedIpv6Listen}; realm/socat/nginx listeners switch to ${reportedIpv6Listen ? "dual-stack [::]" : "IPv4 0.0.0.0"}`);
+        if (!agentVersionChanged) invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
       }
     }
     if (agentVersionChanged) {
@@ -952,6 +972,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // interface selected by the default route so mimic is not silently skipped.
     const configuredHostInterface = normalizeNetworkInterface((host as any).networkInterface);
     const hostInterface = configuredHostInterface || reportedDefaultNetworkInterface;
+    // 内核关了 IPv6 的机器（Agent 2.2.256+ 报 ipv6Listen=false）：realm / socat 只听 IPv4。没报过按有 IPv6，配置不变。
+    const hostIpv6Listen = hostIpv6ListenAvailable(host);
     const mimicFiltersByInterface = new Map<string, Set<string>>();
     const mimicLifecycleResources = new Map<string, MimicLifecycleResource>();
     const reportedMimicInterfaces = new Set<string>();
@@ -3786,6 +3808,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             sendProxy: proxyProtocolEnabled(rule, "send"),
             acceptProxy: proxyProtocolEnabled(rule, "receive"),
             proxyVersion: proxyProtocolVersion(rule),
+            ipv6Listen: hostIpv6Listen,
           });
           const realmConfigB64 = Buffer.from(realmConfig, "utf8").toString("base64");
           const unit = buildRealmServiceUnit({
@@ -3845,6 +3868,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               targetPort: rule.targetPort,
               dialHost: socatDial.targetIp,
               dialPort: socatDial.targetPort,
+              ipv6Listen: hostIpv6Listen,
             };
             const unitTcp = buildSocatServiceUnit({ ...socatUnitBase, descriptionProtocol: "TCP", dialProtocol: "TCP" });
             const unitUdp = buildSocatServiceUnit({ ...socatUnitBase, descriptionProtocol: "UDP", dialProtocol: "UDP" });
@@ -3880,6 +3904,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               targetPort: rule.targetPort,
               dialHost: socatDial.targetIp,
               dialPort: socatDial.targetPort,
+              ipv6Listen: hostIpv6Listen,
             });
             // socat 单协议模式下为该端口挂入 mangle 计数链
             for (const c of buildCountingChainCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol)) socatPostCmds.push(c);

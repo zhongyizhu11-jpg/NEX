@@ -540,3 +540,60 @@ test("NEX gost runtime: build number parsing, upgrade with .prev backup + marker
   const restart = scriptSection(script, "restart_runtime_services_if_running() {", "install_runtime() {");
   assert.match(restart, /rollback_runtime_binary "restart of \$SVC failed"/);
 });
+
+test("SysV 服务脚本：运行时才算的变量不在生成时展开，生成的脚本能起、能查、能停", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "nex-sysv-"));
+  try {
+    const initDir = path.join(dir, "init.d");
+    const runDir = path.join(dir, "run");
+    const logDir = path.join(dir, "log");
+    fs.mkdirSync(initDir); fs.mkdirSync(runDir); fs.mkdirSync(logDir);
+    // 假的 Agent：一直睡，代表一个常驻进程
+    const fakeAgent = path.join(dir, "forwardx-agent");
+    fs.writeFileSync(fakeAgent, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    // 只把写死的系统路径换成临时目录，其余照原样生成
+    // heredoc 里有顶格的「}」，shellFunction 会截短；这里截到函数最后的 chmod 那一行
+    const writerStart = script.indexOf("\nwrite_agent_sysv_service() {\n") + 1;
+    const writerEndMarker = 'chmod 755 "/etc/init.d/$SERVICE_NAME"\n}\n';
+    const writerEnd = script.indexOf(writerEndMarker, writerStart) + writerEndMarker.length;
+    assert.ok(writerStart > 0 && writerEnd > writerStart);
+    const writer = script.slice(writerStart, writerEnd)
+      .replaceAll("/etc/init.d/", `${initDir}/`)
+      .replaceAll("/run/", `${runDir}/`)
+      .replaceAll("/var/log/forwardx-agent", logDir);
+    const generate = spawnSync("bash", ["-c", [
+      "set -eu",
+      shellFunction(script, "shell_quote"),
+      writer,
+      "SERVICE_NAME=forwardx-agent",
+      `GO_AGENT_BIN=${JSON.stringify(fakeAgent)}`,
+      `CONFIG_DIR=${JSON.stringify(dir)}`,
+      "write_agent_sysv_service",
+    ].join("\n")], { encoding: "utf8" });
+    assert.equal(generate.status, 0, generate.stderr);
+    assert.equal(generate.stderr, "", "生成时不该执行脚本里的 $(cat ...)");
+
+    const service = path.join(initDir, "forwardx-agent");
+    const text = fs.readFileSync(service, "utf8");
+    assert.match(text, /^case "\$1" in$/m);
+    assert.match(text, /kill -0 "\$\(cat "\$PIDFILE"\)"/);
+    assert.match(text, /echo \$! > "\$PIDFILE"/);
+    assert.match(text, /# Required-Start:\s+\$network/);
+    assert.ok(text.includes(`exec ${fakeAgent} -config ${dir}/config.json`), text);
+    assert.equal(spawnSync("sh", ["-n", service]).status, 0);
+
+    const run = (action: string) => spawnSync("sh", [service, action], { encoding: "utf8" });
+    assert.equal(run("start").status, 0);
+    const pid = Number(fs.readFileSync(path.join(runDir, "forwardx-agent.pid"), "utf8"));
+    assert.ok(pid > 0);
+    assert.equal(run("status").status, 0, "start 之后 status 应该是 0");
+    assert.equal(run("stop").status, 0);
+    assert.notEqual(run("status").status, 0, "stop 之后 status 不该是 0");
+    const usage = run("bogus");
+    assert.equal(usage.status, 1);
+    assert.match(usage.stdout, /Usage: .*forwardx-agent \{start\|stop\|restart\|status\}/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -23,18 +23,17 @@ test("面板默认的渐变两端和 design-tokens.css 一致（浅色、深色�
   ]);
 });
 
-test("色卡第一枚画的是渐变：面板默认用令牌的两端，其余预设从主色推", () => {
-  assert.equal(personalizationSwatchGradient("ink"), "linear-gradient(135deg, #8ccfff 0%, #56aaf2 100%)");
-  const lavender = personalizationSwatchGradient("lavender");
-  assert.match(lavender, /^linear-gradient\(135deg, color-mix\(in oklab, #6e56cf 65%, white\) 0%, #6e56cf 100%\)$/);
+test("色卡第一枚：面板默认用令牌的两端，其余预设用主色本身（两端同色）", () => {
+  assert.equal(personalizationSwatchGradient("ink"), "linear-gradient(135deg, #155ec4 0%, #155ec4 100%)");
+  assert.equal(personalizationSwatchGradient("lavender"), "linear-gradient(135deg, #6e56cf 0%, #6e56cf 100%)");
   for (const preset of PERSONALIZATION_THEME_PRESETS) {
     assert.match(personalizationSwatchGradient(preset.id), /^linear-gradient\(135deg, /, preset.id);
   }
 });
 
-test("浅色是「主色兑白 → 主色」，深色是「主色 → 主色兑黑」", () => {
-  assert.deepEqual(primaryGradientStops("#6e56cf", "light"), ["color-mix(in oklab, #6e56cf 65%, white)", "#6e56cf"]);
-  assert.deepEqual(primaryGradientStops("#6e56cf", "dark"), ["#6e56cf", "color-mix(in oklab, #6e56cf 75%, black)"]);
+test("主色控件不再兑白 / 兑黑：深浅色两端都是主色本身，字色对比不被冲淡", () => {
+  assert.deepEqual(primaryGradientStops("#6e56cf", "light"), ["#6e56cf", "#6e56cf"]);
+  assert.deepEqual(primaryGradientStops("#6e56cf", "dark"), ["#6e56cf", "#6e56cf"]);
 });
 
 test("页面底色：预设 id 或 #rrggbb，别的回到浅灰；浅灰不写变量，自定义色的控件槽从底色兑 5% 黑", async () => {

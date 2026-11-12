@@ -9,7 +9,7 @@ import { formatMoneyCents as money } from "@shared/formatMoney";
 import { formatBytes } from "@shared/formatBytes";
 import DashboardLayout from "@/components/DashboardLayout";
 import MobileAppSettings from "@/components/MobileAppSettings";
-import SystemStatusHeader, { type SystemHealth } from "@/components/SystemStatusHeader";
+import SystemStatusHeader, { systemHealthHeadline, type SystemHealth } from "@/components/SystemStatusHeader";
 import QueryErrorState, { failedQueryState } from "@/components/QueryErrorState";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { pollingInterval } from "@/lib/polling";
@@ -249,17 +249,19 @@ function DashboardContent() {
     我的账户。租户把账户提到流量前面：对他来说「额度还剩多少、哪天到期」就是
     他的「系统状态」，比一张走势图要紧。
   */
-  const statusHeader = (
+  const renderStatusHeader = (attentionListedBelow = false) => (
       <SystemStatusHeader
         health={health as SystemHealth | undefined}
         loading={healthLoading}
         isAdmin={isAdmin}
+        attentionListedBelow={attentionListedBelow}
         onRetry={() => { void refetchHealth(); }}
         onOpenAttention={() => {
           document.getElementById("dashboard-attention")?.scrollIntoView({ behavior: "smooth", block: "start" });
         }}
       />
   );
+  const statusHeader = renderStatusHeader();
 
   const header = (
       <WorkspaceHeader title="总览" status={health ? (
@@ -274,6 +276,9 @@ function DashboardContent() {
       ) : null} actions={pearl ? <PearlHeaderBadges /> : undefined} />
   );
   const mapEnabled = !health || health.hosts.total > 0;
+  const attentionListed = ((health as SystemHealth | undefined)?.attention?.rows?.length ?? 0) > 0;
+  const headline = health ? systemHealthHeadline(health as SystemHealth) : null;
+  const attentionHeader = headline && headline.tone !== "healthy" ? headline.text : "需要关注";
 
   if (deepspace) {
     return (
@@ -311,19 +316,21 @@ function DashboardContent() {
       */}
       {header}
       {/*
-        概览放在数字前面：这一页第一眼看到的是「机器在哪、谁转给谁、哪条断了」，数字是第二眼的事
-        （用户 2026-09-27 明确要它留在顶端）。没有主机时它自己不出现。
-        它的几条请求不等 health：health 还没回来时照常并行取，health 说没有主机才停。
+        从上往下（2026-11 走查，用户认了改法）：几个数 → 需要关注 → 地图。
+        原来地图在最上面（2026-09-27 那一轮要它留在顶端），1440 宽的屏上占掉第一屏六成，
+        没有连线时只写一句「还没有连线」，几个数和要处理的事反倒被挤到折叠线以下。
+        结论那一句（「4 处需要关注」）不再在数字下面单画一行，直接当下面那块列表的标题。
+        地图矮一截、能收起（收没收记在这个浏览器里）。它的几条请求照旧不等 health。
       */}
-      {pearl ? statusHeader : null}
-      <NetworkMapSlot enabled={mapEnabled} cacheScope={accountCacheScope} onOpen={setLocation} />
-      {pearl ? null : statusHeader}
+      {renderStatusHeader(attentionListed)}
       <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} dense={compactLayout} />
       <AttentionSection
         attention={(health as SystemHealth | undefined)?.attention}
         isAdmin={isAdmin}
         onOpen={setLocation}
+        header={attentionHeader}
       />
+      <NetworkMapSlot enabled={mapEnabled} cacheScope={accountCacheScope} onOpen={setLocation} collapsible />
       <OpsHomeExtras isAdmin={isAdmin} />
       {isAdmin ? trafficSection : accountSection}
       {isAdmin ? accountSection : trafficSection}
