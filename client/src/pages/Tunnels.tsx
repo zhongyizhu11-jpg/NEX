@@ -3925,7 +3925,7 @@ function TunnelsContent() {
             </div>
           )}
         </div>
-        {form.udpOverTcp && form.forwardxVersion === "v1" && (
+        {form.udpOverTcp && form.forwardxVersion !== "v2" && (
           <label className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2">
             <span className="min-w-0">
               <span className="block text-sm font-medium">mimic UDP 线路端口</span>
