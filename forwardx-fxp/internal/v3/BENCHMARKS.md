@@ -16,6 +16,10 @@ go test -run '^$' -bench 'BenchmarkV3(BulkRTT|ConnRate)' -benchtime 1x -count 2 
 go test -run '^$' -bench 'BenchmarkV3FirstConn' -benchtime 5x .
 # V1 / V2 的数据面回归（bench_dataplane_test.go，改动前后各跑一遍）
 go test -run '^$' -bench 'BenchmarkDataplaneTCP(Bulk|RTT)' -count 3 .
+# 内层 AEAD 两种算法（模式 3 AES-128-GCM / 模式 5 ChaCha20-Poly1305）：只测算法、整条隧道
+go test -run '^$' -bench 'BenchmarkInnerAEAD' -count 3 ./internal/v3/
+go test -run '^$' -bench 'BenchmarkV3InnerCipher' -benchtime 300x -count 3 .
+# 同样两条命令前面加 GODEBUG=cpu.aes=off：模拟没有 AES 硬件（标准库 AES 退回纯 Go 实现）
 ```
 
 测基线：`git worktree add /tmp/base 18ebfe861`，把 `bench_v3_test.go` 拷进
@@ -195,6 +199,58 @@ go test -run '^$' -bench 'BenchmarkDataplaneTCP(Bulk|RTT)' -count 3 .
 | TCPRTT/aes-serial p50-us | 18.2 | 18.2 | -0% |
 | TCPRTT/aes-serial p99-us | 52.5 | 52.0 | -1% |
 
+### 内层 AEAD 算法：AES-128-GCM vs ChaCha20-Poly1305（模式 3 / 5）
+
+模式 3 / 5 按两端有没有 AES 硬件自动选（协商见 `PROTOCOL.md`「内层算法协商」）；这里比两种算法的
+代价。这台机器有 AES-NI，「没有 AES 硬件」用 `GODEBUG=cpu.aes=off` 模拟：标准库的 AES 退回纯 Go
+的查表实现（和没有加密扩展的 ARM 上 Go 走的是同一份代码），ChaCha20 的汇编不受影响。
+`BenchmarkV3InnerCipher` 用 `v3.OverrideAESHardware` 让两端都当作有 / 没有 AES 硬件，从而强制协商出
+某一种算法；TLS 外层是模式 4（内层直通），不在这张表里。
+
+只测算法（`BenchmarkInnerAEAD`：单核把一条 16 KiB 的记录封好再解开，含 2 字节长度的那次密封，
+-count 3 中位数；cpu-ms/GB 是「封 + 解」1 GB 明文的单核 CPU）：
+
+| 本机 | AES-128-GCM | ChaCha20-Poly1305 | ChaCha20 / AES 的 CPU |
+| --- | --- | --- | --- |
+| 有 AES-NI | 2,698 MB/s · 370 cpu-ms/GB | 877 MB/s · 1,141 cpu-ms/GB | 3.1×（ChaCha20 更贵） |
+| `cpu.aes=off`（没有 AES 硬件） | 58 MB/s · 17,232 cpu-ms/GB | 947 MB/s · 1,056 cpu-ms/GB | 0.061×（AES-GCM 贵 16×） |
+
+整条隧道（`BenchmarkV3InnerCipher`，回环、入口和出口在一个进程里，cpu-ms/GB 是整个进程；
+有 AES 时 -benchtime 300x，`cpu.aes=off` 时只跑不复用、-benchtime 100x，都是 -count 3 中位数）：
+
+| 路径 | 连接 | 有 AES-NI：AES-GCM | 有 AES-NI：ChaCha20 | 没有 AES：AES-GCM | 没有 AES：ChaCha20 |
+| --- | --- | --- | --- | --- | --- |
+| v3-ws-nomux | 1 | 9.74 Gbps · 2,365 | 6.44 Gbps · 3,366 | 0.70 Gbps · 25,110 | 5.20 Gbps · 3,700 |
+| v3-ws-nomux | 4 | 13.7 Gbps · 2,152 | 11.1 Gbps · 2,797 | 1.37 Gbps · 20,680 | 8.83 Gbps · 2,890 |
+| v3-http-nomux | 1 | 9.73 Gbps · 2,279 | 5.49 Gbps · 3,586 | 0.65 Gbps · 25,440 | 5.30 Gbps · 3,614 |
+| v3-http-nomux | 4 | 15.7 Gbps · 1,961 | 10.8 Gbps · 2,893 | 1.18 Gbps · 23,400 | 8.07 Gbps · 3,033 |
+| v3-ws-mux | 1 | 8.18 Gbps · 2,937 | 6.54 Gbps · 3,573 | - | - |
+| v3-ws-mux | 4 | 10.0 Gbps · 2,629 | 6.70 Gbps · 3,599 | - | - |
+| v3-http-mux | 1 | 8.86 Gbps · 2,686 | 6.21 Gbps · 3,688 | - | - |
+| v3-http-mux | 4 | 10.3 Gbps · 2,667 | 6.78 Gbps · 3,716 | - | - |
+
+怎么读：
+
+- 有 AES 硬件时 ChaCha20 整条隧道的 CPU/GB 多 20–60%（每 GB 多约 0.6–1.3 秒 CPU，和只测算法时「封 + 解」
+  一次的差 0.77 秒同一个量级），吞吐低 20–45%。所以两端都有 AES 硬件时仍用 AES-GCM。
+- 没有 AES 硬件时纯 Go 的 AES-GCM 是瓶颈：整条隧道 CPU/GB 是 ChaCha20 的 6.8–7.7 倍，吞吐只有
+  ChaCha20 的 12–16%。选 ChaCha20 后，「没有 AES」的机器上 V3 的 HTTP / WS 外层吞吐接近有 AES-NI 时
+  用 ChaCha20 的水平（单连接 5.2 vs 6.4 Gbps）。
+- 只要有一端没有 AES 硬件就用 ChaCha20：有硬件的那端多花的是上面第一条的那 20–60%，没有硬件的那端
+  省下的是 6–7 倍。
+
+ARM 上的预期（**没有在 ARM 上实测**）：
+
+- 带 ARMv8 加密扩展的 ARM（AWS Graviton、Ampere Altra、苹果 M 系列、多数云厂商的 ARM 实例，以及
+  Cortex-A53 / A55 / A72 等带加密选项的芯片）：x/sys/cpu 报有 AES + PMULL，照旧用 AES-GCM，表现和
+  上面「有 AES-NI」那两列同一类。
+- 没有加密扩展的 ARM（树莓派 3 / 4 的 BCM2837 / BCM2711、一些便宜的 ARM 小鸡、32 位 ARM）：Go 的
+  AES-GCM 走纯 Go 查表实现，和这里 `cpu.aes=off` 的 AES-GCM 列是同一份代码；ChaCha20 在 arm64 上有
+  NEON 汇编（Poly1305 是纯 Go），在 32 位 arm 上两者都是纯 Go。按 x86 上软件实现的比例（只测算法 16×、
+  整条隧道 6–7×）和这类小核的特点，预期 ChaCha20 的吞吐是 AES-GCM 的数倍，绝对值受限于单核速度，
+  通常远低于这里的 Gbps 级数字。要实测：在那台机器上跑上面两条基准命令（不用 GODEBUG）。
+- 32 位 arm、386、riscv64 等架构这里一律当作没有 AES 硬件（Go 1.24 的 AES-GCM 在这些架构上没有汇编）。
+
 ## 结论和局限
 
 - 回环吞吐：不复用的 V3 从同次 V1 的 34–47% 提到 85–100%，复用的从 14–16% 提到 61–90%（4 条流共用一条
@@ -206,5 +262,8 @@ go test -run '^$' -bench 'BenchmarkDataplaneTCP(Bulk|RTT)' -count 3 .
 - 短连接：复用时每条新连接少一个往返（50ms 往返下 p50 105 → 53 ms，每秒连接数翻倍）；不复用时
   预热池命中时本来就只要一个往返，没命中时（p99）少一个往返：TLS p99 262 → 158 ms。
 - 首连：复用时规则一起来就预热好会话，310 / 258 → 约 54 ms（和不复用、V1 一样只剩一个往返）。
+- 内层 AEAD 按两端 AES 硬件选算法：两端都有 AES 硬件时不变（AES-GCM）；任意一端没有时改用
+  ChaCha20-Poly1305，模拟没有 AES 硬件时整条隧道（HTTP / WS 外层、不复用）吞吐约 6–8 倍、CPU/GB 降 85%
+  以上。ARM 上的数字没有实测。
 - 延迟代理是进程内的、不丢包、不限带宽；真实线路的丢包、乱序、带宽上限没有模拟，窗口自适应在
   丢包线路上的表现（尤其是复用时一条 TCP 的队头阻塞）没有量过。没有做多机、长时间的压测。

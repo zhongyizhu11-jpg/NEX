@@ -150,7 +150,9 @@ func innerRoundTrip(t *testing.T, client, server *InnerConn, payload []byte) {
 
 func TestInnerHandshakeAndRecordRoundTrip(t *testing.T) {
 	client, server := innerPair(t, "tunnel-psk")
-	if client.Mode() != InnerModeAEAD || server.Mode() != InnerModeAEAD || client.Plain() {
+	// 两端都在本进程，按本机硬件协商：有 AES 是模式 3，没有是模式 5（比如 GODEBUG=cpu.aes=off）。
+	want := innerOffer(HasAESHardware())
+	if client.Mode() != want || server.Mode() != want || client.Plain() {
 		t.Fatalf("modes client=%d server=%d", client.Mode(), server.Mode())
 	}
 	for _, payload := range [][]byte{
@@ -204,8 +206,9 @@ func TestInnerClientDoesNotWaitAfterItsProof(t *testing.T) {
 			return
 		}
 		material := make([]byte, innerMaterialSize)
-		reply := append([]byte{InnerModeAEAD}, material...)
-		reply = append(reply, innerProof("psk", 's', InnerModeAEAD, first[1:], material)...)
+		chosen := innerChoose(first[0], true)
+		reply := append([]byte{chosen}, material...)
+		reply = append(reply, innerAEADProof("psk", 's', chosen, first[0], first[1:], material)...)
 		_, _ = b.Write(reply)
 		// 之后什么都不发。
 	}()
@@ -292,6 +295,17 @@ func TestInnerProofIsNotReflectable(t *testing.T) {
 	}
 	if bytes.Equal(innerProof("psk", 't', InnerModeTLS, c, s), innerProof("psk", 't', InnerModeAEAD, c, s)) {
 		t.Fatal("proof does not cover the mode byte")
+	}
+	// 模式 3 / 5 的证明同时覆盖服务端定下的和客户端要的模式字节。
+	base := innerAEADProof("psk", 's', InnerModeAEAD, InnerModeAEAD, c, s)
+	for _, other := range [][]byte{
+		innerAEADProof("psk", 's', InnerModeAEADChaCha, InnerModeAEAD, c, s),
+		innerAEADProof("psk", 's', InnerModeAEAD, InnerModeAEADChaCha, c, s),
+		innerAEADProof("psk", 's', InnerModeAEADChaCha, InnerModeAEADChaCha, c, s),
+	} {
+		if bytes.Equal(base, other) {
+			t.Fatal("AEAD proof does not cover the cipher negotiation")
+		}
 	}
 }
 

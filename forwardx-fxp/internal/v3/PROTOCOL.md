@@ -13,7 +13,7 @@
 业务 TCP / UDP
   -> FXP 逻辑帧（4 字节长度 + 明文）
   -> （可选）多路复用帧：type u8、流号 u32 BE、长度 u16 BE、内容
-  -> 内层：模式 3 是 AEAD 记录；模式 4 直通（外层 TLS 1.3 负责加密）
+  -> 内层：模式 3 / 5 是 AEAD 记录（AES-128-GCM / ChaCha20-Poly1305）；模式 4 直通（外层 TLS 1.3 负责加密）
   -> 外层：HTTP 样式 / WS 样式 / TLS
   -> TCP
 ```
@@ -24,22 +24,90 @@
 
 | 模式 | 用在 | 线上 |
 | --- | --- | --- |
-| 3 | HTTP / WS 外层；或 TLS 但协商出的版本低于 1.3 | C→S `[3][c]`；S→C `[3][s][Ps]`；C→S `[Pc]`，紧跟记录 |
+| 3 / 5 | HTTP / WS 外层；或 TLS 但协商出的版本低于 1.3 | C→S `[o][c]`；S→C `[m][s][Ps]`；C→S `[Pc]`，紧跟记录。3 = AES-128-GCM，5 = ChaCha20-Poly1305，见下面「内层算法协商」 |
 | 4 | TLS 1.3 外层 | C→S `[4][c][Pt]`，紧跟明文字节；服务端什么也不回 |
 | 2 | 移植原样（上游形状） | **不再接受**，服务端报 `ErrInnerLegacyPeer` |
 
 - `Ka = SHA-256("nex-v3 inner auth\0" ‖ PSK)`，证明是 `HMAC-SHA256(Ka, 角色 ‖ 模式 ‖ 各段（2 字节长度 + 内容）)` 取前 16 字节，
   `hmac.Equal` 比较。角色 `s` / `c` / `t` 让服务端、客户端、TLS 模式的证明两两不同，不能反射；
   模式字节在证明里，改不了模式。
-  - `Ps = proof('s', 3, c, s)`，`Pc = proof('c', 3, c, s)`，`Pt = proof('t', 4, c, E)`。
+  - `Ps = proof('s', m, c, s, o)`，`Pc = proof('c', m, c, s, o)`，`Pt = proof('t', 4, c, E)`。
+    `o` 是客户端第一条消息的模式字节（它要的算法），`m` 是服务端回应的模式字节（定下的算法），
+    `o` 作为最后一段（1 字节）进 HMAC，`m` 在模式位置上。
   - `E` 是这条 TLS 连接的导出密钥：`ExportKeyingMaterial("EXPORTER-NEX-V3-inner-auth", nil, 32)`（RFC 8446 §7.5）。
-- 模式 3：服务端收到 `[3][c]` 就把自己的材料和证明一起回；客户端验过 `Ps` 才发 `Pc`，发完不等，
+- 模式 3 / 5：服务端收到 `[o][c]` 就把自己的材料和证明一起回；客户端验过 `Ps` 才发 `Pc`，发完不等，
   第一批记录紧跟在后面。服务端先验 `Pc`，验过之前不交出任何业务数据。内层握手一个往返
   （移植原样：两个往返——先交换材料，再交换证明）。
 - 模式 4：客户端只发一条 33 字节的消息，内层握手不占往返；服务端验过 `Pt` 就直通。
 - 服务端只在**自己**的外层是 TLS 1.3 时才接受模式 4（`v3TLSBinding` 拿不到导出密钥就是没有
   资格），否则拒绝——不会在没有 TLS 1.3 保护的连接上直通，也没有降级路径。客户端只在自己的
   外层协商出 TLS 1.3 时才发 4，否则发 3。
+
+## 内层算法协商（模式 3 / 5）
+
+没有 AES 硬件加速的机器（不少 ARM 小鸡、老 CPU）上，纯软件的 AES-GCM 比 ChaCha20-Poly1305 慢
+一个数量级（见 `BENCHMARKS.md`「内层 AEAD 算法」）；有 AES 硬件时 AES-GCM 更快。所以 AEAD 记录
+的算法按两端硬件定：
+
+- **本机有没有 AES 硬件**：`internal/v3/cpu.go`，用 `golang.org/x/sys/cpu`（FXP 模块本来就直接
+  依赖 x/sys，没有加新依赖；ChaCha20-Poly1305 用的 `golang.org/x/crypto/chacha20poly1305` 也是
+  FXP 已有的直接依赖，V1 / V2 早就在用）。判断方式照 Go 标准库 `crypto/tls` 的
+  `hasAESGCMHardwareSupport`：amd64 要 AES-NI + PCLMULQDQ + SSE4.1 + SSSE3，arm64 要 AES + PMULL
+  （darwin / ios 当作有），s390x 要 KM-AES + KMCTR + GHASH，ppc64 / ppc64le 当作有，其它架构
+  （包括 386）当作没有。x/sys/cpu 和标准库一样认 `GODEBUG=cpu.aes=off`。
+- **客户端**发 `o`：本机有 AES 硬件发 3，没有发 5（「我要 ChaCha20」）。第一条消息还是 17 字节，
+  只是模式字节多了一个取值。
+- **服务端**定 `m`：`o = 5` 或者服务端自己没有 AES 硬件 → 5，否则 3。即**任意一端没有 AES 硬件就用
+  ChaCha20-Poly1305**：没有硬件的一端跑软件 AES-GCM 要慢十几倍（而且查表实现不是常数时间），
+  有硬件的一端跑 ChaCha20 只是慢两三倍，照顾慢的那端。
+- **客户端**只接受规矩允许的 `m`：发了 5 只收 5；发了 3 收 3 或 5。别的一律 `ErrInnerHandshake`。
+- 记录密钥：`m = 3` 时 HKDF 的 `info = "nex-v3 records"`，导出 4 × 16 字节（AES-128-GCM）；
+  `m = 5` 时 `info = "nex-v3 records chacha20-poly1305"`，导出 4 × 32 字节。两种算法 nonce 都是
+  12 字节、标签都是 16 字节，记录格式（长度 18 字节 + 内容 n + 16 字节、nonce 构造、计数上限）完全一样。
+- 测试钩子 `v3.OverrideAESHardware`（整个进程）和 `innerClientHandshake` / `innerServerHandshake`
+  的 `localAES` 参数（同一进程里两端各给各的）。
+
+**为什么不能被降级（或「升级」）**：中间人想做的是把双方压到某一种算法上——比如让没有 AES 硬件
+的一端跑 AES-GCM（变慢，等于拒绝服务的一种），或者让两端都有硬件时跑 ChaCha20。
+
+1. `o` 和 `m` 都在两个证明里（`Ps`、`Pc` 都覆盖 `m` 和 `o`），证明是以 PSK 派生的 `Ka` 为密钥的
+   HMAC，没有 PSK 算不出。
+2. 中间人改第一条消息的 `o`（3 ↔ 5）：服务端按改过的 `o` 算 `Ps`，客户端按自己真正发的 `o` 验，
+   对不上，拒绝（如果是 5 → 3，服务端还可能回 3，客户端按「发了 5 只收 5」也直接拒绝）。
+3. 中间人改回应的 `m`：`Ps` 是按服务端真正定的 `m` 算的，客户端按改过的 `m` 验，对不上，拒绝。
+4. 两头一起改（`o` 和 `m` 都改成「看起来自洽」）：`Ps` 里是服务端看到的 `o'` 和它定的 `m'`，客户端
+   按自己的 `o` 和收到的 `m''` 验，至少 `o` 不同，对不上。
+5. 服务端这边也一样：`Pc` 是客户端按自己的 `o` 和收到的 `m` 算的；第一条消息被改过时服务端按它
+   收到的 `o'` 验，对不上，拒绝，验过之前不交出任何业务数据。所以即使客户端有毛病、没验 `Ps`，
+   被改过协商的连接也起不来。
+6. 就算哪里漏了，两种算法派生出的密钥不同（HKDF info 不同、长度不同），两端算法不一致的话第一条
+   记录就解不开。而且两种算法本身都是完整的 AEAD，被「压到」任何一种都不削弱机密性和完整性，
+   受影响的只有速度。
+7. 只有知道 PSK 的一方才能让双方接受某个 `m`：那样的一方本来就能冒充任意一端，不在威胁模型里。
+
+测试：`internal/v3/inner_cipher_test.go`（四种组合协商结果和收发、五种篡改、服务端核对 `o`、
+「要 ChaCha20 回 AES」被拒、钩子），`v3_cipher_test.go`（真起出口 / 入口，HTTP / WS 外层 × 复用开关、
+TLS 外层仍是模式 4）。
+
+**和本提交之前的 NEX V3 开发版不互通**：模式 3 的证明多了 `o` 这一段。NEX V3 还没发布，线上没有那样
+的对端；V1 / V2 不受影响。
+
+### 模式 4（TLS 1.3 直通）的算法由 TLS 自己选
+
+模式 4 内层不加密，算法就是外层 TLS 1.3 的套件。V3 的 TLS 外层用的是 Go 标准库 `crypto/tls`，没有
+设置 `CipherSuites`（TLS 1.3 的套件本来也不能配），它已经按两端硬件选（核对的是 Go 1.24.7 源码）：
+
+- 客户端（`handshake_client.go`）：`hasAESGCMHardwareSupport` 为假时 ClientHello 里的 TLS 1.3 套件
+  按 `defaultCipherSuitesTLS13NoAES` 排（ChaCha20 第一），否则 AES-128-GCM 第一。
+- 服务端（`handshake_server_tls13.go`）：`!hasAESGCMHardwareSupport || !aesgcmPreferred(客户端的套件列表)`
+  时按 `NoAES` 的顺序选（ChaCha20 优先），否则 AES-GCM 优先。`aesgcmPreferred` 看的就是客户端列表里
+  第一个认识的套件是不是 AES-GCM——也就是「客户端有没有 AES 硬件」。
+- 合起来正好是「任意一端没有 AES 硬件 → ChaCha20-Poly1305」，和内层模式 3 / 5 的规则相同。
+  TLS 1.3 的整个握手（含 ClientHello 的套件列表）都被 Finished 和 CertificateVerify 覆盖，中间人
+  改不了。
+- 测试 `TestV3TLSOuterPicksCipherByHardware` 用 V3 真实的 TLS 外层核对：本机有 AES 时是
+  `TLS_AES_128_GCM_SHA256`；`GODEBUG=cpu.aes=off go test -run TestV3TLSOuterPicksCipherByHardware .`
+  时是 `TLS_CHACHA20_POLY1305_SHA256`。
 
 ## 模式 4 的安全论证（TLS 外层不再套内层 AEAD）
 
@@ -62,17 +130,18 @@
    那条连接的 `E`，没有 PSK 算不出对应的 `Pt`。
 5. **探测**：没有 PSK 的探测者能和出口完成 TLS（出口不要求客户端证书），之后发什么都过不了 `Pt`，
    出口延迟一会儿关连接（`probeDelay`），和以前一样，也和模式 3 下一样不回任何业务数据。
-6. **域分隔**：TLS 证书密钥、内层证明密钥 `Ka`、模式 3 的记录密钥各自带不同的标签从 PSK 派生，
+6. **域分隔**：TLS 证书密钥、内层证明密钥 `Ka`、模式 3 / 5 的记录密钥各自带不同的标签从 PSK 派生，
    任何一个泄露不会直接给出另外两个。
 
 保留的东西：内层握手里的 HMAC 证明仍然在（第 3、4 条），所以 V3 照旧是双向认证；只是去掉了
 在 TLS 1.3 里面再加密一遍的那层。排障时可以把 FXP 的 `v3TLSInnerAEAD` 打开，TLS 外层也走模式 3：
 它只管客户端发哪个模式，服务端只要自己的外层是 TLS 1.3，两种都收。
 
-## 记录层（模式 3）
+## 记录层（模式 3 / 5）
 
 - HKDF-SHA256（RFC 5869，自己实现，带 RFC 测试向量）：`IKM = SHA-256(PSK)`，`salt = c ‖ s`，
-  `info = "nex-v3 records"`，导出四把 AES-128-GCM 密钥：两个方向 × 长度 / 内容，互不共用。
+  `info = "nex-v3 records"`（模式 3）或 `"nex-v3 records chacha20-poly1305"`（模式 5），导出四把
+  AES-128-GCM（16 字节）或 ChaCha20-Poly1305（32 字节）密钥：两个方向 × 长度 / 内容，互不共用。
 - 一条记录：2 字节长度单独封（18 字节）、内容单独封（n + 16 字节），`n ≤ 16384`。nonce 是
   `方向 ‖ 用途 ‖ 0 ‖ 0 ‖ 计数（u64 BE）`，计数到 2^62 就失败关闭。
 - 写：一次 `WriteBuffers` 把几段明文按记录上限切开，**就地**封进一块借来的缓冲（明文只拷一次），

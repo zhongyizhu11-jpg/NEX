@@ -141,7 +141,7 @@ func (t *selectedTransport) connectLocked() error {
 }
 
 // connectV3Locked 用 V3 拿一条到这个端点的连接。V3 的握手是同步做完的：拿到连接时对端的
-// 身份已经验过（模式 3 验了服务端的证明，模式 4 验了钉死的 TLS 证书），不需要重放缓存。
+// 身份已经验过（模式 3 / 5 验了服务端的证明，模式 4 验了钉死的 TLS 证书），不需要重放缓存。
 // done 为 true 表示这一轮到此为止（成功，或者是换端点也没用的本地错误）。
 func (t *selectedTransport) connectV3Locked(endpoint exitEndpoint, index int, dialCfg config, endpointLabel string) (bool, error) {
 	started := time.Now()

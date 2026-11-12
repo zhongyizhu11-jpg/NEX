@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	v3 "github.com/zhongyizhu11-jpg/NEX/forwardx-fxp/internal/v3"
 )
 
 /*
@@ -30,8 +32,9 @@ NEX V3 的性能基准：入口 → （可选：延迟代理）→ 出口，两�
 	go test -run '^$' -bench 'BenchmarkV3Bulk$' -benchtime 2000x -count 3 .
 	go test -run '^$' -bench 'BenchmarkV3(BulkRTT|ConnRate|FirstConn)' -benchtime 1x -count 3 .
 
-这个文件只用 config 字段起隧道，不碰 V3 的内部类型，所以能原样拷到改动前的提交上跑基线
-（internal/v3/BENCHMARKS.md 记了怎么跑、两边的数字）。
+这个文件只用 config 字段起隧道，不碰 V3 的内部类型，所以能拷到改动前的提交上跑基线
+（internal/v3/BENCHMARKS.md 记了怎么跑、两边的数字）。例外是 BenchmarkV3InnerCipher（内层两种
+AEAD 算法的对比，用了 v3.OverrideAESHardware 钩子）：拷到基线上跑时删掉它和 v3 的 import。
 */
 
 type v3BenchPath struct {
@@ -451,5 +454,54 @@ func BenchmarkV3FirstConn(b *testing.B) {
 			}
 			v3BenchPercentiles(b, samples)
 		})
+	}
+}
+
+// BenchmarkV3InnerCipher 比内层 AEAD 记录的两种算法（模式 3 AES-128-GCM / 模式 5 ChaCha20-Poly1305）：
+// 只在 HTTP / WS 外层上有意义（TLS 1.3 外层内层直通，算法由 TLS 选）。用 v3.OverrideAESHardware
+// 让两端都当作有 / 没有 AES 硬件，所以这一个基准用了 V3 的内部钩子，拷到基线提交上跑时删掉它。
+//
+//	go test -run '^$' -bench 'BenchmarkV3InnerCipher' -benchtime 300x -count 3 .
+//	GODEBUG=cpu.aes=off go test ...   # 模拟没有 AES 硬件：标准库的 AES-GCM 退回纯 Go 实现
+func BenchmarkV3InnerCipher(b *testing.B) {
+	payload := make([]byte, dpBulkChunk)
+	for i := range payload {
+		payload[i] = byte(i * 7)
+	}
+	paths := v3BenchPaths([]string{"ws", "http"}, false)
+	for _, cipher := range []struct {
+		name   string
+		hasAES bool
+	}{{"aes-128-gcm", true}, {"chacha20-poly1305", false}} {
+		for _, path := range paths {
+			for _, streams := range []int{1, 4} {
+				b.Run(fmt.Sprintf("%s/%s/streams=%d", cipher.name, path.name, streams), func(b *testing.B) {
+					defer v3.OverrideAESHardware(cipher.hasAES)()
+					target := dpTCPTarget(b, false)
+					addr := v3BenchStart(b, target, path, 0)
+					if err := dpPushTCP(addr, 1, payload[:4096]); err != nil {
+						b.Fatal(err)
+					}
+					perStream := b.N / streams
+					if perStream == 0 {
+						perStream = 1
+					}
+					b.SetBytes(dpBulkChunk)
+					cost := dpMeasureStart()
+					b.ResetTimer()
+					errs := make(chan error, streams)
+					for s := 0; s < streams; s++ {
+						go func() { errs <- dpPushTCP(addr, perStream, payload) }()
+					}
+					for s := 0; s < streams; s++ {
+						if err := <-errs; err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.StopTimer()
+					cost.report(b, int64(perStream*streams)*dpBulkChunk)
+				})
+			}
+		}
 	}
 }
