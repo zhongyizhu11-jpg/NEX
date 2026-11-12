@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,75 @@ func TestNetTuneDesiredRules(t *testing.T) {
 	}
 }
 
+// tcp_rmem 的起点（中间值）和上限都只抬不降，抬完 最小 ≤ 起点 ≤ 上限。
+func TestNetTuneDesiredRmemTriple(t *testing.T) {
+	rule := netTuneRule{"net.ipv4.tcp_rmem", netTuneRmemAtLeast, 67108864}
+	cases := []struct {
+		current, want string
+		change        bool
+	}{
+		// 发行版默认：起点和上限都抬
+		{"4096 131072 6291456", "4096 1048576 67108864", true},
+		// 老版本调过（只抬了上限）：补上起点
+		{"4096 131072 67108864", "4096 1048576 67108864", true},
+		// 已经达标：不动
+		{"4096 1048576 67108864", "", false},
+		// 用户调得更大：起点、上限都不压
+		{"4096 8388608 134217728", "", false},
+		{"4096 4194304 67108864", "", false},
+		{"8192 6291456 67108864", "", false},
+		// 只有起点低：只抬起点，上限原样
+		{"4096 87380 134217728", "4096 1048576 134217728", true},
+		// 最小值比目标起点还大：起点跟到最小值，三段保持合法
+		{"8388608 131072 67108864", "8388608 8388608 67108864", true},
+		// 最小值比上限还大（手改坏的）：上限跟上来
+		{"134217728 131072 6291456", "134217728 134217728 134217728", true},
+		// 认不出的值：不动
+		{"4096 abc 6291456", "", false},
+		{"4096 -1 6291456", "", false},
+		// 不是三段：退回只看最后一段
+		{"6291456", "67108864", true},
+	}
+	for _, c := range cases {
+		got, change := netTuneDesired(rule, c.current)
+		if got != c.want || change != c.change {
+			t.Errorf("%q: got (%q, %v), want (%q, %v)", c.current, got, change, c.want, c.change)
+		}
+		if change {
+			fields := strings.Fields(got)
+			if len(fields) == 3 && !(netTuneParseInt(fields[0]) <= netTuneParseInt(fields[1]) && netTuneParseInt(fields[1]) <= netTuneParseInt(fields[2])) {
+				t.Errorf("%q → %q：三段不合法", c.current, got)
+			}
+		}
+	}
+}
+
+func netTuneParseInt(text string) int64 {
+	n, _ := strconv.ParseInt(text, 10, 64)
+	return n
+}
+
+func TestNetTuneValidateBufferTripleOrder(t *testing.T) {
+	for _, c := range []struct {
+		key, value string
+		ok         bool
+	}{
+		{"net.ipv4.tcp_rmem", "4096 1048576 67108864", true},
+		{"net.ipv4.tcp_rmem", "4096 4096 4096", true},
+		{"net.ipv4.tcp_rmem", "4096 134217728 67108864", false}, // 起点比上限大
+		{"net.ipv4.tcp_rmem", "8192 4096 67108864", false},      // 最小比起点大
+		{"net.ipv4.tcp_wmem", "4096 16384 8192", false},
+	} {
+		_, err := netTuneValidate(c.key, c.value, "4096 131072 6291456")
+		if (err == nil) != c.ok {
+			t.Errorf("%s=%q: err=%v, want ok=%v", c.key, c.value, err, c.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "从小到大") {
+			t.Errorf("提示要说清楚：%v", err)
+		}
+	}
+}
+
 func TestNetTuneApplyRaisesOnlyAndPersists(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("只在 Linux 上跑")
@@ -110,9 +180,9 @@ func TestNetTuneApplyRaisesOnlyAndPersists(t *testing.T) {
 	values := result.Values
 	expect := map[string]string{
 		"net.core.rmem_max":                  "67108864",
-		"net.core.wmem_max":                  "134217728", // 原本更大，不动
-		"net.ipv4.tcp_rmem":                  "4096 131072 67108864",
-		"net.ipv4.tcp_wmem":                  "4096 16384 67108864",
+		"net.core.wmem_max":                  "134217728",             // 原本更大，不动
+		"net.ipv4.tcp_rmem":                  "4096 1048576 67108864", // 起点也抬到 1 MiB
+		"net.ipv4.tcp_wmem":                  "4096 16384 67108864",   // 发送方向只抬上限
 		"net.netfilter.nf_conntrack_max":     "1048576",
 		"net.netfilter.nf_conntrack_buckets": "262144",
 		"net.core.somaxconn":                 "4096",
@@ -149,7 +219,7 @@ func TestNetTuneApplyRaisesOnlyAndPersists(t *testing.T) {
 	text := string(conf)
 	for _, line := range []string{
 		"net.core.wmem_max = 134217728",
-		"net.ipv4.tcp_rmem = 4096 131072 67108864",
+		"net.ipv4.tcp_rmem = 4096 1048576 67108864",
 		"net.netfilter.nf_conntrack_buckets = 262144",
 		"net.core.default_qdisc = fq",
 		"net.ipv4.tcp_congestion_control = bbr",
@@ -374,6 +444,9 @@ func TestNetTuneRestoreGoesBackToFirstBackup(t *testing.T) {
 	if !applied.HasBackup || len(applied.Changed) == 0 {
 		t.Fatalf("一键调优要先存备份再改：%+v", applied)
 	}
+	if value, _, _ := netTuneRead("net.ipv4.tcp_rmem"); value != "4096 1048576 67108864" {
+		t.Fatalf("调优后 tcp_rmem 起点和上限都该抬：%s", value)
+	}
 	// 第二次改动不覆盖备份：原样还是第一次之前那份
 	netTuneRunMode("set", map[string]string{"net.core.somaxconn": "1024"})
 	if value, _, _ := netTuneRead("net.core.somaxconn"); value != "1024" {
@@ -388,7 +461,7 @@ func TestNetTuneRestoreGoesBackToFirstBackup(t *testing.T) {
 		"net.core.default_qdisc":          "fq_codel",
 		"net.core.rmem_max":               "212992",
 		"net.core.somaxconn":              "4096",
-		"net.ipv4.tcp_rmem":               "4096 131072 6291456",
+		"net.ipv4.tcp_rmem":               "4096 131072 6291456", // 起点和上限都回到调优前
 	} {
 		if value, _, _ := netTuneRead(key); value != want {
 			t.Errorf("%s 应该还原成 %s，实际 %s", key, want, value)
@@ -403,5 +476,32 @@ func TestNetTuneRestoreGoesBackToFirstBackup(t *testing.T) {
 	}
 	if mode := netTuneMode("weird", true); mode != "apply" {
 		t.Errorf("认不出的 mode 按 apply 字段：%s", mode)
+	}
+}
+
+// 老版本 Agent / 安装脚本调过的机器（只抬了 tcp_rmem 上限）：再调一次补上起点，还原回到那之前。
+func TestNetTuneRaisesRmemStartOnPreviouslyTunedHost(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("只在 Linux 上跑")
+	}
+	values := netTuneDistroDefaults()
+	values["net.ipv4.tcp_rmem"] = "4096\t131072\t67108864"
+	netTuneFakeProc(t, values)
+	applied := netTuneRunMode("apply", nil)
+	var change *netTuneChange
+	for i := range applied.Changed {
+		if applied.Changed[i].Key == "net.ipv4.tcp_rmem" {
+			change = &applied.Changed[i]
+		}
+	}
+	if change == nil || change.From != "4096 131072 67108864" || change.To != "4096 1048576 67108864" {
+		t.Fatalf("tcp_rmem 的改动不对：%+v", applied.Changed)
+	}
+	restored := netTuneRunMode("restore", nil)
+	if restored.Error != "" {
+		t.Fatalf("还原失败：%+v", restored)
+	}
+	if value, _, _ := netTuneRead("net.ipv4.tcp_rmem"); value != "4096 131072 67108864" {
+		t.Errorf("还原后 tcp_rmem = %s，应该回到 4096 131072 67108864", value)
 	}
 }

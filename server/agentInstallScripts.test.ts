@@ -150,9 +150,11 @@ test("Agent install and upgrade both apply forwarding network tuning", () => {
   assert.match(script, /net\.ipv4\.tcp_fastopen = \$\(\(cur \| 3\)\)/);
   assert.match(script, /net\.ipv4\.tcp_congestion_control = bbr/);
   // 跨境长往返线路跑满千兆要 64MB 窗口上限；只抬上限（tuning_raise），不压低已有更大的值。
-  for (const key of ["net.core.rmem_max", "net.core.wmem_max", "net.ipv4.tcp_rmem", "net.ipv4.tcp_wmem"]) {
+  for (const key of ["net.core.rmem_max", "net.core.wmem_max", "net.ipv4.tcp_wmem"]) {
     assert.match(script, new RegExp(`tuning_raise ${key.replace(/\./g, "\\.")} 67108864`));
   }
+  // tcp_rmem 的起点（中间值）也抬到 1MB（见下一个测试）
+  assert.match(script, /tuning_raise_rmem net\.ipv4\.tcp_rmem 67108864 1048576/);
   assert.match(script, /tuning_raise net\.netfilter\.nf_conntrack_max 1048576/);
   // conntrack 哈希桶跟着表上限走：新内核走 sysctl，老内核这个键只读，退回 /sys 模块参数并写 modprobe.d。
   assert.match(script, /tuning_conntrack_buckets 262144/);
@@ -171,6 +173,38 @@ test("Agent install and upgrade both apply forwarding network tuning", () => {
   }
   assert.match(upgrade, /\n\s*apply_network_tuning\n/);
   assert.ok(upgrade.indexOf("apply_network_tuning") < upgrade.indexOf("write_agent_service"));
+});
+
+test("Agent install tuning raises tcp_rmem start and limit without lowering, keeping min <= start <= max", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  const tuning = shellFunction(script, "apply_network_tuning");
+  // 只取几个小工具（tuning_current … tuning_raise_rmem），换掉 sysctl，在临时文件里看写了什么
+  const helpers = scriptSection(tuning, "  tuning_current() {", "  # 把值压到至多");
+  const cases: [string, string][] = [
+    ["4096\t131072\t6291456", "4096 1048576 67108864"], // 发行版默认：起点、上限都抬
+    ["4096\t131072\t67108864", "4096 1048576 67108864"], // 老版本调过（只抬了上限）：补上起点
+    ["4096 1048576 67108864", "4096 1048576 67108864"], // 已经达标
+    ["4096 8388608 134217728", "4096 8388608 134217728"], // 自己调得更大：不压
+    ["4096 87380 134217728", "4096 1048576 134217728"], // 只抬起点，上限原样
+    ["8388608 131072 67108864", "8388608 8388608 67108864"], // 最小比目标起点大：起点跟到最小
+    ["134217728 131072 6291456", "134217728 134217728 134217728"], // 手改坏的：上限跟上来，三段合法
+    ["6291456", "67108864"], // 不是三段：退回只动上限
+  ];
+  const probe = [
+    helpers,
+    'sysctl() { [ "$1" = "-n" ] && printf "%b\\n" "$FAKE_VALUE"; }',
+    'TUNING_TMP=$(mktemp)',
+    ...cases.map(([value]) => `FAKE_VALUE=${JSON.stringify(value)}; tuning_raise_rmem net.ipv4.tcp_rmem 67108864 1048576`),
+    // 认不出的值：不写
+    'FAKE_VALUE="4096 abc 6291456"; tuning_raise_rmem net.ipv4.tcp_rmem 67108864 1048576',
+    'cat "$TUNING_TMP"; rm -f "$TUNING_TMP"',
+  ].join("\n");
+  for (const shell of ["bash", "sh"]) {
+    const result = spawnSync(shell, ["-c", probe], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout.trim().split("\n");
+    assert.deepEqual(lines, cases.map(([, want]) => `net.ipv4.tcp_rmem = ${want}`), `${shell}: ${result.stdout}`);
+  }
 });
 
 test("Agent install and upgrade do not install or modify host time synchronization", () => {

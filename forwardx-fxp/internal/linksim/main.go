@@ -22,6 +22,8 @@
 //	                                                 整套矩阵：建线路 → 每个链路设定 × 每种路径
 //	                                                 起 FXP 出口 / 入口 → 跑负载 → 记结果 → 清理
 //	linksim report r.jsonl                           把结果汇总成 Markdown 表（中位数）
+//	linksim rmem -fxp ./fxp -wg ./wgsim -out m.jsonl 对比 tcp_rmem 中间值（见 rmem_linux.go）
+//	linksim rmem-report m.jsonl                      汇总 rmem 的结果
 //
 // 例：
 //
@@ -40,7 +42,7 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: linksim up|down|sink|load|bench|report [flags]（见源码开头的说明）")
+	fmt.Fprintln(os.Stderr, "usage: linksim up|down|sink|load|bench|report|rmem|rmem-report [flags]（见源码开头的说明）")
 	os.Exit(2)
 }
 
@@ -63,6 +65,10 @@ func main() {
 		err = cmdBench(args)
 	case "report":
 		err = cmdReport(args)
+	case "rmem":
+		err = cmdRmem(args)
+	case "rmem-report":
+		err = cmdRmemReport(args)
 	default:
 		usage()
 	}

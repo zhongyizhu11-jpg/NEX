@@ -37,7 +37,7 @@ const distroDefaults: Record<string, string> = {
 const tuned: Record<string, string> = {
   ...distroDefaults,
   "net.core.rmem_max": "67108864",
-  "net.ipv4.tcp_rmem": "4096 131072 67108864",
+  "net.ipv4.tcp_rmem": "4096 1048576 67108864",
   "net.ipv4.tcp_wmem": "4096 16384 67108864",
   "net.netfilter.nf_conntrack_max": "1048576",
   "net.netfilter.nf_conntrack_buckets": "262144",
@@ -65,7 +65,9 @@ test("网络调优判断：发行版默认值大多偏低，调完全部达标",
   const byKey = Object.fromEntries(before.items.map((item) => [item.key, item]));
   assert.equal(byKey["net.core.wmem_max"].status, "ok", "调得比建议还大的算达标");
   assert.equal(byKey["net.core.wmem_max"].current, "128 MB");
-  assert.equal(byKey["net.ipv4.tcp_rmem"].current, "6 MB", "三元组看最后一个字段");
+  assert.equal(byKey["net.ipv4.tcp_rmem"].current, "起点 128 KB · 上限 6 MB", "tcp_rmem 看起点和上限");
+  assert.equal(byKey["net.ipv4.tcp_rmem"].want, "起点 ≥ 1 MB · 上限 ≥ 64 MB");
+  assert.equal(byKey["net.ipv4.tcp_wmem"].current, "4 MB", "tcp_wmem 只看上限");
   assert.equal(byKey["net.ipv4.tcp_congestion_control"].status, "low");
   assert.equal(byKey["net.ipv4.tcp_notsent_lowat"].current, "不限", "2^32-1 是内核的「不限」");
   assert.equal(byKey["net.netfilter.nf_conntrack_buckets"].status, "low");
@@ -75,6 +77,15 @@ test("网络调优判断：发行版默认值大多偏低，调完全部达标",
   const after = evaluateNetTune(tuned);
   assert.equal(after.low, 0, `调完不该还有偏低的：${after.items.filter((item) => item.status === "low").map((item) => item.key).join(",")}`);
   assert.equal(after.ok, after.total);
+});
+
+test("网络调优判断：tcp_rmem 起点和上限都要到（老版本只抬了上限的机器算偏低）", () => {
+  const status = (value: string) => evaluateNetTune({ ...tuned, "net.ipv4.tcp_rmem": value }).items.find((item) => item.key === "net.ipv4.tcp_rmem")?.status;
+  assert.equal(status("4096 1048576 67108864"), "ok");
+  assert.equal(status("4096 131072 67108864"), "low", "老 Agent 调过：起点还是 128 KB");
+  assert.equal(status("4096 1048576 33554432"), "low", "上限不够");
+  assert.equal(status("8192 8388608 134217728"), "ok", "自己调得更大的算达标");
+  assert.equal(status("67108864"), "ok", "认不出三段时只看上限");
 });
 
 test("网络调优判断：自选的拥塞控制算法不算不达标；缺的参数单列", () => {
@@ -164,6 +175,9 @@ test("逐项设置 / 还原：面板先校验，指令带 mode 和 values；检�
   assert.throws(() => normalizeNetTuneSetting("net.core.somaxconn", "1; reboot"), /不是非负整数/);
   assert.throws(() => normalizeNetTuneSetting("net.core.somaxconn", ""), /值是空的/);
   assert.throws(() => normalizeNetTuneSetting("net.ipv4.tcp_rmem", "1 2 3 4"), /最多 3 个数/);
+  assert.equal(normalizeNetTuneSetting("net.ipv4.tcp_rmem", "4096 1048576 67108864"), "4096 1048576 67108864");
+  assert.throws(() => normalizeNetTuneSetting("net.ipv4.tcp_rmem", "4096 134217728 67108864"), /最小 ≤ 起点 ≤ 上限/);
+  assert.throws(() => normalizeNetTuneSetting("net.ipv4.tcp_wmem", "65536 16384 67108864"), /最小 ≤ 起点 ≤ 上限/);
   assert.throws(() => normalizeNetTuneSetting("net.core.default_qdisc", "noqueue"), /只支持/);
   assert.throws(() => normalizeNetTuneSetting("net.ipv4.tcp_congestion_control", "bbr cubic"), /算法名不对/);
   assert.ok(NETTUNE_EDITABLE_KEYS.includes("net.ipv4.tcp_congestion_control"));

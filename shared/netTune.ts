@@ -10,7 +10,7 @@
 */
 
 
-export type NetTuneRuleKind = "atLeast" | "atMost" | "bitsSet" | "equals";
+export type NetTuneRuleKind = "atLeast" | "atMost" | "bitsSet" | "equals" | "rmemAtLeast";
 export type NetTuneGroup = "forwarding" | "congestion" | "buffers" | "conntrack" | "queues" | "tcp";
 
 export const NETTUNE_GROUP_LABELS: Record<NetTuneGroup, string> = {
@@ -30,15 +30,26 @@ export type NetTuneRule = {
   group: NetTuneGroup;
   /** 值是字节数（显示成 MB / KB）。 */
   bytes?: boolean;
+  /** rmemAtLeast：三元组「最小 起点 上限」的起点（中间值）至少要到多少；上限看 want。 */
+  wantDefault?: number;
   hint: string;
 };
+
+/**
+ * tcp_rmem 的起点（每条 TCP 接收缓冲从多大开始长）至少抬到 1 MB（Agent 2.2.257 起；和
+ * agent/ext_nettune.go 的 netTuneTCPRmemDefault 一致）。内核默认 128 KB 时，高延迟又丢包的线路上
+ * 新连接的 BBR 启动阶段会被接收窗口卡住，之后十几秒只有几到几十 Mbit/s。实测见
+ * forwardx-fxp/internal/v3/BENCHMARKS.md「tcp_rmem 起点」（4 MB 起步更快，但 50 ms 丢包线路上多条新连接
+ * 同时下载反而更慢，所以取 1 MB）。
+ */
+export const NETTUNE_TCP_RMEM_DEFAULT = 1048576;
 
 /** 和 agent/ext_nettune.go 的 netTuneRules 一一对应（哈希桶和拥塞控制另算，见下面）。 */
 export const NETTUNE_RULES: readonly NetTuneRule[] = [
   { key: "net.ipv4.ip_forward", kind: "equals", want: 1, label: "IPv4 转发", group: "forwarding", hint: "iptables / nftables 转发要它打开" },
   { key: "net.core.rmem_max", kind: "atLeast", want: 67108864, label: "接收缓冲上限", group: "buffers", bytes: true, hint: "长距离线路跑满带宽需要的窗口；只是上限，不会多占内存" },
   { key: "net.core.wmem_max", kind: "atLeast", want: 67108864, label: "发送缓冲上限", group: "buffers", bytes: true, hint: "同上，发送方向" },
-  { key: "net.ipv4.tcp_rmem", kind: "atLeast", want: 67108864, label: "TCP 接收窗口上限", group: "buffers", bytes: true, hint: "16 MB 在 200 ms 的跨境线路上单连接只有三四百兆，64 MB 才够跑满千兆" },
+  { key: "net.ipv4.tcp_rmem", kind: "rmemAtLeast", want: 67108864, wantDefault: NETTUNE_TCP_RMEM_DEFAULT, label: "TCP 接收窗口", group: "buffers", bytes: true, hint: "上限：16 MB 在 200 ms 的跨境线路上单连接只有三四百兆，64 MB 才够跑满千兆。起点：内核默认 128 KB，高延迟丢包线路上新连接会被它卡住、十几秒都爬不起来；1 MB 只是起点，按收到的数据才占内存，对端读得慢的连接最多攒到 1 MB（Agent 2.2.257 起的一键调优和安装脚本才抬起点，升级 Agent 时自动补上）" },
   { key: "net.ipv4.tcp_wmem", kind: "atLeast", want: 67108864, label: "TCP 发送窗口上限", group: "buffers", bytes: true, hint: "同上，发送方向" },
   { key: "net.core.rmem_default", kind: "atLeast", want: 1048576, label: "默认接收缓冲", group: "buffers", bytes: true, hint: "隧道、游戏的 UDP 突发时不在套接字缓冲上丢包" },
   { key: "net.core.wmem_default", kind: "atLeast", want: 1048576, label: "默认发送缓冲", group: "buffers", bytes: true, hint: "同上，发送方向" },
@@ -196,11 +207,22 @@ function lastNumber(value: string): number | null {
   return fields.length > 0 && fields[fields.length - 1] !== "" && Number.isFinite(number) ? number : null;
 }
 
+/** 三元组「最小 起点 上限」的起点；不是三段数字返回 null。 */
+function middleNumber(value: string): number | null {
+  const fields = value.trim().split(/\s+/);
+  if (fields.length !== 3 || !/^\d+$/.test(fields[1])) return null;
+  return Number(fields[1]);
+}
+
 /** 内核用 2^32 - 1（或更大）表示「不限」，例如 tcp_notsent_lowat 的默认值。 */
 const NETTUNE_UNLIMITED = 4294967295;
 
 function display(rule: NetTuneRule, value: string): string {
   const number = lastNumber(value);
+  if (rule.kind === "rmemAtLeast" && number !== null) {
+    const start = middleNumber(value);
+    return start === null ? formatNetTuneBytes(number) : `起点 ${formatNetTuneBytes(start)} · 上限 ${formatNetTuneBytes(number)}`;
+  }
   if (rule.bytes && number !== null && number >= NETTUNE_UNLIMITED) return "不限";
   if (rule.bytes && number !== null) return formatNetTuneBytes(number);
   if (rule.kind === "atMost" && rule.want === 0) return number === 0 ? "关" : "开";
@@ -219,6 +241,8 @@ function wantText(rule: NetTuneRule): string {
       return `含 ${rule.want}`;
     case "equals":
       return rule.key === "net.ipv4.ip_forward" ? "开" : String(rule.want);
+    case "rmemAtLeast":
+      return `起点 ≥ ${formatNetTuneBytes(rule.wantDefault ?? 0)} · 上限 ≥ ${formatNetTuneBytes(rule.want)}`;
   }
 }
 
@@ -234,6 +258,11 @@ function ruleSatisfied(rule: NetTuneRule, value: string): boolean | null {
       return (number & rule.want) === rule.want;
     case "equals":
       return number === rule.want;
+    case "rmemAtLeast": {
+      const start = middleNumber(value);
+      // 认不出三段时只看上限（和 Agent 一样退回 atLeast）
+      return number >= rule.want && (start === null || start >= (rule.wantDefault ?? 0));
+    }
   }
 }
 
@@ -349,6 +378,11 @@ export function normalizeNetTuneSetting(key: string, raw: string): string {
   if (fields.length > 3) throw new Error(`${netTuneKeyLabel(key)}：最多 3 个数`);
   for (const field of fields) {
     if (!/^\d{1,19}$/.test(field)) throw new Error(`${netTuneKeyLabel(key)}：「${field}」不是非负整数`);
+  }
+  // TCP 缓冲三元组：最小 ≤ 起点 ≤ 上限（Agent 那头同样拦）
+  if ((key === "net.ipv4.tcp_rmem" || key === "net.ipv4.tcp_wmem") && fields.length === 3) {
+    const [low, start, high] = fields.map((field) => BigInt(field));
+    if (low > start || start > high) throw new Error(`${netTuneKeyLabel(key)}：三个数要从小到大：最小 ≤ 起点 ≤ 上限`);
   }
   return fields.join(" ");
 }

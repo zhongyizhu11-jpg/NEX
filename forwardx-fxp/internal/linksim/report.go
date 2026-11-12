@@ -173,7 +173,7 @@ func cmdReport(args []string) error {
 }
 
 func pathOrder(path string) int {
-	for i, p := range []string{"direct", "v1", "v3-nomux", "v3-mux", "v3ws-nomux", "v3ws-mux"} {
+	for i, p := range []string{"direct", "v1", "v2", "v3-nomux", "v3-mux", "v3ws-nomux", "v3ws-mux"} {
 		if p == path {
 			return i
 		}

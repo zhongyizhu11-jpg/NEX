@@ -24,6 +24,8 @@ import (
 //
 //	direct     不经隧道，压测客户端直连 nexsim-b 里的目标服务（线路本身的参照）
 //	v1         FXP V1（入口 → 出口一条 TCP 跑 FXP 加密帧，每条业务连接一条 TCP）
+//	v2         NEX V2 的内核数据面：两端之间一条 WireGuard（-wg 指定的 agent/internal/wgsim，wireguard-go 驱动内核
+//	           TUN），FXP 以 transportVersion=v2 跑在 WireGuard 地址上（明文帧）；隧道里是内核 TCP
 //	v3-nomux   NEX V3，TLS 外层，不复用（每条业务连接一条物理连接）
 //	v3-mux     NEX V3，TLS 外层，多路复用（业务连接是会话里的逻辑流）
 //	v3ws-nomux / v3ws-mux  同上，WS 外层
@@ -65,6 +67,8 @@ func pathConfig(path string) (map[string]any, error) {
 	switch path {
 	case "direct", "v1":
 		return map[string]any{}, nil
+	case "v2":
+		return map[string]any{"transportVersion": "v2"}, nil
 	}
 	mode, mux, ok := strings.Cut(path, "-")
 	if !ok || (mux != "mux" && mux != "nomux") {
@@ -151,6 +155,11 @@ func startTunnel(fxp, work, path string, extra map[string]any) (string, func(), 
 		for k, v := range extra {
 			cfg[k] = v
 		}
+	}
+	if path == "v2" {
+		// 和 Agent 的内核直通一样：出口监听在自己的 WireGuard 地址上，入口直接拨对端的 WireGuard 地址。
+		exit["listenHost"] = wgAddrB
+		entry["exitHost"] = wgAddrB
 	}
 	exitPath := filepath.Join(work, "exit.json")
 	entryPath := filepath.Join(work, "entry.json")
