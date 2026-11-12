@@ -55,6 +55,8 @@ type fxpEndpointID struct {
 	key  string
 	// lossTolerant：走抗丢包承载。同一个出口的 TCP 连接和抗丢包连接各有各的池和健康。
 	lossTolerant bool
+	// transport：V3 外层选项（见 exitEndpoint.transport）。
+	transport string
 }
 
 type pooledSecureConn struct {
@@ -98,7 +100,7 @@ var fxpEndpoints = struct {
 var fxpProbeHello, _ = json.Marshal(helloFrame{Network: "probe"})
 
 func fxpEndpointStateFor(endpoint exitEndpoint) *fxpEndpointState {
-	id := fxpEndpointID{host: strings.TrimSpace(endpoint.Host), port: endpoint.Port, key: endpoint.Key, lossTolerant: endpoint.lossTolerant}
+	id := fxpEndpointID{host: strings.TrimSpace(endpoint.Host), port: endpoint.Port, key: endpoint.Key, lossTolerant: endpoint.lossTolerant, transport: endpoint.transport}
 	fxpEndpoints.mu.Lock()
 	state := fxpEndpoints.states[id]
 	if state == nil {
@@ -377,7 +379,8 @@ func (s *fxpEndpointState) poolTargetLocked(now time.Time) int {
 func (s *fxpEndpointState) ensureFill() {
 	now := time.Now()
 	s.mu.Lock()
-	if !s.dialCfgKnown || !s.healthy || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
+	// V3 多路复用时会话池就是连接池（v3SessionPool），这里不再预热一份。
+	if !s.dialCfgKnown || v3MuxEnabled(s.dialCfg) || !s.healthy || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
 		s.mu.Unlock()
 		return
 	}

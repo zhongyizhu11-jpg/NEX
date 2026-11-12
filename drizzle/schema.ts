@@ -1301,6 +1301,16 @@ export const tunnels = table("tunnels", {
   // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。
   multipathReplicate: boolean("multipathReplicate").notNull().default(false),
   parallelStreams: int("parallelStreams").notNull().default(1),
+  /** NEX V3（forwardxVersion = v3）的外层：http / ws / tls，其余版本为空（shared/forwardXV3.ts）。 */
+  v3Transport: varchar("v3Transport", { length: 8 }),
+  /** V3 HTTP / WS 外层的 Host 头、请求路径、User-Agent；留空用 FXP 的默认。 */
+  v3Host: text("v3Host"),
+  v3Path: text("v3Path"),
+  v3UserAgent: text("v3UserAgent"),
+  /** V3 TLS 外层的 SNI，留空不发。 */
+  v3ServerName: text("v3ServerName"),
+  /** V3 多条业务连接共用一条物理连接，默认关。 */
+  v3Multiplex: boolean("v3Multiplex").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),

@@ -798,6 +798,13 @@ type fxpSpec struct {
 	MultipathMaxPending int               `json:"multipathMaxPending,omitempty"`
 	// MultipathReplicate：复制模式，每一片从两条腿各发一份（FXP 2.2.133 起认）。
 	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
+	// NEX V3 的外层选项（见 fxp_v3_transport.go），原样交给 FXP，只在 transportVersion=v3 时有。
+	V3Transport  string `json:"v3Transport,omitempty"`
+	V3Host       string `json:"v3Host,omitempty"`
+	V3Path       string `json:"v3Path,omitempty"`
+	V3UserAgent  string `json:"v3UserAgent,omitempty"`
+	V3ServerName string `json:"v3ServerName,omitempty"`
+	V3Multiplex  *bool  `json:"v3Multiplex,omitempty"`
 }
 
 // fxpMultipathLeg is one parallel path from the entry to the exit, either a

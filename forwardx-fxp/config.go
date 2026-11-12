@@ -32,6 +32,12 @@ func normalizeConfig(cfg config) config {
 	cfg.RelayExitHost = strings.TrimSpace(cfg.RelayExitHost)
 	cfg.ListenHost = strings.TrimSpace(cfg.ListenHost)
 	cfg.ProxyProtocolVersion = normalizeProxyProtocolVersion(cfg.ProxyProtocolVersion)
+	cfg.TransportVersion = strings.ToLower(strings.TrimSpace(cfg.TransportVersion))
+	cfg.V3Transport = strings.ToLower(strings.TrimSpace(cfg.V3Transport))
+	cfg.V3Host = strings.TrimSpace(cfg.V3Host)
+	cfg.V3Path = strings.TrimSpace(cfg.V3Path)
+	cfg.V3UserAgent = strings.TrimSpace(cfg.V3UserAgent)
+	cfg.V3ServerName = strings.TrimSpace(cfg.V3ServerName)
 	// 这两项面板暂时不下发；没写时看环境变量（写在 Agent 的 systemd 单元里，FXP 是
 	// 它的子进程），给需要手动指定的人留一个口子。
 	if strings.TrimSpace(cfg.TCPCongestion) == "" {
@@ -107,6 +113,9 @@ func validateConfig(cfg config) error {
 	if cfg.Role == "entry-group" {
 		return validateEntryGroupConfig(cfg)
 	}
+	if err := validateTransportConfig(cfg); err != nil {
+		return err
+	}
 	if cfg.Key == "" {
 		return errors.New("empty key")
 	}
@@ -137,9 +146,14 @@ func validateConfig(cfg config) error {
 			return errors.New("entry requires target host and port")
 		}
 	}
-	if cfg.LossTolerant && strings.EqualFold(strings.TrimSpace(cfg.TransportVersion), "v2") {
-		// V2 的外层已经是 WireGuard 的 UDP，再套一层没有意义；面板不会这样下发。
+	if cfg.LossTolerant && (strings.EqualFold(strings.TrimSpace(cfg.TransportVersion), "v2") || cfg.TransportVersion == "v3") {
+		// V2 的外层已经是 WireGuard 的 UDP，再套一层没有意义；V3 的外层是 HTTP / WS / TLS
+		// 伪装，换成 UDP 上的 KCP 就没有伪装可言了。面板不会这样下发。
 		return errors.New("loss-tolerant transport is only supported on v1 tunnels")
+	}
+	if cfg.TransportVersion == "v3" && multipathEnabled(cfg) {
+		// 多路径的每条腿自己握手、自己调度，和 V3 的物理会话不是一回事；面板保存时就拒了。
+		return errors.New("multipath is not supported on v3 tunnels")
 	}
 	if (cfg.ProxyProtocolReceive || cfg.ProxyProtocolSend || cfg.ProxyProtocolExitReceive || cfg.ProxyProtocolExitSend) && cfg.Protocol == "udp" {
 		return errors.New("proxy protocol requires tcp protocol")

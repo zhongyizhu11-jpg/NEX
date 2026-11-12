@@ -23,12 +23,15 @@ export function normalizeTunnelParallelStreams(value: unknown): number {
 /**
  * 这条隧道能不能开，不能开时给出原因。
  * - 只有 NEX V1：V2 是 WireGuard，外面本来就只有一条 UDP 流，里面拆几条 TCP 没有用；
+ *   V3 的物理会话不支持 FXP 的多路径；
  * - 中转是「主备 / 单连接叠加」时不用：那两种已经是并排的中转，叠加模式本来就在拆；
  * - 多出口负载均衡的隧道不用：重组必须在同一个出口，拆了就没法按出口分流。
  */
 export function tunnelParallelStreamsUnavailableReason(tunnel: any, hops: readonly any[], exitRouteCount = 1): string {
   if (String(tunnel?.mode || "").trim().toLowerCase() !== "forwardx") return "只有 NEX 隧道支持单连接多路并发";
-  if (String(tunnel?.forwardxVersion || "v1").trim().toLowerCase() === "v2") return "NEX V2（WireGuard）隧道外层只有一条 UDP 流，拆成多路没有用";
+  const version = String(tunnel?.forwardxVersion || "v1").trim().toLowerCase();
+  if (version === "v2") return "NEX V2（WireGuard）隧道外层只有一条 UDP 流，拆成多路没有用";
+  if (version === "v3") return "NEX V3 隧道不支持单连接多路并发（多路并发走的是 FXP 的多路径，V3 的会话不支持）";
   if (tunnelRelayUsesParallelRelays(tunnel, [...hops])) return "中转是「主备」或「单连接叠加」的隧道不用再开（单连接叠加已经在拆）";
   if (exitRouteCount > 1) return "多出口负载均衡的隧道不能拆（重组必须在同一个出口）";
   return "";
