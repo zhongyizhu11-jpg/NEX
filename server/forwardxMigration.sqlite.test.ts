@@ -54,6 +54,7 @@ test("原版 2.3.299 的 SQLite 库：只读导进全新的 NEX 库，能换算�
     const output = JSON.parse(fs.readFileSync(reportFile, "utf8"));
     assert.equal(output.success, true);
     assert.equal(output.import.mode, "restore");
+    assert.equal(output.import.skippedRows, 0, `导入时不该有被跳过的行：${JSON.stringify(output.import.skipped)}`);
     assert.equal(sha256(source), before, "原版的库一个字节都不能改");
 
     const tables = new Map(output.report.tables.map((item: any) => [item.table, item]));

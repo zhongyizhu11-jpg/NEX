@@ -649,6 +649,8 @@ export async function buildForwardxMigrationSnapshot(
       const kept: SourceRow[] = [];
       for (const row of rows) {
         const key = String(row.key || "");
+        // 面板公开地址由导入时的 targetPanelUrl 写（importMigrationSnapshot 不收快照里的这一项），这里不算「没迁」
+        if (key === "panelPublicUrl") continue;
         if (!key || isSkippedForwardxSetting(key)) {
           if (key) report.skippedSettings.push(key);
           continue;
