@@ -28,8 +28,10 @@ export const FORWARDX_V3_TRANSPORT_LABELS: Record<ForwardXV3Transport, string> =
 export const FORWARDX_V3_DEFAULT_TRANSPORT: ForwardXV3Transport = "tls";
 /**
  * 默认不复用：每条业务连接一条自己的 TCP（建连的往返由预热连接池在后台做完），一条卡住不影响
- * 别的。复用时窗口会按线路自动放大（最大 16 MiB），高延迟线路上单连接也跑得起来，但所有连接
- * 挤在一条 TCP 上，一个丢包大家一起等。
+ * 别的。复用时窗口会按线路自动放大（最大 32 MiB），高延迟线路上单连接也跑得起来，但所有连接
+ * 挤在一条 TCP 上，一个丢包大家一起等。丢包线路上的实测（forwardx-fxp/internal/v3/BENCHMARKS.md
+ * 「丢包 + 高延迟线路」）：不复用的吞吐和交互延迟都和 V1 一样；复用在丢包时交互延迟高一截，
+ * 所以默认仍然不复用。
  */
 export const FORWARDX_V3_DEFAULT_MULTIPLEX = false;
 
