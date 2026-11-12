@@ -301,6 +301,10 @@ export const hosts = table("hosts", {
   // （JSON 数组，例如 ["ssEgress2022","ssEgressUdp"]），见 shared/ssEgress.ts。
   runtimeVersion: varchar("runtimeVersion", { length: 64 }),
   agentCapabilities: text("agentCapabilities"),
+  // Agent 的发行来源：nex = NEX 发的 Agent，forwardx = 原版 ForwardX 的 Agent（shared/agentDistribution.ts）。
+  // NULL = 还没认出来（老数据）。agentUpgradeTargetDistribution 非空时，升级要等 Agent 换成这一家才算完成。
+  agentDistribution: varchar("agentDistribution", { length: 32 }),
+  agentUpgradeTargetDistribution: varchar("agentUpgradeTargetDistribution", { length: 32 }),
   // Agent 2.2.256 起每次心跳上报：这台机器能不能开 IPv6 监听（内核 ipv6.disable=1 时是 false）。
   // NULL = 没报过（老 Agent），按能用算；false 时 realm / socat / nginx 只听 IPv4（shared/hostIpv6Listen.ts）。
   ipv6ListenAvailable: boolean("ipv6ListenAvailable"),

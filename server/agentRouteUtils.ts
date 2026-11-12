@@ -10,6 +10,7 @@ export const AGENT_PLUGIN_TASK_VERSION = "2.2.151";
 export { normalizeVersion, compareVersions, isAgentVersionAtLeast, isAgentVersionBehind } from "../shared/version";
 import { compareVersions, normalizeVersion } from "../shared/version";
 import { fxpRuntimeNeedsUpgrade } from "../shared/fxpRuntime";
+import { FORWARDX_AGENT_DISTRIBUTION, NEX_AGENT_DISTRIBUTION, normalizeAgentDistribution } from "../shared/agentDistribution";
 
 export function isAgentUpgradeTargetSatisfied(
   version: string | null | undefined,
@@ -26,6 +27,11 @@ export function isAgentUpgradeTargetSatisfied(
   return compareVersions(normalizedVersion, normalizedTarget) >= 0;
 }
 
+/** 这台主机升级时要不要顺带换发行来源：跑着原版 ForwardX 的 Agent 时回 "nex"，否则 null。 */
+export function agentUpgradeTargetDistributionFor(host: { agentDistribution?: string | null }) {
+  return normalizeAgentDistribution(host.agentDistribution) === FORWARDX_AGENT_DISTRIBUTION ? NEX_AGENT_DISTRIBUTION : null;
+}
+
 /**
  * 一键升级算不算完成：Agent 到了目标版本，并且（升到当前版本时）FXP 也不再需要重装。
  *
@@ -35,10 +41,19 @@ export function isAgentUpgradeTargetSatisfied(
  * 旧版本的安装包里本来就是旧 FXP。
  */
 export function isAgentUpgradeCompleted(
-  host: { agentVersion?: string | null; fxpVersion?: string | null },
+  host: {
+    agentVersion?: string | null;
+    fxpVersion?: string | null;
+    agentDistribution?: string | null;
+    agentUpgradeTargetDistribution?: string | null;
+  },
   target: string | null | undefined,
   currentSupportedVersion?: string | null,
 ) {
+  // 从原版 ForwardX 迁过来的升级（agentUpgradeTargetDistribution = "nex"）：版本号够了不算数，
+  // 原版的 Agent 版本号可能比 NEX 的还高，要等它真的换成 NEX 发的 Agent（shared/agentDistribution.ts）。
+  const targetDistribution = normalizeAgentDistribution(host.agentUpgradeTargetDistribution);
+  if (targetDistribution && normalizeAgentDistribution(host.agentDistribution) !== targetDistribution) return false;
   if (!isAgentUpgradeTargetSatisfied(host.agentVersion, target, currentSupportedVersion)) return false;
   if (currentSupportedVersion && compareVersions(normalizeVersion(target), currentSupportedVersion) < 0) return true;
   return !fxpRuntimeNeedsUpgrade(host);
@@ -49,10 +64,12 @@ export function isAgentUpgradeCompleted(
  * FXP 也不需要重装。FXP 旧了的主机即使 Agent 已是最新，也要能一键重跑安装脚本。
  */
 export function isHostAgentUpgradeUnnecessary(
-  host: { agentVersion?: string | null; fxpVersion?: string | null },
+  host: { agentVersion?: string | null; fxpVersion?: string | null; agentDistribution?: string | null },
   target: string | null | undefined,
   currentSupportedVersion?: string | null,
 ) {
+  // 原版 ForwardX 的 Agent 版本号再高也要能一键换成 NEX 的
+  if (agentUpgradeTargetDistributionFor(host)) return false;
   if (!host.agentVersion || !target || compareVersions(host.agentVersion, target) < 0) return false;
   if (currentSupportedVersion && compareVersions(normalizeVersion(target), currentSupportedVersion) < 0) return true;
   return !fxpRuntimeNeedsUpgrade(host);

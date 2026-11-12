@@ -212,7 +212,13 @@ async function openAgentEventStream(input: {
     const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
     const agentUpgradeCompleted = (host as any).agentUpgradeRequested
       && isAgentUpgradeCompleted(
-        { agentVersion, fxpVersion: fxpVersion || (host as any).fxpVersion },
+        {
+          agentVersion,
+          fxpVersion: fxpVersion || (host as any).fxpVersion,
+          // 事件流不更新发行来源（心跳才认），这里按上一次心跳认出来的算
+          agentDistribution: host.agentDistribution,
+          agentUpgradeTargetDistribution: host.agentUpgradeTargetDistribution,
+        },
         requestedTargetVersion,
         AGENT_VERSION,
       );
