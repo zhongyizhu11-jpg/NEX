@@ -25,12 +25,16 @@ V3 在 NEX FXP 里的接入层。
   - 不复用（v3Multiplex=false，NEX 面板的默认）：这条物理连接只跑一条业务连接，和 V1 一样
     能进入口的预热连接池（endpoint_pool.go），用户连接来了直接取一条写 hello，TCP / TLS /
     内层握手的几个往返都在后台做完了。单连接吞吐和 V1 一样只受 TCP 本身限制。
-  - 多路复用：几十条业务连接共用一条物理连接（v3SessionPool），每条业务连接是会话里的一个
-    逻辑流。建连只多发一个 OPEN 帧；代价是每个逻辑流的接收窗口只有 64 KiB（会话总共 8 MiB、
-    最多 128 条流），高延迟线路上单条连接跑不满带宽，而且一条物理连接卡住所有流一起卡。
+  - 多路复用：几十条业务连接共用一条物理连接（v3SessionPool，端点活跃时预热好一条），每条业务
+    连接是会话里的一个逻辑流。建连只发一个 OPEN 帧、不等回话；每个逻辑流的窗口从 128 KiB 起
+    按需放大到 16 MiB（internal/v3/session.go）。代价是一条物理连接丢包时所有流一起等。
 
-两种用法里，业务帧都是「4 字节长度 + 明文」的逻辑帧（secureConn.logical），加密由内层
-记录层负责。hello、目标授权、PROXY 头、流量统计和 V1 是同一套代码。
+出口不看自己的配置、看认证后的第一个字节分辨这两种（v3AwaitFirstByte），所以两端的复用设置
+不一样也能通，多路径的腿也可以是不复用的连接。
+
+两种用法里，业务帧都是「4 字节长度 + 明文」的逻辑帧（secureConn.logical），加密由内层负责
+（外层是 TLS 1.3 时由 TLS 负责，内层直通，见 PROTOCOL.md）。hello、目标授权、PROXY 头、流量
+统计和 V1 是同一套代码。
 */
 
 // v3LogicalFrameLimit 是一个逻辑帧的上限。FXP 的数据帧最多 64 KiB（fxpCopyChunkSize）；
@@ -156,7 +160,7 @@ func v3ClientHandshake(raw net.Conn, cfg config) (*v3.InnerConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	inner, err := v3.InnerClient(wrapped, cfg.Key, v3TLSBinding(wrapped))
+	inner, err := v3.InnerClient(wrapped, cfg.Key, v3TLSClientBinding(wrapped))
 	if err != nil {
 		return nil, err
 	}

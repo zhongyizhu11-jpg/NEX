@@ -149,16 +149,22 @@ func wrapV3Server(conn net.Conn, cfg config) (net.Conn, error) {
 }
 
 // v3TLSInnerAEAD 为假时（默认），外层是 TLS 1.3 的 V3 连接内层不再套第二层 AEAD
-// （内层模式 4，见 internal/v3/inner.go 和 PROTOCOL.md 的安全论证）。只给测试 / 排障对照用。
+// （内层模式 4，见 internal/v3/inner.go 和 PROTOCOL.md 的安全论证）。只给测试 / 排障对照用，
+// 只管客户端发什么：选模式的是客户端，服务端两种都收（只要它自己的外层是 TLS 1.3）。
 var v3TLSInnerAEAD atomic.Bool
+
+// v3TLSClientBinding 是客户端发不发模式 4：打开 v3TLSInnerAEAD 时不发（走模式 3）。
+func v3TLSClientBinding(conn net.Conn) []byte {
+	if v3TLSInnerAEAD.Load() {
+		return nil
+	}
+	return v3TLSBinding(conn)
+}
 
 // v3TLSBinding 是内层模式 4 的绑定材料：外层是 TLS 1.3 时，这条 TLS 会话的导出密钥
 // （RFC 8446 §7.5）。外层不是 TLS、TLS 版本低于 1.3、或者导出失败，都返回 nil —— 内层
 // 照旧做自己的 AEAD 记录（模式 3），不会在没有 TLS 1.3 保护的连接上直通。
 func v3TLSBinding(conn net.Conn) []byte {
-	if v3TLSInnerAEAD.Load() {
-		return nil
-	}
 	wrapped, ok := conn.(*tls.Conn)
 	if !ok {
 		return nil
