@@ -1973,6 +1973,10 @@ func handleRelayBusiness(upSec *secureConn, cfg config, selector *exitEndpointSe
 	// Connect to downstream (like entry)
 	downCfg := cfg
 	downCfg.Key = cfg.RelayKey
+	if strings.TrimSpace(hello.MultipathSessionID) != "" {
+		// 多路径的一条腿：V3 时下一跳也是它自己的物理连接（V1 / V2 原样不变）。
+		downCfg = v3LegConfig(downCfg)
+	}
 	selectionKey := strings.TrimSpace(hello.SelectionKey)
 	if selectionKey == "" {
 		selectionKey = strings.TrimSpace(hello.ProxySourceIP)

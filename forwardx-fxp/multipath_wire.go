@@ -125,7 +125,8 @@ func dialMultipathLegs(cfg config, hello helloFrame, sessionID string, indexes [
 // 中途重拨的那一路要换一个没用过的编号（出口按编号记每一路的字节数，旧编号会被拒）。
 func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, wireIndex int) multipathDialResult {
 	legCfg := cfg.MultipathLegs[cfgIndex]
-	dialCfg := cfg
+	// V3 隧道上每条腿是一条自己的物理连接，不并进复用会话（V1 / V2 原样不变）。
+	dialCfg := v3LegConfig(cfg)
 	if strings.TrimSpace(legCfg.Key) != "" {
 		dialCfg.Key = legCfg.Key
 	}
