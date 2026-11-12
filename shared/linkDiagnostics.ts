@@ -14,6 +14,8 @@
 export type DiagnosticStatus = "pass" | "warn" | "fail" | "skip" | "pending";
 export type DiagnosticGroup = "config" | "host" | "entry" | "link" | "target";
 export type DiagnosticSubjectKind = "rule" | "tunnel" | "forwardGroup";
+/** 报告能对着什么出：上面三种之外，网络测试页的「配置体检」还能对着一台主机出（server/networkConfigCheck.ts）。 */
+export type DiagnosticReportSubjectKind = DiagnosticSubjectKind | "host";
 
 export const DIAGNOSTIC_GROUPS: readonly DiagnosticGroup[] = ["config", "host", "entry", "link", "target"];
 
@@ -69,7 +71,7 @@ export type DiagnosticCause = {
 
 export type LinkDiagnosticsReport = {
   sessionId: string;
-  subject: { kind: DiagnosticSubjectKind; id: number; name: string };
+  subject: { kind: DiagnosticReportSubjectKind; id: number; name: string };
   startedAt: string;
   updatedAt: string;
   /** 还有 Agent 项没回来。 */
@@ -158,10 +160,11 @@ export function buildDiagnosticsReport(input: {
   };
 }
 
-const SUBJECT_KIND_LABELS: Record<DiagnosticSubjectKind, string> = {
+const SUBJECT_KIND_LABELS: Record<DiagnosticReportSubjectKind, string> = {
   rule: "规则",
   tunnel: "隧道",
   forwardGroup: "转发链",
+  host: "主机",
 };
 
 function itemStatusText(item: DiagnosticItem) {
@@ -172,10 +175,10 @@ function itemStatusText(item: DiagnosticItem) {
  * 「复制结果」：贴给客服 / 发工单用的纯文本。每组一段，每项一行
  * 「[状态] 标题：结论」，有修复建议另起一行，原始细节缩进跟在后面。
  */
-export function formatDiagnosticsReportText(report: LinkDiagnosticsReport, options: { includeDetail?: boolean } = {}) {
+export function formatDiagnosticsReportText(report: LinkDiagnosticsReport, options: { includeDetail?: boolean; title?: string } = {}) {
   const includeDetail = options.includeDetail !== false;
   const lines: string[] = [];
-  lines.push(`NEX 链路诊断 · ${SUBJECT_KIND_LABELS[report.subject.kind]}「${report.subject.name}」(#${report.subject.id})`);
+  lines.push(`${options.title || "NEX 链路诊断"} · ${SUBJECT_KIND_LABELS[report.subject.kind]}「${report.subject.name}」(#${report.subject.id})`);
   lines.push(`时间：${report.startedAt}`);
   lines.push(`结论：${report.verdictText}`);
   if (report.cause) {
