@@ -150,7 +150,7 @@ func selfUpgrade(cfg Config, up *agentUpgrade) {
 	// 管理代理：升级脚本里的下载（Agent 二进制、运行时、FXP）和这台 Agent 用同一个代理（management_proxy.go）。
 	// 放在拿到升级锁、挂好清理之后：读配置失败退出时临时脚本和锁一起清掉。
 	upgradeCmd = strings.Replace(upgradeCmd, "trap cleanup EXIT; ", "trap cleanup EXIT; "+agentUpgradeProxySetup(activeConfigPath), 1)
-	cmd := fmt.Sprintf(`if command -v systemd-run >/dev/null 2>&1; then systemd-run --unit=forwardx-agent-upgrade --collect /bin/sh -lc %s; else nohup sh -lc %s >/var/log/forwardx-agent/agent-upgrade.log 2>&1 < /dev/null & fi`, shellQuote(upgradeCmd), shellQuote(upgradeCmd))
+	cmd := selfUpgradeLauncherCommand(upgradeCmd, agentLogDir+"/agent-upgrade.log")
 	logf("self-upgrade requested target=%s release=%s", up.TargetVersion, releaseVersion)
 	if !runShell(cmd) {
 		_ = os.Remove(scriptPath)
@@ -176,4 +176,14 @@ func handleLegacyPanelMigrationUpgrade(cfg Config, up *agentUpgrade) bool {
 		FallbackPanelURL: currentPanelURL(cfg),
 		StartedAt:        time.Now().Unix(),
 	})
+}
+
+// selfUpgradeLauncherCommand 把升级命令放到 Agent 进程外面跑（升级会重启 Agent，不能跟着一起被杀）。
+//
+// 只有 systemd 真在当 PID 1（/run/systemd/system 在）时才用 systemd-run；装了 systemd 包、但不是用它启动的机器
+// （容器、chroot、一些 NAT 小鸡）上 systemd-run 一调就报「System has not been booted with systemd」，以前就卡在这里：
+// 每次心跳都「launcher failed」，永远升不上去。systemd-run 失败时也退回 nohup —— 升级脚本自己有目录锁，不会跑两份。
+func selfUpgradeLauncherCommand(upgradeCmd, logPath string) string {
+	quoted := shellQuote(upgradeCmd)
+	return fmt.Sprintf(`if [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1 && systemd-run --unit=forwardx-agent-upgrade --collect /bin/sh -lc %s >/dev/null 2>&1; then :; else nohup sh -lc %s >>%s 2>&1 < /dev/null & fi`, quoted, quoted, shellQuote(logPath))
 }
