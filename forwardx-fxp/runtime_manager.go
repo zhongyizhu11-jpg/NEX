@@ -250,7 +250,7 @@ func buildEntryPlans(entries []config, grouped bool) ([]tcpListenPlan, []udpServ
 		res := &entryResources{
 			cfg:        entry,
 			gate:       newConnGate(entry.MaxConnections, entry.MaxIPs),
-			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant}, entry.ExitStrategy),
+			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant, transport: v3TransportIdentity(entry)}, entry.ExitStrategy),
 			inLimiter:  newLimiter(entry.LimitIn),
 			outLimiter: newLimiter(entry.LimitOut),
 		}
@@ -412,7 +412,7 @@ func buildRelayPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 	var tcpPlans []tcpListenPlan
 	var udpPlans []udpServePlan
 	newSelector := func() *exitEndpointSelector {
-		return newExitEndpointSelector(cfg.Exits, exitEndpoint{Host: cfg.RelayExitHost, Port: cfg.RelayExitPort, UDPPort: cfg.UDPRelayExitPort, Key: cfg.RelayKey, lossTolerant: cfg.LossTolerant}, cfg.ExitStrategy)
+		return newExitEndpointSelector(cfg.Exits, exitEndpoint{Host: cfg.RelayExitHost, Port: cfg.RelayExitPort, UDPPort: cfg.UDPRelayExitPort, Key: cfg.RelayKey, lossTolerant: cfg.LossTolerant, transport: v3TransportIdentity(cfg)}, cfg.ExitStrategy)
 	}
 	if protocolHas(cfg, "tcp") {
 		tcpPlans = append(tcpPlans, tcpListenPlan{

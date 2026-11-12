@@ -87,6 +87,14 @@ func (t *selectedTransport) connectLocked() error {
 			dialCfg.Key = endpoint.Key
 		}
 		endpointLabel := connStatsEndpoint(endpoint.Host, endpoint.Port)
+		if v3Enabled(dialCfg) {
+			done, err := t.connectV3Locked(endpoint, index, dialCfg, endpointLabel)
+			if done {
+				return err
+			}
+			lastErr = err
+			continue
+		}
 		if conn, sec, ok := t.selector.states[index].take(dialCfg); ok {
 			recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "pool", endpointLabel, 0, nil)
 			t.useLocked(conn, sec, endpoint, index, true)
@@ -130,6 +138,35 @@ func (t *selectedTransport) connectLocked() error {
 		lastErr = errors.New("no exit endpoint available")
 	}
 	return lastErr
+}
+
+// connectV3Locked 用 V3 拿一条到这个端点的连接。V3 的握手是同步做完的（内层握手要
+// 往返，没有 V1 那种「先发后确认」的流水线），拿到的连接都已确认，不需要重放缓存。
+// done 为 true 表示这一轮到此为止（成功，或者是换端点也没用的本地错误）。
+func (t *selectedTransport) connectV3Locked(endpoint exitEndpoint, index int, dialCfg config, endpointLabel string) (bool, error) {
+	started := time.Now()
+	conn, sec, reused, err := dialV3Transport(t.selector.states[index], endpoint.Host, endpoint.Port, dialCfg)
+	stage := "handshake"
+	if reused {
+		stage = "pool"
+	}
+	if err == nil || !isClosedErr(err) {
+		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, stage, endpointLabel, time.Since(started), err)
+	}
+	if err != nil {
+		if !v3EndpointFailureIsRetryable(err) {
+			return true, err
+		}
+		t.selector.markFailure(index, err)
+		return false, err
+	}
+	if !reused {
+		t.selector.observeLatency(index, time.Since(started))
+	}
+	t.selector.markHealthy(index)
+	t.useLocked(conn, sec, endpoint, index, true)
+	t.selector.probeFailedEndpoint(dialCfg)
+	return true, nil
 }
 
 func (t *selectedTransport) useLocked(conn net.Conn, sec *secureConn, endpoint exitEndpoint, index int, committed bool) {
