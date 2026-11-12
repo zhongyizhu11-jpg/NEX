@@ -27,7 +27,9 @@ V3 在 NEX FXP 里的接入层。
     内层握手的几个往返都在后台做完了。单连接吞吐和 V1 一样只受 TCP 本身限制。
   - 多路复用：几十条业务连接共用一条物理连接（v3SessionPool，端点活跃时预热好一条），每条业务
     连接是会话里的一个逻辑流。建连只发一个 OPEN 帧、不等回话；每个逻辑流的窗口从 128 KiB 起
-    按需放大到 16 MiB（internal/v3/session.go）。代价是一条物理连接丢包时所有流一起等。
+    按需放大到 32 MiB（internal/v3/session.go）。代价是一条物理连接丢包时所有流一起等（队头阻塞）；
+    发送队列按连接限住了（v3SessionNotSentLowat），交互流量不会再排在大流量堆进内核的十几 MB
+    后面。丢包线路上的实测见 internal/v3/BENCHMARKS.md「丢包 + 高延迟线路」。
 
 出口不看自己的配置、看认证后的第一个字节分辨这两种（v3AwaitFirstByte），所以两端的复用设置
 不一样也能通，多路径的腿也可以是不复用的连接。
@@ -290,6 +292,7 @@ func serveV3Inbound(role string, conn net.Conn, cfg config, in *fxpInbound, hand
 		return handler(newV3SecureConn(peeked, shaper, conn), in)
 	case v3.FrameOpen:
 		shaper.attach(conn)
+		tuneV3SessionSocket(conn)
 		// 多路复用的物理连接一直开着，不会再有「等 hello」这一段：让出 pending 份额，只占 active。
 		in.helloReceived()
 		return serveV3Session(role, peeked, in, shaper, handler)
@@ -297,6 +300,27 @@ func serveV3Inbound(role string, conn net.Conn, cfg config, in *fxpInbound, hand
 		probeDelay()
 		return fmt.Errorf("v3: unexpected first byte %#x after the inner handshake", first)
 	}
+}
+
+// v3SessionNotSentLowat 是多路复用物理连接的 TCP_NOTSENT_LOWAT：内核发送队列里还没发出去的
+// 数据最多这么多，再多就留在会话自己的写队列里（每条流最多排 4 帧，别的流的帧排在它们中间）。
+//
+// 为什么只给复用的会话设（丢包线路的实测见 internal/v3/BENCHMARKS.md「丢包 + 高延迟线路」）：
+// 不设时内核按自动调优把发送缓冲放大到 tcp_wmem 上限（调优过的机器 64 MB），复用窗口又放大到
+// 几十 MiB，一条下载能在这条 TCP 的发送队列里堆上十几 MB；同一会话里另一条流的一个小包要排在
+// 它们后面 —— 50 ms 往返、200 Mbit/s 时一问一答从 85 ms 涨到 680 ms，200 ms 往返时涨到 800 ms
+// 以上。不复用的连接上只有一条流，队列堆在自己前面不影响别人，不设。Agent 的网络调优写了
+// net.ipv4.tcp_notsent_lowat，但在开发机的内核上那个 sysctl 没有限住发送队列（按连接设的才
+// 管用），没装 Agent 调优的机器上它又是不限，所以这里按连接设。
+//
+// 128 KiB 和安装脚本的调优值一样（200 Mbit/s 时约 5 ms）；512 KiB、2 MiB 量过，交互延迟更高、
+// 吞吐没有更好，回环上 8 Gbit/s 量级的吞吐也没有因为它变低。
+const v3SessionNotSentLowat = 128 << 10
+
+// tuneV3SessionSocket 给多路复用的物理连接设 TCP_NOTSENT_LOWAT（入口拨出、出口接入两边都设：
+// 下载方向的数据是出口发的）。设不上就算了，只是排队长一点。
+func tuneV3SessionSocket(raw net.Conn) {
+	_ = setTCPNotSentLowat(raw, v3SessionNotSentLowat)
 }
 
 // v3AwaitFirstByte 等认证过的连接上的第一个字节，规矩和等 hello 一样：最多 fxpServerHelloWait
@@ -541,6 +565,7 @@ func (p *v3SessionPool) finishDial(key [32]byte, bucket *v3PoolBucket, host stri
 	var session *v3.Session
 	if err == nil {
 		shaper.attach(raw)
+		tuneV3SessionSocket(raw)
 		session = v3.NewSession(inner, v3.SessionOptions{Client: true, IdleTimeout: v3ClientIdleTimeout})
 	}
 	p.mu.Lock()

@@ -7,11 +7,18 @@ package v3
 //     第一次额度就能直接写。移植版每条新流都要先等一个往返的额度，短连接因此多一个 RTT。
 //   - 窗口**按需放大**：接收端发现「对端把额度全用完了、而本地读的一方已经把缓冲读空了」——
 //     也就是卡住发送的是窗口、不是读得慢——就把这条流的窗口放大（1 MiB 以下 ×4，以上 ×2），
-//     最大 MaxStreamWindow（默认 16 MiB）。读得慢的流缓冲是满的，不会触发放大。
-//   - 放大的部分从会话的预算（SessionBuffer，默认 32 MiB）和整个进程的预算
+//     最大 MaxStreamWindow（默认 32 MiB）。读得慢的流缓冲是满的，不会触发放大。
+//   - 放大的部分从会话的预算（SessionBuffer，默认 64 MiB）和整个进程的预算
 //     （GlobalWindowBudget，默认 256 MiB）里扣，流结束时还回去：一条流再快也占不满内存，
 //     最坏情况下的内存上限仍然是确定的。
-//   - 额度只在攒够窗口的四分之一时才发，不是读一次发一次。
+//   - 额度攒够窗口的四分之一（最多 creditChunk）才发，不是读一次发一次。
+//
+// 窗口上限为什么是 32 MiB（丢包线路的实测见 BENCHMARKS.md「丢包 + 高延迟线路」）：额度一旦
+// 卡住发送，底下那条 TCP 在内核看来就是「应用没数据可发」（app-limited），BBR 的启动阶段
+// 只在不是 app-limited 的往返里判断带宽到顶，于是一直停在 2.89 倍增益、在途量是带宽时延积的
+// 近三倍，瓶颈队列被灌满、自己制造丢包，复用会话上的每条流都跟着等重传。窗口要盖得住
+// 「BBR 的在途量 + 额度回来的半个往返 + 额度粒度」，约 3.5 倍带宽时延积：200 Mbit/s × 200 ms
+// 是 17.5 MB，16 MiB 不够、32 MiB 够。
 //
 // 写路径：业务数据拷进池里的帧缓冲（帧头已经写好），写协程把排着的帧一次取一批，交给内层
 // 一次封好、一次系统调用写出。读路径：帧内容读进池里的块，直接挂到流上，读空了还回池里。
@@ -44,10 +51,15 @@ const DefaultWriteTimeout = 10 * time.Second
 
 const (
 	DefaultStreamWindow    = 128 << 10
-	DefaultMaxStreamWindow = 16 << 20
-	DefaultSessionGrowth   = 32 << 20
+	DefaultMaxStreamWindow = 32 << 20
+	DefaultSessionGrowth   = 64 << 20
 	// maxCreditOutstanding：对端给的额度累计不能超过这个数（防伪造额度把计数撑爆）。
+	// 窗口上限最多是它的一半（NewSession 里截），两端的上限不一样也不会互相报错。
 	maxCreditOutstanding = 64 << 20
+	// creditChunk：额度攒够窗口的四分之一就发，但最多攒这么多。窗口放大到几十 MiB 时，
+	// 四分之一是好几 MiB，发送端拿到的额度一大块一大块地来，中间这条 TCP 的发送队列会
+	// 见底（内核把它记成 app-limited，BBR 因此出不了启动阶段）。
+	creditChunk = 1 << 20
 	// writeBatchBytes / writeBatchFrames：写协程一批最多拼多少。
 	writeBatchBytes  = 512 << 10
 	writeBatchFrames = 64
@@ -434,9 +446,10 @@ func (s *Session) growOnBlockedLocked(st *Stream) bool {
 	return true
 }
 
-// queueCreditLocked：要还的额度攒到窗口的四分之一（force 时只要有），就交给写协程发。
+// queueCreditLocked：要还的额度攒到窗口的四分之一（最多 creditChunk；force 时只要有），
+// 就交给写协程发。
 func (s *Session) queueCreditLocked(st *Stream, force bool) {
-	if st.creditQueued || st.creditDue == 0 || (!force && st.creditDue < st.window/4) {
+	if st.creditQueued || st.creditDue == 0 || (!force && st.creditDue < creditThreshold(st.window)) {
 		return
 	}
 	st.creditQueued = true
@@ -446,6 +459,9 @@ func (s *Session) queueCreditLocked(st *Stream, force bool) {
 	default:
 	}
 }
+
+// creditThreshold：窗口是 window 的流，读掉多少字节才还一次额度。
+func creditThreshold(window int) int { return min(window/4, creditChunk) }
 
 // takeCreditsLocked 把排着的额度编成帧追加到 dst。
 func (s *Session) takeCreditsLocked(dst [][]byte) [][]byte {

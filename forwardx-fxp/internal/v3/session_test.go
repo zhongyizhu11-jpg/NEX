@@ -670,3 +670,17 @@ func TestSessionWindowGrowthRespectsSessionBudget(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// 额度攒够窗口的四分之一就还，但最多攒 creditChunk：窗口放大到 32 MiB 时四分之一是 8 MiB，
+// 发送端的额度会一大块一大块地来，中间那条 TCP 的发送队列见底。
+func TestCreditThresholdIsCapped(t *testing.T) {
+	for _, tc := range []struct{ window, want int }{
+		{DefaultStreamWindow, DefaultStreamWindow / 4},
+		{4 << 20, creditChunk},
+		{DefaultMaxStreamWindow, creditChunk},
+	} {
+		if got := creditThreshold(tc.window); got != tc.want {
+			t.Fatalf("creditThreshold(%d) = %d, want %d", tc.window, got, tc.want)
+		}
+	}
+}
