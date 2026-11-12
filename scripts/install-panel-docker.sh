@@ -995,7 +995,7 @@ install_panel_manager() {
   if [ ! -e "$PANEL_FWXM_LINK" ] || grep -q "$PANEL_FWXM_MARKER" "$PANEL_FWXM_LINK" 2>/dev/null; then
     cat > "$PANEL_FWXM_LINK.new" <<FWXM_DISPATCH
 #!/bin/bash
-# $PANEL_FWXM_MARKER：只装了面板时的 fwxm。同机装了 Agent 后会被 Agent 的 fwxm 换掉，它同样认 fwxm panel。
+# ${PANEL_FWXM_MARKER}：只装了面板时的 fwxm。同机装了 Agent 后会被 Agent 的 fwxm 换掉，它同样认 fwxm panel。
 [ "\${1:-}" = panel ] && shift
 exec "$PANEL_MANAGER" "\$@"
 FWXM_DISPATCH

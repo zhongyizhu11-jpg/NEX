@@ -36,7 +36,7 @@ HELP
 }
 
 load_conf() {
-  [ -r "$CONF_FILE" ] || die "没找到面板管理配置 $CONF_FILE，请重新运行一次面板安装 / 升级脚本"
+  [ -r "$CONF_FILE" ] || die "没找到面板管理配置 ${CONF_FILE}，请重新运行一次面板安装 / 升级脚本"
   local key value
   # 只认这几个键，不 source：配置文件被改坏了也不会被当成脚本执行
   while IFS='=' read -r key value; do
@@ -157,7 +157,7 @@ case "$ACTION" in
     else
       echo "服务名称:  $SERVICE_NAME"
       echo "数据目录:  $APP_DIR/data"
-      echo "日志文件:  $APP_DIR/data/panel.log（systemd 部署看 journalctl -u $SERVICE_NAME）"
+      echo "日志文件:  $APP_DIR/data/panel.log（systemd 部署看 journalctl -u ${SERVICE_NAME}）"
     fi ;;
   status)
     if [ "$MODE" = docker ]; then docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}'
