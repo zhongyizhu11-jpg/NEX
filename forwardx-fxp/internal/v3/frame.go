@@ -1,5 +1,5 @@
-// Package v3 contains independently tested V3 wire primitives. Panel/Agent
-// exposure remains disabled until session lifecycle and integration are complete.
+// Package v3 是 NEX V3 传输的线上原语：外层（HTTP / WS 样式）、内层握手和记录层、多路复用
+// 会话。协议见 PROTOCOL.md 开头的「NEX 修订」；FXP 的接入层在 forwardx-fxp/v3_*.go。
 package v3
 
 import (

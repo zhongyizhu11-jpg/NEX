@@ -3586,11 +3586,11 @@ function TunnelsContent() {
                     forwardxVersion: option.value,
                     // V2 自带 WireGuard 端口；V1 / V3 只有开了 mimic 才要 UDP 线路端口。
                     mimicPort: option.value === "v2" || prev.udpOverTcp ? prev.mimicPort : 0,
-                    // V3 不能和抗丢包传输、中转叠加 / 热备同开（服务端也会拒），切过去时一并关掉。
+                    // V3 不能和抗丢包传输同开、内核直通只对 V2 有效（服务端也会拒），切过去时一并关掉。
+                    // 中转叠加 / 热备、单连接多路并发可以留着（每条腿一条自己的 V3 物理连接）。
                     ...(option.value === "v3" ? {
                       lossTolerant: false,
                       kernelPassthrough: false,
-                      relayMode: prev.relayMode === "aggregate" || prev.relayMode === "hot_standby" ? "chain" as const : prev.relayMode,
                     } : {}),
                   }))}
                 >
@@ -3696,7 +3696,7 @@ function TunnelsContent() {
               <span className="min-w-0">
                 <span className="block text-sm font-medium">多路复用</span>
                 <span className="block whitespace-normal text-xs text-muted-foreground">
-                  多条连接共用一条物理连接，建连更快；单条连接的窗口只有 64 KiB，高延迟线路上跑不满带宽
+                  多条连接共用一条物理连接，外面看连接更少；窗口按线路自动放大，但一条物理连接丢包时所有连接一起等
                 </span>
               </span>
               <Checkbox
@@ -3709,7 +3709,7 @@ function TunnelsContent() {
               {`隧道上每台机器都要 Agent ${FORWARDX_V3_MIN_AGENT_VERSION}、FXP ${FORWARDX_V3_MIN_FXP_VERSION} 以上。`}
             </p>
             <p data-fx-help="" className="text-xs text-muted-foreground">
-              不能和抗丢包传输、中转叠加 / 热备、单连接多路并发同开；UDP 照旧走直连，不经过外层。
+              不能和抗丢包传输同开；中转叠加 / 热备、单连接多路并发可以一起用。UDP 照旧走直连，不经过外层。
             </p>
           </div>
         )}
@@ -5225,7 +5225,7 @@ function TunnelsContent() {
                 externalExit={!!form.exitGroupId}
                 relayMode={form.relayMode}
                 relayModeSupported={tunnelRelayFailoverSupported(form.mode)}
-                relayAggregateSupported={tunnelRelayAggregateSupported(form.mode) && form.forwardxVersion !== "v3"}
+                relayAggregateSupported={tunnelRelayAggregateSupported(form.mode)}
                 onRelayModeChange={(relayMode) => setForm((prev) => ({ ...prev, relayMode }))}
                 fixedExitHostIds={form.exitGroupId ? exitMembersForGroup(form.exitGroupId).map((member: any) => Number(member.hostId || 0)).filter((id: number) => id > 0) : []}
                 excludedHostIds={externalTunnelHostIds(form.entryGroupId, form.exitGroupId)}

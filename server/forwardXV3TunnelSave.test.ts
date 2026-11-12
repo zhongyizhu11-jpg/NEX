@@ -9,7 +9,7 @@ import test from "node:test";
  * NEX V3 隧道保存时的校验（真 sqlite + 真 tunnels 路由）：
  *
  *   · 隧道上有一台 Agent / FXP 不够新就拒，写清是哪台、差什么；
- *   · 不能组合的特性（抗丢包传输、中转叠加、内核直通、多路并发）拒并给中文原因；
+ *   · 不能组合的特性（抗丢包传输、内核直通）拒并给中文原因；多路并发可以一起开；
  *   · 外层选项按 V3 存，改回 V1 时清空；
  *   · 外层写坏（路径带换行）拒。
  */
@@ -97,13 +97,18 @@ test("NEX V3 隧道的创建 / 修改校验", () => {
       assert.equal(saved.forwardxVersion, "v1");
       assert.equal(saved.v3Transport, null);
       assert.equal(saved.v3ServerName, null);
-      // V1 隧道开了 4 路并发，再切 V3：拒。
+      // V1 隧道开了 4 路并发，再切 V3：照存（FXP 2.2.141 起每一路是一条自己的 V3 物理连接）。
       await runtime.executeRaw('UPDATE "tunnels" SET "parallelStreams" = 4 WHERE "id" = ?', [id]);
-      await rejects(caller.update({ id, forwardxVersion: "v3", v3Transport: "tls" }), /多路并发/, "V3 + 多路并发");
-      await runtime.executeRaw('UPDATE "tunnels" SET "parallelStreams" = 1 WHERE "id" = ?', [id]);
-      // 已经是 V3 的隧道不能再打开多路并发。
       await caller.update({ id, forwardxVersion: "v3", v3Transport: "tls" });
-      await rejects(caller.setParallelStreams({ id, streams: 4 }), /V3/, "V3 隧道打开多路并发");
+      saved = await row();
+      assert.equal(saved.forwardxVersion, "v3", "V3 + 多路并发可以一起开");
+      assert.equal(Number(saved.parallelStreams), 4);
+      // 已经是 V3 的隧道也能改多路并发。
+      await caller.setParallelStreams({ id, streams: 2 });
+      saved = await row();
+      assert.equal(Number(saved.parallelStreams), 2, "V3 隧道改多路并发");
+      // 抗丢包传输照旧不行（开着多路并发也一样）。
+      await rejects(caller.update({ id, lossTolerant: true }), /抗丢包传输/, "V3 + 多路并发 + 抗丢包传输");
     } finally {
       await runtime.closeDatabase();
     }

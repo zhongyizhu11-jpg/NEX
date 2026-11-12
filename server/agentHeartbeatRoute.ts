@@ -2418,12 +2418,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (isForwardXV3Tunnel(tunnel)) {
         const v3Fields = forwardXV3SpecFields(tunnel);
         if (!v3Fields) return null;
-        // 面板保存时已经拒了 V3 + 抗丢包传输 / 多路径；库里要是还留着旧值（比如直接改库），
-        // 这里不下发，免得 FXP 拒掉整份配置、隧道上别的规则跟着起不来。
+        // 面板保存时已经拒了 V3 + 抗丢包传输；库里要是还留着旧值（比如直接改库），这里不下发，
+        // 免得 FXP 拒掉整份配置、隧道上别的规则跟着起不来。多路径（中转叠加 / 热备 / 单连接
+        // 多路并发）照常下发：FXP 2.2.141 起每条腿是一条自己的 V3 物理连接。
         delete fxpSpec.lossTolerant;
-        delete fxpSpec.multipathEnabled;
-        delete fxpSpec.multipathLegs;
-        delete fxpSpec.multipathReplicate;
         fxpSpec.transportVersion = "v3";
         Object.assign(fxpSpec, v3Fields);
         return fxpSpec;

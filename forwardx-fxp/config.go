@@ -151,10 +151,8 @@ func validateConfig(cfg config) error {
 		// 伪装，换成 UDP 上的 KCP 就没有伪装可言了。面板不会这样下发。
 		return errors.New("loss-tolerant transport is only supported on v1 tunnels")
 	}
-	if cfg.TransportVersion == "v3" && multipathEnabled(cfg) {
-		// 多路径的每条腿自己握手、自己调度，和 V3 的物理会话不是一回事；面板保存时就拒了。
-		return errors.New("multipath is not supported on v3 tunnels")
-	}
+	// 多路径（叠加 / 热备 / 单连接多路并发）可以走 V3：每条腿是一条不复用的 V3 物理连接，
+	// 入口和中转都不把腿并进复用会话（v3LegConfig）。
 	if (cfg.ProxyProtocolReceive || cfg.ProxyProtocolSend || cfg.ProxyProtocolExitReceive || cfg.ProxyProtocolExitSend) && cfg.Protocol == "udp" {
 		return errors.New("proxy protocol requires tcp protocol")
 	}

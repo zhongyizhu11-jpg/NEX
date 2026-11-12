@@ -81,13 +81,17 @@ test("NEX V3：和已有特性的组合，不能组合的说清为什么", () =>
   assert.equal(forwardXV3ConflictReason({ relayMode: "chain" }), "");
   assert.match(forwardXV3ConflictReason({ lossTolerant: true }), /抗丢包传输/);
   assert.match(forwardXV3ConflictReason({ lossTolerant: 1 }), /抗丢包传输/);
-  assert.match(forwardXV3ConflictReason({ relayMode: "aggregate" }), /叠加/);
-  assert.match(forwardXV3ConflictReason({ relayMode: "hot_standby" }), /热备/);
-  assert.match(forwardXV3ConflictReason({ parallelStreams: 4 }), /多路并发/);
   assert.match(forwardXV3ConflictReason({ kernelPassthrough: true }), /内核直通/);
-  // 单连接多路并发那边也认 V3。
-  assert.match(tunnelParallelStreamsUnavailableReason({ mode: "forwardx", forwardxVersion: "v3" }, []), /V3/);
+  // 中转「叠加」「热备」、单连接多路并发可以和 V3 一起开了（FXP 2.2.141：每条腿一条自己的 V3 物理连接）。
+  assert.equal(forwardXV3ConflictReason({ relayMode: "aggregate" }), "");
+  assert.equal(forwardXV3ConflictReason({ relayMode: "hot_standby" }), "");
+  assert.equal(forwardXV3ConflictReason({ parallelStreams: 4 }), "");
+  // 抗丢包传输照旧不行，不管中转方式是什么。
+  assert.match(forwardXV3ConflictReason({ relayMode: "aggregate", lossTolerant: true }), /抗丢包传输/);
+  // 单连接多路并发那边 V3 和 V1 一样能开，V2 照旧不行。
+  assert.equal(tunnelParallelStreamsUnavailableReason({ mode: "forwardx", forwardxVersion: "v3" }, []), "");
   assert.equal(tunnelParallelStreamsUnavailableReason({ mode: "forwardx", forwardxVersion: "v1" }, []), "");
+  assert.match(tunnelParallelStreamsUnavailableReason({ mode: "forwardx", forwardxVersion: "v2" }, []), /V2/);
 });
 
 test("NEX V3：两端（含中转）的 Agent / FXP 版本都要够新", () => {

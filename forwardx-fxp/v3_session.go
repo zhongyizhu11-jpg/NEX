@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,18 +25,27 @@ V3 在 NEX FXP 里的接入层。
   - 不复用（v3Multiplex=false，NEX 面板的默认）：这条物理连接只跑一条业务连接，和 V1 一样
     能进入口的预热连接池（endpoint_pool.go），用户连接来了直接取一条写 hello，TCP / TLS /
     内层握手的几个往返都在后台做完了。单连接吞吐和 V1 一样只受 TCP 本身限制。
-  - 多路复用：几十条业务连接共用一条物理连接（v3SessionPool），每条业务连接是会话里的一个
-    逻辑流。建连只多发一个 OPEN 帧；代价是每个逻辑流的接收窗口只有 64 KiB（会话总共 8 MiB、
-    最多 128 条流），高延迟线路上单条连接跑不满带宽，而且一条物理连接卡住所有流一起卡。
+  - 多路复用：几十条业务连接共用一条物理连接（v3SessionPool，端点活跃时预热好一条），每条业务
+    连接是会话里的一个逻辑流。建连只发一个 OPEN 帧、不等回话；每个逻辑流的窗口从 128 KiB 起
+    按需放大到 16 MiB（internal/v3/session.go）。代价是一条物理连接丢包时所有流一起等。
 
-两种用法里，业务帧都是「4 字节长度 + 明文」的逻辑帧（secureConn.logical），加密由内层
-记录层负责。hello、目标授权、PROXY 头、流量统计和 V1 是同一套代码。
+出口不看自己的配置、看认证后的第一个字节分辨这两种（v3AwaitFirstByte），所以两端的复用设置
+不一样也能通，多路径的腿也可以是不复用的连接。
+
+两种用法里，业务帧都是「4 字节长度 + 明文」的逻辑帧（secureConn.logical），加密由内层负责
+（外层是 TLS 1.3 时由 TLS 负责，内层直通，见 PROTOCOL.md）。hello、目标授权、PROXY 头、流量
+统计和 V1 是同一套代码。
 */
 
-// v3LogicalFrameLimit 是一个逻辑帧的上限。FXP 的数据帧最多 64 KiB（fxpCopyChunkSize），
-// 多路径的大块在 V3 上不会出现（多路径和 V3 不能同开）。
-const v3LogicalFrameLimit = 128 * 1024
+// v3LogicalFrameLimit 是一个逻辑帧的上限。FXP 的数据帧最多 64 KiB（fxpCopyChunkSize）；
+// 多路径的腿走 V3 时，一帧是一个多路径分片，收端最多接受 multipathMaxChunkPayload 加帧头。
+// 上限不到 16 MiB，长度的最高字节一定是 0 —— 出口靠这一点分辨复用 / 不复用（v3AwaitFirstByte）。
+const v3LogicalFrameLimit = multipathMaxChunkPayload + 64
 const v3PoolSessionLimit = 64
+
+// v3ClientIdleTimeout：入口一侧没有流的会话这么久就关。比出口一侧（会话默认 30 秒）短，
+// 空闲会话总是入口先关，不会出现入口刚在上面开流、出口正好把它当空闲关掉。
+const v3ClientIdleTimeout = 20 * time.Second
 
 // v3SessionStaleAge：物理会话这么久没有一次成功的写，池子就不再往它上面开新流。
 // 从会话写超时推出来，两者不会各改各的。
@@ -73,6 +83,18 @@ func (c *secureConn) writeLogicalFrames(frames [][]byte) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// 内层连接和逻辑流都能一次收几段：长度头和内容直接交下去，不先拼进一块缓冲
+	// （内层封记录、逻辑流切帧时各自只拷一次）。
+	if out, ok := c.conn.(interface{ WriteBuffers([][]byte) error }); ok && len(frames) <= fxpCopyBatchFrames {
+		var headers [fxpCopyBatchFrames][4]byte
+		var parts [2 * fxpCopyBatchFrames][]byte
+		bufs := parts[:0]
+		for i, plain := range frames {
+			binary.BigEndian.PutUint32(headers[i][:], uint32(len(plain)))
+			bufs = append(bufs, headers[i][:], plain)
+		}
+		return out.WriteBuffers(bufs)
+	}
 	wire := getFXPByteBuffer(size)
 	defer putFXPByteBuffer(wire)
 	wire = wire[:0]
@@ -138,7 +160,7 @@ func v3ClientHandshake(raw net.Conn, cfg config) (*v3.InnerConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	inner, err := v3.InnerClient(wrapped, cfg.Key)
+	inner, err := v3.InnerClient(wrapped, cfg.Key, v3TLSClientBinding(wrapped))
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +195,7 @@ func dialV3Fresh(host string, port int, cfg config) (net.Conn, *secureConn, erro
 		// 关的是底下的 TCP：连接池按它「偷看」空闲连接活没活（见 pooledSecureConnAlive）。
 		return raw, newV3SecureConn(inner, shaper, raw), nil
 	}
-	session := v3.NewSession(inner, v3.SessionOptions{Client: true})
+	session := v3.NewSession(inner, v3.SessionOptions{Client: true, IdleTimeout: v3ClientIdleTimeout})
 	stream, err := session.Open()
 	if err != nil {
 		session.Close()
@@ -186,7 +208,15 @@ func dialV3Fresh(host string, port int, cfg config) (net.Conn, *secureConn, erro
 // dialV3Transport 给入口 / 中转的一条业务连接拿一条 V3 连接：多路复用时从会话池里开一个
 // 逻辑流，不复用时先看预热连接池，没有再现拨。reused 表示没有新拨物理连接。
 func dialV3Transport(state *fxpEndpointState, host string, port int, cfg config) (net.Conn, *secureConn, bool, error) {
+	// 端点状态按承载方式分份（复用 / 不复用的连接池不能混用）：多路径的腿把复用关掉了，
+	// 选择器给的却是这个端点复用那份状态，换成不复用的那份。
+	if identity := v3TransportIdentity(cfg); state != nil && state.id.transport != identity {
+		state = fxpEndpointStateFor(exitEndpoint{Host: state.id.host, Port: state.id.port, Key: state.id.key, lossTolerant: state.id.lossTolerant, transport: identity})
+	}
 	if v3MuxEnabled(cfg) {
+		if state != nil {
+			state.markUsed(cfg)
+		}
 		return v3Outbound.openAt(host, port, cfg)
 	}
 	if state != nil {
@@ -196,6 +226,17 @@ func dialV3Transport(state *fxpEndpointState, host string, port int, cfg config)
 	}
 	conn, sec, err := dialV3Fresh(host, port, cfg)
 	return conn, sec, false, err
+}
+
+// v3LegConfig 是多路径一条腿用的配置：V3 时关掉复用，每条腿是一条自己的物理连接 ——
+// 并进同一个复用会话，几条腿就挤在一条 TCP 上，叠加 / 并发就没意义了。V1 / V2 原样返回。
+func v3LegConfig(cfg config) config {
+	if !v3MuxEnabled(cfg) {
+		return cfg
+	}
+	off := false
+	cfg.V3Multiplex = &off
+	return cfg
 }
 
 // v3EndpointFailureIsRetryable：换一个出口端点有没有可能好。池子到顶是本地上限，
@@ -224,7 +265,7 @@ func serveV3Inbound(role string, conn net.Conn, cfg config, in *fxpInbound, hand
 		probeDelay()
 		return err
 	}
-	inner, err := v3.InnerServer(wrapped, cfg.Key)
+	inner, err := v3.InnerServer(wrapped, cfg.Key, v3TLSBinding(wrapped))
 	if err != nil {
 		probeDelay()
 		return err
@@ -236,13 +277,72 @@ func serveV3Inbound(role string, conn net.Conn, cfg config, in *fxpInbound, hand
 		return nil
 	}
 	shaper := linkShaperHandle("down", cfg)
-	if !v3MuxEnabled(cfg) {
-		return handler(newV3SecureConn(inner, shaper, conn), in)
+	// 复用还是不复用，看客户端发来的第一个字节，不看本端配置：不复用的连接第一个字节是逻辑帧
+	// 长度的最高字节（帧不超过 v3LogicalFrameLimit，一定是 0），复用的会话第一帧一定是 OPEN（1）。
+	// 这样多路径的每条腿可以是一条不复用的物理连接，哪怕隧道开了复用（见 dialMultipathLeg）。
+	first, err := v3AwaitFirstByte(inner, in.stop())
+	if err != nil {
+		return quietHelloError(err)
 	}
-	shaper.attach(conn)
-	// 多路复用的物理连接一直开着，不会再有「等 hello」这一段：让出 pending 份额，只占 active。
-	in.helloReceived()
-	return serveV3Session(role, inner, in, shaper, handler)
+	peeked := &v3PeekedConn{InnerConn: inner, first: first, pending: true}
+	switch first {
+	case 0:
+		return handler(newV3SecureConn(peeked, shaper, conn), in)
+	case v3.FrameOpen:
+		shaper.attach(conn)
+		// 多路复用的物理连接一直开着，不会再有「等 hello」这一段：让出 pending 份额，只占 active。
+		in.helloReceived()
+		return serveV3Session(role, peeked, in, shaper, handler)
+	default:
+		probeDelay()
+		return fmt.Errorf("v3: unexpected first byte %#x after the inner handshake", first)
+	}
+}
+
+// v3AwaitFirstByte 等认证过的连接上的第一个字节，规矩和等 hello 一样：最多 fxpServerHelloWait
+// （预热池里的连接会空等在这里），监听停了就不等。
+func v3AwaitFirstByte(inner *v3.InnerConn, stopping <-chan struct{}) (byte, error) {
+	if stopping != nil {
+		waiting := make(chan struct{})
+		defer close(waiting)
+		go func() {
+			select {
+			case <-stopping:
+				_ = inner.Close()
+			case <-waiting:
+			}
+		}()
+	}
+	if err := inner.SetReadDeadline(time.Now().Add(fxpServerHelloWait)); err != nil {
+		return 0, err
+	}
+	var b [1]byte
+	if _, err := io.ReadFull(inner, b[:]); err != nil {
+		return 0, err
+	}
+	if err := inner.SetReadDeadline(time.Time{}); err != nil {
+		return 0, err
+	}
+	return b[0], nil
+}
+
+// v3PeekedConn 把已经读掉的第一个字节还给后面的读者；写（含 WriteBuffers）原样交给内层。
+type v3PeekedConn struct {
+	*v3.InnerConn
+	first   byte
+	pending bool
+}
+
+func (c *v3PeekedConn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if c.pending {
+		c.pending = false
+		p[0] = c.first
+		return 1, nil
+	}
+	return c.InnerConn.Read(p)
 }
 
 func serveV3Session(role string, inner net.Conn, in *fxpInbound, shaper *linkShaper, handler func(*secureConn, *fxpInbound) error) error {
@@ -371,7 +471,12 @@ func (p *v3SessionPool) openAt(host string, port int, cfg config) (net.Conn, *se
 		}
 		bucket.sessions = alive
 		if selected != nil {
+			// 挑中的会话快满了：后台再备一条，下一批新连接不用排在建连后面。
+			predial := mostSlots <= v3PoolLowSlots && p.startDialLocked(bucket)
 			p.mu.Unlock()
+			if predial {
+				go func() { _ = p.finishDial(key, bucket, host, port, cfg, shaper) }()
+			}
 			stream, err := selected.Open()
 			if errors.Is(err, v3.ErrStreamLimit) {
 				continue
@@ -406,39 +511,98 @@ func (p *v3SessionPool) openAt(host string, port int, cfg config) (net.Conn, *se
 			p.mu.Unlock()
 			return nil, nil, false, fmt.Errorf("%w (%d sessions, 128 streams/session)", v3ErrPoolLimit, v3PoolSessionLimit)
 		}
-		bucket.dialing = true
-		p.count++
+		p.startDialLocked(bucket)
 		p.mu.Unlock()
 		dialed = true
-		raw, inner, err := dialV3Inner(host, port, cfg)
-		var session *v3.Session
-		if err == nil {
-			shaper.attach(raw)
-			session = v3.NewSession(inner, v3.SessionOptions{Client: true})
-		}
-		p.mu.Lock()
-		bucket.dialing = false
-		if p.closed && err == nil {
-			session.Close()
-			err = net.ErrClosed
-		}
-		bucket.lastErr = err
-		if err == nil {
-			bucket.sessions = append(bucket.sessions, session)
-		} else {
-			p.count--
-			if len(bucket.sessions) == 0 {
-				delete(p.buckets, key)
-			}
-		}
-		close(bucket.changed)
-		bucket.changed = make(chan struct{})
-		p.mu.Unlock()
-		if err != nil {
+		if err := p.finishDial(key, bucket, host, port, cfg, shaper); err != nil {
 			return nil, nil, false, err
 		}
-		go p.releaseWhenClosed(key, bucket, session)
 		// 回到正常的挑选流程：同时在等的业务连接可以共用这条刚认证好的会话。
+	}
+}
+
+// v3PoolLowSlots：挑中的会话空位不多于这么多时，后台再备一条会话。
+const v3PoolLowSlots = 16
+
+// startDialLocked 占一个拨号名额（这个桶同时只拨一条，整个池子不超过 v3PoolSessionLimit），
+// 报告占没占上。调用方持有 p.mu；占上了之后必须调一次 finishDial。
+func (p *v3SessionPool) startDialLocked(bucket *v3PoolBucket) bool {
+	if p.closed || bucket.dialing || p.count >= v3PoolSessionLimit {
+		return false
+	}
+	bucket.dialing = true
+	p.count++
+	return true
+}
+
+// finishDial 拨一条物理会话（外层、内层握手都做完）并放进桶里，叫醒在等这个桶的业务连接。
+func (p *v3SessionPool) finishDial(key [32]byte, bucket *v3PoolBucket, host string, port int, cfg config, shaper *linkShaper) error {
+	raw, inner, err := dialV3Inner(host, port, cfg)
+	var session *v3.Session
+	if err == nil {
+		shaper.attach(raw)
+		session = v3.NewSession(inner, v3.SessionOptions{Client: true, IdleTimeout: v3ClientIdleTimeout})
+	}
+	p.mu.Lock()
+	bucket.dialing = false
+	if p.closed && err == nil {
+		session.Close()
+		err = net.ErrClosed
+	}
+	bucket.lastErr = err
+	if err == nil {
+		bucket.sessions = append(bucket.sessions, session)
+	} else {
+		p.count--
+		if len(bucket.sessions) == 0 && p.buckets[key] == bucket {
+			delete(p.buckets, key)
+		}
+	}
+	close(bucket.changed)
+	bucket.changed = make(chan struct{})
+	p.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	go p.releaseWhenClosed(key, bucket, session)
+	return nil
+}
+
+// warm 让这个端点至少有一条认证好、有空位的物理会话（复用时的「预热」）：没有就在后台拨一条，
+// 第一条用户连接只要发一个 OPEN，不用等 TCP / TLS / 内层握手。端点状态的维护循环在端点
+// 活跃（最近有人用、或者规则刚起来）时每秒调一次；空闲会话入口 20 秒就关，下一秒再补。
+func (p *v3SessionPool) warm(host string, port int, cfg config) {
+	if validateTransportConfig(cfg) != nil {
+		return
+	}
+	key := v3PoolKey(host, port, cfg)
+	p.mu.Lock()
+	bucket := p.buckets[key]
+	if bucket == nil {
+		if p.closed {
+			p.mu.Unlock()
+			return
+		}
+		bucket = &v3PoolBucket{changed: make(chan struct{})}
+		p.buckets[key] = bucket
+	}
+	for _, session := range bucket.sessions {
+		if session.Alive(v3SessionStaleAge) && session.OpenSlots() > v3PoolLowSlots {
+			p.mu.Unlock()
+			return
+		}
+	}
+	started := p.startDialLocked(bucket)
+	if !started && len(bucket.sessions) == 0 && !bucket.dialing && p.buckets[key] == bucket {
+		delete(p.buckets, key)
+	}
+	p.mu.Unlock()
+	if started {
+		go func() {
+			if err := p.finishDial(key, bucket, host, port, cfg, linkShaperHandle("up", cfg)); err != nil {
+				fxpVerbosef("v3 session prewarm %s failed: %v", net.JoinHostPort(host, strconv.Itoa(port)), err)
+			}
+		}()
 	}
 }
 

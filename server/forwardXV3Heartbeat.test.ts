@@ -125,13 +125,21 @@ test("V3 隧道：入口、出口的 FXP 规格都是 v3，带着同一份外层
   }
 });
 
-test("V3 隧道不下发库里残留的抗丢包传输和多路并发", () => {
+test("V3 隧道不下发库里残留的抗丢包传输", () => {
   for (const spec of [outcome.entry["entry:1"], outcome.exit["exit:1"]]) {
     assert.ok(spec, "规格要在");
     assert.equal(spec.lossTolerant, undefined);
-    assert.equal(spec.multipathEnabled, undefined);
-    assert.equal(spec.multipathLegs, undefined);
   }
+});
+
+test("V3 隧道的单连接多路并发照常下发（FXP 2.2.141 起每条腿是一条自己的 V3 物理连接）", () => {
+  const entry = outcome.entry["entry:1"];
+  assert.ok(entry, "规格要在");
+  assert.equal(entry.multipathEnabled, true);
+  assert.equal((entry.multipathLegs as unknown[] | undefined)?.length, 4);
+  assert.equal(entry.transportVersion, "v3");
+  // 出口不拆腿，规格里没有多路径字段。
+  assert.equal(outcome.exit["exit:1"]?.multipathEnabled, undefined);
 });
 
 test("V1 隧道的规格里没有 V3 字段", () => {

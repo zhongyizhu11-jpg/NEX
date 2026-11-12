@@ -337,6 +337,16 @@ func (s *fxpEndpointState) take(cfg config) (net.Conn, *secureConn, bool) {
 	return nil, nil, false
 }
 
+// markUsed 记一次「有人用了这个端点」，不从池里取连接（V3 多路复用时走会话池），
+// 让预热和维护循环知道它是活跃的。
+func (s *fxpEndpointState) markUsed(cfg config) {
+	s.mu.Lock()
+	s.noteDialConfigLocked(cfg)
+	s.recordTakeLocked(time.Now())
+	s.mu.Unlock()
+	s.ensureFill()
+}
+
 // pooledSecureConnAlive：抗丢包承载没有套接字可偷看，问它自己（对端复位、关了、失联都知道）。
 func pooledSecureConnAlive(conn net.Conn) bool {
 	if carrier, ok := conn.(*lossCarrierConn); ok {
@@ -379,9 +389,15 @@ func (s *fxpEndpointState) poolTargetLocked(now time.Time) int {
 func (s *fxpEndpointState) ensureFill() {
 	now := time.Now()
 	s.mu.Lock()
-	// V3 多路复用时会话池就是连接池（v3SessionPool），这里不再预热一份。
-	if !s.dialCfgKnown || v3MuxEnabled(s.dialCfg) || !s.healthy || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
+	if !s.dialCfgKnown || !s.healthy || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
 		s.mu.Unlock()
+		return
+	}
+	// V3 多路复用时会话池就是连接池（v3SessionPool）：不备空闲连接，备一条认证好的会话。
+	if v3MuxEnabled(s.dialCfg) {
+		cfg := s.dialCfg
+		s.mu.Unlock()
+		v3Outbound.warm(s.id.host, s.id.port, cfg)
 		return
 	}
 	need := s.poolTargetLocked(now) - len(s.idle) - s.dialing

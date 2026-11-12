@@ -334,12 +334,13 @@ func TestV3ConfigValidation(t *testing.T) {
 		{"v3 路径带换行", func(c *config) { c.TransportVersion = "v3"; c.V3Transport = "http"; c.V3Path = "/a\r\nX: y" }, "invalid HTTP"},
 		{"v3 UA 带换行", func(c *config) { c.TransportVersion = "v3"; c.V3Transport = "ws"; c.V3UserAgent = "a\nb" }, "invalid HTTP"},
 		{"v3 + 抗丢包传输", func(c *config) { c.TransportVersion = "v3"; c.V3Transport = "tls"; c.LossTolerant = true }, "only supported on v1"},
+		// 多路径可以走 V3 了（每条腿一条不复用的 V3 物理连接，见 v3_multipath_test.go）。
 		{"v3 + 多路径", func(c *config) {
 			c.TransportVersion = "v3"
 			c.V3Transport = "tls"
 			c.MultipathEnabled = true
 			c.MultipathLegs = []multipathLeg{{Host: "a", Port: 1}, {Host: "b", Port: 2}}
-		}, "multipath is not supported on v3"},
+		}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
