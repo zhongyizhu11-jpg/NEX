@@ -31,6 +31,7 @@ import { planPairSegments, type LineSegmentNode } from "../../shared/lineDiagnos
 import { getHostEntryAddress } from "../../shared/hostEntryAddress";
 import { isTunnelRelayAggregate, isTunnelRelayFailover } from "../../shared/tunnelRelay";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, probeFamilyNumber, type ProbeAddressFamily } from "../../shared/probeFamily";
+import { checkHostConfig, checkRuleConfig, listConfigCheckRules } from "../networkConfigCheck";
 
 /*
   iperf3 对拉（2.3.505）：选一条隧道（按它经过的机器拆段）或者两台机器，一段一段：下游开服务端、上游测正向 /
@@ -269,6 +270,28 @@ export const lookingGlassRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "网络测试任务不存在或已过期" });
       }
       return decorateStatus(status, host);
+    }),
+
+  /**
+   * 配置体检（只读，不派任务、不改配置）：一台主机，或这台主机上的一条规则。判定在 server/networkConfigCheckItems.ts。
+   * 是查询不是变更：按一次「开始体检」就重新取一次（前端 enabled: false + refetch）。
+   */
+  configCheck: protectedProcedure
+    .input(z.object({
+      hostId: z.number().int().positive().optional(),
+      ruleId: z.number().int().positive().optional(),
+    }).strict().refine((value) => Number(!!value.hostId) + Number(!!value.ruleId) === 1, { message: "选一台主机或一条规则" }))
+    .query(async ({ input, ctx }) => {
+      await assertNetworkTestAllowed(ctx);
+      return input.ruleId ? checkRuleConfig(ctx, input.ruleId) : checkHostConfig(ctx, Number(input.hostId));
+    }),
+
+  /** 体检能选的规则：这台主机上的（管理员是全部，普通用户只有自己的）。 */
+  configCheckRules: protectedProcedure
+    .input(z.object({ hostId: z.number().int().positive() }))
+    .query(async ({ input, ctx }) => {
+      await assertNetworkTestAllowed(ctx);
+      return listConfigCheckRules(ctx, input.hostId);
     }),
 
   /** 对拉能选的隧道（按经过的机器）。机器列表用 hosts。 */

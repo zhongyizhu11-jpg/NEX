@@ -31,6 +31,9 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ElementType } from "react";
 import { Iperf3PairPanel } from "@/features/network/Iperf3PairPanel";
+import { NetworkConfigCheckPanel } from "@/features/network/NetworkConfigCheckPanel";
+import { PingSummaryStrip, RouteHopTable } from "@/features/network/NetworkTestSummaryView";
+import { summarizeNetworkTest, type NetworkTestSummary } from "@shared/networkTestSummary";
 import { PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, type ProbeAddressFamily } from "@shared/probeFamily";
 import { toast } from "sonner";
 
@@ -140,6 +143,23 @@ function buildPendingOutput(
   return lines.join("\n");
 }
 
+/** 跑完的 Ping / Traceroute / MTR 读出摘要；还在跑、或者输出认不出来时是 null（只显示原始输出）。 */
+function resultSummary(result: LookingGlassResult | null | undefined): NetworkTestSummary | null {
+  if (!result || result.status === "queued" || result.status === "running") return null;
+  return summarizeNetworkTest(result.method, result.output, result.resolvedAddress);
+}
+
+/** 「最近测试」卡片上的一行：Ping 是丢包和平均，路由是跳数。 */
+function historySummaryLine(summary: NetworkTestSummary | null) {
+  if (!summary) return "";
+  if (summary.kind === "ping") {
+    const parts = [summary.lossPercent !== null ? `丢包 ${summary.lossPercent}%` : "", summary.avgMs !== null ? `平均 ${summary.avgMs.toFixed(1)} ms` : ""].filter(Boolean);
+    return parts.join(" · ");
+  }
+  const last = summary.hops[summary.hops.length - 1];
+  return summary.reachedTarget === false ? `${summary.hops.length} 跳，没到目标` : `${last?.hop ?? summary.hops.length} 跳`;
+}
+
 function iperf3StateLabel(state?: Iperf3State) {
   if (state === "queued") return "排队中";
   if (state === "starting") return "启动中";
@@ -161,6 +181,9 @@ function ResultOutput({
 }) {
   const isRunning = state === "queued" || state === "running";
   const ok = resultOk(result);
+  const summary = isRunning ? null : resultSummary(result);
+  // 路由类的摘要是一张逐跳表，和原始输出二选一地看（卡片高度是固定的）；Ping 的摘要是一行，放在输出上面。
+  const [view, setView] = useState<"hops" | "raw">("hops");
   const title = result ? methodMeta(result.method).label : "网络测试结果";
   const output = result?.output || liveOutput || "选择主机、测试类型和目标后开始执行。";
   const statusLabel = isRunning ? "执行中" : result ? (ok ? "完成" : result.timedOut ? "超时" : "异常") : "等待";
@@ -198,6 +221,26 @@ function ResultOutput({
                 <span className="max-w-40 truncate font-mono">{result.resolvedAddress}</span>
               </>
             )}
+            {summary?.kind === "route" && (
+              <div className="flex overflow-hidden rounded-md border border-border/60" role="group" aria-label="结果视图">
+                <button
+                  type="button"
+                  aria-pressed={view === "hops"}
+                  onClick={() => setView("hops")}
+                  className={cn("h-8 px-2.5 text-xs transition-colors", view === "hops" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground")}
+                >
+                  逐跳
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={view === "raw"}
+                  onClick={() => setView("raw")}
+                  className={cn("h-8 border-l border-border/60 px-2.5 text-xs transition-colors", view === "raw" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground")}
+                >
+                  原始输出
+                </button>
+              </div>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -215,10 +258,17 @@ function ResultOutput({
           </div>
         </div>
       </CardHeader>
+      {summary?.kind === "ping" && <PingSummaryStrip summary={summary} />}
       <CardContent className="min-h-0 flex-1 p-0">
-        <pre className="terminal-scrollbar h-full min-h-0 overflow-auto bg-neutral-950 px-4 py-4 font-mono text-xs leading-6 text-neutral-100">
-          {output}
-        </pre>
+        {summary?.kind === "route" && view === "hops" ? (
+          <div className="h-full min-h-0 overflow-auto">
+            <RouteHopTable summary={summary} />
+          </div>
+        ) : (
+          <pre className="terminal-scrollbar h-full min-h-0 overflow-auto bg-neutral-950 px-4 py-4 font-mono text-xs leading-6 text-neutral-100">
+            {output}
+          </pre>
+        )}
       </CardContent>
     </Card>
   );
@@ -647,7 +697,7 @@ export default function LookingGlass() {
   return (
     <DashboardLayout>
       <div className="space-y-5">
-        <WorkspaceHeader title="网络测试" description="从 Agent 主机发起 Ping、Traceroute、MTR、TCPing，或在两台机器之间用 iperf3 对拉测带宽。" />
+        <WorkspaceHeader title="网络测试" description="从 Agent 主机发起 Ping、Traceroute、MTR、TCPing，或在两台机器之间用 iperf3 对拉测带宽；下面的配置体检帮你看主机和规则的配置有没有问题。" />
 
         <Alert className="border-border bg-card text-foreground [&>svg]:text-muted-foreground">
           <Globe2 className="h-4 w-4" />
@@ -905,6 +955,10 @@ export default function LookingGlass() {
         </div>
         )}
 
+        {method !== "iperf3-pair" && Number(hostId) > 0 && (
+          <NetworkConfigCheckPanel hostId={Number(hostId)} hostName={selectedHost?.name || ""} />
+        )}
+
         {history.length > 0 && (
           <Card className="border-border bg-card">
             <CardHeader className="pb-2">
@@ -914,6 +968,7 @@ export default function LookingGlass() {
               {history.map((item, index) => {
                 const meta = methodMeta(item.method);
                 const ItemIcon = meta.icon;
+                const summaryLine = historySummaryLine(resultSummary(item));
                 return (
                   <button
                     key={`${item.startedAt}-${index}`}
@@ -935,6 +990,7 @@ export default function LookingGlass() {
                       </Badge>
                     </div>
                     <p className="mt-2 truncate font-mono text-xs text-muted-foreground">{item.resolvedAddress}</p>
+                    {summaryLine && <p className="mt-1 truncate text-xs">{summaryLine}</p>}
                     <p className="mt-1 text-xs text-muted-foreground">{item.sourceHostName || "Agent 主机"} / {formatDateTime(item.startedAt)}</p>
                     <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">访问 IP: {item.clientIp || clientInfo.data?.ip || "-"}</p>
                   </button>
