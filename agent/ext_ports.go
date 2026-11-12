@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -190,10 +191,44 @@ type portOccupancyClassifier struct {
 	selfPID  int
 	readFile func(path string) ([]byte, error)
 	cache    map[int]bool
+	// pidFiles 列出 Agent 托管服务的 pid 文件（/run/forwardx-*.pid）。nil 表示不查（测试里按需给）。
+	pidFiles    func() []string
+	servicePIDs map[int]bool
 }
 
 func newPortOccupancyClassifier() *portOccupancyClassifier {
-	return &portOccupancyClassifier{selfPID: os.Getpid(), readFile: os.ReadFile, cache: map[int]bool{}}
+	return &portOccupancyClassifier{
+		selfPID:  os.Getpid(),
+		readFile: os.ReadFile,
+		cache:    map[int]bool{},
+		pidFiles: func() []string {
+			files, _ := filepath.Glob("/run/forwardx-*.pid")
+			return files
+		},
+	}
+}
+
+// managedServicePID：没有 systemd 的机器（SysV / OpenRC）上，Agent 托管的 socat、realm 这些服务由
+// managed_service.go 生成的 /etc/init.d 脚本拉起，pid 记在 /run/forwardx-<服务名>.pid；进程自己脱离了
+// Agent（父进程是 1），cgroup 里没有 forwardx，socat 的命令行里也没有配置路径——以前因此被当成「外来程序」，
+// 规则卡上挂着「端口被占用」，配置体检也报警告。pid 文件对得上就是自己的。
+func (c *portOccupancyClassifier) managedServicePID(pid int) bool {
+	if c.pidFiles == nil {
+		return false
+	}
+	if c.servicePIDs == nil {
+		c.servicePIDs = map[int]bool{}
+		for _, file := range c.pidFiles() {
+			data, err := c.readFile(file)
+			if err != nil {
+				continue
+			}
+			if value, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && value > 0 {
+				c.servicePIDs[value] = true
+			}
+		}
+	}
+	return c.servicePIDs[pid]
 }
 
 // managed：Agent 自己（守卫、主备代理、线路组、SNI 分流都在 Agent 进程里听）、它的子进程（FXP、插件），
@@ -217,6 +252,9 @@ func (c *portOccupancyClassifier) managed(pid int, process string) bool {
 
 func (c *portOccupancyClassifier) lookup(pid int, process string) bool {
 	if strings.HasPrefix(strings.ToLower(process), "forwardx") {
+		return true
+	}
+	if c.managedServicePID(pid) {
 		return true
 	}
 	base := "/proc/" + strconv.Itoa(pid) + "/"
