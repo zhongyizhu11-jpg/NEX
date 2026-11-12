@@ -953,6 +953,8 @@ install_runtime_dependencies() {
 
 write_env() {
   local jwt_secret="${JWT_SECRET:-}"
+  # 反向代理的信任范围（server/trustProxy.ts）：.env 每次升级都会重写，管理员设过的值要带过去
+  local trust_proxy="${FORWARDX_TRUST_PROXY:-$(get_env_value FORWARDX_TRUST_PROXY || true)}"
   if [ -z "$jwt_secret" ]; then
     jwt_secret="$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | awk '{print $1}')"
   fi
@@ -969,6 +971,9 @@ FORWARDX_PORT_MANAGEMENT=local
 FORWARDX_GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL"
 FORWARDX_UPGRADE_COMMAND="/bin/bash $APP_DIR/scripts/install-panel-local.sh upgrade"
 EOF
+  if [ -n "$trust_proxy" ]; then
+    printf 'FORWARDX_TRUST_PROXY=%s\n' "$trust_proxy" >> "$APP_DIR/.env"
+  fi
 }
 
 # ── SSH 管理命令 fwxm（面板这一侧，脚本本体是 scripts/fwxm-panel.sh） ──

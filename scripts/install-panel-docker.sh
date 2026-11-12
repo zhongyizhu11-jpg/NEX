@@ -697,6 +697,7 @@ services:
       POSTGRES_DATABASE: ${POSTGRES_DATABASE:-}
       POSTGRES_SSL: ${POSTGRES_SSL:-false}
       JWT_SECRET: ${JWT_SECRET:-}
+      FORWARDX_TRUST_PROXY: ${FORWARDX_TRUST_PROXY:-loopback}
     volumes:
       - forwardx-data:/data
     logging:
@@ -715,6 +716,8 @@ EOF
 write_env() {
   local image="$1"
   local existing_jwt jwt_secret
+  # 反向代理的信任范围（server/trustProxy.ts）：.env 每次升级都会重写，管理员设过的值要带过去
+  local trust_proxy="${FORWARDX_TRUST_PROXY:-$(get_env_value FORWARDX_TRUST_PROXY || true)}"
   if ! valid_port "$PORT"; then
     PORT="9810"
   fi
@@ -733,6 +736,9 @@ FORWARDX_CONTAINER_NAME=$CONTAINER_NAME
 FORWARDX_IMAGE=$image
 FORWARDX_GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL"
 EOF
+  if [ -n "$trust_proxy" ]; then
+    printf 'FORWARDX_TRUST_PROXY=%s\n' "$trust_proxy" >> "$APP_DIR/.env"
+  fi
 }
 
 remove_existing_panel_containers() {
