@@ -88,6 +88,9 @@ type loadResult struct {
 	RoundMs []float64 `json:"roundMs,omitempty"`
 	// rpc：一问一答的往返（毫秒），以及同时跑着的下载的速率。
 	RTTMs []float64 `json:"rttMs,omitempty"`
+	// ramp：新连接从拨号起每 SeriesStepMs 毫秒一格的速率（Mbit/s），看启动阶段爬得多快。
+	SeriesMbps   []float64 `json:"seriesMbps,omitempty"`
+	SeriesStepMs int       `json:"seriesStepMs,omitempty"`
 	// 失败的流（拨号、读写出错、没收完）。
 	Errors int `json:"errors"`
 }
@@ -161,6 +164,59 @@ func runBulk(addr string, streams int, warm, measure time.Duration) loadResult {
 	}
 	wg.Wait()
 	res.Errors = int(errs.Load())
+	return res
+}
+
+// runRamp：streams 条新连接从拨号起一直下载 duration，每 step 记一次这段时间的总速率。
+// 和 bulk 不同，开头不扔：量的就是新连接的启动阶段（BBR 爬坡、接收窗口从 tcp_rmem 的中间值长起来）。
+func runRamp(addr string, streams int, duration, step time.Duration) loadResult {
+	res := loadResult{Mode: "ramp", Streams: streams, SeriesStepMs: int(step / time.Millisecond)}
+	var counter atomic.Int64
+	var wg sync.WaitGroup
+	var conns []net.Conn
+	began := time.Now()
+	for i := 0; i < streams; i++ {
+		conn, err := dialDownload(addr, 0)
+		if err != nil {
+			res.Errors++
+			continue
+		}
+		conns = append(conns, conn)
+		wg.Add(1)
+		go func() { defer wg.Done(); countingReader(conn, &counter) }()
+	}
+	last := int64(0)
+	for i := 1; time.Duration(i)*step <= duration; i++ {
+		time.Sleep(time.Until(began.Add(time.Duration(i) * step)))
+		now := counter.Load()
+		res.SeriesMbps = append(res.SeriesMbps, float64(now-last)*8/step.Seconds()/1e6)
+		last = now
+	}
+	res.Mbps = float64(last) * 8 / time.Since(began).Seconds() / 1e6
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+	wg.Wait()
+	return res
+}
+
+// runHold：streams 条下载连上以后一个字节都不读，撑 duration（看「对端读得慢」时接收端每条连接
+// 最多攒多少数据：没有读，接收缓冲不会自动放大，攒到 tcp_rmem 的起点为止）。
+func runHold(addr string, streams int, duration time.Duration) loadResult {
+	res := loadResult{Mode: "hold", Streams: streams}
+	var conns []net.Conn
+	for i := 0; i < streams; i++ {
+		conn, err := dialDownload(addr, 0)
+		if err != nil {
+			res.Errors++
+			continue
+		}
+		conns = append(conns, conn)
+	}
+	time.Sleep(duration)
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
 	return res
 }
 
@@ -291,7 +347,7 @@ func runRPC(addr string, bulkStreams int, probeFirst bool, interval, warm, measu
 func cmdLoad(args []string) error {
 	fs := flag.NewFlagSet("load", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:7100", "入口地址（或直连时目标服务的地址）")
-	mode := fs.String("mode", "bulk", "bulk / fixed / rpc")
+	mode := fs.String("mode", "bulk", "bulk / fixed / rpc / ramp / hold")
 	streams := fs.Int("streams", 1, "并发流数（rpc：同时跑的下载流数）")
 	warm := fs.Duration("warm", 3*time.Second, "bulk / rpc：开头这么久不算（建连、爬坡）")
 	measure := fs.Duration("measure", 7*time.Second, "bulk / rpc：测量窗口")
@@ -300,6 +356,8 @@ func cmdLoad(args []string) error {
 	gap := fs.Duration("gap", 500*time.Millisecond, "fixed：轮与轮之间歇多久")
 	interval := fs.Duration("interval", 20*time.Millisecond, "rpc：两次一问一答之间歇多久")
 	probeFirst := fs.Bool("probe-first", false, "rpc：先开一问一答的连接再开下载（复用时两者在同一条会话上）")
+	duration := fs.Duration("duration", 20*time.Second, "ramp：从拨号起下载多久；hold：连着不读多久")
+	step := fs.Duration("step", 500*time.Millisecond, "ramp：多久记一格速率")
 	_ = fs.Parse(args)
 	var res loadResult
 	switch *mode {
@@ -309,6 +367,10 @@ func cmdLoad(args []string) error {
 		res = runFixed(*addr, *streams, *size, *rounds, *gap)
 	case "rpc":
 		res = runRPC(*addr, *streams, *probeFirst, *interval, *warm, *measure)
+	case "ramp":
+		res = runRamp(*addr, *streams, *duration, *step)
+	case "hold":
+		res = runHold(*addr, *streams, *duration)
 	default:
 		return errors.New("unknown -mode")
 	}
