@@ -3,11 +3,13 @@ export const FORWARD_TYPES = ["iptables", "nftables", "realm", "socat", "gost", 
 export type ForwardType = (typeof FORWARD_TYPES)[number];
 export type ForwardRuleProtocol = "tcp" | "udp" | "both";
 
-export const FORWARDX_VERSIONS = ["v1", "v2"] as const;
+/** NEX 隧道的传输版本：V1 FXP 加密直连、V2 WireGuard、V3 HTTP / WS / TLS 外层（shared/forwardXV3.ts）。 */
+export const FORWARDX_VERSIONS = ["v1", "v2", "v3"] as const;
 export type ForwardXVersion = (typeof FORWARDX_VERSIONS)[number];
 
 export function normalizeForwardXVersion(value: unknown): ForwardXVersion {
-  return String(value || "").trim().toLowerCase() === "v2" ? "v2" : "v1";
+  const normalized = String(value || "").trim().toLowerCase();
+  return (FORWARDX_VERSIONS as readonly string[]).includes(normalized) ? normalized as ForwardXVersion : "v1";
 }
 
 export const FORWARD_TYPE_LABELS: Record<ForwardType, string> = {

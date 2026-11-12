@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { normalizeAgentText } from "./agentInputValidation";
+import { parseReportedForwardXTransportVersion, type ForwardXRuntimeTransportVersion } from "./agentRuntimeRuleState";
 
 /*
   心跳的第一步：把 Agent 报上来的状态规整成面板内部用的形状（纯函数，不碰数据库和缓存）。
@@ -29,14 +30,14 @@ export type AgentLocalRuntimeRuleState = {
   targetIp?: string;
   targetPort?: number;
   protocol?: string;
-  transportVersion?: "v1" | "v2";
+  transportVersion?: ForwardXRuntimeTransportVersion;
   ready?: boolean;
 };
 export type AgentLocalRuntimeTunnelState = {
   port: number;
   tunnelId: number;
   forwardType: string;
-  transportVersion?: "v1" | "v2";
+  transportVersion?: ForwardXRuntimeTransportVersion;
   wireGuardPlane?: "kernel" | "netstack";
   ready?: boolean;
 };
@@ -151,11 +152,7 @@ export function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeSt
         targetIp: cappedText(item?.targetIp) || undefined,
         targetPort: Number(item?.targetPort || 0) || undefined,
         protocol: cappedText(item?.protocol, 16) || undefined,
-        transportVersion: String(item?.transportVersion || "").trim().toLowerCase() === "v2"
-          ? "v2" as const
-          : String(item?.transportVersion || "").trim().toLowerCase() === "v1"
-            ? "v1" as const
-            : undefined,
+        transportVersion: parseReportedForwardXTransportVersion(item?.transportVersion),
         ready: item?.ready !== false,
       }))
       .filter((item: AgentLocalRuntimeRuleState) => item.port > 0)
@@ -166,11 +163,7 @@ export function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeSt
         port: Number(item?.port || 0),
         tunnelId: Number(item?.tunnelId || 0),
         forwardType: cappedText(item?.forwardType),
-        transportVersion: String(item?.transportVersion || "").trim().toLowerCase() === "v2"
-          ? "v2" as const
-          : String(item?.transportVersion || "").trim().toLowerCase() === "v1"
-            ? "v1" as const
-            : undefined,
+        transportVersion: parseReportedForwardXTransportVersion(item?.transportVersion),
         wireGuardPlane: (["kernel", "netstack"] as const).find((plane) => plane === String(item?.wireGuardPlane || "").trim().toLowerCase()),
         ready: item?.ready !== false,
       }))

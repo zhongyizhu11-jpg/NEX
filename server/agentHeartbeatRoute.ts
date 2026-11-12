@@ -135,6 +135,7 @@ import {
   isForwardXWireGuardV2,
   type ForwardXWireGuardNodePlan,
 } from "./forwardXWireGuard";
+import { forwardXV3SpecFields, isForwardXV3Tunnel } from "@shared/forwardXV3";
 import { agentActionIssueTracker, agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
 import { resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
@@ -1667,7 +1668,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             actions.push({
               tunnelId, ruleId: 0, statusType: "tunnel", op: "remove", forwardType: "forwardx-tunnel",
               sourcePort: Number(localExit.listenPort), targetIp: host.ip, targetPort: Number(localExit.listenPort), protocol: "both", commands: [],
-              fxp: { role: "exit", tunnelId, ruleId: 0, listenPort: Number(localExit.listenPort) },
+              // V3 的出口进程身份带着 v3（Agent 的 fxpServerID），撤的时候要说清楚是哪个版本。
+              fxp: { role: "exit", tunnelId, ruleId: 0, listenPort: Number(localExit.listenPort), ...(isForwardXV3Tunnel(tunnel) ? { transportVersion: "v3" } : {}) },
             } as any);
           }
         }
@@ -2387,6 +2389,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         fxpSpec.egressShaping = egress.mode;
         if (egress.mode === "manual") fxpSpec.egressMbps = egress.mbps;
         else if (await egressHint()) fxpSpec.egressHintMbps = await egressHint();
+      }
+      // NEX V3（shared/forwardXV3.ts）：外层选项逐跳都带，入口、中转、出口读的是同一行隧道配置。
+      if (isForwardXV3Tunnel(tunnel)) {
+        const v3Fields = forwardXV3SpecFields(tunnel);
+        if (!v3Fields) return null;
+        // 面板保存时已经拒了 V3 + 抗丢包传输 / 多路径；库里要是还留着旧值（比如直接改库），
+        // 这里不下发，免得 FXP 拒掉整份配置、隧道上别的规则跟着起不来。
+        delete fxpSpec.lossTolerant;
+        delete fxpSpec.multipathEnabled;
+        delete fxpSpec.multipathLegs;
+        delete fxpSpec.multipathReplicate;
+        fxpSpec.transportVersion = "v3";
+        Object.assign(fxpSpec, v3Fields);
+        return fxpSpec;
       }
       if (!isForwardXWireGuardV2(tunnel)) {
         fxpSpec.transportVersion = "v1";

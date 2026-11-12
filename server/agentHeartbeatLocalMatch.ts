@@ -2,6 +2,7 @@ import { isPassiveForwardXFirstHopMarker } from "./tunnelRuntimePlan";
 import { buildKernelForwardTransitionCleanupCmds, buildManagedPortCleanupCmds } from "./agentActionCommands";
 import { normalizeForwardRuleProtocol } from "@shared/forwardTypes";
 import { isForwardXWireGuardV2 } from "./forwardXWireGuard";
+import { isForwardXV3Tunnel } from "@shared/forwardXV3";
 import { resolveLocalForwardXTransportVersion } from "./agentRuntimeRuleState";
 import type { AgentLocalRuntimeRuleState, AgentLocalRuntimeTunnelState } from "./agentHeartbeatReport";
 import { isForwardXTunnelMode, runtimeBool } from "./agentHeartbeatRuntime";
@@ -50,6 +51,7 @@ export function createLocalRuntimeMatchers(ctx: HeartbeatRequestContext, deps: L
     if (normalizedType !== "forwardx" && normalizedType !== "forwardx-tunnel") return undefined;
     const tunnel = tunnelById.get(Number(tunnelId || 0)) as any;
     if (!isForwardXTunnelMode(tunnel)) return undefined;
+    if (isForwardXV3Tunnel(tunnel)) return "v3" as const;
     return isForwardXWireGuardV2(tunnel) ? "v2" as const : "v1" as const;
   };
   const findLocalRuleState = (port: number, protocol: unknown, ruleId?: number) => {

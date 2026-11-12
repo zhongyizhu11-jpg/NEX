@@ -4,6 +4,7 @@ import { getAgentPluginInventory } from "./agentPluginInventory";
 import { setBoundedMapValue } from "./boundedCache";
 import { cleanEndpointHost } from "./forwardRuntimeConfigs";
 import { normalizeForwardRuleProtocol } from "@shared/forwardTypes";
+import type { ForwardXRuntimeTransportVersion } from "./agentRuntimeRuleState";
 import {
   AGENT_STATE_SECTION_NAMES,
   type AgentLocalRuntimeState,
@@ -112,13 +113,13 @@ export const localProtocolCompatible = (local: unknown, expected: unknown) => {
   return normalizeForwardRuleProtocol(localValue) === normalizeForwardRuleProtocol(expectedValue);
 };
 
-export const localForwardXTransportCompatible = (local: { transportVersion?: "v1" | "v2" }, expected: "v1" | "v2" | undefined) => {
+export const localForwardXTransportCompatible = (local: { transportVersion?: ForwardXRuntimeTransportVersion }, expected: ForwardXRuntimeTransportVersion | undefined) => {
   if (!expected) return true;
-  // V2 must never adopt a V1 runtime. For V1, tolerate an omitted field
-  // from older Agents while still rejecting a clearly stale V2 process.
-  return expected === "v2"
-    ? local.transportVersion === "v2"
-    : local.transportVersion !== "v2";
+  // V2 / V3 must never adopt an older runtime, and a V2 / V3 runtime must never
+  // satisfy a V1 expectation. For V1, tolerate an omitted field from older
+  // Agents while still rejecting a clearly stale V2 / V3 process.
+  if (expected === "v1") return local.transportVersion !== "v2" && local.transportVersion !== "v3";
+  return local.transportVersion === expected;
 };
 
 export const settleStoppedRule = async (rule: any) => {

@@ -17,7 +17,8 @@ test("local runtime state is normalized into the panel's shape", () => {
     rules: [
       { port: "8080", ruleId: "7", tunnelId: 0, forwardType: " gost ", targetIp: " 1.2.3.4 ", targetPort: "80", protocol: "tcp", transportVersion: "V2", ready: false },
       { port: 0, ruleId: 9 },
-      { port: 9000, ruleId: 9, transportVersion: "v3" },
+      { port: 9000, ruleId: 9, transportVersion: "v4" },
+      { port: 9001, ruleId: 10, transportVersion: " V3 " },
     ],
     tunnels: [
       { port: 443, tunnelId: 3, forwardType: "forwardx-tunnel", transportVersion: "v1", wireGuardPlane: "KERNEL" },
@@ -30,6 +31,7 @@ test("local runtime state is normalized into the panel's shape", () => {
     rules: [
       { port: 8080, ruleId: 7, tunnelId: undefined, forwardType: "gost", targetIp: "1.2.3.4", targetPort: 80, protocol: "tcp", transportVersion: "v2", ready: false },
       { port: 9000, ruleId: 9, tunnelId: undefined, forwardType: "", targetIp: undefined, targetPort: undefined, protocol: undefined, transportVersion: undefined, ready: true },
+      { port: 9001, ruleId: 10, tunnelId: undefined, forwardType: "", targetIp: undefined, targetPort: undefined, protocol: undefined, transportVersion: "v3", ready: true },
     ],
     tunnels: [{ port: 443, tunnelId: 3, forwardType: "forwardx-tunnel", transportVersion: "v1", wireGuardPlane: "kernel", ready: true }],
     services: [{ name: "realm", active: true, hasWork: false, status: "running", message: undefined, hooksReady: undefined, connectionState: undefined }],

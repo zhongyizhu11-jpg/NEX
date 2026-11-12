@@ -43,6 +43,17 @@ import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import { lossTolerantBlockerMessage, lossTolerantBlockers } from "../../shared/lossTolerantGate";
 import {
+  FORWARDX_V3_HOST_MAX,
+  FORWARDX_V3_PATH_MAX,
+  FORWARDX_V3_SERVER_NAME_MAX,
+  FORWARDX_V3_TRANSPORTS,
+  FORWARDX_V3_USER_AGENT_MAX,
+  forwardXV3BlockerMessage,
+  forwardXV3Blockers,
+  forwardXV3ConflictReason,
+  forwardXV3TunnelPatch,
+} from "../../shared/forwardXV3";
+import {
   defaultTunnelHostAddress,
   selectEntryGroupTunnelTestAddress,
   selectTunnelDialAddress,
@@ -66,7 +77,17 @@ import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
 
 const tunnelNetworkTypeSchema = z.enum(["public", "private"]);
 const tunnelModeSchema = z.enum(["forwardx", "tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream"]);
-const forwardXVersionSchema = z.enum(["v1", "v2"]);
+const forwardXVersionSchema = z.enum(["v1", "v2", "v3"]);
+const FORWARDX_V3_OPTION_KEYS = ["v3Transport", "v3Host", "v3Path", "v3UserAgent", "v3ServerName", "v3Multiplex"] as const;
+// 长度上限放宽一点，超长的由 forwardXV3OptionsError 给出中文原因。
+const forwardXV3InputFields = {
+  v3Transport: z.enum(FORWARDX_V3_TRANSPORTS).nullable().optional(),
+  v3Host: z.string().max(FORWARDX_V3_HOST_MAX * 2).nullable().optional(),
+  v3Path: z.string().max(FORWARDX_V3_PATH_MAX * 2).nullable().optional(),
+  v3UserAgent: z.string().max(FORWARDX_V3_USER_AGENT_MAX * 2).nullable().optional(),
+  v3ServerName: z.string().max(FORWARDX_V3_SERVER_NAME_MAX * 2).nullable().optional(),
+  v3Multiplex: z.boolean().nullable().optional(),
+};
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
 const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"]);
 const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate", "hot_standby"]);
@@ -110,6 +131,16 @@ async function requireLossTolerantVersionForHosts(hostIds: number[]) {
   const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
   const blockers = lossTolerantBlockers(hosts as Array<{ id: number; name?: string | null; agentVersion?: string | null; fxpVersion?: string | null } | null | undefined>, ids);
   if (blockers.length > 0) throw new Error(lossTolerantBlockerMessage(blockers));
+}
+
+/** NEX V3 要隧道上每台机器的 Agent / FXP 都认识 v3：老 FXP 会把它当 V1 跑，两端谁也连不上谁。 */
+async function requireForwardXV3VersionForHosts(hostIds: number[]) {
+  const ids = Array.from(new Set(hostIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)));
+  const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
+  const blockers = forwardXV3Blockers(hosts as Array<{ id: number; name?: string | null; agentVersion?: string | null; fxpVersion?: string | null } | null | undefined>, ids);
+  if (blockers.length > 0) throw new Error(forwardXV3BlockerMessage(blockers));
 }
 
 function isTunnelProxyProtocolSupported(mode: unknown) {
@@ -988,6 +1019,7 @@ export const tunnelsRouter = router({
         mode: tunnelModeSchema.default("forwardx"),
         relayMode: tunnelRelayModeSchema.optional().default("chain"),
         forwardxVersion: forwardXVersionSchema.optional().default("v1"),
+        ...forwardXV3InputFields,
         listenPort: z.number().int().min(0).max(65535).optional().default(0),
         mimicPort: z.number().int().min(0).max(65535).optional().default(0),
         rateLimitMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
@@ -1116,6 +1148,21 @@ export const tunnelsRouter = router({
         });
         const runtimeOptions = normalizeTunnelRuntimeOptions(input, normalizedMode);
         assertLinkShapingOptions(runtimeOptions);
+        const forwardXV3Options = forwardXV3TunnelPatch(input as Record<string, unknown>, normalizedMode, forwardxVersion);
+        if (forwardXV3Options.v3Transport) {
+          const conflict = forwardXV3ConflictReason({ ...runtimeOptions, relayMode });
+          if (conflict) throw new Error(conflict);
+          const entryHostIds = await getTunnelEntryTestHostIds({
+            entryGroupId: input.entryGroupId ?? null,
+            entryHostId,
+          });
+          await requireForwardXV3VersionForHosts([
+            ...entryHostIds,
+            ...(hopHostIds || []),
+            exitHostId,
+            ...extraExitNodes.map((node) => node.hostId),
+          ]);
+        }
         if (runtimeOptions.udpOverTcp) {
           const entryHostIds = await getTunnelEntryTestHostIds({
             entryGroupId: input.entryGroupId ?? null,
@@ -1178,6 +1225,7 @@ export const tunnelsRouter = router({
           blockSocks: false,
           blockTls: false,
           ...runtimeOptions,
+          ...forwardXV3Options,
           loadBalanceEnabled: loadBalanceEnabled && extraExitNodes.length > 0,
           loadBalanceStrategy: loadBalanceEnabled && extraExitNodes.length > 0 ? loadBalanceStrategy : "round_robin",
           listenPort,
@@ -1252,6 +1300,7 @@ export const tunnelsRouter = router({
         mode: tunnelModeSchema.optional(),
         relayMode: tunnelRelayModeSchema.optional(),
         forwardxVersion: forwardXVersionSchema.optional(),
+        ...forwardXV3InputFields,
         listenPort: z.number().int().min(0).max(65535).optional(),
         // Non-persistent client hint: false means the value is merely the
         // form's persisted value and may be repaired after a route change.
@@ -1680,11 +1729,55 @@ export const tunnelsRouter = router({
             ...extraExitNodes.map((node) => node.hostId),
           ]);
         }
+        // NEX V3：外层选项随隧道行走；切到 V3、或者 V3 隧道换了机器，都要重新核一遍版本。
+        // 和抗丢包传输、叠加 / 热备、多路并发这类不能组合的特性同开时直接拒，说清为什么。
+        {
+          const v3Touched = FORWARDX_V3_OPTION_KEYS.some((key) => lossPatch[key] !== undefined);
+          if (v3Touched || lossPatch.mode !== undefined || lossPatch.forwardxVersion !== undefined) {
+            const v3Source: Record<string, unknown> = {};
+            for (const key of FORWARDX_V3_OPTION_KEYS) v3Source[key] = lossPatch[key] !== undefined ? lossPatch[key] : lossCurrent[key];
+            Object.assign(lossPatch, forwardXV3TunnelPatch(v3Source, nextModeForRuntime, nextForwardXVersion));
+          }
+          if (nextModeForRuntime === "forwardx" && nextForwardXVersion === "v3") {
+            const conflict = forwardXV3ConflictReason({
+              lossTolerant: nextLossTolerant,
+              kernelPassthrough: lossPatch.kernelPassthrough !== undefined ? lossPatch.kernelPassthrough : lossCurrent.kernelPassthrough,
+              relayMode: nextRelayMode,
+              parallelStreams: lossCurrent.parallelStreams,
+            });
+            if (conflict) throw new Error(conflict);
+            const wasV3 = isTunnelForwardXMode(lossCurrent.mode) && normalizeForwardXVersion(lossCurrent.forwardxVersion) === "v3";
+            const v3ActivationChanged = !wasV3
+              || hopChanged
+              || loadBalanceChanged
+              || lossPatch.entryGroupId !== undefined
+              || lossPatch.entryHostId !== undefined
+              || lossPatch.exitHostId !== undefined;
+            if (v3ActivationChanged) {
+              const entryHostIds = await getTunnelEntryTestHostIds({
+                ...tunnel,
+                ...data,
+                entryHostId,
+                exitHostId,
+                entryGroupId: lossPatch.entryGroupId !== undefined ? lossPatch.entryGroupId : lossCurrent.entryGroupId,
+              } as Parameters<typeof getTunnelEntryTestHostIds>[0]);
+              await requireForwardXV3VersionForHosts([
+                ...entryHostIds,
+                ...normalizedRequestedHopIds,
+                exitHostId,
+                ...extraExitNodes.map((node) => node.hostId),
+              ]);
+            }
+          }
+        }
         const topologyChanged = ["entryGroupId", "exitGroupId", "entryHostId", "exitHostId", "relayMode", "networkType", "connectHost"]
           .some((key) => (data as any)[key] !== undefined && (data as any)[key] !== (tunnel as any)[key])
           || hopChanged
           || loadBalanceChanged;
-        let keyChanged = ["entryGroupId", "exitGroupId", "entryHostId", "exitHostId", "mode", "relayMode", "forwardxVersion", "certDomain", "certPem", "certKeyPem", "listenPort", "mimicPort", "rateLimitMbps", "isEnabled", "portRangeStart", "portRangeEnd", "networkType", "connectHost", ...tunnelRuntimeKeys].some((key) => (data as any)[key] !== undefined && (data as any)[key] !== (tunnel as any)[key]) || hopChanged || loadBalanceChanged;
+        let keyChanged = ["entryGroupId", "exitGroupId", "entryHostId", "exitHostId", "mode", "relayMode", "forwardxVersion", "certDomain", "certPem", "certKeyPem", "listenPort", "mimicPort", "rateLimitMbps", "isEnabled", "portRangeStart", "portRangeEnd", "networkType", "connectHost", ...tunnelRuntimeKeys].some((key) => (data as any)[key] !== undefined && (data as any)[key] !== (tunnel as any)[key])
+          // V3 外层选项：库里的布尔值可能是 0/1，按归一化后的值比，免得没改也算改了。
+          || FORWARDX_V3_OPTION_KEYS.some((key) => (data as any)[key] !== undefined && String((data as any)[key] ?? "") !== String(key === "v3Multiplex" ? dbBool((tunnel as any)[key]) : ((tunnel as any)[key] ?? "")))
+          || hopChanged || loadBalanceChanged;
         const enabledChanged = (data as any).isEnabled !== undefined
           && dbBool((data as any).isEnabled) !== dbBool((tunnel as any).isEnabled);
         if (keyChanged) (data as any).isRunning = false;

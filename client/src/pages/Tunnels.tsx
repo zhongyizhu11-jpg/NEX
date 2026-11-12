@@ -150,6 +150,18 @@ import {
   trafficMultiplierToInputValue,
 } from "@shared/trafficMultiplier";
 import {
+  FORWARDX_V3_DEFAULT_MULTIPLEX,
+  FORWARDX_V3_DEFAULT_TRANSPORT,
+  FORWARDX_V3_MIN_AGENT_VERSION,
+  FORWARDX_V3_MIN_FXP_VERSION,
+  FORWARDX_V3_TRANSPORTS,
+  FORWARDX_V3_TRANSPORT_LABELS,
+  forwardXV3OptionsError,
+  normalizeForwardXV3Options,
+  normalizeForwardXV3Transport,
+  type ForwardXV3Transport,
+} from "@shared/forwardXV3";
+import {
   normalizeTunnelRelayMode,
   tunnelRelayAggregateSupported,
   tunnelRelayFailoverSupported,
@@ -178,7 +190,14 @@ type TunnelForm = {
   hopConnectHosts: Array<string | null>;
   mode: TunnelProtocol;
   relayMode: TunnelRelayMode;
-  forwardxVersion: "v1" | "v2";
+  forwardxVersion: "v1" | "v2" | "v3";
+  /** NEX V3 的外层和可选参数（shared/forwardXV3.ts），只在 forwardxVersion = v3 时提交。 */
+  v3Transport: ForwardXV3Transport;
+  v3Host: string;
+  v3Path: string;
+  v3UserAgent: string;
+  v3ServerName: string;
+  v3Multiplex: boolean;
   certDomain: string;
   certPem: string;
   certKeyPem: string;
@@ -341,6 +360,12 @@ const defaultForm: TunnelForm = {
   mode: "forwardx",
   relayMode: "chain",
   forwardxVersion: "v1",
+  v3Transport: FORWARDX_V3_DEFAULT_TRANSPORT,
+  v3Host: "",
+  v3Path: "",
+  v3UserAgent: "",
+  v3ServerName: "",
+  v3Multiplex: FORWARDX_V3_DEFAULT_MULTIPLEX,
   certDomain: "",
   certPem: "",
   certKeyPem: "",
@@ -801,7 +826,9 @@ function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVers
   const label = tunnelModeLabels[normalized] || String(mode || "").toUpperCase();
   if (isNginxTunnelModeValue(normalized)) return showNginxLabel ? "Nginx" : "Stream";
   if (normalized === "forwardx") {
-    if (normalizeForwardXVersion(forwardxVersion) !== "v2") return "NEX V1";
+    const version = normalizeForwardXVersion(forwardxVersion);
+    if (version === "v3") return "NEX V3";
+    if (version !== "v2") return "NEX V1";
     // 所有主机都跑在内核 WireGuard 上时标出来；用户态或混用就不加后缀。
     return wireGuardPlane === "kernel" ? "NEX V2 · 内核" : "NEX V2";
   }
@@ -2736,6 +2763,18 @@ function TunnelsContent() {
       mode,
       relayMode: tunnelRelayFailoverSupported(mode) ? normalizeTunnelRelayMode(tunnel.relayMode) : "chain",
       forwardxVersion: normalizeForwardXVersion(tunnel.forwardxVersion),
+      ...(() => {
+        // 不是 V3 的隧道这几列是空的，展开时按默认值填，用户切到 V3 看到的是推荐设置。
+        const v3 = normalizeForwardXV3Options(tunnel as Record<string, unknown>);
+        return {
+          v3Transport: v3.v3Transport,
+          v3Host: String((tunnel as any).v3Host || ""),
+          v3Path: String((tunnel as any).v3Path || ""),
+          v3UserAgent: String((tunnel as any).v3UserAgent || ""),
+          v3ServerName: String((tunnel as any).v3ServerName || ""),
+          v3Multiplex: v3.v3Multiplex,
+        };
+      })(),
       certDomain: String(tunnel.certDomain || ""),
       certPem: String(tunnel.certPem || ""),
       certKeyPem: String(tunnel.certKeyPem || ""),
@@ -3074,6 +3113,13 @@ function TunnelsContent() {
     }
     const trafficMultiplier = trafficMultiplierFromInput(trafficMultiplierValue);
     const forwardxVersion = submitForm.mode === "forwardx" ? submitForm.forwardxVersion : "v1";
+    if (forwardxVersion === "v3") {
+      const v3Error = forwardXV3OptionsError(submitForm);
+      if (v3Error) {
+        toast.error(v3Error);
+        return;
+      }
+    }
     if (!isTunnelSupported(submitForm)) {
       toast.error(unsupportedProtocolTitle);
       return;
@@ -3155,6 +3201,18 @@ function TunnelsContent() {
       mode: normalizeTunnelModeForForm(submitForm.mode),
       relayMode: relayModeForSubmit(submitForm.mode, submitForm.relayMode, orderedHopHostIds.length),
       forwardxVersion,
+      // V3 的外层选项只在 V3 时提交；不是 V3 时服务端会清空这几列。
+      ...(forwardxVersion === "v3" ? (() => {
+        const v3 = normalizeForwardXV3Options(submitForm);
+        return {
+          v3Transport: v3.v3Transport,
+          v3Host: v3.v3Host || null,
+          v3Path: v3.v3Path || null,
+          v3UserAgent: v3.v3UserAgent || null,
+          v3ServerName: v3.v3ServerName || null,
+          v3Multiplex: v3.v3Multiplex,
+        };
+      })() : {}),
       certDomain: isNginxTunnelModeValue(submitForm.mode) ? certDomain || null : null,
       certPem: isNginxTunnelModeValue(submitForm.mode) ? certPem || null : null,
       certKeyPem: isNginxTunnelModeValue(submitForm.mode) ? certKeyPem || null : null,
@@ -3179,7 +3237,8 @@ function TunnelsContent() {
       udpFec: transportTuningSupported && submitForm.udpFec,
       // 抗丢包传输只有 V1：V2 外层已经是 WireGuard 的 UDP。
       lossTolerant: transportTuningSupported && submitForm.forwardxVersion === "v1" && submitForm.lossTolerant,
-      kernelPassthrough: transportTuningSupported && submitForm.kernelPassthrough,
+      // 内核直通只对 V2 有效；V3 隧道不提交（服务端会拒 V3 + 内核直通）。
+      kernelPassthrough: transportTuningSupported && forwardxVersion !== "v3" && submitForm.kernelPassthrough,
       entryGroupId: submitForm.entryGroupId || null,
       exitGroupId: submitForm.exitGroupId || null,
       entryHostId,
@@ -3497,54 +3556,53 @@ function TunnelsContent() {
   };
   const renderForwardXVersionOptions = () => {
     if (form.mode !== "forwardx") return null;
+    const versionOptions: Array<{ value: TunnelForm["forwardxVersion"]; title: string; description: string; icon: typeof ShieldCheck }> = [
+      { value: "v1", title: "V1 AES-GCM", description: "FXP 认证加密传输，兼容现有链路", icon: ShieldCheck },
+      { value: "v2", title: "V2 WireGuard", description: "内置 UDP 通道（无需安装系统 WireGuard）", icon: Network },
+      { value: "v3", title: "V3 HTTP / WS / TLS", description: "TCP 外面套一层 HTTP、WebSocket 或 TLS", icon: Globe },
+    ];
+    const v3Http = form.v3Transport !== "tls";
     return (
       <>
         <div className="space-y-2">
           <Label>隧道版本</Label>
-          <div className={`${segmentedControlClassName} grid grid-cols-2 gap-1`}>
-            <button
-              type="button"
-              aria-pressed={form.forwardxVersion === "v1"}
-              className={segmentedOptionClassName(
-                form.forwardxVersion === "v1",
-                false,
-                "h-auto min-h-16 items-start justify-start px-3 py-2 text-left",
-              )}
-              onClick={() => setForm((prev) => ({
-                ...prev,
-                forwardxVersion: "v1",
-                mimicPort: prev.udpOverTcp ? prev.mimicPort : 0,
-              }))}
-            >
-              <ShieldCheck className={segmentedIconClassName(form.forwardxVersion === "v1", "mt-0.5")} />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">V1 AES-GCM</span>
-                <span className="mt-0.5 block whitespace-normal text-[11px] font-normal leading-4 text-muted-foreground">
-                  FXP 认证加密传输，兼容现有链路
-                </span>
-              </span>
-            </button>
-            <button
-              type="button"
-              aria-pressed={form.forwardxVersion === "v2"}
-              className={segmentedOptionClassName(
-                form.forwardxVersion === "v2",
-                false,
-                "h-auto min-h-16 items-start justify-start px-3 py-2 text-left",
-              )}
-              onClick={() => setForm((prev) => ({
-                ...prev,
-                forwardxVersion: "v2",
-              }))}
-            >
-              <Network className={segmentedIconClassName(form.forwardxVersion === "v2", "mt-0.5")} />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">V2 WireGuard</span>
-                <span className="mt-0.5 block whitespace-normal text-[11px] font-normal leading-4 text-muted-foreground">
-                  内置 UDP 通道（无需安装系统 WireGuard）
-                </span>
-              </span>
-            </button>
+          <div className={`${segmentedControlClassName} grid grid-cols-1 gap-1 sm:grid-cols-3`}>
+            {versionOptions.map((option) => {
+              const Icon = option.icon;
+              const active = form.forwardxVersion === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={active}
+                  className={segmentedOptionClassName(
+                    active,
+                    false,
+                    "h-auto min-h-16 items-start justify-start px-3 py-2 text-left",
+                  )}
+                  onClick={() => setForm((prev) => ({
+                    ...prev,
+                    forwardxVersion: option.value,
+                    // V2 自带 WireGuard 端口；V1 / V3 只有开了 mimic 才要 UDP 线路端口。
+                    mimicPort: option.value === "v2" || prev.udpOverTcp ? prev.mimicPort : 0,
+                    // V3 不能和抗丢包传输、中转叠加 / 热备同开（服务端也会拒），切过去时一并关掉。
+                    ...(option.value === "v3" ? {
+                      lossTolerant: false,
+                      kernelPassthrough: false,
+                      relayMode: prev.relayMode === "aggregate" || prev.relayMode === "hot_standby" ? "chain" as const : prev.relayMode,
+                    } : {}),
+                  }))}
+                >
+                  <Icon className={segmentedIconClassName(active, "mt-0.5")} />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{option.title}</span>
+                    <span className="mt-0.5 block whitespace-normal text-[11px] font-normal leading-4 text-muted-foreground">
+                      {option.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
         {form.forwardxVersion === "v2" && (
@@ -3563,6 +3621,96 @@ function TunnelsContent() {
               }}
             />
           </FormField>
+        )}
+        {form.forwardxVersion === "v3" && (
+          <div className="space-y-3 rounded-md border border-border/50 bg-background/60 px-3 py-3">
+            <div className="space-y-2">
+              <Label>V3 外层</Label>
+              <div className={`${segmentedControlClassName} grid grid-cols-3 gap-1`}>
+                {FORWARDX_V3_TRANSPORTS.map((transport) => (
+                  <button
+                    key={transport}
+                    type="button"
+                    aria-pressed={form.v3Transport === transport}
+                    className={segmentedOptionClassName(form.v3Transport === transport)}
+                    onClick={() => setForm((prev) => ({ ...prev, v3Transport: normalizeForwardXV3Transport(transport) || FORWARDX_V3_DEFAULT_TRANSPORT }))}
+                  >
+                    {FORWARDX_V3_TRANSPORT_LABELS[transport]}
+                  </button>
+                ))}
+              </div>
+              <p data-fx-help="" className="text-xs text-muted-foreground">
+                {form.v3Transport === "tls"
+                  ? "外面看是一条普通的 TLS 连接；证书由隧道密钥派生、两端钉死，不用另配证书。"
+                  : form.v3Transport === "ws"
+                    ? "先发一个 WebSocket 升级请求，出口回 101 之后走隧道自己的数据。"
+                    : "先发一个 HTTP GET 请求，出口回 200 之后走隧道自己的数据。"}
+              </p>
+            </div>
+            {v3Http ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <FormField className="space-y-1">
+                  <Label className="text-xs">路径</Label>
+                  <Input
+                    value={form.v3Path}
+                    placeholder="/"
+                    aria-label="V3 路径"
+                    onChange={(event) => setForm((prev) => ({ ...prev, v3Path: event.target.value }))}
+                  />
+                </FormField>
+                <FormField className="space-y-1">
+                  <Label className="text-xs">Host</Label>
+                  <Input
+                    value={form.v3Host}
+                    placeholder="留空不发 Host 头"
+                    aria-label="V3 Host"
+                    onChange={(event) => setForm((prev) => ({ ...prev, v3Host: event.target.value }))}
+                  />
+                </FormField>
+                <FormField className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">User-Agent</Label>
+                  <Input
+                    value={form.v3UserAgent}
+                    placeholder="留空用常见浏览器的 UA"
+                    aria-label="V3 User-Agent"
+                    onChange={(event) => setForm((prev) => ({ ...prev, v3UserAgent: event.target.value }))}
+                  />
+                </FormField>
+              </div>
+            ) : (
+              <FormField className="space-y-1">
+                <Label className="text-xs">服务器名称（SNI）</Label>
+                <Input
+                  value={form.v3ServerName}
+                  placeholder="留空不发 SNI"
+                  aria-label="V3 SNI"
+                  onChange={(event) => setForm((prev) => ({ ...prev, v3ServerName: event.target.value }))}
+                />
+              </FormField>
+            )}
+            <label className={cn(
+              "flex min-h-12 items-center justify-between gap-2 rounded-md border px-3 py-2 transition-colors",
+              form.v3Multiplex ? "border-primary/35 bg-primary/5" : "border-border/50 bg-background/60",
+            )}>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">多路复用</span>
+                <span className="block whitespace-normal text-xs text-muted-foreground">
+                  多条连接共用一条物理连接，建连更快；单条连接的窗口只有 64 KiB，高延迟线路上跑不满带宽
+                </span>
+              </span>
+              <Checkbox
+                aria-label="多路复用"
+                checked={form.v3Multiplex}
+                onCheckedChange={(checked) => setForm((prev) => ({ ...prev, v3Multiplex: checked === true }))}
+              />
+            </label>
+            <p data-fx-help="" className="text-xs text-muted-foreground">
+              {`隧道上每台机器都要 Agent ${FORWARDX_V3_MIN_AGENT_VERSION}、FXP ${FORWARDX_V3_MIN_FXP_VERSION} 以上。`}
+            </p>
+            <p data-fx-help="" className="text-xs text-muted-foreground">
+              不能和抗丢包传输、中转叠加 / 热备、单连接多路并发同开；UDP 照旧走直连，不经过外层。
+            </p>
+          </div>
         )}
       </>
     );
@@ -3730,7 +3878,7 @@ function TunnelsContent() {
             (lossTolerant) => setForm((prev) => ({ ...prev, lossTolerant })),
             "隧道里的 TCP 改走 UDP（KCP 加纠错包），丢包时不降速。多耗约 30%~50% 流量、几倍 CPU。出口和中转要放行与隧道端口同号的 UDP 端口；连不上就报错，不会悄悄退回 TCP。隧道上的机器都要升级。",
           )}
-          {renderTransportSwitch(
+          {form.forwardxVersion !== "v3" && renderTransportSwitch(
             "内核直通",
             "规则不经 FXP，内核里直接进 WireGuard",
             form.kernelPassthrough,
@@ -5076,7 +5224,7 @@ function TunnelsContent() {
                 externalExit={!!form.exitGroupId}
                 relayMode={form.relayMode}
                 relayModeSupported={tunnelRelayFailoverSupported(form.mode)}
-                relayAggregateSupported={tunnelRelayAggregateSupported(form.mode)}
+                relayAggregateSupported={tunnelRelayAggregateSupported(form.mode) && form.forwardxVersion !== "v3"}
                 onRelayModeChange={(relayMode) => setForm((prev) => ({ ...prev, relayMode }))}
                 fixedExitHostIds={form.exitGroupId ? exitMembersForGroup(form.exitGroupId).map((member: any) => Number(member.hostId || 0)).filter((id: number) => id > 0) : []}
                 excludedHostIds={externalTunnelHostIds(form.entryGroupId, form.exitGroupId)}
