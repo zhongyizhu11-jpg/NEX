@@ -26,7 +26,11 @@ export const FORWARDX_V3_TRANSPORT_LABELS: Record<ForwardXV3Transport, string> =
 
 /** 默认外层：TLS（外面看是一条普通的 TLS 连接，证书公钥由隧道密钥派生、两端钉死）。 */
 export const FORWARDX_V3_DEFAULT_TRANSPORT: ForwardXV3Transport = "tls";
-/** 默认不复用：复用时每条连接只有 64 KiB 窗口，高延迟线路上单连接跑不满带宽。 */
+/**
+ * 默认不复用：每条业务连接一条自己的 TCP（建连的往返由预热连接池在后台做完），一条卡住不影响
+ * 别的。复用时窗口会按线路自动放大（最大 16 MiB），高延迟线路上单连接也跑得起来，但所有连接
+ * 挤在一条 TCP 上，一个丢包大家一起等。
+ */
 export const FORWARDX_V3_DEFAULT_MULTIPLEX = false;
 
 export const FORWARDX_V3_HOST_MAX = 253;
@@ -140,7 +144,10 @@ export function forwardXV3SpecFields(tunnel: unknown) {
   };
 }
 
-/** 隧道上 V3 不能和哪些特性一起开。 */
+/**
+ * 隧道上 V3 不能和哪些特性一起开。relayMode / parallelStreams 现在都可以和 V3 组合，
+ * 调用方照旧传进来，这里不再据此拒绝。
+ */
 export type ForwardXV3ConflictInput = {
   lossTolerant?: unknown;
   kernelPassthrough?: unknown;
@@ -153,22 +160,14 @@ const truthy = (value: unknown) => value === true || value === 1 || value === "1
 /**
  * V3 和 NEX 已有特性的组合：不能组合的保存时就拒，并说清为什么（不让它静默失效）。
  * - 抗丢包传输：它把下一跳的 TCP 换成 UDP 上的 KCP，V3 的 HTTP / WS / TLS 外层就没了；
- * - 中转「叠加」「热备」、单连接多路并发：都是一条连接同时走几条腿（FXP 的多路径），
- *   每条腿自己握手、自己调度，FXP 的 V3 不支持；
  * - 内核直通：只对 V2（内核 WireGuard）有意义。
  * 能组合的：UDP 直连、UDP 抗丢包、mimic、链路整形、TCP Fast Open、PROXY、多出口负载均衡、
- * 中转「顺序」「主备」。
+ * 中转「顺序」「主备」「叠加」「热备」、单连接多路并发（FXP 2.2.141 起：多路径的每条腿是一条
+ * 自己的 V3 物理连接，开着多路复用也不会把腿并进同一条连接）。
  */
 export function forwardXV3ConflictReason(input: ForwardXV3ConflictInput): string {
   if (truthy(input.lossTolerant)) {
     return "NEX V3 不能和「抗丢包传输」同时开：抗丢包传输把隧道里的 TCP 换成 UDP 上的 KCP，V3 的 HTTP / WebSocket / TLS 外层就没有了。二选一。";
-  }
-  const relayMode = String(input.relayMode || "").trim().toLowerCase();
-  if (relayMode === "aggregate" || relayMode === "hot_standby") {
-    return "NEX V3 不支持中转「叠加」「热备」：这两种是一条连接同时走几台中转，V3 的会话做不到。请把中转方式改成「顺序」或「主备」。";
-  }
-  if (Math.floor(Number(input.parallelStreams || 0)) >= 2) {
-    return "NEX V3 不支持「单连接多路并发」：请先把多路并发改回单路，再切到 V3。";
   }
   if (truthy(input.kernelPassthrough)) {
     return "「内核直通」只对 NEX V2（WireGuard）隧道有效，V3 隧道请关掉它。";
