@@ -207,6 +207,8 @@ func stripTCPOnlyFields(cfg *config) {
 	cfg.LossTolerant = false
 	// UDP 直连只看 udpTargets；TCP 目标表变了不该把 UDP 监听连同会话一起重启。
 	cfg.StreamTargets = nil
+	// V3 的外层只套在 TCP 承载上，UDP 直连不经过它：改外层选项不重启 UDP 监听。
+	cfg.V3Transport, cfg.V3Host, cfg.V3Path, cfg.V3UserAgent, cfg.V3ServerName, cfg.V3Multiplex = "", "", "", "", "", nil
 }
 
 func listenSlotKey(network, host string, port int) string {
