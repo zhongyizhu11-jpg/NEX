@@ -2,6 +2,7 @@ package v3
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -268,8 +269,12 @@ func TestSessionStalledPeerHasBoundedWriterLifetime(t *testing.T) {
 	defer b.Close()
 	s := NewSession(a, SessionOptions{Client: true, WriteTimeout: 30 * time.Millisecond})
 	defer s.Close()
-	if _, err := s.Open(); err == nil {
-		t.Fatal("unread peer unexpectedly accepted Open")
+	// Open 不等 OPEN 帧写出去；写不出去由写超时拆掉会话，流上的写随之报错。
+	st, err := s.Open()
+	if err == nil {
+		if _, err = st.Write([]byte("x")); err == nil {
+			t.Fatal("unread peer unexpectedly accepted a write")
+		}
 	}
 	select {
 	case <-s.Done():
@@ -367,9 +372,19 @@ func TestSessionForgedCreditOverrunResetsOnlyOffendingStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	waitSessionState(t, func() bool { client.mu.Lock(); defer client.mu.Unlock(); return a.sendCredit > 0 })
-	// Bypass Stream.Write's credit enforcement to simulate a faulty/keyed peer.
-	client.control(Frame{Type: FrameData, StreamID: a.id, Payload: make([]byte, 8*1024+2)})
+	// 初始窗口是隐含的：开流就有额度。
+	client.mu.Lock()
+	credit := a.sendCredit
+	client.mu.Unlock()
+	if credit != 8*1024 {
+		t.Fatalf("implicit initial window=%d", credit)
+	}
+	// 绕过 Stream.Write 的额度检查，模拟一个有密钥但行为不对的对端：一帧比窗口大。
+	forged := make([]byte, HeaderSize+8*1024+2)
+	forged[0] = FrameData
+	binary.BigEndian.PutUint32(forged[1:5], a.id)
+	binary.BigEndian.PutUint16(forged[5:7], 8*1024+2)
+	client.controls <- forged
 	waitSessionState(t, func() bool { server.mu.Lock(); defer server.mu.Unlock(); return errors.Is(b.err, ErrWindowExceeded) })
 	if server.BufferedBytes() != 0 || server.Err() != nil {
 		t.Fatal("window overrun retained data or killed siblings")
@@ -436,7 +451,7 @@ func TestSessionWriteRefreshesLiveness(t *testing.T) {
 	defer st.Close()
 	before := client.LastWrite()
 	time.Sleep(5 * time.Millisecond)
-	client.control(Frame{Type: FrameClose, StreamID: 999})
+	client.control(FrameClose, 999)
 	waitSessionState(t, func() bool { return client.LastWrite().After(before) })
 }
 
@@ -451,7 +466,7 @@ func TestSessionControlBurstDoesNotKillSession(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < burst; i++ {
-			client.control(Frame{Type: FrameClose, StreamID: uint32(i + 1)})
+			client.control(FrameClose, uint32(i+1))
 		}
 	}()
 	select {
@@ -475,7 +490,7 @@ func TestSessionTryControlReportsFullQueue(t *testing.T) {
 	defer s.Close()
 	queued, rejected := 0, 0
 	for i := 0; i < 4096; i++ {
-		if s.tryControl(Frame{Type: FrameClose, StreamID: uint32(i + 1)}) {
+		if s.tryControl(FrameClose, uint32(i+1)) {
 			queued++
 		} else {
 			rejected++
@@ -512,7 +527,7 @@ func TestSessionTinyWritesDoNotAccumulateBufferFragments(t *testing.T) {
 	}
 	waitSessionState(t, func() bool { return server.BufferedBytes() == 1000 })
 	server.mu.Lock()
-	chunks := len(b.buffers)
+	chunks := len(b.chunks)
 	server.mu.Unlock()
 	if chunks != 1 {
 		t.Fatalf("tiny writes retained %d buffer fragments", chunks)
@@ -522,4 +537,136 @@ func TestSessionTinyWritesDoNotAccumulateBufferFragments(t *testing.T) {
 	if err != nil || len(got) != 1000 {
 		t.Fatal("tiny writes lost data", err)
 	}
+}
+
+// 新流不用等对端的额度：开流之后马上就能写满初始窗口，对端一个额度帧都还没发。
+func TestSessionImplicitInitialWindow(t *testing.T) {
+	client, server := sessionPair(t, SessionOptions{StreamBuffer: 16 * 1024})
+	a, err := client.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.SetWriteDeadline(time.Now().Add(time.Second))
+	// 服务端还没 Accept、也就没人读：写满初始窗口不能卡住。
+	if n, err := a.Write(make([]byte, 16*1024)); err != nil || n != 16*1024 {
+		t.Fatalf("initial window not usable before any credit: n=%d err=%v", n, err)
+	}
+	b, err := server.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	waitSessionState(t, func() bool { return server.BufferedBytes() == 16*1024 })
+}
+
+// 读得快的流（卡住发送的是窗口）窗口会放大；流结束后放大的部分还给会话和进程。
+func TestSessionWindowGrowsForFastConsumerAndIsReleased(t *testing.T) {
+	client, server := sessionPair(t, SessionOptions{StreamBuffer: 16 * 1024, MaxStreamWindow: 1 << 20})
+	a, err := client.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := server.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetDeadline(time.Now().Add(5 * time.Second))
+	b.SetDeadline(time.Now().Add(5 * time.Second))
+	payload := bytes.Repeat([]byte("grow"), 1<<20)
+	done := make(chan error, 1)
+	go func() { _, err := a.Write(payload); done <- err }()
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(b, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil || !bytes.Equal(got, payload) {
+		t.Fatal("transfer corrupted", err)
+	}
+	server.mu.Lock()
+	window := b.window
+	server.mu.Unlock()
+	if window <= 16*1024 || server.WindowGrowth() != window-16*1024 {
+		t.Fatalf("window did not grow for a fast consumer: window=%d growth=%d", window, server.WindowGrowth())
+	}
+	if window > 1<<20 {
+		t.Fatalf("window exceeded MaxStreamWindow: %d", window)
+	}
+	a.Close()
+	b.Close()
+	waitSessionState(t, func() bool { return server.WindowGrowth() == 0 && server.ActiveStreams() == 0 })
+	if GlobalWindowGrowth() != 0 {
+		t.Fatalf("process window budget not returned: %d", GlobalWindowGrowth())
+	}
+}
+
+// 根本不读的流：发送端额度用完、报了 BLOCKED，但接收端缓冲是满的 —— 不放大，内存只占初始窗口。
+func TestSessionWindowDoesNotGrowForStalledConsumer(t *testing.T) {
+	client, server := sessionPair(t, SessionOptions{StreamBuffer: 16 * 1024})
+	a, err := client.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := server.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	go func() { _, _ = a.Write(make([]byte, 1<<20)) }()
+	waitSessionState(t, func() bool { server.mu.Lock(); defer server.mu.Unlock(); return b.blockedSeen })
+	time.Sleep(50 * time.Millisecond)
+	if server.BufferedBytes() != 16*1024 || server.WindowGrowth() != 0 {
+		t.Fatalf("stalled consumer grew: buffered=%d growth=%d", server.BufferedBytes(), server.WindowGrowth())
+	}
+	// 慢慢读：每次读四分之一窗口（正好触发还额度），对端马上补满，缓冲回到满的，也不放大。
+	for i := 0; i < 8; i++ {
+		if _, err := io.ReadFull(b, make([]byte, 4*1024)); err != nil {
+			t.Fatal(err)
+		}
+		waitSessionState(t, func() bool { return server.BufferedBytes() == 16*1024 })
+	}
+	if server.WindowGrowth() != 0 {
+		t.Fatalf("slow consumer grew its window: %d", server.WindowGrowth())
+	}
+}
+
+// 会话的放大预算用完了，再快的流也不再放大。
+func TestSessionWindowGrowthRespectsSessionBudget(t *testing.T) {
+	client, server := sessionPair(t, SessionOptions{StreamBuffer: 16 * 1024, MaxStreamWindow: 4 << 20, SessionBuffer: 64 * 1024})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		a, err := client.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := server.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			defer a.Close()
+			a.SetDeadline(time.Now().Add(5 * time.Second))
+			_, _ = a.Write(make([]byte, 2<<20))
+		}()
+		go func() {
+			defer wg.Done()
+			defer b.Close()
+			b.SetDeadline(time.Now().Add(5 * time.Second))
+			_, _ = io.ReadFull(b, make([]byte, 2<<20))
+		}()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if g := server.WindowGrowth(); g > 64*1024 {
+			t.Fatalf("session growth %d exceeds budget", g)
+		}
+		time.Sleep(time.Millisecond)
+		if server.ActiveStreams() == 0 {
+			break
+		}
+	}
+	wg.Wait()
 }

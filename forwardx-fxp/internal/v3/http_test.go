@@ -233,8 +233,7 @@ func TestHTTPServerWSHandshakeEmitsAccept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Reading on the server side triggers the handshake response towards the
-	// client and returns the payload that was already buffered.
+	// 服务端读到已经缓冲的内容；回应还没发。
 	buf := make([]byte, 64)
 	n, err := wrapped.Read(buf)
 	if err != nil {
@@ -243,17 +242,17 @@ func TestHTTPServerWSHandshakeEmitsAccept(t *testing.T) {
 	if string(buf[:n]) != "inner" {
 		t.Fatalf("server-side payload corrupted: %q", buf[:n])
 	}
-	// The client must have received the full reference response literal.
-	response := make([]byte, 4096)
-	rn, err := client.Read(response)
-	if err != nil {
-		t.Fatalf("client did not receive the handshake response: %v", err)
-	}
-	got := string(response[:rn])
+	// NEX：回应和服务端的第一次写拼成一段发出，字面量照旧是上游的。
+	go func() { _, _ = wrapped.Write([]byte("reply")) }()
 	want := "HTTP/1.1 101 Switching Protocols\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: " + wsAccept(key) + "\r\n\r\n"
+		"Sec-WebSocket-Accept: " + wsAccept(key) + "\r\n\r\n" + "reply"
+	response := make([]byte, len(want))
+	if _, err := io.ReadFull(client, response); err != nil {
+		t.Fatalf("client did not receive the handshake response: %v", err)
+	}
+	got := string(response)
 	if got != want {
 		t.Fatalf("handshake response mismatch\n got %q\nwant %q", got, want)
 	}
@@ -296,11 +295,14 @@ func TestHTTPServerWithholdsResponseUntilPeerSends(t *testing.T) {
 		t.Fatalf("server answered before the peer sent its initialisation: %q", data)
 	case <-time.After(150 * time.Millisecond):
 	}
-	// Once the peer sends bytes the response appears on first read.
+	// 对端发了内层的第一条消息、服务端读到并回复之后，回应才和回复一起出现。
 	readErr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 1)
 		_, err := wrapped.Read(buf)
+		if err == nil {
+			_, err = wrapped.Write([]byte("y"))
+		}
 		readErr <- err
 	}()
 	go func() { _ = writeFull(client, []byte("x")) }()

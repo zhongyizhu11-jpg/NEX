@@ -2,11 +2,15 @@ package v3
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"sync"
@@ -63,22 +67,27 @@ func innerTCPPair(t *testing.T) (net.Conn, net.Conn) {
 func innerPair(t *testing.T, psk string) (*InnerConn, *InnerConn) {
 	t.Helper()
 	a, b := innerTCPPair(t)
-	clientCh := make(chan *InnerConn, 1)
+	return innerHandshakePair(t, a, b, psk, nil, nil)
+}
+
+func innerHandshakePair(t *testing.T, a, b net.Conn, psk string, clientBinding, serverBinding []byte) (*InnerConn, *InnerConn) {
+	t.Helper()
+	serverCh := make(chan *InnerConn, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		conn, err := InnerServer(b, psk)
+		conn, err := InnerServer(b, psk, serverBinding)
 		if err != nil {
 			errCh <- err
 			return
 		}
-		clientCh <- conn
+		serverCh <- conn
 	}()
-	client, err := InnerClient(a, psk)
+	client, err := InnerClient(a, psk, clientBinding)
 	if err != nil {
 		t.Fatalf("client handshake: %v", err)
 	}
 	select {
-	case server := <-clientCh:
+	case server := <-serverCh:
 		return client, server
 	case err := <-errCh:
 		t.Fatalf("server handshake: %v", err)
@@ -88,42 +97,121 @@ func innerPair(t *testing.T, psk string) (*InnerConn, *InnerConn) {
 	return nil, nil
 }
 
+// innerTLSPair 在 TCP 上起一对真的 TLS 1.3 连接，返回两端和各自的导出材料。
+func innerTLSPair(t *testing.T) (*tls.Conn, *tls.Conn, []byte, []byte) {
+	t.Helper()
+	a, b := innerTCPPair(t)
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "t"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, private.Public(), private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := tls.Server(b, &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: private}}, MinVersion: tls.VersionTLS13})
+	client := tls.Client(a, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13})
+	errs := make(chan error, 1)
+	go func() { errs <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	export := func(c *tls.Conn) []byte {
+		state := c.ConnectionState()
+		out, err := state.ExportKeyingMaterial(TLSExporterLabel, nil, 32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	return client, server, export(client), export(server)
+}
+
+func innerRoundTrip(t *testing.T, client, server *InnerConn, payload []byte) {
+	t.Helper()
+	writeErr := make(chan error, 1)
+	go func() { _, err := client.Write(payload); writeErr <- err }()
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(server, got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("payload mismatch length=%d", len(got))
+	}
+}
+
 func TestInnerHandshakeAndRecordRoundTrip(t *testing.T) {
 	client, server := innerPair(t, "tunnel-psk")
-	payloads := [][]byte{
+	if client.Mode() != InnerModeAEAD || server.Mode() != InnerModeAEAD || client.Plain() {
+		t.Fatalf("modes client=%d server=%d", client.Mode(), server.Mode())
+	}
+	for _, payload := range [][]byte{
 		[]byte("hello"),
 		bytes.Repeat([]byte{0xff}, InnerPayloadLimit),
-		// Larger than one record: Write must split it.
-		bytes.Repeat([]byte("record-boundary"), 3000),
+		bytes.Repeat([]byte("record-boundary"), 30000),
+	} {
+		innerRoundTrip(t, client, server, payload)
+		innerRoundTrip(t, server, client, payload)
 	}
-	for i, payload := range payloads {
-		writeErr := make(chan error, 1)
-		go func(p []byte) {
-			if len(p) > InnerPayloadLimit {
-				_, err := client.Write(p)
-				writeErr <- err
-				return
-			}
-			writeErr <- client.WriteRecord(p)
-		}(payload)
-		got := make([]byte, len(payload))
-		if _, err := io.ReadFull(server, got); err != nil {
-			t.Fatalf("payload %d read: %v", i, err)
-		}
-		if err := <-writeErr; err != nil {
-			t.Fatalf("payload %d write: %v", i, err)
-		}
-		if !bytes.Equal(got, payload) {
-			t.Fatalf("payload %d mismatch length=%d", i, len(got))
-		}
-	}
-	// A zero-length record is a valid record and must survive the layer.
+	// 空记录也是合法记录。
 	go func() { _ = client.WriteRecord(nil) }()
 	if err := server.readRecord(); err != nil {
 		t.Fatalf("empty record read: %v", err)
 	}
-	if server.readLen != 0 {
-		t.Fatalf("empty record produced %d bytes", server.readLen)
+	if len(server.plainBuf) != 0 {
+		t.Fatalf("empty record produced %d bytes", len(server.plainBuf))
+	}
+}
+
+func TestInnerWriteBuffersSpanRecords(t *testing.T) {
+	client, server := innerPair(t, "psk")
+	parts := [][]byte{[]byte("a"), bytes.Repeat([]byte("b"), InnerPayloadLimit-1), bytes.Repeat([]byte("c"), 3*InnerPayloadLimit+5), nil, []byte("tail")}
+	var want []byte
+	for _, p := range parts {
+		want = append(want, p...)
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.WriteBuffers(parts) }()
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(server, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("WriteBuffers corrupted the byte stream")
+	}
+	if client.writeCounter != 5 {
+		t.Fatalf("records sealed=%d, want 5", client.writeCounter)
+	}
+}
+
+// 握手只占一个往返：客户端发完自己的证明就返回，不等服务端再回任何东西。
+func TestInnerClientDoesNotWaitAfterItsProof(t *testing.T) {
+	a, b := innerTCPPair(t)
+	go func() {
+		first := make([]byte, InnerHandshakeSize)
+		if _, err := io.ReadFull(b, first); err != nil {
+			return
+		}
+		material := make([]byte, innerMaterialSize)
+		reply := append([]byte{InnerModeAEAD}, material...)
+		reply = append(reply, innerProof("psk", 's', InnerModeAEAD, first[1:], material)...)
+		_, _ = b.Write(reply)
+		// 之后什么都不发。
+	}()
+	_ = a.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := InnerClient(a, "psk", nil); err != nil {
+		t.Fatalf("client waited for more than the server's first reply: %v", err)
 	}
 }
 
@@ -131,21 +219,11 @@ func TestInnerRejectsWrongKey(t *testing.T) {
 	a, b := innerTCPPair(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := InnerServer(b, "server-secret")
+		_, err := InnerServer(b, "server-secret", nil)
 		done <- err
 	}()
-	clientErr := make(chan error, 1)
-	go func() {
-		_, err := InnerClient(a, "client-secret")
-		clientErr <- err
-	}()
-	select {
-	case err := <-clientErr:
-		if err == nil {
-			t.Fatal("wrong PSK accepted by client")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("client did not finish")
+	if _, err := InnerClient(a, "client-secret", nil); !errors.Is(err, ErrInnerHandshake) {
+		t.Fatalf("wrong PSK accepted by client: %v", err)
 	}
 	select {
 	case err := <-done:
@@ -157,18 +235,21 @@ func TestInnerRejectsWrongKey(t *testing.T) {
 	}
 }
 
-func TestInnerRejectsTamperedHandshake(t *testing.T) {
+func TestInnerRejectsTamperedClientProof(t *testing.T) {
 	a, b := innerTCPPair(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := InnerServer(b, "psk")
+		_, err := InnerServer(b, "psk", nil)
 		done <- err
 	}()
-	// Correct 17-byte init shape, then a wrong proof.
 	go func() {
 		init := make([]byte, InnerHandshakeSize)
 		init[0] = InnerModeAEAD
 		if _, err := a.Write(init); err != nil {
+			return
+		}
+		reply := make([]byte, InnerHandshakeSize+innerTagSize)
+		if _, err := io.ReadFull(a, reply); err != nil {
 			return
 		}
 		_, _ = a.Write(make([]byte, innerTagSize))
@@ -185,164 +266,182 @@ func TestInnerRejectsTamperedHandshake(t *testing.T) {
 
 func TestInnerRejectsTamperedServerProof(t *testing.T) {
 	a, b := innerTCPPair(t)
-	serverErr := make(chan error, 1)
 	go func() {
-		// A server that answers with a wrong proof must be rejected by the
-		// client rather than yielding a session.
-		peer, err := readInnerInit(b)
-		if err != nil {
-			serverErr <- err
+		first := make([]byte, InnerHandshakeSize)
+		if _, err := io.ReadFull(b, first); err != nil {
 			return
 		}
-		material := make([]byte, innerMaterialSize)
-		if err := writeInnerInit(b, material); err != nil {
-			serverErr <- err
-			return
-		}
-		if err := readInnerProof(b, "psk", material, peer); err != nil {
-			serverErr <- err
-			return
-		}
-		_, _ = b.Write(make([]byte, innerTagSize)) // wrong proof
-		serverErr <- nil
+		reply := make([]byte, InnerHandshakeSize+innerTagSize)
+		reply[0] = InnerModeAEAD
+		_, _ = b.Write(reply) // 证明是全零
 	}()
-	if _, err := InnerClient(a, "psk"); !errors.Is(err, ErrInnerHandshake) {
+	if _, err := InnerClient(a, "psk", nil); !errors.Is(err, ErrInnerHandshake) {
 		t.Fatalf("client accepted a forged server proof: %v", err)
 	}
-	<-serverErr
 }
 
-func TestInnerRejectsWrongModeByte(t *testing.T) {
-	a, b := innerTCPPair(t)
+// 服务端的证明反射回去不能当客户端的证明用：证明里带了角色。
+func TestInnerProofIsNotReflectable(t *testing.T) {
+	c := bytes.Repeat([]byte{1}, innerMaterialSize)
+	s := bytes.Repeat([]byte{2}, innerMaterialSize)
+	if bytes.Equal(innerProof("psk", 's', InnerModeAEAD, c, s), innerProof("psk", 'c', InnerModeAEAD, c, s)) {
+		t.Fatal("client and server proofs coincide")
+	}
+	if bytes.Equal(innerProof("psk", 'c', InnerModeAEAD, c, s), innerProof("psk", 'c', InnerModeAEAD, s, c)) {
+		t.Fatal("proof is symmetric in the materials")
+	}
+	if bytes.Equal(innerProof("psk", 't', InnerModeTLS, c, s), innerProof("psk", 't', InnerModeAEAD, c, s)) {
+		t.Fatal("proof does not cover the mode byte")
+	}
+}
+
+func TestInnerRejectsUnknownAndLegacyModes(t *testing.T) {
+	for _, tc := range []struct {
+		mode byte
+		want error
+	}{{1, ErrInnerHandshake}, {innerModeLegacy, ErrInnerLegacyPeer}, {9, ErrInnerHandshake}} {
+		a, b := innerTCPPair(t)
+		done := make(chan error, 1)
+		go func() {
+			_, err := InnerServer(b, "psk", nil)
+			done <- err
+		}()
+		msg := make([]byte, InnerHandshakeSize)
+		msg[0] = tc.mode
+		go func() { _, _ = a.Write(msg) }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("mode %d: %v, want %v", tc.mode, err, tc.want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("server did not reject mode %d", tc.mode)
+		}
+	}
+}
+
+func TestInnerTLSModeIsPlainAndBound(t *testing.T) {
+	clientTLS, serverTLS, clientBinding, serverBinding := innerTLSPair(t)
+	if !bytes.Equal(clientBinding, serverBinding) {
+		t.Fatal("exporter differs between the two ends")
+	}
+	client, server := innerHandshakePair(t, clientTLS, serverTLS, "psk", clientBinding, serverBinding)
+	if !client.Plain() || !server.Plain() || client.Mode() != InnerModeTLS {
+		t.Fatal("TLS 1.3 binding did not select the plain mode")
+	}
+	innerRoundTrip(t, client, server, bytes.Repeat([]byte("over tls"), 50000))
+	innerRoundTrip(t, server, client, []byte("back"))
+	if client.writeCounter != 0 {
+		t.Fatal("plain mode sealed inner records")
+	}
+}
+
+// 模式 4 的证明绑在 TLS 会话上：拿到别的 TLS 连接上用（重放）不通过。
+func TestInnerTLSProofDoesNotReplayAcrossSessions(t *testing.T) {
+	_, _, firstBinding, _ := innerTLSPair(t)
+	clientTLS, serverTLS, _, serverBinding := innerTLSPair(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := InnerServer(b, "psk")
+		_, err := InnerServer(serverTLS, "psk", serverBinding)
 		done <- err
 	}()
-	msg := make([]byte, InnerHandshakeSize)
-	msg[0] = 1 // the reference's OFB marker; ForwardX implements no such mode
-	go func() { _, _ = a.Write(msg) }()
+	if _, err := InnerClient(clientTLS, "psk", firstBinding); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case err := <-done:
 		if !errors.Is(err, ErrInnerHandshake) {
-			t.Fatalf("unsupported mode accepted: %v", err)
+			t.Fatalf("proof bound to another TLS session accepted: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("server did not reject unsupported mode")
+		t.Fatal("server did not reject")
+	}
+}
+
+// 服务端外层不是 TLS 1.3（没有绑定材料）时不接受模式 4：不会在没有 TLS 保护的连接上直通。
+func TestInnerTLSModeNeedsServerBinding(t *testing.T) {
+	a, b := innerTCPPair(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := InnerServer(b, "psk", nil)
+		done <- err
+	}()
+	if _, err := InnerClient(a, "psk", bytes.Repeat([]byte{3}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrInnerHandshake) {
+			t.Fatalf("plain mode accepted without TLS: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not reject")
 	}
 }
 
 func TestInnerSessionsWithSamePSKDoNotShareKeys(t *testing.T) {
-	// Fresh random material per handshake must give every session its own keys,
-	// so a record sealed in one session is undecryptable in another even though
-	// both use the same tunnel PSK.
 	first, firstPeer := innerPair(t, "psk")
 	second, _ := innerPair(t, "psk")
-
 	if first.writeKeyID == second.writeKeyID {
 		t.Fatal("two sessions derived the same write key")
 	}
 	if first.writeKeyID == first.readKeyID {
 		t.Fatal("write and read keys are not separated")
 	}
-	// The peer's read key must equal our write key, otherwise the two sides
-	// disagree about the direction mapping.
-	if firstPeer.readKeyID != first.writeKeyID {
-		t.Fatal("peer read key does not match local write key")
-	}
-	if firstPeer.writeKeyID != first.readKeyID {
-		t.Fatal("peer write key does not match local read key")
+	if firstPeer.readKeyID != first.writeKeyID || firstPeer.writeKeyID != first.readKeyID {
+		t.Fatal("peer keys do not mirror local keys")
 	}
 }
 
 func TestInnerRejectsTamperedRecord(t *testing.T) {
 	client, server := innerPair(t, "psk")
-	sealed, err := client.sealRecord(nil, []byte("payload"))
+	client.writeMu.Lock()
+	sealed, err := client.appendSealedLocked(nil, [][]byte{[]byte("payload")}, 7)
+	client.writeMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
 	sealed[len(sealed)-1] ^= 0x01
-	// The tampered bytes must be rejected rather than yielding plaintext.
 	go func() { _, _ = client.conn.Write(sealed) }()
 	buf := make([]byte, 32)
-	server.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = server.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if _, err := server.Read(buf); !errors.Is(err, ErrInnerRecord) {
 		t.Fatalf("tampered record accepted: %v", err)
 	}
 }
 
-func TestInnerRejectsOversizedPayload(t *testing.T) {
+func TestInnerRejectsOversizedRecord(t *testing.T) {
 	client, _ := innerPair(t, "psk")
 	if err := client.WriteRecord(make([]byte, InnerPayloadLimit+1)); !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("oversized record accepted: %v", err)
-	}
-	// The cap comes from the reference reader buffer 0x400f minus the 2-byte
-	// length record and the 16-byte tag.
-	if InnerPayloadLimit != 16381 {
-		t.Fatalf("payload limit changed: %d", InnerPayloadLimit)
-	}
-	if innerRecordLimit != 0x400f {
-		t.Fatalf("record limit changed: %#x", innerRecordLimit)
-	}
-}
-
-func TestInnerLargeWriteSplitsIntoRecords(t *testing.T) {
-	client, server := innerPair(t, "psk")
-	payload := bytes.Repeat([]byte("split-me"), 20000)
-	done := make(chan error, 1)
-	go func() {
-		_, err := client.Write(payload)
-		done <- err
-	}()
-	got := make([]byte, len(payload))
-	if _, err := io.ReadFull(server, got); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Fatal("split write corrupted payload")
 	}
 }
 
 func TestInnerConcurrentWritesDoNotInterleave(t *testing.T) {
 	client, server := innerPair(t, "psk")
 	const writers = 8
-	const each = 200
+	const each = 40000
 	var wg sync.WaitGroup
 	for w := 0; w < writers; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			payload := bytes.Repeat([]byte{byte('A' + w)}, each)
-			if _, err := client.Write(payload); err != nil {
+			if _, err := client.Write(bytes.Repeat([]byte{byte('A' + w)}, each)); err != nil {
 				t.Error(err)
 			}
 		}(w)
 	}
-	total := writers * each
-	got := make([]byte, total)
+	got := make([]byte, writers*each)
 	readDone := make(chan error, 1)
-	go func() {
-		_, err := io.ReadFull(server, got)
-		readDone <- err
-	}()
+	go func() { _, err := io.ReadFull(server, got); readDone <- err }()
 	wg.Wait()
 	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}
-	// Each writer's bytes must arrive contiguously and unmixed.
-	for w := 0; w < writers; w++ {
-		marker := byte('A' + w)
-		count := 0
-		for _, b := range got {
-			if b == marker {
-				count++
-			}
-		}
-		if count != each {
-			t.Fatalf("writer %c contributed %d bytes, want %d", marker, count, each)
+	// 每个写者的字节必须连续地到。
+	for i := 0; i < len(got); i += each {
+		if !bytes.Equal(got[i:i+each], bytes.Repeat(got[i:i+1], each)) {
+			t.Fatalf("write at %d interleaved", i)
 		}
 	}
 }
@@ -353,40 +452,25 @@ func TestInnerNonceExhaustionFailsClosed(t *testing.T) {
 	if err := client.WriteRecord([]byte("x")); !errors.Is(err, ErrInnerNonce) {
 		t.Fatalf("nonce exhaustion not enforced: %v", err)
 	}
-}
-
-func TestInnerHandshakeTagIsHMACSHA256(t *testing.T) {
-	local := bytes.Repeat([]byte{7}, innerMaterialSize)
-	peer := bytes.Repeat([]byte{9}, innerMaterialSize)
-	tag := innerTag("psk", local, peer)
-	if len(tag) != innerTagSize {
-		t.Fatalf("tag length %d", len(tag))
-	}
-	key := sha256.Sum256([]byte("forwardx-v3 inner handshake\x00psk"))
-	mac := hmac.New(sha256.New, key[:])
-	mac.Write(local)
-	mac.Write(peer)
-	if !hmac.Equal(tag, mac.Sum(nil)[:innerTagSize]) {
-		t.Fatal("tag construction drifted from HMAC-SHA256")
-	}
-	// The first message is exactly the reference's 17 bytes.
-	if InnerHandshakeSize != 17 {
-		t.Fatalf("handshake size changed: %d", InnerHandshakeSize)
-	}
-	// Swapping the materials must change the tag, so the two directions cannot
-	// accept each other's proof.
-	if hmac.Equal(innerTag("psk", local, peer), innerTag("psk", peer, local)) {
-		t.Fatal("tag is symmetric in the two materials")
+	// 写失败之后连接作废。
+	if _, err := client.Write([]byte("y")); !errors.Is(err, ErrInnerNonce) {
+		t.Fatalf("write after failure: %v", err)
 	}
 }
 
 func TestInnerDeadlinesPropagateToUnderlyingConn(t *testing.T) {
 	client, _ := innerPair(t, "psk")
-	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := client.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	buf := make([]byte, 1)
 	if _, err := client.Read(buf); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("read deadline not honoured: %v", err)
+	}
+}
+
+func TestInnerFirstMessageKeepsReferenceShape(t *testing.T) {
+	if InnerHandshakeSize != 17 {
+		t.Fatalf("handshake size changed: %d", InnerHandshakeSize)
 	}
 }

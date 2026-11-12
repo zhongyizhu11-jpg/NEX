@@ -103,10 +103,8 @@ func HTTPClient(conn net.Conn, host, path, userAgent string, wsStyle bool) (net.
 	if err != nil {
 		return nil, err
 	}
-	if err = writeFull(conn, preface); err != nil {
-		return nil, err
-	}
-	return &httpClientConn{Conn: conn, reader: bufio.NewReader(conn), wsKey: wsKey, wsStyle: wsStyle}, nil
+	// NEX：请求头不单独发，和第一次写（内层握手的第一条消息）拼成一个 TCP 段。
+	return &httpClientConn{Conn: conn, reader: bufio.NewReader(conn), wsKey: wsKey, wsStyle: wsStyle, preface: preface}, nil
 }
 
 type httpClientConn struct {
@@ -116,6 +114,35 @@ type httpClientConn struct {
 	wsStyle bool
 	once    sync.Once
 	err     error
+
+	writeMu sync.Mutex
+	preface []byte
+}
+
+func (c *httpClientConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.preface == nil {
+		return c.Conn.Write(p)
+	}
+	out := append(c.preface, p...)
+	c.preface = nil
+	if err := writeFull(c.Conn, out); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// flushPreface 把还没发出去的请求头发出去（还没写过任何东西就要读的时候）。
+func (c *httpClientConn) flushPreface() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.preface == nil {
+		return nil
+	}
+	preface := c.preface
+	c.preface = nil
+	return writeFull(c.Conn, preface)
 }
 
 func (c *httpClientConn) Read(p []byte) (int, error) {
@@ -123,6 +150,10 @@ func (c *httpClientConn) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	c.once.Do(func() {
+		if err := c.flushPreface(); err != nil {
+			c.err = err
+			return
+		}
 		header, err := readHTTPHeader(c.reader)
 		if err != nil {
 			c.err = err
@@ -225,22 +256,12 @@ type httpServerConn struct {
 	err      error
 }
 
+// Read 不发回应。NEX：回应留到服务端第一次写（内层握手的回复）时和它拼成一段发出。
+// 服务端只有读到客户端的内层第一条消息之后才会写，所以只发了请求头就不说话的探测
+// 照旧收不到任何成功的回应。
 func (c *httpServerConn) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
-	}
-	// Send the handshake response on first read: by then the peer has produced
-	// its inner initialisation, so an idle or unauthenticated probe is never
-	// answered with a success status.
-	c.writeMu.Lock()
-	if c.response != nil && c.err == nil {
-		c.err = writeFull(c.Conn, c.response)
-		c.response = nil
-	}
-	err := c.err
-	c.writeMu.Unlock()
-	if err != nil {
-		return 0, err
 	}
 	return c.reader.Read(p)
 }
@@ -252,11 +273,12 @@ func (c *httpServerConn) Write(p []byte) (int, error) {
 		return 0, c.err
 	}
 	if c.response != nil {
-		c.err = writeFull(c.Conn, c.response)
+		out := append(c.response, p...)
 		c.response = nil
-		if c.err != nil {
+		if c.err = writeFull(c.Conn, out); c.err != nil {
 			return 0, c.err
 		}
+		return len(p), nil
 	}
 	return c.Conn.Write(p)
 }
