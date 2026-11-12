@@ -588,7 +588,20 @@ async function runScenario(hosts: Hosts, lines: Lines) {
     const startedBack = Date.now();
     compose(["start", "relay-a"]);
     // 另两条线路也跟着切过去了，但它们这一小时里已经自动切过几次，切回会被抖动抑制压住，这里只看这一条。
-    report.measurements.failbackMs = await waitActive(lines.failure, 0, "中转 A 回来后切回主线路", 240_000, startedBack);
+    // 线路刚建好时中继还没起全，偶尔会有一次「主线路不健康 → 切走 → 马上切回」的开机抖动。算上它，这条规则一小时里
+    // 的自动切换就到了 3 次，切回会被抖动抑制按规矩压 5 分钟（事件里有 flap_hold，带着压到几点）。这是 Agent 该有的行为，
+    // 不是故障：看到 flap_hold 就等到它写的时间再加一分钟余量，而不是在 240 秒上判失败（2026-11 main 上偶发红过一次）。
+    report.measurements.failbackMs = await waitActive(lines.failure, 0, "中转 A 回来后切回主线路", 240_000, startedBack).catch(async (error) => {
+      const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId: lines.failure, limit: 20 });
+      const holdUntil = events
+        .filter((event) => event.kind === "flap_hold" && event.at >= startedBack - 60_000)
+        .map((event) => Date.parse(/until (\S+)/.exec(event.reason || "")?.[1] || ""))
+        .filter((at) => Number.isFinite(at))
+        .sort((a, b) => b - a)[0];
+      if (!holdUntil) throw error;
+      report.steps.push({ name: "切回被抖动抑制压住，等它到点", ms: 0, ok: true, note: `hold until ${new Date(holdUntil).toISOString()}` });
+      return waitActive(lines.failure, 0, "抖动抑制到点后切回主线路", Math.max(holdUntil - Date.now(), 0) + 90_000, startedBack);
+    });
     const peer = await peerOfNewConnection(LINE_PORTS.failure);
     assert(peer === NET.relayA, `中转 A 回来后新连接应走中转 A，落地看到的是 ${peer}`);
   });
