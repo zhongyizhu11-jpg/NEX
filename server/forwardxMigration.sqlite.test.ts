@@ -54,7 +54,7 @@ test("原版 2.3.299 的 SQLite 库：只读导进全新的 NEX 库，能换算�
     const output = JSON.parse(fs.readFileSync(reportFile, "utf8"));
     assert.equal(output.success, true);
     assert.equal(output.import.mode, "restore");
-    assert.equal(output.import.skippedRows, 0, `导入时不该有被跳过的行：${JSON.stringify(output.import.skipped)}`);
+    assert.equal(output.import.skippedRows, 0, `导入时不该有被跳过的行：${JSON.stringify(output.import.skipped)}\n${result.stderr.split("\n").filter((line) => line.includes("[Migration] skipped")).join("\n")}`);
     assert.equal(sha256(source), before, "原版的库一个字节都不能改");
 
     const tables = new Map(output.report.tables.map((item: any) => [item.table, item]));
@@ -62,10 +62,10 @@ test("原版 2.3.299 的 SQLite 库：只读导进全新的 NEX 库，能换算�
     assert.equal((tables.get("affiliate_referrals") as any)?.target, "users.inviterId");
     assert.equal((tables.get("plugins") as any)?.status, "skipped");
     assert.equal((tables.get("support_ticket_attachments") as any)?.status, "skipped");
-    assert.ok(output.report.droppedColumns.some((item: any) => item.table === "tunnels" && item.column === "v3Transport" && item.rowsWithValue === 1));
+    assert.ok(!output.report.droppedColumns.some((item: any) => item.table === "tunnels" && item.column.startsWith("v3")), "NEX 也有 V3 了，原版的 v3 列照迁");
     assert.ok(output.report.skippedSettings.includes("runtimeCache:exitPort:3"));
     assert.ok(output.report.skippedSettings.includes("panelMigrationPhase"));
-    assert.ok(output.report.warnings.some((warning: string) => /FXP v3/.test(warning)));
+    assert.ok(output.report.warnings.some((warning: string) => /迁成 NEX V3/.test(warning)));
     assert.ok(output.report.warnings.some((warning: string) => /推广账户/.test(warning)));
 
     // 先看文件：WAL 已并回主文件，脚本只用挪一个文件（下面只读打开以后 SQLite 自己会再建 -wal / -shm）
@@ -93,7 +93,9 @@ test("原版 2.3.299 的 SQLite 库：只读导进全新的 NEX 库，能换算�
         [101, 10, 3, alice.id, 0],
       ]);
       const tunnelColumns = (nex.prepare("PRAGMA table_info(tunnels)").all() as any[]).map((column) => column.name);
-      assert.ok(!tunnelColumns.includes("v3Transport"), "NEX 的库里不留原版的列");
+      assert.ok(tunnelColumns.includes("v3Transport"));
+      const [tunnel] = all('SELECT "forwardxVersion", "v3Transport", "v3Path", "v3Multiplex" FROM tunnels');
+      assert.deepEqual([tunnel.forwardxVersion, tunnel.v3Transport, tunnel.v3Path, tunnel.v3Multiplex], ["v3", "ws", "/fxp", 1], "原版的 V3 隧道迁成 NEX V3；多路复用空着按原版的默认（开）");
       assert.equal(all("SELECT COUNT(*) AS n FROM tunnels")[0].n, 1);
 
       const settings = new Map(all("SELECT key, value FROM system_settings").map((row) => [row.key, row.value]));
@@ -181,7 +183,7 @@ test("迁过来的原版 Agent：心跳自动排升级换成 NEX；版本号再�
       const schema = await import(url("server/dbSchema.ts"));
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      const { AGENT_VERSION } = await import(url("shared/versions.ts"));
+      const { AGENT_VERSION, FXP_RUNTIME_VERSION } = await import(url("shared/versions.ts"));
       const query = (sql, params = []) => runtime.queryRaw(sql, params);
       const express = (await import("express")).default;
       const route = await import(url("server/agentHeartbeatRoute.ts"));
@@ -210,18 +212,18 @@ test("迁过来的原版 Agent：心跳自动排升级换成 NEX；版本号再�
       const host = async () => (await query('SELECT "agentDistribution" AS d, "agentUpgradeRequested" AS r, "agentUpgradeTargetVersion" AS v, "agentUpgradeTargetDistribution" AS td FROM hosts WHERE id = 10'))[0];
       try {
         // 原版 Agent，版本号比 NEX 的还高：照样排升级，目标是 NEX 自带的 Agent 版本
-        const first = await heartbeat({ agentVersion: "2.9.999", fxpVersion: "2.2.140" });
+        const first = await heartbeat({ agentVersion: "2.9.999", fxpVersion: FXP_RUNTIME_VERSION });
         assert.equal(first.agentUpgrade?.targetVersion, AGENT_VERSION, JSON.stringify(first.agentUpgrade));
         let row = await host();
         assert.equal(row.d, "forwardx");
         assert.equal(Number(row.r), 1);
         assert.equal(row.td, "nex");
         // 版本号够了也不算完成：还是原版的 Agent
-        const second = await heartbeat({ agentVersion: "2.9.999", fxpVersion: "2.2.140" });
+        const second = await heartbeat({ agentVersion: "2.9.999", fxpVersion: FXP_RUNTIME_VERSION });
         assert.equal(second.agentUpgrade?.targetVersion, AGENT_VERSION);
         assert.equal(Number((await host()).r), 1);
         // 换上了 NEX 的 Agent：报 nex，升级完成
-        await heartbeat({ agentVersion: AGENT_VERSION, agentDistribution: "nex", fxpVersion: "2.2.140", agentCapabilities: [], runtimeVersion: "3.2.6-nex3" });
+        await heartbeat({ agentVersion: AGENT_VERSION, agentDistribution: "nex", fxpVersion: FXP_RUNTIME_VERSION, agentCapabilities: [], runtimeVersion: "3.2.6-nex3" });
         row = await host();
         assert.equal(row.d, "nex");
         assert.equal(Number(row.r), 0);

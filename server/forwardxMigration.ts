@@ -5,7 +5,7 @@
   NEX 是从原版分出来的，两边的表结构各自长了很久（对比的是原版 2.3.299）：
   - 原版有 26 张 NEX 没有的表（工单 support_tickets、推广 affiliate_*、运营统计 operations_* 等），
     NEX 有 60 多张原版没有的表；
-  - 同名表里原版多出来的列（tunnels.v3Transport、users.googleSubject、hosts.ipv4Addresses ……），
+  - 同名表里原版多出来的列（users.googleSubject、hosts.ipv4Addresses ……），
     NEX 写入时不会填，原地升级会留下一堆 NEX 不认识、也不维护的列；有的列名字不一样、意思一样
     （googleSubject ↔ googleSub、host_metrics.load1 ↔ loadAvg1）。
   所以迁移不动原版的库：只读地把数据读出来，按 NEX 的表结构过滤 / 换算成快照，再用面板迁移现成的
@@ -26,6 +26,7 @@ import dotenv from "dotenv";
 import mysql from "mysql2/promise";
 import pg from "pg";
 import { FORWARDX_AGENT_DISTRIBUTION } from "../shared/agentDistribution";
+import { FORWARDX_V3_MIN_AGENT_VERSION, FORWARDX_V3_MIN_FXP_VERSION } from "../shared/forwardXV3";
 import type { MigrationSnapshot } from "./migration";
 
 /** 从原版库里读出来的一行（列名 → 值）。 */
@@ -450,12 +451,6 @@ const RENAMED_COLUMNS: Record<string, Record<string, string>> = {
 
 /** 原版多出来的列里，值得在报告里单独说一句的。 */
 const DROPPED_COLUMN_NOTES: Record<string, string> = {
-  "tunnels.v3Transport": "原版 FXP v3 传输参数，NEX 不支持，这些隧道按 NEX 默认传输重新下发",
-  "tunnels.v3Host": "同上",
-  "tunnels.v3Path": "同上",
-  "tunnels.v3UserAgent": "同上",
-  "tunnels.v3ServerName": "同上",
-  "tunnels.v3Multiplex": "同上",
   "host_probe_services.targetUrl": "HTTP 探测的地址换算到 host_probe_services.targetIp",
   "subscription_plans.trafficMode": "原版套餐的计费方向，NEX 套餐按双向计",
   "hosts.ipv4Addresses": "Agent 重连后 NEX 会重新上报网卡地址",
@@ -563,6 +558,18 @@ function adaptRow(table: string, row: SourceRow, context: { inviterByUser: Map<n
       // 还没收到心跳前先记成原版的 Agent：迁移排队靠它（server/forwardxAgentMigration.ts），第一次心跳会按实际改
       next.agentDistribution = FORWARDX_AGENT_DISTRIBUTION;
       next.agentUpgradeTargetDistribution = null;
+      break;
+    case "tunnels":
+      // NEX 2.3.527 起也有 V3（同名列）。原版用 V3 的隧道迁成 NEX V3：原版 v3Multiplex 空着表示「默认开」，
+      // NEX 这一列不能空、默认关，所以按原版的意思填 true。没用 V3 的隧道，原版残留的 v3 参数清掉，免得以后
+      // 切到 V3 时带上一份没人设过的旧值。
+      if (String(next.forwardxVersion || "").trim().toLowerCase() === "v3") {
+        next.forwardxVersion = "v3";
+        next.v3Multiplex = hasValue(next.v3Multiplex) ? Boolean(Number(next.v3Multiplex) || next.v3Multiplex === true) : true;
+      } else {
+        for (const key of ["v3Transport", "v3Host", "v3Path", "v3UserAgent", "v3ServerName"]) next[key] = null;
+        next.v3Multiplex = false;
+      }
       break;
     case "host_probe_services":
       if (String(next.method || "") === "http" && hasValue(row.targetUrl)) next.targetIp = row.targetUrl;
@@ -699,8 +706,8 @@ export async function buildForwardxMigrationSnapshot(
     tunnels: count("tunnels"),
     forwardGroups: count("forward_groups"),
   };
-  const v3Tunnels = report.droppedColumns.find((column) => column.table === "tunnels" && column.column === "v3Transport")?.rowsWithValue || 0;
-  if (v3Tunnels > 0) report.warnings.push(`${v3Tunnels} 条隧道用了原版的 FXP v3 传输参数，NEX 不支持，迁完按 NEX 默认传输下发，请检查这些隧道`);
+  const v3Tunnels = (await readTable("tunnels")).filter((row) => String(row.forwardxVersion || "").trim().toLowerCase() === "v3").length;
+  if (v3Tunnels > 0) report.warnings.push(`${v3Tunnels} 条隧道用的是原版的 FXP V3，迁成 NEX V3：两端主机要升级到 Agent ${FORWARDX_V3_MIN_AGENT_VERSION}、FXP ${FORWARDX_V3_MIN_FXP_VERSION} 才能跑；NEX V3 和原版 V3 线上不互通，两端都换成 NEX 后再启用`);
   const affiliateBalance = (await readTable("affiliate_accounts")).filter((row) => Number(row.availableCents || 0) > 0).length;
   if (affiliateBalance > 0) report.warnings.push(`${affiliateBalance} 个推广账户还有未提现余额，NEX 不迁这部分，请迁移前结清或手动给用户加余额`);
   const plugins = sourceTables.has("plugins") ? await source.countRows("plugins") : 0;

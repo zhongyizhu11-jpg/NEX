@@ -1776,7 +1776,11 @@ export const tunnelsRouter = router({
           || loadBalanceChanged;
         let keyChanged = ["entryGroupId", "exitGroupId", "entryHostId", "exitHostId", "mode", "relayMode", "forwardxVersion", "certDomain", "certPem", "certKeyPem", "listenPort", "mimicPort", "rateLimitMbps", "isEnabled", "portRangeStart", "portRangeEnd", "networkType", "connectHost", ...tunnelRuntimeKeys].some((key) => (data as any)[key] !== undefined && (data as any)[key] !== (tunnel as any)[key])
           // V3 外层选项：库里的布尔值可能是 0/1，按归一化后的值比，免得没改也算改了。
-          || FORWARDX_V3_OPTION_KEYS.some((key) => (data as any)[key] !== undefined && String((data as any)[key] ?? "") !== String(key === "v3Multiplex" ? dbBool((tunnel as any)[key]) : ((tunnel as any)[key] ?? "")))
+          || FORWARDX_V3_OPTION_KEYS.some((key) => {
+            const next = (data as Record<string, unknown>)[key];
+            const current = (tunnel as Record<string, unknown>)[key];
+            return next !== undefined && String(next ?? "") !== String(key === "v3Multiplex" ? dbBool(current) : (current ?? ""));
+          })
           || hopChanged || loadBalanceChanged;
         const enabledChanged = (data as any).isEnabled !== undefined
           && dbBool((data as any).isEnabled) !== dbBool((tunnel as any).isEnabled);

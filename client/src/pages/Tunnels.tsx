@@ -2765,13 +2765,14 @@ function TunnelsContent() {
       forwardxVersion: normalizeForwardXVersion(tunnel.forwardxVersion),
       ...(() => {
         // 不是 V3 的隧道这几列是空的，展开时按默认值填，用户切到 V3 看到的是推荐设置。
-        const v3 = normalizeForwardXV3Options(tunnel as Record<string, unknown>);
+        const v3Fields = tunnel as Record<string, unknown>;
+        const v3 = normalizeForwardXV3Options(v3Fields);
         return {
           v3Transport: v3.v3Transport,
-          v3Host: String((tunnel as any).v3Host || ""),
-          v3Path: String((tunnel as any).v3Path || ""),
-          v3UserAgent: String((tunnel as any).v3UserAgent || ""),
-          v3ServerName: String((tunnel as any).v3ServerName || ""),
+          v3Host: String(v3Fields.v3Host || ""),
+          v3Path: String(v3Fields.v3Path || ""),
+          v3UserAgent: String(v3Fields.v3UserAgent || ""),
+          v3ServerName: String(v3Fields.v3ServerName || ""),
           v3Multiplex: v3.v3Multiplex,
         };
       })(),

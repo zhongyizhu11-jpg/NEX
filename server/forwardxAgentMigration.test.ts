@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { AGENT_VERSION, FXP_RUNTIME_VERSION } from "../shared/versions";
 import { agentDistributionLabel, classifyHeartbeatAgentDistribution, normalizeAgentDistribution } from "../shared/agentDistribution";
 import { agentUpgradeTargetDistributionFor, isAgentUpgradeCompleted, isHostAgentUpgradeUnnecessary } from "./agentRouteUtils";
 import {
@@ -28,16 +29,16 @@ test("心跳认发行来源：报了就按报的；没报时带运行时能力�
 });
 
 test("迁移升级的完成条件：目标发行来源是 nex 时，版本号够了也要等 Agent 报 nex", () => {
-  const target = "2.2.256";
-  const fxpVersion = "2.2.140";
+  const target = AGENT_VERSION;
+  const fxpVersion = FXP_RUNTIME_VERSION;
   assert.equal(isAgentUpgradeCompleted({ agentVersion: "2.9.0", fxpVersion, agentDistribution: "forwardx", agentUpgradeTargetDistribution: "nex" }, target, target), false);
-  assert.equal(isAgentUpgradeCompleted({ agentVersion: "2.2.256", fxpVersion, agentDistribution: "nex", agentUpgradeTargetDistribution: "nex" }, target, target), true);
+  assert.equal(isAgentUpgradeCompleted({ agentVersion: AGENT_VERSION, fxpVersion, agentDistribution: "nex", agentUpgradeTargetDistribution: "nex" }, target, target), true);
   assert.equal(isAgentUpgradeCompleted({ agentVersion: "2.2.250", fxpVersion, agentDistribution: "nex", agentUpgradeTargetDistribution: "nex" }, target, target), false, "版本不够照样不算");
   // 普通升级（没有目标发行来源）：和以前一样只看版本
-  assert.equal(isAgentUpgradeCompleted({ agentVersion: "2.2.256", fxpVersion, agentDistribution: "forwardx" }, target, target), true);
+  assert.equal(isAgentUpgradeCompleted({ agentVersion: AGENT_VERSION, fxpVersion, agentDistribution: "forwardx" }, target, target), true);
   // 原版 Agent 点「升级」不能被当成「已是最新」挡掉，要顺带换成 NEX
   assert.equal(isHostAgentUpgradeUnnecessary({ agentVersion: "2.9.0", fxpVersion, agentDistribution: "forwardx" }, target, target), false);
-  assert.equal(isHostAgentUpgradeUnnecessary({ agentVersion: "2.2.256", fxpVersion, agentDistribution: "nex" }, target, target), true);
+  assert.equal(isHostAgentUpgradeUnnecessary({ agentVersion: AGENT_VERSION, fxpVersion, agentDistribution: "nex" }, target, target), true);
   assert.equal(agentUpgradeTargetDistributionFor({ agentDistribution: "forwardx" }), "nex");
   assert.equal(agentUpgradeTargetDistributionFor({ agentDistribution: "nex" }), null);
   assert.equal(agentUpgradeTargetDistributionFor({}), null);

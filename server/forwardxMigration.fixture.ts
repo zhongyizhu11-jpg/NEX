@@ -1,7 +1,7 @@
 /*
   测试用：按原版 ForwardX 2.3.299 的表结构（testdata/forwardx-upstream-2.3.299-schema.json，从原版
   server/dbSchema.ts 的源码文本整理出来的 84 张表）建一个库，再塞一套有代表性的数据：
-  两个用户（管理员 + 被推广来的普通用户）、两台主机、一条用了原版 FXP v3 传输参数的隧道、
+  两个用户（管理员 + 被推广来的普通用户）、两台主机、一条原版 FXP V3 隧道（多路复用列空着）、
   端口转发和隧道转发各一条、工单（公开回复 + 内部备注）、推广关系、插件、HTTP 探测、负载指标、
   运行时缓存和面板迁移状态这类不该带走的设置。SQLite 和 PostgreSQL 两种（建表语句照原版的写法）。
 */
@@ -79,7 +79,7 @@ function fixtureStatements(dialect: Dialect) {
   insert("users", { id: 7, username: "alice", password: "salt:hash2", role: "user", googleSubject: "google-sub-alice", createdAt: now, updatedAt: now });
   insert("hosts", { id: 10, name: "入口-香港", ip: "203.0.113.10", ipv4: "203.0.113.10", hostType: "slave", agentToken: "tok-entry", userId: 1, agentVersion: "2.2.211", isOnline: true, lastHeartbeat: now, ipv4Addresses: "[\"203.0.113.10\"]", createdAt: now, updatedAt: now });
   insert("hosts", { id: 11, name: "出口-东京", ip: "198.51.100.20", ipv4: "198.51.100.20", hostType: "slave", agentToken: "tok-exit", userId: 1, agentVersion: "2.2.211", createdAt: now, updatedAt: now });
-  insert("tunnels", { id: 3, name: "港日 FXP", mode: "forwardx", entryHostId: 10, exitHostId: 11, userId: 1, listenPort: 31000, v3Transport: "ws", v3Path: "/fxp", isRunning: true, createdAt: now, updatedAt: now });
+  insert("tunnels", { id: 3, name: "港日 FXP", mode: "forwardx", entryHostId: 10, exitHostId: 11, userId: 1, listenPort: 31000, forwardxVersion: "v3", v3Transport: "ws", v3Path: "/fxp", isRunning: true, createdAt: now, updatedAt: now });
   insert("forward_rules", { id: 100, hostId: 10, name: "直转", forwardType: "realm", protocol: "tcp", sourcePort: 30001, targetIp: "192.0.2.1", targetPort: 443, userId: 7, runtimeDiagnostic: "{\"x\":1}", isEnabled: true, isRunning: true, createdAt: now, updatedAt: now });
   insert("forward_rules", { id: 101, hostId: 10, tunnelId: 3, name: "隧道转发", forwardType: "gost", protocol: "tcp", sourcePort: 30002, targetIp: "192.0.2.2", targetPort: 8443, userId: 7, isEnabled: true, createdAt: now, updatedAt: now });
   insert("system_settings", { key: "panelPublicUrl", value: "https://panel.example.com", updatedAt: now });
