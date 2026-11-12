@@ -5034,15 +5034,30 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }
 
     if (hasReportedRuntimeState) {
-      const recoverableRules = (rules as any[]).filter((rule: any) => (
-        rule
-        && runtimeBool(rule.isEnabled)
-        && !runtimeBool(rule.pendingDelete)
-        && !runtimeBool(rule.isRunning)
-        && !rule.tunnelId
-        && Number(rule.sourcePort || 0) > 0
-        && localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort))
-      ));
+      /*
+        隧道入口规则也按本机监听恢复：主机地址变了、短暂掉线、面板重启都会把这台机器的运行状态清掉
+        （resetAgentRuntimeStateForHost），普通规则下一次心跳就按本机监听恢复了，隧道规则以前被排除在外，
+        只能等 Agent 再报一次 —— 可 Agent 那边配置没变、不会重下发，于是流量照通、面板一直写「没在运行」
+        （动态 IP 的机器隔几分钟就来一次）。现在：本机上这条规则的监听对得上（转发类型按隧道算：FXP 隧道是
+        forwardx，传输版本 V1 / V2 / V3 也要对上），并且它走的隧道已经报了在跑，就一起恢复。
+        守卫、内核直通这类本机形态不一样的对不上，照旧等 Agent 报。
+      */
+      const recoverableRules = (rules as any[]).filter((rule: any) => {
+        if (
+          !rule
+          || !runtimeBool(rule.isEnabled)
+          || runtimeBool(rule.pendingDelete)
+          || runtimeBool(rule.isRunning)
+          || Number(rule.sourcePort || 0) <= 0
+        ) return false;
+        if (!rule.tunnelId) return localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort));
+        const ruleTunnel = tunnelById.get(rule.tunnelId);
+        if (!ruleTunnel || !runtimeBool(ruleTunnel.isEnabled) || !runtimeBool(ruleTunnel.isRunning)) return false;
+        const expectedForwardType = rule.forwardType === "gost"
+          ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
+          : rule.forwardType;
+        return localRuleMatches(rule, String(expectedForwardType || ""), Number(rule.sourcePort));
+      });
       if (recoverableRules.length > 0) {
         await mapWithConcurrency(recoverableRules, 16, async (rule: any) => {
           await setRuntimeRuleRunning(Number(rule.id), true);
