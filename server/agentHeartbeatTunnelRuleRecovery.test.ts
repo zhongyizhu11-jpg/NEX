@@ -46,6 +46,7 @@ function run(): Outcome {
     await tunnel(1, 23001, "v3", true);   // V3，在跑
     await tunnel(2, 23002, "v1", true);   // V1，在跑
     await tunnel(3, 23003, "v1", false);  // V1，隧道自己还没报在跑
+    await tunnel(4, 23004, "v2", true);   // V2，在跑
     const rule = (id, port, tunnelId, forwardType) => exec(
       'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "tunnelId", "tunnelExitPort") VALUES (?, 2, ?, ?, ?, ?, ?, ?, 1, 1, 0, ?, ?)',
       [id, "rule-" + id, forwardType, "tcp", port, "198.51.100.7", 443, tunnelId, tunnelId ? 23000 + tunnelId : null],
@@ -55,6 +56,7 @@ function run(): Outcome {
     await rule(3, 24003, 3, "gost");      // 隧道没在跑 → 不恢复
     await rule(4, 24004, null, "nftables"); // 普通规则 → 照旧恢复
     await rule(5, 24005, 1, "gost");      // 经 V3 隧道，本机报的却是 V1 的进程（旧的） → 不恢复
+    await exec('INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "tunnelId", "tunnelExitPort") VALUES (6, 2, ?, ?, ?, ?, ?, ?, 1, 1, 0, 4, 23004)', ["rule-6", "gost", "udp", 24006, "198.51.100.7", 443]);
 
     const express = (await import("express")).default;
     const heartbeat = await import(url("server/agentHeartbeatRoute.ts"));
@@ -82,6 +84,7 @@ function run(): Outcome {
             local(3, 24003, 3, "forwardx", "v1"),
             local(4, 24004, undefined, "nftables", undefined),
             local(5, 24005, 1, "forwardx", "v1"),
+            { ...local(6, 24006, 4, "forwardx", "v2"), protocol: "udp" },
           ],
           tunnels: [],
           services: [],
@@ -113,6 +116,7 @@ test("运行状态被清掉后：隧道入口规则按本机监听恢复，和�
   assert.equal(outcome["1"], 1, "经 V3 隧道、本机监听对得上");
   assert.equal(outcome["2"], 1, "经 V1 隧道、本机监听对得上");
   assert.equal(outcome["4"], 1, "普通规则照旧恢复");
+  assert.equal(outcome["6"], 1, "经 V2 隧道的 UDP 规则");
 });
 
 test("隧道还没报在跑、或本机进程的传输版本对不上：不恢复，等 Agent 报", () => {
