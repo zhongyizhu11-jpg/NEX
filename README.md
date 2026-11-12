@@ -11,6 +11,7 @@ NEX 通过轻量 Agent 统一管理多台 Linux 服务器上的端口转发、�
 
 - [使用文档](https://zhongyizhu11-jpg.github.io/NEX/)
 - [GitHub Releases](https://github.com/zhongyizhu11-jpg/NEX/releases/latest)
+- [更新日志（CHANGELOG）](CHANGELOG.md)
 - [Android APK](https://github.com/zhongyizhu11-jpg/NEX/releases/latest)
 
 ## 主要功能
@@ -87,6 +88,20 @@ curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/i
 ```
 
 默认安装目录为 `/opt/forwardx-panel`，服务名为 `forwardx-panel.service`，数据位于 `/opt/forwardx-panel/data`。
+
+### 从原版 ForwardX 迁移
+
+在跑着原版 ForwardX（poouo/Forwardx）面板的机器上，把上面命令里的动作换成 `migrate-forwardx`：
+
+```bash
+# Docker 部署
+curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-panel-docker.sh | bash -s -- migrate-forwardx
+
+# 本地 systemd 部署
+curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-panel-local.sh | bash -s -- migrate-forwardx
+```
+
+数据导进全新的 NEX 数据库，原版的程序、配置和数据库整个留作备份，失败自动回退，之后可以用 `rollback-forwardx` 换回原版；已接入的 Agent 会在心跳里自动换成 NEX 的 Agent。哪些数据能迁、哪些不能，见[从原版 ForwardX 迁移](https://zhongyizhu11-jpg.github.io/NEX/guide/migrate-from-forwardx)。
 
 ### 管理员密码恢复
 

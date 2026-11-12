@@ -452,7 +452,7 @@ journalctl -u forwardx-panel -n 100 --no-pager
 
 ## 配置域名和 HTTPS
 
-建议使用 Nginx、Caddy 或宝塔反向代理到面板端口。
+建议使用 Nginx、Caddy 或宝塔反向代理到面板端口。完整的 Nginx / Caddy 配置、真实 IP（`FORWARDX_TRUST_PROXY`）和 Agent 地址怎么填见[反向代理](./reverse-proxy.md)；Docker 部署前面有宿主机上的反代时一定要看。
 
 Nginx 示例：
 
