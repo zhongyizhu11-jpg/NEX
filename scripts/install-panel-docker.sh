@@ -14,6 +14,10 @@ ASSETS_PENDING_EXIT_CODE=12
 PANEL_STEP_TOTAL=4
 SCRIPT_STARTED_AT="$(date +%s)"
 ENABLE_ADMIN_ACCOUNT="false"
+# migrate-forwardx / rollback-forwardx 用：--yes 跳过确认、--target-db-config 导进外部空库、--backup-dir 指定回退用的备份
+ASSUME_YES="false"
+TARGET_DB_CONFIG=""
+ROLLBACK_BACKUP_DIR=""
 EXPLICIT_FORWARDX_IMAGE="${FORWARDX_IMAGE:-}"
 DATA_VOLUME_REUSE_NOTIFIED="false"
 RESOLVED_IMAGE=""
@@ -27,12 +31,19 @@ fi
 
 usage() {
   cat <<EOF
-Usage: $0 install|upgrade|uninstall|reset-admin|reset-password [--github-accelerator URL] [--enable-account]
+Usage: $0 install|upgrade|uninstall|reset-admin|reset-password|migrate-forwardx|rollback-forwardx [options]
 
 Options:
   --github-accelerator URL   Prefix GitHub API/raw/release URLs with this HTTP(S) accelerator.
                              Docker image pulls still use FORWARDX_IMAGE/FORWARDX_IMAGE_REPO.
   --enable-account           With reset-admin, enable the selected administrator account.
+  --yes                      With migrate-forwardx / rollback-forwardx, skip the confirmation prompt.
+  --target-db-config FILE    With migrate-forwardx, import into the empty MySQL/PostgreSQL database
+                             described by FILE (NEX database.json format) instead of a new SQLite file.
+  --backup-dir DIR           With rollback-forwardx, the backup created by migrate-forwardx.
+
+migrate-forwardx moves an original ForwardX (poouo/Forwardx) Docker panel to NEX: the original
+.env, compose file, data volume and image are kept as a backup and restored if anything fails.
 
 Environment:
   FORWARDX_GITHUB_ACCELERATOR_URL   Same as --github-accelerator; an explicit empty value disables it.
@@ -44,7 +55,7 @@ parse_args() {
   local value=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      install|upgrade|update|uninstall|remove|reset-admin|reset-password)
+      install|upgrade|update|uninstall|remove|reset-admin|reset-password|migrate-forwardx|rollback-forwardx)
         if [ "$action_seen" = "true" ]; then
           echo "[ERROR] Multiple actions were provided: $1" >&2
           usage >&2
@@ -78,6 +89,19 @@ parse_args() {
       --enable-account)
         ENABLE_ADMIN_ACCOUNT="true"
         shift
+        ;;
+      --yes|-y)
+        ASSUME_YES="true"
+        shift
+        ;;
+      --target-db-config|--backup-dir)
+        if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
+          echo "[ERROR] $1 requires a path" >&2
+          usage >&2
+          exit 1
+        fi
+        if [ "$1" = "--target-db-config" ]; then TARGET_DB_CONFIG="$2"; else ROLLBACK_BACKUP_DIR="$2"; fi
+        shift 2
         ;;
       -h|--help)
         usage
@@ -1135,11 +1159,270 @@ reset_admin_password() {
   docker exec -it "$CONTAINER_NAME" node dist/reset-admin-password.js "${cli_args[@]}" < /dev/tty
 }
 
+# ── 从原版 ForwardX 迁移（migrate-forwardx / rollback-forwardx） ──
+# 用在跑着原版 ForwardX（poouo/Forwardx）Docker 面板的机器上：
+#   1. 先拉 NEX 镜像，用镜像里的迁移命令只读检查原版的库（原版容器照常跑），列出能迁的数据，等确认；
+#   2. 停原版容器；原版的 .env、docker-compose.yml 和整个数据卷拷到 ${APP_DIR}.forwardx-backup-时间，
+#      原版镜像另打一个 forwardx-migration-backup:时间 的标签（清理旧镜像时不会被删）；
+#   3. 迁移命令从备份里的原版数据库导进全新的 NEX 数据库（数据卷里的 forwardx.db 换成 NEX 的），
+#      换上 NEX 的 compose / .env 起容器、等数据库健康；
+#   4. 第 2 步以后任何一步失败都自动回退：删 NEX 容器、数据卷按备份还原、原版 .env / compose 放回、原版镜像起容器。
+# 迁完以后想退回原版：rollback-forwardx。
+FORWARDX_MIGRATION_MARKER="${FORWARDX_MIGRATION_MARKER:-/etc/nex/forwardx-migration.last}"
+
+forwardx_image_kind() {
+  # 镜像里装的是哪家的面板：输出两行，第一行 forwardx / nex，第二行版本
+  local image="$1" out=""
+  out="$(docker run --rm --entrypoint node "$image" -p "const p = require('/app/package.json'); (/^NEX/.test(p.description || '') ? 'nex' : 'forwardx') + '\n' + p.version" 2>/dev/null || true)"
+  if [ -z "$out" ]; then
+    printf "unknown\n\n"
+  else
+    printf "%s\n" "$out"
+  fi
+}
+
+manifest_value() {
+  # 备份里的 manifest 只按 KEY=VALUE 读，不当脚本执行
+  sed -n "s/^$2=//p" "$1/manifest" 2>/dev/null | head -1
+}
+
+backup_forwardx_fwxm() {
+  # 原版装的 /usr/local/bin/fwxm（forwardx-manage.sh）会从原版仓库重装面板：留一份到备份里再删掉，
+  # NEX 的 fwxm 才装得上（install_panel_manager 不覆盖别人的 fwxm）。回退时放回去。
+  local backup_dir="$1"
+  if [ -f "$PANEL_FWXM_LINK" ] && grep -q "ForwardX Manager" "$PANEL_FWXM_LINK" 2>/dev/null; then
+    mkdir -p "$backup_dir/service"
+    cp -p "$PANEL_FWXM_LINK" "$backup_dir/service/fwxm.forwardx"
+    rm -f "$PANEL_FWXM_LINK"
+  fi
+}
+
+wait_docker_panel_ready() {
+  # 容器在跑还不够：数据库连上并且 healthy 才算起来了（/api/database-health 不查业务、不要登录）
+  local attempt=0 body=""
+  local limit="${FORWARDX_MIGRATE_READY_TIMEOUT:-90}"
+  while [ "$attempt" -lt "$limit" ]; do
+    body="$(docker exec "$CONTAINER_NAME" curl -fsS -m 3 http://127.0.0.1:3000/api/database-health 2>/dev/null || true)"
+    case "$body" in
+      *'"state":"healthy"'*) return 0 ;;
+    esac
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  echo "[ERROR] NEX 容器 ${limit} 秒内没有就绪（/api/database-health：${body:-无响应}），看日志：docker logs --tail 100 ${CONTAINER_NAME}"
+  return 1
+}
+
+forwardx_docker_cli() {
+  # 在 NEX 镜像里跑迁移命令。$1 镜像，$2 数据卷，$3 只读挂成 /source 的目录（可空），$4 挂成 /work 的目录，其余是参数
+  local image="$1" volume="$2" source_dir="$3" work_dir="$4"
+  shift 4
+  local -a mounts=(-v "$volume:/data" -v "$work_dir:/work")
+  if [ -n "$source_dir" ]; then mounts+=(-v "$source_dir:/source:ro"); fi
+  docker run --rm --add-host host.docker.internal:host-gateway "${mounts[@]}" \
+    -e JWT_SECRET="$(get_env_value JWT_SECRET)" \
+    --entrypoint node "$image" dist/migrate-forwardx.js "$@"
+}
+
+rollback_forwardx_docker() {
+  local backup_dir="$1"
+  local old_image volume
+  old_image="$(manifest_value "$backup_dir" OLD_IMAGE_TAG)"
+  volume="$(manifest_value "$backup_dir" VOLUME)"
+  if [ -z "$old_image" ] || [ -z "$volume" ] || [ ! -d "$backup_dir/data" ]; then
+    echo "[ERROR] 备份不完整，没法自动回退：$backup_dir"
+    return 1
+  fi
+  echo "[NEX] 回退到原版 ForwardX：$backup_dir"
+  remove_existing_panel_containers
+  if ! docker run --rm -v "$volume:/data" -v "$backup_dir/data:/backup:ro" --entrypoint sh "$old_image" \
+    -c 'find /data -mindepth 1 -delete && cp -a /backup/. /data/'; then
+    echo "[ERROR] 数据卷 $volume 没能按备份还原，备份还在 $backup_dir/data，请手动处理"
+    return 1
+  fi
+  cp -p "$backup_dir/compose/.env" "$APP_DIR/.env"
+  if [ -f "$backup_dir/compose/docker-compose.yml" ]; then cp -p "$backup_dir/compose/docker-compose.yml" "$APP_DIR/docker-compose.yml"; fi
+  if [ -f "$backup_dir/service/fwxm.forwardx" ]; then
+    mkdir -p "$(dirname "$PANEL_FWXM_LINK")"
+    cp -p "$backup_dir/service/fwxm.forwardx" "$PANEL_FWXM_LINK"
+  fi
+  # 用备份时打的标签起原版镜像（.env 里写的可能是 latest，现在拉到的已经不是当时那一版）
+  if ! (cd "$APP_DIR" && FORWARDX_IMAGE="$old_image" compose_cmd --env-file "$APP_DIR/.env" -p "$PROJECT_NAME" up -d --remove-orphans); then
+    echo "[ERROR] 原版的 .env / compose / 数据卷已经换回，但容器没起来，请手动检查：cd $APP_DIR && docker compose up -d"
+    return 1
+  fi
+  echo "[DONE] 已回到原版 ForwardX（镜像 ${old_image}）"
+}
+
+migrate_forwardx_docker() {
+  local old_image_ref old_image_id old_kind old_version image volume backup_dir stamp target_arg status=0
+  local -a source_args=() target_args=()
+  require_root
+  load_existing_env
+  old_image_ref="$(docker inspect --format '{{.Config.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+  old_image_id="$(docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+  if [ -z "$old_image_id" ]; then
+    echo "[ERROR] 没找到原版面板容器 ${CONTAINER_NAME}（用 FORWARDX_CONTAINER_NAME 指定容器名）"
+    return 1
+  fi
+  { read -r old_kind; read -r old_version; } < <(forwardx_image_kind "$old_image_id")
+  if [ "$old_kind" = nex ]; then
+    echo "[ERROR] 容器 $CONTAINER_NAME 已经是 NEX 面板了，不用迁移；升级请用 upgrade"
+    return 1
+  fi
+  volume="$(panel_data_volume_names | head -1)"
+  volume="${volume:-$(data_volume_name)}"
+  if ! docker volume inspect "$volume" >/dev/null 2>&1; then
+    echo "[ERROR] 没找到原版面板的数据卷 $volume"
+    return 1
+  fi
+  if [ -n "$TARGET_DB_CONFIG" ] && [ ! -f "$TARGET_DB_CONFIG" ]; then
+    echo "[ERROR] 目标数据库配置不存在：$TARGET_DB_CONFIG"
+    return 1
+  fi
+  stamp="$(date +%Y%m%d%H%M%S)"
+  backup_dir="${APP_DIR}.forwardx-backup-${stamp}"
+  echo "[NEX] 检测到原版 ForwardX 面板：容器 ${CONTAINER_NAME}，镜像 ${old_image_ref:-$old_image_id}，版本 ${old_version:-未知}，数据卷 ${volume}，端口 ${PORT}"
+
+  # 1. 拉 NEX 镜像、只读检查原版的库（原版容器照常跑）
+  resolve_github_accelerator
+  install_docker
+  panel_step 1 "检查镜像"
+  resolve_image_selection
+  image="$RESOLVED_IMAGE"
+  echo "[INFO] Pulling image: $image"
+  if ! docker pull "$image"; then
+    echo "[ERROR] 拉不到 NEX 镜像 ${image}，原版面板没有改动"
+    return 1
+  fi
+  if ! docker run --rm --entrypoint sh "$image" -c 'test -f /app/dist/migrate-forwardx.js'; then
+    echo "[ERROR] NEX 镜像 $image 里没有迁移命令 dist/migrate-forwardx.js，原版面板没有改动"
+    return 1
+  fi
+  mkdir -p "$backup_dir/compose"
+  cp -p "$APP_DIR/.env" "$backup_dir/compose/.env"
+  echo "[NEX] 检查原版面板的数据库（只读）"
+  if ! forwardx_docker_cli "$image" "$volume" "" "$backup_dir/compose" inspect \
+    --source-config /data/database.json --source-mysql-config /data/mysql.json \
+    --source-env-file /work/.env --default-sqlite /data/forwardx.db --map-path /data=/data; then
+    rm -rf "$backup_dir"
+    echo "[ERROR] 原版面板的数据库检查没通过，原版面板没有改动"
+    return 1
+  fi
+  echo "[NEX] 接下来：停掉原版容器 → 数据卷和配置备份到 $backup_dir → 换成 NEX 镜像并导入数据"
+  if [ -n "$TARGET_DB_CONFIG" ]; then
+    echo "[NEX] 数据导进 $TARGET_DB_CONFIG 指定的数据库（必须是空库）"
+  else
+    echo "[NEX] 数据导进数据卷里新的 SQLite 数据库（原版的数据库留在备份里）"
+  fi
+  echo "[NEX] 迁移后已接入的原版 Agent 会在下一次心跳时自动换成 NEX 的 Agent"
+  if [ "$ASSUME_YES" != "true" ] && ! confirm_yes "确认从原版 ForwardX 迁移到 NEX？[y/N] "; then
+    rm -rf "$backup_dir"
+    echo "[INFO] 已取消，原版面板没有改动"
+    return 0
+  fi
+
+  # 2. 停原版、备份
+  docker tag "$old_image_id" "forwardx-migration-backup:$stamp"
+  docker stop "$CONTAINER_NAME" >/dev/null
+  if [ -f "$APP_DIR/docker-compose.yml" ]; then cp -p "$APP_DIR/docker-compose.yml" "$backup_dir/compose/docker-compose.yml"; fi
+  if ! docker run --rm -v "$volume:/data:ro" -v "$backup_dir:/backup" --entrypoint sh "$image" \
+    -c 'mkdir -p /backup/data && cp -a /data/. /backup/data/'; then
+    echo "[ERROR] 数据卷备份失败，重新启动原版容器"
+    docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    return 1
+  fi
+  {
+    echo "MODE=docker"
+    echo "APP_DIR=$APP_DIR"
+    echo "CONTAINER_NAME=$CONTAINER_NAME"
+    echo "PROJECT_NAME=$PROJECT_NAME"
+    echo "VOLUME=$volume"
+    echo "OLD_IMAGE_REF=$old_image_ref"
+    echo "OLD_IMAGE_TAG=forwardx-migration-backup:$stamp"
+    echo "SOURCE_VERSION=$old_version"
+    echo "NEX_IMAGE=$image"
+    echo "CREATED_AT=$stamp"
+  } > "$backup_dir/manifest"
+  backup_forwardx_fwxm "$backup_dir"
+  mkdir -p "$(dirname "$FORWARDX_MIGRATION_MARKER")"
+  printf "%s\n" "$backup_dir" > "$FORWARDX_MIGRATION_MARKER"
+  echo "[NEX] 原版已备份到 $backup_dir"
+
+  # 3. 导数据（读备份里的原版数据库）、换 NEX 容器；失败就回退
+  source_args=(--source-config /source/database.json --source-mysql-config /source/mysql.json
+    --source-env-file /work/compose/.env --default-sqlite /source/forwardx.db --map-path /data=/source
+    --jwt-secret-file /data/jwt.secret)
+  if [ -n "$TARGET_DB_CONFIG" ]; then
+    cp "$TARGET_DB_CONFIG" "$backup_dir/target-database.json"
+    chmod 600 "$backup_dir/target-database.json" 2>/dev/null || true
+    target_args=(--target-config /work/target-database.json)
+  else
+    target_args=(--target-sqlite /data/forwardx.db.nex-import)
+  fi
+  docker run --rm -v "$volume:/data" --entrypoint sh "$image" -c 'rm -f /data/forwardx.db.nex-import /data/forwardx.db.nex-import-wal /data/forwardx.db.nex-import-shm' || true
+  echo "[NEX] 导入数据"
+  if ! forwardx_docker_cli "$image" "$volume" "$backup_dir/data" "$backup_dir" import \
+    "${source_args[@]}" "${target_args[@]}" --report /work/migration-report.json; then
+    status=1
+  fi
+  if [ "$status" = 0 ]; then
+    if [ -n "$TARGET_DB_CONFIG" ]; then
+      target_arg='cp /work/target-database.json /data/database.json'
+    else
+      target_arg='rm -f /data/forwardx.db /data/forwardx.db-wal /data/forwardx.db-shm && mv /data/forwardx.db.nex-import /data/forwardx.db && printf "{\n  \"type\": \"sqlite\",\n  \"sqlite\": {\n    \"path\": \"/data/forwardx.db\"\n  }\n}\n" > /data/database.json'
+    fi
+    docker run --rm -v "$volume:/data" -v "$backup_dir:/work:ro" --entrypoint sh "$image" -c "$target_arg && chmod 600 /data/database.json" || status=1
+  fi
+  if [ "$status" = 0 ]; then
+    # 镜像第 1 步已经拉好了。不走 start_panel：它重新拉镜像失败时直接 exit，会跳过下面的回退
+    write_compose_file
+    write_env "$image"
+    remove_existing_panel_containers
+    (cd "$APP_DIR" && compose_cmd --env-file "$APP_DIR/.env" -p "$PROJECT_NAME" up -d --remove-orphans forwardx) || status=1
+  fi
+  if [ "$status" = 0 ]; then
+    wait_docker_panel_ready || status=1
+  fi
+  if [ "$status" != 0 ]; then
+    echo "[ERROR] 迁移没有完成，自动回退到原版 ForwardX"
+    rollback_forwardx_docker "$backup_dir" || true
+    return 1
+  fi
+  install_panel_manager_from_github
+  echo "[DONE] 已从原版 ForwardX ${old_version:-} 迁到 NEX（镜像 ${image}，$(elapsed_seconds)s）"
+  echo "[INFO] 迁移报告：$backup_dir/migration-report.json"
+  echo "[INFO] 原版备份：${backup_dir}（原版镜像标签 forwardx-migration-backup:${stamp}）；确认没问题后可以删掉。要退回原版：bash install-panel-docker.sh rollback-forwardx --backup-dir $backup_dir"
+}
+
+rollback_forwardx_docker_action() {
+  local backup_dir="$ROLLBACK_BACKUP_DIR"
+  require_root
+  load_existing_env
+  if [ -z "$backup_dir" ] && [ -f "$FORWARDX_MIGRATION_MARKER" ]; then
+    backup_dir="$(head -1 "$FORWARDX_MIGRATION_MARKER")"
+  fi
+  if [ -z "$backup_dir" ] || [ ! -f "$backup_dir/manifest" ]; then
+    echo "[ERROR] 找不到原版备份（用 --backup-dir 指定 ${APP_DIR}.forwardx-backup-时间 目录）"
+    return 1
+  fi
+  echo "[WARN] 回退会删掉 NEX 容器，数据卷换回 $backup_dir 里的原版数据；迁移以后在 NEX 里新写的数据不会带回原版。"
+  echo "[WARN] 已经换成 NEX Agent 的主机要在原版面板里重新执行一次安装命令，才会换回原版的 Agent。"
+  if [ "$ASSUME_YES" != "true" ] && ! confirm_yes "确认回退到原版 ForwardX？[y/N] "; then
+    echo "[INFO] 已取消"
+    return 0
+  fi
+  rollback_forwardx_docker "$backup_dir"
+  rm -f "$FORWARDX_MIGRATION_MARKER"
+}
+
 case "$ACTION" in
   install) install_panel ;;
   upgrade|update) upgrade_panel ;;
   uninstall|remove) uninstall_panel ;;
   reset-admin|reset-password) reset_admin_password ;;
+  migrate-forwardx) migrate_forwardx_docker ;;
+  rollback-forwardx) rollback_forwardx_docker_action ;;
   *)
     usage
     exit 1
