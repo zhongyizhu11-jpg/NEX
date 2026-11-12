@@ -44,6 +44,11 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 		actionMessage.set("fxp invalid config role=%s tunnel=%d rule=%d port=%d", spec.Role, spec.TunnelID, spec.RuleID, spec.ListenPort)
 		return false
 	}
+	// 传输版本和 V3 选项不对就不动正在跑的进程（面板保存时已经拦过，这里兜底）。
+	if err := validateFXPTransport(spec); err != nil {
+		actionMessage.set("fxp invalid transport role=%s tunnel=%d rule=%d: %v", spec.Role, spec.TunnelID, spec.RuleID, err)
+		return false
+	}
 	runtimePath, err := resolveFXPRuntimeExecutable()
 	if err != nil || runtimePath == "" {
 		actionMessage.set("fxp runtime missing: install /usr/local/bin/forwardx-fxp to use custom encrypted tunnels")
@@ -51,6 +56,11 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 	}
 	// 旧 FXP 握不上新协议：宁可让动作失败、在面板上写清楚原因，也不要跑一个注定连不通的进程。
 	if err := fxpRuntimeCompatibilityError(); err != nil {
+		actionMessage.set("%v", err)
+		return false
+	}
+	// 老 FXP 不认识 v3，会把 V3 隧道当 V1 跑：同样是注定连不通，直接报出来。
+	if err := fxpV3RuntimeError(spec); err != nil {
 		actionMessage.set("%v", err)
 		return false
 	}
