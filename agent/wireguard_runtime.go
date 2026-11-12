@@ -1798,10 +1798,37 @@ func (runtime *wireGuardRuntime) close() {
 	}
 }
 
+/*
+cloneFXPSpecEndpoints：复制一份入口组成员和出口列表，改它不会改到调用方手里那份。
+
+fxpSpec 按值传，但 Entries / Exits 是切片，复制结构体只复制了切片头，底层数组还是同一块。
+prepareFXPWireGuard 要把出口改写成本机 WireGuard 代理的 127.0.0.1:本地端口；以前直接改在共享的
+数组上，于是调用方的「原始配置」也被改了：Agent 记下的运行中配置、落盘的上次成功快照、同一批里
+别的动作带着的期望入口组，出口全变成了上一轮的本地代理端口。下一轮再准备时把这个本地端口当成
+对端端口，建出指向出口机上不存在端口的代理（日志里 remote=对端:上一轮的本地端口、
+「wireguard tcp proxy dial failed ... connection was refused」）。TCP 有多出口失败切换还能通，
+UDP 选中这一路就整条会话收不到回包；就绪检查拿被改过的配置去对代理，也一直对不上。
+*/
+func cloneFXPSpecEndpoints(spec fxpSpec) fxpSpec {
+	if spec.Exits != nil {
+		spec.Exits = append([]fxpExitEndpoint(nil), spec.Exits...)
+	}
+	if spec.Entries != nil {
+		entries := make([]fxpSpec, len(spec.Entries))
+		for index, entry := range spec.Entries {
+			entries[index] = cloneFXPSpecEndpoints(entry)
+		}
+		spec.Entries = entries
+	}
+	return spec
+}
+
 func prepareFXPWireGuard(spec fxpSpec, refID string) (prepared fxpSpec, err error) {
 	if strings.ToLower(strings.TrimSpace(spec.TransportVersion)) != forwardXWireGuardVersion {
 		return spec, nil
 	}
+	// 下面会就地改写出口地址，先和调用方的切片脱钩（见 cloneFXPSpecEndpoints）。
+	spec = cloneFXPSpecEndpoints(spec)
 	refID = strings.TrimSpace(refID)
 	if refID == "" {
 		return spec, errors.New("wireguard runtime reference is required")
