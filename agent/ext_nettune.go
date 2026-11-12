@@ -56,7 +56,7 @@ var (
 type netTuneRuleKind int
 
 const (
-	// 数值至少要到 want；三元组（tcp_rmem 这类）只看、只动最后一个字段。
+	// 数值至少要到 want；三元组（tcp_wmem 这类）只看、只动最后一个字段。
 	netTuneAtLeast netTuneRuleKind = iota
 	// 数值至多 want。
 	netTuneAtMost
@@ -64,7 +64,18 @@ const (
 	netTuneBitsSet
 	// 必须等于 want。
 	netTuneEquals
+	// TCP 接收缓冲三元组（tcp_rmem：最小 起点 上限）：上限至少 want，起点（中间值）至少
+	// netTuneTCPRmemDefault。只抬不降，抬完保证 最小 ≤ 起点 ≤ 上限。
+	netTuneRmemAtLeast
 )
+
+// netTuneTCPRmemDefault 是 tcp_rmem 中间值（每条 TCP 接收缓冲的起点）至少抬到多少。
+// 内核默认 128 KiB：高延迟 + 丢包的线路上新连接的 BBR 启动阶段会被接收窗口卡住、过早结束，
+// 之后十几秒只有几到几十 Mbit/s。取 1 MiB 不取 4 MiB：4 MiB 起步更快，但 50 ms 丢包线路上
+// 十几条新连接同时下载时最慢的那条反而晚 10–15% 收完，对端读得慢的连接最多攒的数据也是 4 倍。
+// 实测见 forwardx-fxp/internal/v3/BENCHMARKS.md「tcp_rmem 起点」一节。它只是起点：内核按收到的
+// 数据分配，没数据进来的连接不多占；对端一直不读的连接最多攒到这么多（原来是 128 KiB）。
+const netTuneTCPRmemDefault = 1048576
 
 type netTuneRule struct {
 	key  string
@@ -77,7 +88,7 @@ var netTuneRules = []netTuneRule{
 	{"net.ipv4.ip_forward", netTuneEquals, 1},
 	{"net.core.rmem_max", netTuneAtLeast, 67108864},
 	{"net.core.wmem_max", netTuneAtLeast, 67108864},
-	{"net.ipv4.tcp_rmem", netTuneAtLeast, 67108864},
+	{"net.ipv4.tcp_rmem", netTuneRmemAtLeast, 67108864},
 	{"net.ipv4.tcp_wmem", netTuneAtLeast, 67108864},
 	{"net.netfilter.nf_conntrack_max", netTuneAtLeast, 1048576},
 	{"net.netfilter.nf_conntrack_tcp_be_liberal", netTuneAtLeast, 1},
@@ -290,6 +301,26 @@ func netTuneDesired(rule netTuneRule, current string) (string, bool) {
 		}
 		fields[len(fields)-1] = strconv.FormatInt(rule.want, 10)
 		return strings.Join(fields, " "), true
+	case netTuneRmemAtLeast:
+		if len(fields) != 3 {
+			// 认不出三段（不该发生）：退回只看最后一段。
+			return netTuneDesired(netTuneRule{rule.key, netTuneAtLeast, rule.want}, current)
+		}
+		nums := [3]int64{}
+		for i, field := range fields {
+			n, err := strconv.ParseInt(field, 10, 64)
+			if err != nil || n < 0 {
+				return "", false
+			}
+			nums[i] = n
+		}
+		minimum, start, limit := nums[0], nums[1], nums[2]
+		start = max(start, netTuneTCPRmemDefault, minimum)
+		limit = max(limit, rule.want, start)
+		if start == nums[1] && limit == nums[2] {
+			return "", false
+		}
+		return fmt.Sprintf("%d %d %d", minimum, start, limit), true
 	case netTuneAtMost:
 		if len(fields) != 1 {
 			return "", false
@@ -554,6 +585,11 @@ func netTuneEnsureBackup(result *netTuneResult) {
 	}
 }
 
+// netTuneTCPBufferKey：「最小 起点 上限」三段的 TCP 缓冲参数。
+func netTuneTCPBufferKey(key string) bool {
+	return key == "net.ipv4.tcp_rmem" || key == "net.ipv4.tcp_wmem"
+}
+
 var netTuneQdiscChoices = map[string]bool{"fq": true, "fq_codel": true, "cake": true, "pfifo_fast": true, "sfq": true, "codel": true}
 
 // netTuneEditableKey：能逐项设置的键。和 shared/netTune.ts 的 NETTUNE_EDITABLE_KEYS 一致。
@@ -599,10 +635,17 @@ func netTuneValidate(key, value, current string) (string, error) {
 	if want := len(strings.Fields(current)); want > 0 && len(fields) != want {
 		return "", fmt.Errorf("这一项要填 %d 个数", want)
 	}
+	nums := make([]int64, 0, len(fields))
 	for _, field := range fields {
-		if n, err := strconv.ParseInt(field, 10, 64); err != nil || n < 0 {
+		n, err := strconv.ParseInt(field, 10, 64)
+		if err != nil || n < 0 {
 			return "", fmt.Errorf("「%s」不是非负整数", field)
 		}
+		nums = append(nums, n)
+	}
+	// TCP 缓冲三元组：最小 ≤ 起点 ≤ 上限（内核不查，填反了缓冲会长不起来或一开始就超上限）。
+	if netTuneTCPBufferKey(key) && len(nums) == 3 && (nums[0] > nums[1] || nums[1] > nums[2]) {
+		return "", errors.New("三个数要从小到大：最小 ≤ 起点 ≤ 上限")
 	}
 	return strings.Join(fields, " "), nil
 }

@@ -2908,7 +2908,7 @@ async function seedAgentMemoryDemo(hostIds: number[]) {
         "net.ipv4.ip_forward": "1",
         "net.core.rmem_max": "67108864",
         "net.core.wmem_max": "67108864",
-        "net.ipv4.tcp_rmem": "4096 131072 67108864",
+        "net.ipv4.tcp_rmem": "4096 1048576 67108864",
         "net.ipv4.tcp_wmem": "4096 16384 67108864",
         "net.core.rmem_default": "1048576",
         "net.core.wmem_default": "1048576",
@@ -2934,7 +2934,7 @@ async function seedAgentMemoryDemo(hostIds: number[]) {
       },
       changed: [
         { key: "net.core.rmem_max", from: "212992", to: "67108864" },
-        { key: "net.ipv4.tcp_rmem", from: "4096 131072 6291456", to: "4096 131072 67108864" },
+        { key: "net.ipv4.tcp_rmem", from: "4096 131072 6291456", to: "4096 1048576 67108864" },
         { key: "net.ipv4.tcp_congestion_control", from: "cubic", to: "bbr" },
         { key: "net.core.default_qdisc", from: "fq_codel", to: "fq" },
       ],
