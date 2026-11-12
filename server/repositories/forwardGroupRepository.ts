@@ -367,6 +367,30 @@ function canHotUpdateChildRulePolicy(existing: Record<string, unknown>, payload:
   return canPreserveChildRuleRuntime(policyApplied, payload, { preserveRuntime: true });
 }
 
+function looselySameColumn(left: unknown, right: unknown) {
+  const blank = (value: unknown) => value === null || value === undefined || value === "";
+  if (blank(left) || blank(right)) return blank(left) && blank(right);
+  if (left instanceof Date || right instanceof Date) return (toDate(left)?.getTime() ?? null) === (toDate(right)?.getTime() ?? null);
+  if (typeof left === "boolean" || typeof right === "boolean") return dbBool(left) === dbBool(right);
+  if (typeof left === "number" || typeof right === "number") return Number(left) === Number(right);
+  return String(left) === String(right);
+}
+
+/**
+ * 子规则已经和这次要写的一样（在跑、运行时那几列一样、调度设置每一列也一样）：什么都不用写。
+ * 只看在跑的：没在跑的照旧整条写，让它重新下发。比不准（类型对不上）就当不一样，照旧写，不会漏改。
+ */
+function childRuleAlreadyMatches(existing: Record<string, unknown>, payload: Record<string, unknown>) {
+  if (!canPreserveChildRuleRuntime(existing, payload, { preserveRuntime: true })) return false;
+  return CHILD_ROUTE_POLICY_KEYS.every((key) => {
+    if (!(key in payload)) return true;
+    if (key === "routePaths") return nullableString(normalizedRoutePaths(existing?.routePaths)) === nullableString(normalizedRoutePaths(payload.routePaths));
+    if (key === "routeLines") return nullableString(normalizedRouteLines(existing?.routeLines)) === nullableString(normalizedRouteLines(payload.routeLines));
+    if (key === "failoverPinnedIndex") return pinIndexOf(existing?.failoverPinnedIndex) === pinIndexOf(payload.failoverPinnedIndex);
+    return looselySameColumn(existing?.[key], payload[key]);
+  });
+}
+
 function normalizedRoutePaths(raw: unknown): string | null {
   return serializeRoutePaths(parseRoutePaths(raw));
 }
@@ -3521,6 +3545,14 @@ async function ensureMemberRuleForTemplate(
   if (existing) {
     if (canPreserveChildRuleRuntime(existing, payload, options)) {
       await syncPreservedChildRuleMetadata(existing, payload);
+      return Number(existing.id);
+    }
+    if (canHotUpdateChildRulePolicy(existing, payload) && childRuleAlreadyMatches(existing, payload)) {
+      // 升级后的重同步、模板没改的再同步：子规则和要写的一模一样，不重写整条、不催 Agent；
+      // 名字这类元数据照补，中继照对一遍（缺了会补）。
+      outcome.keptRunning = true;
+      await syncPreservedChildRuleMetadata(existing, payload);
+      await syncChildRouteRelays(Number(existing.id), routeColumns, "forward-group-child-policy-unchanged");
       return Number(existing.id);
     }
     if (canHotUpdateChildRulePolicy(existing, payload)) {
