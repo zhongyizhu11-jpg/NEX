@@ -83,4 +83,7 @@ NEX 用于管理多台 Linux 服务器上的转发资源、业务规则、用户
 | [OIDC 登录](./oidc-login.md) | 接入 Pocket ID、Keycloak、Authentik 等自建身份提供方：回调地址、内网 IdP、常见问题 |
 | [Discord 登录和通知](./discord.md) | 用 Discord 账号登录面板，并用机器人把通知私信给绑定的用户 |
 | [升级和备份](./upgrade-backup.md) | 面板升级、数据备份和更新记录 |
+| [数据库](./database.md) | SQLite / MySQL / PostgreSQL 怎么选、怎么配、怎么切换和备份 |
+| [反向代理](./reverse-proxy.md) | Nginx / Caddy 反代面板、真实 IP（`FORWARDX_TRUST_PROXY`）、Agent 地址怎么填 |
+| [从原版 ForwardX 迁移](./migrate-from-forwardx.md) | 一条命令把原版 ForwardX 面板换成 NEX：备份、失败回退、哪些数据能迁、Agent 自动换成 NEX |
 | [插件开发](./plugins.md) | 插件清单、权限、Agent 动作和资源界面 |

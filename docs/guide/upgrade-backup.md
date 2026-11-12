@@ -22,7 +22,9 @@ mysqldump -h 127.0.0.1 -u forwardx -p forwardx > forwardx.sql
 pg_dump -h 127.0.0.1 -U forwardx forwardx > forwardx.sql
 ```
 
-Docker 部署建议备份 Docker 数据卷，或先导出数据库后再升级。
+Docker 部署建议备份 Docker 数据卷，或先导出数据库后再升级。SQLite 开着 WAL，面板运行时只拷 `forwardx.db` 一个文件可能拿不到最近的写入，稳妥的做法和各数据库的切换见[数据库](./database.md)。
+
+从原版 ForwardX 换成 NEX 不走普通升级，用专门的 `migrate-forwardx`，见[从原版 ForwardX 迁移](./migrate-from-forwardx.md)。
 
 ## 面板升级
 
@@ -261,7 +263,7 @@ curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/m
 
 ## 更新日志
 
-升级前建议查看 [GitHub Release](https://github.com/zhongyizhu11-jpg/NEX/releases) 或项目更新日志，确认是否包含面板、Agent 或 Android 客户端更新。
+升级前建议查看 [GitHub Release](https://github.com/zhongyizhu11-jpg/NEX/releases) 或仓库根目录的 [CHANGELOG.md](https://github.com/zhongyizhu11-jpg/NEX/blob/main/CHANGELOG.md)，确认是否包含面板、Agent 或 Android 客户端更新。
 
 ## 卸载
 

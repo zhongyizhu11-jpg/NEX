@@ -138,7 +138,7 @@
     "server/agentHeartbeatProtocolGuard.ts": 9,
     "server/agentHeartbeatRecovery.ts": 2,
     "server/agentHeartbeatReport.ts": 14,
-    "server/agentHeartbeatRoute.ts": 501,
+    "server/agentHeartbeatRoute.ts": 500,
     "server/agentHeartbeatRuleRemoval.ts": 4,
     "server/agentHeartbeatRuntime.ts": 9,
     "server/agentHeartbeatTunnel.ts": 14,

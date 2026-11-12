@@ -67,6 +67,12 @@ Docker 场景下数据库地址可以按下面判断：
 | 数据库在宿主机 | `host.docker.internal` 或宿主机内网 IP |
 | 数据库在另一台服务器 | 面板容器能访问到的内网 IP、公网 IP 或域名 |
 
+## 反向代理
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `FORWARDX_TRUST_PROXY` | `loopback` | 信任哪些反向代理传来的 `X-Forwarded-For` / `X-Forwarded-Proto` 等头：`loopback`（只信本机）、网段或地址（逗号分隔，如 `172.16.0.0/12`）、跳数（数字），或 `false` 一律不信。`true` / `*` 这类「全信」的写法按 `false` 处理。Docker 部署前面有宿主机上的 Nginx / Caddy 时要改，见[反向代理](./reverse-proxy.md)。安装脚本升级时会保留这一项 |
+
 ## 数据库连接池
 
 MySQL 和 PostgreSQL 连接池由面板自动管理，不需要配置连接数。面板会按主机数量在 `16/24/32` 的最大连接档位间自动调整。连接按实际并发按需创建，并保留已经建立的池内连接供下一轮心跳复用，避免并发突发后反复建连产生大量 `TIME-WAIT`；MySQL 使用有限等待队列，PostgreSQL 的连接与排队等待最多为 6 秒。

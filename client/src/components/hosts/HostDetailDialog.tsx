@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 
 import { formatBytes } from "@shared/formatBytes";
+import { FORWARDX_AGENT_DISTRIBUTION, normalizeAgentDistribution } from "@shared/agentDistribution";
 import { HOST_TRAFFIC_MEASURE_MODE_LABELS, normalizeHostTrafficMeasureMode } from "@shared/hostTrafficQuota";
 import { hostPolicyBool, hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
 import { EntityActions } from "@/components/entity/EntityActions";
@@ -163,7 +164,20 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
                 )
               }
             />
-            <Row label="Agent" value={host.agentVersion ? `v${host.agentVersion}` : "—"} />
+            <Row
+              label="Agent"
+              value={
+                host.agentVersion ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <span>{`v${host.agentVersion}`}</span>
+                    {/* 发行来源：原版 ForwardX 的 Agent 单独标出来（shared/agentDistribution.ts），NEX 的不提示 */}
+                    {normalizeAgentDistribution(host.agentDistribution) === FORWARDX_AGENT_DISTRIBUTION ? (
+                      <span className="text-[var(--fx-warn-text)]" title="从原版 ForwardX 迁过来的面板会自动把它换成 NEX 的 Agent">原版 ForwardX</span>
+                    ) : null}
+                  </span>
+                ) : "—"
+              }
+            />
             <Row label="FXP" value={<span title={fxpRuntimeBadgeTitle(host)}>{fxpRuntimeDetailText(host)}</span>} />
             {/* 能升级时说清是哪件事（缺 FXP 运行时 / Agent 有新版本），和列表卡片注脚同一句 */}
             {props.upgradeReason ? (

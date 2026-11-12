@@ -878,7 +878,13 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath, "config file")
 	onceRegister := flag.Bool("register", false, "register and exit")
 	printVersion := flag.Bool("version", false, "print the Agent version and exit")
+	printDistribution := flag.Bool("distribution", false, "print the Agent release distribution (nex) and exit")
 	flag.Parse()
+	if *printDistribution {
+		// 原版 ForwardX 的 Agent 不认这个参数（报错退出），运维和脚本可以据此分辨装的是哪一家的 Agent。
+		fmt.Println(Distribution)
+		return
+	}
 	if *printVersion {
 		// fwxm 和安装脚本靠它判断这个二进制认不认 proxyUrl（老版本不认这个参数，直接报错退出）。
 		fmt.Println(Version)
@@ -1147,6 +1153,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
 	addGostRuntimeReport(payload)
+	addAgentDistributionReport(payload)
 	addHostHealthCounters(payload)
 	// 1 / 5 / 15 分钟负载（2.2.255 起）：不在紧凑数组 m 里，读不到就不带，见 load_average.go
 	addLoadAverageReport(payload)

@@ -19,6 +19,8 @@ import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
 import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, recordTunnelExitPorts, tunnelExitPortFor, type TunnelExitPortEntry } from "./tunnelExitPorts";
 import * as db from "./db";
+import { classifyHeartbeatAgentDistribution, NEX_AGENT_DISTRIBUTION, normalizeAgentDistribution } from "../shared/agentDistribution";
+import { isForwardxAgentMigrationEnabled, markForwardxAgentMigrationQueued, shouldQueueForwardxAgentMigration } from "./forwardxAgentMigration";
 import { getIpChangeProbeTasksForHost, hasPendingIpChangeProbeDelivery } from "./ipChange/runtime";
 import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
@@ -498,6 +500,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 没报（旧 Agent）就保留库里的值；报了就以这次为准。
     const nextFxpVersion = normalizeReportedFxpVersion(req.body?.fxpVersion);
     const fxpVersionChanged = !!nextFxpVersion && nextFxpVersion !== String((host as any).fxpVersion || "");
+    // 发行来源（NEX / 原版 ForwardX，shared/agentDistribution.ts）：这次认不出来（精简心跳）就保留库里的值。
+    const forwardxAgentMigrationEnabled = await isForwardxAgentMigrationEnabled();
+    const reportedAgentDistribution = classifyHeartbeatAgentDistribution(req.body, { unknownAsForwardx: forwardxAgentMigrationEnabled });
+    const agentDistributionChanged = !!reportedAgentDistribution
+      && reportedAgentDistribution !== normalizeAgentDistribution(host.agentDistribution);
     /*
       2.2.227 起 Agent 每次心跳都带上：实测的 gost 运行时版本和能力（ssEgressUdp / ssEgress2022，见
       shared/ssEgress.ts）。报了就以这次为准（运行时回滚后能力会消失）；没报（旧 Agent）保留库里的值，
@@ -633,6 +640,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || addressChanged
       || agentVersionChanged
       || fxpVersionChanged
+      || agentDistributionChanged
       || capabilitiesChanged
       || runtimeVersionChanged
       || ipv6ListenStoredChanged
@@ -658,6 +666,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     } else await db.updateHostHeartbeat(host.id, {
       agentVersion: nextAgentVersion || (host as any).agentVersion || null,
       ...(nextFxpVersion ? { fxpVersion: nextFxpVersion } : {}),
+      ...(agentDistributionChanged ? { agentDistribution: reportedAgentDistribution } : {}),
       ...(reportedCapabilities !== null ? { agentCapabilities: reportedCapabilities } : {}),
       ...(reportedRuntimeVersion !== null ? { runtimeVersion: reportedRuntimeVersion || null } : {}),
       ...(ipv6ListenStoredChanged ? { ipv6ListenAvailable: reportedIpv6Listen } : {}),
@@ -695,6 +704,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (addressApplied) Object.assign(host as any, reportedAddress);
     // Agent 2.2.255+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
     await syncHostDetectedAddressesSafely(host, req.body);
+    if (agentDistributionChanged) {
+      appendPanelLog(
+        "info",
+        `[AgentUpgrade] host=${host.id} distribution=${String(host.agentDistribution || "-")} -> ${reportedAgentDistribution}`,
+      );
+      host.agentDistribution = reportedAgentDistribution;
+    }
     if (fxpVersionChanged) {
       appendPanelLog(
         "info",
@@ -849,9 +865,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const pluginInventorySignature = agentPluginInventorySignature(reportedPluginInventoryForFastPath);
     const mimicEnvironmentSignature = stableStateSignature(mimicEnvironment || null);
     const panelMigrationForFastPath = await getPanelMigrationAgentDirective(Number(host.id));
+    // 从原版 ForwardX 迁过来、还要排「换成 NEX Agent」的主机：走完整心跳（排队在完整心跳里做）
+    const forwardxAgentMigrationDue = shouldQueueForwardxAgentMigration({
+      enabled: forwardxAgentMigrationEnabled,
+      hostId: Number(host.id),
+      agentDistribution: host.agentDistribution,
+      agentUpgradeRequested: host.agentUpgradeRequested,
+    });
     const stablePlan = agentStableHeartbeatPlanCache.match(host.id, {
       forceReconcile,
       hasBlockingWork: !!(host as any).agentUpgradeRequested
+        || forwardxAgentMigrationDue
         || !!panelMigrationForFastPath
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
@@ -4550,11 +4574,40 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     }
 
+    /*
+      从原版 ForwardX 迁过来的面板（server/forwardxAgentMigration.ts）：原版 Agent 自动排一次升级，
+      换成 NEX 发的 Agent。不看版本号 —— 原版的版本号可能比 NEX 的还高。
+    */
+    if (shouldQueueForwardxAgentMigration({
+      enabled: forwardxAgentMigrationEnabled,
+      hostId: Number(host.id),
+      agentDistribution: host.agentDistribution,
+      agentUpgradeRequested: host.agentUpgradeRequested,
+    })) {
+      await db.requestHostAgentUpgrade(host.id, AGENT_VERSION, null, new Date(responseIssuedAt), NEX_AGENT_DISTRIBUTION);
+      markForwardxAgentMigrationQueued(Number(host.id));
+      Object.assign(host, {
+        agentUpgradeRequested: true,
+        agentUpgradeTargetVersion: AGENT_VERSION,
+        agentUpgradeReleaseVersion: null,
+        agentUpgradeTargetDistribution: NEX_AGENT_DISTRIBUTION,
+        agentUpgradeRequestedAt: new Date(responseIssuedAt),
+      });
+      appendPanelLog(
+        "info",
+        `[AgentMigration] queued host=${host.id} name=${String(host.name || "-")} version=${effectiveAgentVersion || "-"} distribution=forwardx target=${AGENT_VERSION}/nex`,
+      );
+    }
     const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
     const agentUpgradeCompleted = (host as any).agentUpgradeRequested
       && agentVersion
       && isAgentUpgradeCompleted(
-        { agentVersion, fxpVersion: nextFxpVersion || (host as any).fxpVersion },
+        {
+          agentVersion,
+          fxpVersion: nextFxpVersion || host.fxpVersion,
+          agentDistribution: host.agentDistribution,
+          agentUpgradeTargetDistribution: host.agentUpgradeTargetDistribution,
+        },
         requestedTargetVersion,
         AGENT_VERSION,
       );

@@ -165,6 +165,7 @@ func runAgentEventStream(cfg Config) error {
 		return errAgentSuperseded
 	}
 	streamPayload := map[string]any{"agentVersion": Version, "fxpVersion": reportedFXPVersion()}
+	addAgentDistributionReport(streamPayload)
 	if installationID != "" {
 		streamPayload["installationId"] = installationID
 	}
