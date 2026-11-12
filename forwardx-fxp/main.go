@@ -235,7 +235,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.140"
+	fxpRuntimeVersion             = "2.2.141"
 	fxpFallbackRetry              = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.

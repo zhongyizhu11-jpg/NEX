@@ -4,9 +4,20 @@ NEX 面板每个版本的主要变化，新的在上面。括号里是同一版�
 
 完整的发布文件见 [GitHub Releases](https://github.com/zhongyizhu11-jpg/NEX/releases)，升级方法见[升级和备份](https://zhongyizhu11-jpg.github.io/NEX/guide/upgrade-backup)。
 
-## 2.3.527（未发布）
+## 2.3.527（Agent 2.2.257、FXP 2.2.141）
 
-<!-- 待补充 -->
+### 新增
+
+- **NEX V3 隧道**：隧道版本新增 V3，外层可选 TLS（默认）、WebSocket 或 HTTP，可开多路复用。入口、中转、出口都要升级到 Agent 2.2.257、FXP 2.2.141；不能和抗丢包传输、中转叠加 / 热备、单连接多路并发、内核直通一起用，保存时会说明原因。
+- **网络测试**：Ping 结果给出丢包、延迟和抖动摘要；Traceroute / MTR 按逐跳表格展示并给出结论；新增主机 / 规则「配置体检」（只读）。
+- **从原版 ForwardX 迁移**：面板安装脚本新增 `migrate-forwardx` / `rollback-forwardx`，先备份、再导入，失败自动回退；迁移后原版 Agent 会自动换成 NEX 的 Agent。
+- 新增文档：反向代理、数据库、从原版 ForwardX 迁移；新增本更新日志。
+
+### 修复
+
+- 升级面板时保留 `FORWARDX_TRUST_PROXY`，Docker 部署会把它传进容器（之前升级一次就丢，反代后访客 IP 都记成网关）。
+- 转发组升级后重新同步时，设置没变的子规则不再整条重写。
+- 面板管理脚本 `fwxm` 和面板安装脚本在 macOS 自带的 bash 3.2 下不再报 unbound variable。
 
 ## 2.3.526（Agent 2.2.256、FXP 2.2.140）
 
