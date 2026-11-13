@@ -166,6 +166,19 @@ test("主题包在 SQLite 上跑通：安装 / 替换 / 卸载 / 导出 / 开机
       await settings.setSetting("personalizationUiTheme", "someone-elses-theme");
       assert.equal(await themes.ensureSiteUiThemeInstalled(), null, "不是官方主题库里的补不了，页面按经典画");
 
+      // 撤掉的官方主题（控制台 / 精修 / 深色运维）：从主题库装上的删掉、站点默认回经典；自己上传的同名包不动
+      await themes.installUiThemeFromArchive(archive("console"));
+      await runtime.executeRaw('UPDATE "ui_theme_packages" SET "source" = ? WHERE "themeId" = ?', ["official", "console"]);
+      await themes.installUiThemeFromArchive(archive("refined"));
+      themes.invalidateUiThemeCache();
+      await settings.setSetting("personalizationUiTheme", "console");
+      assert.equal(await themes.ensureSiteUiThemeInstalled(), null);
+      assert.equal(await settings.getSetting("personalizationUiTheme"), "classic", "站点默认是撤掉的那套：回到经典");
+      const afterRetire = await themes.installedUiThemeIds();
+      assert.equal(afterRetire.includes("console"), false, "从主题库装上的撤掉的主题被删掉");
+      assert.equal(afterRetire.includes("refined"), true, "自己上传的同名主题包不动");
+      await themes.uninstallUiTheme("refined");
+
       // 数量上限
       for (let index = (await themes.installedUiThemeIds()).length; index < shared.UI_THEME_LIMITS.installed; index += 1) {
         await themes.installUiThemeFromArchive(archive("bulk-" + String(index).padStart(2, "0")));

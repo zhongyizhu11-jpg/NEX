@@ -5,6 +5,7 @@ import {
   OFFICIAL_UI_THEME_IDS,
   UI_THEME_LIMITS,
   BUILTIN_UI_THEME_IDS,
+  RETIRED_OFFICIAL_UI_THEME_IDS,
   isOfficialUiThemeId,
   isValidUiThemePackageId,
   normalizeUiThemePreview,
@@ -388,7 +389,21 @@ export async function ensureSiteUiThemeInstalled(): Promise<string | null> {
   const builtinPlaceholders = BUILTIN_UI_THEME_IDS.map(() => "?").join(", ");
   const removed = await executeRaw(`DELETE FROM ${q(TABLE)} WHERE ${q("themeId")} IN (${builtinPlaceholders})`, [...BUILTIN_UI_THEME_IDS]).catch(() => null);
   if (removed) invalidateInstalledCache();
-  const siteTheme = String((await getSetting(SITE_THEME_SETTING)) || "").trim();
+  // 撤掉的官方主题（控制台 / 精修 / 深色运维，2.3.528）：从主题库装上的删掉，站点默认是它们的回到经典。
+  // 只删 source = official 的：有人自己上传了同名的主题包，那是他的，不动。
+  const retiredPlaceholders = RETIRED_OFFICIAL_UI_THEME_IDS.map(() => "?").join(", ");
+  const retired = await executeRaw(
+    `DELETE FROM ${q(TABLE)} WHERE ${q("themeId")} IN (${retiredPlaceholders}) AND ${q("source")} = ?`,
+    [...RETIRED_OFFICIAL_UI_THEME_IDS, "official"],
+  ).catch(() => null);
+  if (retired) invalidateInstalledCache();
+  const currentSiteTheme = String((await getSetting(SITE_THEME_SETTING)) || "").trim();
+  if ((RETIRED_OFFICIAL_UI_THEME_IDS as readonly string[]).includes(currentSiteTheme) && !(await installedUiThemeIds()).includes(currentSiteTheme)) {
+    await setSetting(SITE_THEME_SETTING, "classic");
+    console.info(`[UiTheme] site theme ${currentSiteTheme} was retired from the bundled library; switched to classic`);
+    return null;
+  }
+  const siteTheme = currentSiteTheme;
   if (!isOfficialUiThemeId(siteTheme)) return null;
   if ((await installedUiThemeIds()).includes(siteTheme)) return null;
   if (!officialPackage(siteTheme)) {
