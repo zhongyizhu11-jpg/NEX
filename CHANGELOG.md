@@ -4,6 +4,12 @@ NEX 面板每个版本的主要变化，新的在上面。括号里是同一版�
 
 完整的发布文件见 [GitHub Releases](https://github.com/zhongyizhu11-jpg/NEX/releases)，升级方法见[升级和备份](https://zhongyizhu11-jpg.github.io/NEX/guide/upgrade-backup)。
 
+## 2.3.529（Agent 2.2.257、FXP 2.2.141，不变）
+
+### 新增
+
+- **分线路解析支持阿里云 DNS 和华为云 DNS**：入口组 / 转发组的成员按运营商线路解析（电信 → 一台、联通 → 另一台）不再只限腾讯云 DNSPod。阿里云的线路列表按主域名实时读取，每个地址一条记录；华为云用官方的运营商线路（`Dianxin`、`Liantong`、`Yidong` 等），一条线路一个记录集。健康切换、回落到默认线路、删除模式、只按面板记下的记录 ID 删除都和 DNSPod 一样。线路记录 ID 带上了服务商：换 DDNS 服务商时旧服务商的记录 ID 不会拿到新服务商那边删，组事件里会提示到旧服务商手动清理；成员上旧服务商的线路标成「已不可用」。老的 DNSPod 分线路配置和状态不用改。
+
 ## 2.3.528（Agent 2.2.257、FXP 2.2.141，不变）
 
 ### 调整

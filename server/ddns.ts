@@ -484,7 +484,14 @@ async function huaweicloudRequest(settings: DdnsSettings, method: string, path: 
     },
     body: method.toUpperCase() === "GET" ? undefined : body,
   });
-  return readJson(resp, "华为云 DNS 请求失败");
+  const result = await readJsonBody(resp);
+  if (!resp.ok) {
+    const message = extractJsonError(result, `华为云 DNS 请求失败 ${resp.status}`);
+    // 华为云出错时回 {code, message}（网关层是 {error_code, error_msg}）：带上错误码，分线路解析据此给出配额、线路不支持等提示。
+    const code = String(result?.code || result?.error_code || "").trim();
+    throw code ? new DdnsProviderError(message, code) : new Error(message);
+  }
+  return result;
 }
 
 function ensureHuaweiCloudCredentials(settings: DdnsSettings) {
@@ -1189,9 +1196,12 @@ export async function ddnsRootDomain(): Promise<{ root: string | null; reason: s
 }
 
 // 分线路解析（server/ddnsLineRecords.ts）按线路写记录时复用的几样，和默认线路同一套规则：
-// TTL 规整、主域名拆分、按值对账、免费套餐 TTL 下限重试、同名同类型记录的锁。
+// 各家的签名请求、TTL 规整、主域名拆分、按值对账、免费套餐 TTL 下限重试、同名同类型记录的锁。
 export {
+  aliyunRequest,
   ddnsRecordLockKey,
+  fqdn as ddnsFqdn,
+  huaweicloudRequest,
   normalizeDnsName as normalizeDdnsName,
   parseTtl as parseDdnsTtl,
   planDdnsValueChanges,

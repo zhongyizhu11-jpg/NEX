@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
 import { forwardGroups } from "../drizzle/schema";
 import {
+  ddnsLinesForProvider,
   normalizeDdnsLineFallback,
-  parseDdnsLines,
   parseDdnsLineState,
   type DdnsLineFallbackMode,
+  type DdnsLineProvider,
   type DdnsLineRef,
   type DdnsLineState,
   type DdnsLineStateEntry,
@@ -18,7 +19,7 @@ import {
   type LinePlannerMember,
   type LinePlanInput,
 } from "./ddnsLinePlanner";
-import { ddnsDefaultLine, ddnsLineSupport, deleteDdnsLineRecords, publishDdnsLineRecords } from "./ddnsLineRecords";
+import { ddnsDefaultLine, ddnsLineProviderLabel, ddnsLineSupport, deleteDdnsLineRecords, publishDdnsLineRecords } from "./ddnsLineRecords";
 import { getDb, nowDate } from "./dbRuntime";
 
 /*
@@ -30,6 +31,11 @@ import { getDb, nowDate } from "./dbRuntime";
 
   失败的处理：一条线路写失败不影响别的线路，也不回滚默认线路；失败的那条保持上一次的状态（下一轮
   照旧会重试），全部处理完后抛错，让组的评估队列按退避重试。
+
+  换了 DDNS 服务商（例如 DNSPod → 阿里云）：ddnsLineState 记着记录 ID 是哪家的（老数据没写 = DNSPod）。
+  和现在的服务商对不上时，旧 ID 一个都不拿去新服务商那边删（ID 在两家之间毫无关系，碰巧撞上就是误删），
+  只记一条事件提醒到旧服务商手动清理，然后按新服务商从头发布。成员上别家的线路配置也不算数
+  （ddnsLinesForProvider），这些成员等于只在默认线路，界面上把那几条线路标成「已不可用」。
 */
 
 function truthy(value: unknown, fallback = false) {
@@ -51,10 +57,12 @@ export type ForwardGroupLineGroup = {
 };
 
 export type ForwardGroupLineContext = {
+  /** 现在的服务商：只看这家的线路配置，状态里的记录 ID 也只认这家的。 */
+  provider: DdnsLineProvider;
   defaultLine: DdnsLineRef;
   fallback: DdnsLineFallbackMode;
   state: DdnsLineState | null;
-  /** 成员分到的线路（规整过的）。 */
+  /** 成员分到的、属于现在这家服务商的线路（规整过的）。 */
   linesOf(member: { ddnsLines?: unknown }): DdnsLineRef[];
   /**
    * 只留默认线路上的成员（没分线路的、勾了默认线路的；一个都没有时是全部）。
@@ -71,14 +79,16 @@ export function prepareForwardGroupDdnsLines(group: ForwardGroupLineGroup | null
   if (!group || !truthy(group.ddnsAutoResolveEnabled, true)) return null;
   if (!String(group.domain || "").trim()) return null;
   const members = group.members || [];
-  const hasAssignments = members.some((member) => truthy(member?.isEnabled, true) && parseDdnsLines(member?.ddnsLines).length > 0);
+  const linesOf = (member: { ddnsLines?: unknown }) => ddnsLinesForProvider(member?.ddnsLines, settings.provider);
+  const hasAssignments = members.some((member) => truthy(member?.isEnabled, true) && linesOf(member).length > 0);
   const state = parseDdnsLineState(group.ddnsLineState);
   const hasState = !!state && Object.keys(state.lines).length > 0;
   if (!hasAssignments && !hasState) return null;
-  if (!ddnsLineSupport(settings).supported) return null;
+  const support = ddnsLineSupport(settings);
+  if (!support.supported || !support.provider) return null;
   const defaultLine = ddnsDefaultLine(settings);
-  const linesOf = (member: { ddnsLines?: unknown }) => parseDdnsLines(member?.ddnsLines);
   return {
+    provider: support.provider,
     defaultLine,
     fallback: normalizeDdnsLineFallback(group.ddnsLineFallback),
     state,
@@ -135,9 +145,20 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
   const failures: string[] = [];
   const nextLines: Record<string, DdnsLineStateEntry> = {};
   let previousLines: Record<string, DdnsLineStateEntry> = previousState?.lines || {};
+  const providerLabel = ddnsLineProviderLabel(ctx.provider);
 
-  // 组改了域名或记录类型：旧名字 / 旧类型上的线路记录按记下的 ID 先清掉，再按新的发布。
-  if (previousState && (previousState.domain !== domain || previousState.recordType !== recordType)) {
+  // 换了服务商：旧状态里的记录 ID 是旧服务商的，绝不拿去新服务商那边删；提醒手动清理后从头发布。
+  if (previousState && previousState.provider !== ctx.provider) {
+    const oldLabel = ddnsLineProviderLabel(previousState.provider === "unknown" ? "未知服务商" : previousState.provider);
+    for (const entry of Object.values(previousLines)) {
+      await input.recordEvent(
+        "ddns-line-provider-change",
+        `DDNS 服务商从 ${oldLabel} 换成了 ${providerLabel}：之前写在 ${oldLabel} 线路 ${entry.name} 上的 ${entry.recordIds.length} 条记录面板不再管理，也不会去删，请到 ${oldLabel} 控制台手动清理；domain=${previousState.domain} type=${previousState.recordType}`,
+      );
+    }
+    previousLines = {};
+  } else if (previousState && (previousState.domain !== domain || previousState.recordType !== recordType)) {
+    // 组改了域名或记录类型：旧名字 / 旧类型上的线路记录按记下的 ID 先清掉，再按新的发布。
     for (const entry of Object.values(previousLines)) {
       try {
         const result = await deleteDdnsLineRecords(settings, {
@@ -150,8 +171,8 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
       } catch (error) {
         const message = errorText(error);
         if (/不在主域名/.test(message)) {
-          // 旧名字已经不在 DNSPod 主域名下（DDNS 设置换了域名），面板删不了，只能提示人去手动清。
-          await input.recordEvent("ddns-line-error", `旧线路记录不在当前 DNSPod 主域名下，面板没法清理，请到 DNSPod 手动删除；线路=${entry.name} domain=${previousState.domain} type=${previousState.recordType}`);
+          // 旧名字已经不在主域名下（DDNS 设置换了域名），面板删不了，只能提示人去手动清。
+          await input.recordEvent("ddns-line-error", `旧线路记录不在当前 ${providerLabel} 主域名下，面板没法清理，请到 ${providerLabel} 手动删除；线路=${entry.name} domain=${previousState.domain} type=${previousState.recordType}`);
           continue;
         }
         await input.recordEvent("ddns-line-error", `清理旧线路记录失败：${message}；线路=${entry.name} domain=${previousState.domain} type=${previousState.recordType}`);
@@ -178,7 +199,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
   for (const entry of plan.lines) {
     const key = entry.line.id;
     const previous = previousLines[key];
-    const reconcileKey = `${groupId}:${key}`;
+    const reconcileKey = `${groupId}:${ctx.provider}:${key}`;
     if (entry.action === "delete") {
       if (!previous) continue;
       try {
@@ -228,7 +249,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
     }
   }
 
-  const nextState: DdnsLineState = { v: 1, domain, recordType, lines: nextLines };
+  const nextState: DdnsLineState = { v: 1, provider: ctx.provider, domain, recordType, lines: nextLines };
   const nextJson = stateJson(nextState);
   const currentJson = stateJson(previousState);
   if (nextJson !== currentJson || String(group.ddnsLineState ?? "") !== String(nextJson ?? "")) {

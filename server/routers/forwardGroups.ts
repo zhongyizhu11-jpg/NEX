@@ -20,9 +20,10 @@ import {
   MAX_MEMBER_WEIGHT,
 } from "../../shared/bandwidthAggregation";
 import { getLinkAccessScope, visibleForwardGroupMemberIds, type LinkAccessScope } from "../linkAccessView";
-import { DDNS_LINE_FALLBACK_MODES, MAX_MEMBER_DDNS_LINES } from "../../shared/ddnsLines";
+import { DDNS_LINE_FALLBACK_MODES, DDNS_LINE_PROVIDERS, MAX_MEMBER_DDNS_LINES } from "../../shared/ddnsLines";
 import { listDdnsLinesForGroups } from "../ddnsLineRecords";
 import { DnspodRecordsError } from "../dnspodRecords";
+import { DdnsProviderError } from "../ddns";
 import {
   anyForwardGroupHasTunnelMember,
   buildForwardGroupAvailabilitySummaryIndex,
@@ -59,6 +60,8 @@ const memberSchema = z.object({
   ddnsLines: z.array(z.object({
     id: z.string().trim().min(1).max(64).regex(/^[0-9A-Za-z=_.:-]+$/),
     name: z.string().trim().max(64),
+    /** 线路属于哪个服务商；不传 = 腾讯云 DNSPod（老数据）。 */
+    provider: z.enum(DDNS_LINE_PROVIDERS).optional(),
   })).max(MAX_MEMBER_DDNS_LINES).nullable().optional(),
 });
 
@@ -359,7 +362,7 @@ export const forwardGroupsRouter = router({
 
   /**
    * 组编辑框里「运营商线路」能选什么：服务商支不支持（不支持时给原因，界面据此置灰）、
-   * DNSPod 这个主域名的套餐有哪些线路、哪条是组原来那条记录所在的默认线路。
+   * 服务商（DNSPod / 阿里云 / 华为云）有哪些线路、哪条是组原来那条记录所在的默认线路。
    */
   ddnsLines: adminProcedure
     .input(z.object({ domain: z.string().trim().max(253).nullable().optional() }))
@@ -368,6 +371,7 @@ export const forwardGroupsRouter = router({
         return await listDdnsLinesForGroups(input.domain);
       } catch (error) {
         if (error instanceof DnspodRecordsError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+        if (error instanceof DdnsProviderError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
         throw error;
       }
     }),
