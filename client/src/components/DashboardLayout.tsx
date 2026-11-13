@@ -1333,10 +1333,10 @@ function DashboardLayoutContent({
     ? [...visibleProfileMenuItems, ...visibleAdminMenuItems]
     : [...(canShowNetworkTest ? [lookingGlassMenuItem] : []), ...visibleProfileMenuItems];
   /*
-    个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
-    管理与账户那一组少两行，普通用户的「工具与账户」常常就只剩网络测试 / 邀请返利。
+    个人资料在右上角账户菜单里已经有一项，侧栏不再重复放（命令面板里照旧能搜到）。
+    系统设置 2.3.528 放回侧栏（管理与账户一组的最后一行）：iPad / 桌面上去设置不用先点头像。
   */
-  const SIDEBAR_DEDUPED_PATHS = ["/profile", "/settings"];
+  const SIDEBAR_DEDUPED_PATHS = ["/profile"];
   const sidebarManagementItems = managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path));
   const commandItems: WorkspaceDestination[] = [
     ...primaryMenuItems.map(item => ({ ...item, group: "工作空间" })),
