@@ -112,7 +112,7 @@ html.dark .fx-save-dock { border-color: rgb(255 180 200 / 12%); box-shadow: inse
   .fx-save-dock { background: var(--fx-l1-surface); }
 }
 
-/* 个性化顶上的预览卡：一片白瓣，Logo、站点名（斜体衬线）、现在的界面主题 */
+/* 个性化顶上的预览卡：一片白瓣，Logo、站点名（衬线）、现在的界面主题 */
 .fx-brand-preview {
   display: flex;
   flex-direction: column;
@@ -126,7 +126,8 @@ html.dark .fx-save-dock { border-color: rgb(255 180 200 / 12%); box-shadow: inse
 }
 .fx-brand-preview-logo { display: inline-flex; width: 56px; height: 56px; align-items: center; justify-content: center; }
 .fx-brand-preview-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.fx-brand-preview-name { font: italic 400 22px/1.25 var(--fx-font-display, serif); color: var(--fx-text); overflow-wrap: anywhere; }
+/* 站点名多半是中文：不用斜体（中文没有斜体，硬斜像乱码） */
+.fx-brand-preview-name { font: 400 22px/1.25 var(--fx-font-display, serif); color: var(--fx-text); overflow-wrap: anywhere; }
 .fx-brand-preview-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fx-text-muted); }
 .fx-brand-preview-meta .fx-theme-dot { width: 14px; height: 14px; }
 .fx-brand-preview-meta em { font-style: normal; color: var(--fx-rose, var(--fx-accent)); }

@@ -597,6 +597,9 @@ html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :
 }
 html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :is(.fx-rule-addr-group, .fx-rule-addr-list)::before { content: "入口"; }
 html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-path-to::before { content: "出口"; }
+/* 这三枚小标签是伪元素写死的中文，界面翻译（DOM 翻译）够不着：英文界面下换成英文，不然一张卡上中英混排 */
+html[data-ui-theme="pearl"][lang="en"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :is(.fx-rule-addr-group, .fx-rule-addr-list)::before { content: "Entry"; }
+html[data-ui-theme="pearl"][lang="en"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-path-to::before { content: "Exit"; }
 html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path .fx-rule-addr { flex: 1 1 auto; justify-content: space-between; }
 /* 入口和出口之间那枚小圆圈里的向下箭头（就是 NEX 原来那根 → 箭头，转 90°、挪到两格中间） */
 html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path-arrow {
@@ -628,6 +631,7 @@ html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-big {
 }
 html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num { display: grid; grid-template-columns: auto auto; align-items: baseline; column-gap: 3px; row-gap: 4px; }
 html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num::before { content: "累计流量"; grid-column: 1 / -1; color: var(--fx-text-muted); font-size: 12px; font-weight: 400; line-height: 16px; }
+html[data-ui-theme="pearl"][lang="en"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num::before { content: "Total traffic"; }
 html[data-ui-theme="pearl"] .fx-rule-num > b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
 html[data-ui-theme="pearl"] .fx-rule-day { gap: 4px; font-size: 12px; line-height: 16px; }
 html[data-ui-theme="pearl"] .fx-rule-day-val { color: var(--fx-text); font-weight: 500; }
@@ -707,6 +711,37 @@ html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) > p { padding: 8px 8
   html[data-ui-theme="pearl"] .workspace-main .fx-host-card { padding: 16px; }
   html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) { padding: 0 12px 12px; }
   html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) > .fx-list-section-header { padding: 16px 4px 12px; }
+
+  /*
+    主机卡在手机上（2026-11 用户在 iPhone 13 上截图）：上面那套是给桌面三四列卡片墙的 —— 卡窄，图标单独一行、
+    名字收进一格凹框、三个读数竖着排。手机上一列铺满，同样的排法就成了「系统图标独占一行、名字挤在卡里的
+    又一张小卡里、CPU / 内存 / 磁盘竖成三行」，一张卡占大半屏。这里卡头回到一行（图标 · 名字和地址 · ···），
+    名字那块不再套凹框；三个读数横排三格，每格是一块凹进去的读数格（上游 .pearl-readout），细进度条贴格底。
+  */
+  html[data-ui-theme="pearl"] .workspace-main .fx-host-card { gap: 12px; }
+  html[data-ui-theme="pearl"] .fx-host-card > div:first-child { grid-template-areas: "icon info actions"; align-items: center; column-gap: 12px; row-gap: 0; }
+  html[data-ui-theme="pearl"] .fx-host-card > div:first-child > span:first-child { width: 36px; height: 36px; }
+  html[data-ui-theme="pearl"] .fx-host-card > div:first-child > div:nth-child(2) { gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  html[data-ui-theme="pearl"] .fx-host-card .grid.grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  html[data-ui-theme="pearl"] .fx-host-spec { display: flex; flex-direction: column; align-items: stretch; padding: 7px 10px 13px; border: 1px solid var(--fx-pearl-well-stroke); border-radius: 12px; background: var(--fx-pearl-well); box-shadow: var(--fx-pearl-inset); }
+  html[data-ui-theme="pearl"] .fx-host-spec > i { font-size: 11.5px; line-height: 16px; }
+  html[data-ui-theme="pearl"] .fx-host-spec > b { font-size: 15px; line-height: 20px; font-weight: 600; text-align: left; }
+  html[data-ui-theme="pearl"] .fx-host-spec-bar { left: 10px; right: 10px; bottom: 6px; height: 3px; }
+  html[data-ui-theme="pearl"] .fx-host-foot { padding-top: 10px; }
+
+  /*
+    规则卡在手机上也收一收（同一次反馈：一张卡将近 330px 高）：入口 / 出口两格里的小标签从格子上沿挪到
+    格子左边、和地址同一行，格子从 52px 收到 40px；两格之间的空当收窄，那枚向下箭头的小圆圈骑在两格的
+    接缝上；流量读数板上下也收一点。
+  */
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path { gap: 10px; margin-top: 12px; }
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-addr-group,
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-addr-list,
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-path-to { min-height: 40px; padding: 8px 10px 8px 44px; border-radius: 14px; }
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :is(.fx-rule-addr-group, .fx-rule-addr-list, .fx-rule-path-to)::before { top: 12px; left: 12px; }
+  html[data-ui-theme="pearl"][lang="en"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :is(.fx-rule-addr-group, .fx-rule-addr-list, .fx-rule-path-to) { padding-left: 48px; }
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path-arrow { top: -15px; }
+  html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-big { gap: 8px; margin-top: 10px; padding: 10px 12px; border-radius: 14px; }
 }
 
 /*

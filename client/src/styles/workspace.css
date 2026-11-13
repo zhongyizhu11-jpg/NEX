@@ -1366,14 +1366,15 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
   .fx-tabbar-item > svg { width: 23px; height: 23px; }
 
   /*
-    有标签栏时，内容底部要让出胶囊的高度（12 + 58 + 12 = 82px），否则最后一张卡
-    有一半压在栏底下。
+    有标签栏时，内容底部要让出胶囊的高度（离底 12 + 栏高 58 + 间隔 24 = 94px），否则最后一张卡
+    有一半压在栏底下。间隔原来是 12px：最后一行（规则页的「上一页 / 下一页」）贴着胶囊，
+    胶囊那层大投影正好压在它上面，手机上看着像被盖住了一截（2026-11 手机走查），放到 24px。
 
     改的是变量不是 padding：index.css 里那条 [data-mobile-main] 带 !important，
     直接写 padding-bottom 压不过它（实测还是 12px）。自定义属性按正常层叠走，
     所以这里设一下变量就够了，安全区那一份由那条规则自己加。
   */
-  .workspace-has-tabbar { --forwardx-mobile-bottom-inset: 82px; }
+  .workspace-has-tabbar { --forwardx-mobile-bottom-inset: 94px; }
 
   /*
     iOS App 里底栏贴近底边（iOS 26 悬浮标签栏那样）：底栏下沿压进 Home 指示条那一带 12px，
@@ -1385,8 +1386,8 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
     bottom: var(--fx-ios-tabbar-bottom);
   }
   html.capacitor-ios .workspace-has-tabbar {
-    /* 58px 底栏 + 12px 内容间隔；index.css 会再加安全区，所以这里先抵消一次。 */
-    --forwardx-mobile-bottom-inset: calc(70px + var(--fx-ios-tabbar-bottom) - var(--forwardx-safe-area-bottom));
+    /* 58px 底栏 + 24px 内容间隔；index.css 会再加安全区，所以这里先抵消一次。 */
+    --forwardx-mobile-bottom-inset: calc(82px + var(--fx-ios-tabbar-bottom) - var(--forwardx-safe-area-bottom));
   }
 
   /* 有页面自己的导航栏时，顶部不再预留常驻顶栏的高度 */
@@ -1829,6 +1830,17 @@ button.fx-hd-sec-head:hover { background: color-mix(in srgb, var(--fx-text) 3%, 
 .fx-rule-day { flex: none; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right; font-size: 11.5px; line-height: 15px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fx-rule-day-val { color: var(--fx-text-secondary); }
 .fx-rule-day-head { display: inline-flex; align-items: center; gap: 4px; }
+/*
+  360 宽的安卓上卡里只剩三百出头像素：大数字 + 走势 + 「↓ 136.75 KB · ↑ 137.63 KB」排不下，右边那段被卡边
+  裁掉（「近 24H」只剩「近 2」，2026-11 手机走查）。窄屏上空当收到 8px、走势最窄可以让到 28px；连这样也
+  放不下时，「近 24H」那两行整块换到下一行、靠右，不截字也不顶出卡外。
+*/
+@media (max-width: 420px) {
+  .fx-rule-big { flex-wrap: wrap; gap: 4px 8px; }
+  .fx-rule-spark { flex: 1 1 28px; min-width: 28px; }
+  .fx-rule-day { margin-left: auto; }
+}
+
 /* 可用率的颜色往灰里调一点，别比延迟大数字还抢眼 */
 .fx-rule-avail { font-weight: 500; }
 .fx-rule-avail[data-tone="healthy"] { color: color-mix(in srgb, var(--fx-healthy-text) 70%, var(--fx-text-muted)); }

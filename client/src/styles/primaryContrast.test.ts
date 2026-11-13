@@ -68,3 +68,29 @@ test("经典侧栏选中项是淡底 + 主色字，不再是实色胶囊配白�
   const tint = "#" + [1, 3, 5].map((i) => Math.round(parseInt(fill.slice(i, i + 2), 16) * 0.11 + 255 * 0.89).toString(16).padStart(2, "0")).join("");
   assert.ok(contrast(fill, tint) >= 4.5, `侧栏选中项 ${fill} 压在 ${tint} 上只有 ${contrast(fill, tint).toFixed(2)}:1`);
 });
+
+/*
+  液态玻璃（theme-liquid-glass.css）和深空浅色那套绿（themes/official/deepspace）：主色控件同样是白字。
+  2026-11 手机走查量出来：液态玻璃浅色起点 #3b82f6 只有 3.7:1，深色那道 #60a5fa → #3b82f6 只有 2.5～3.7:1，
+  深空浅色 #00a676 只有 3.1:1。这里守着它们和经典一样 ≥ 4.5:1。
+  主题的块里没写 --fx-primary-text 就是继承下来的白字。
+*/
+const themeBlocks = [
+  ["液态玻璃浅色", "theme-liquid-glass.css", 'html[data-ui-theme="liquid-glass"]'],
+  ["液态玻璃深色", "theme-liquid-glass.css", 'html.dark[data-ui-theme="liquid-glass"]'],
+  ["深空浅色", "../../../themes/official/deepspace/theme.css", 'html[data-ui-theme="deepspace"]:not(.dark)'],
+] as const;
+
+for (const [name, file, selector] of themeBlocks) {
+  test(`${name}：主色控件上的字和每一个底色都 ≥ 4.5:1`, () => {
+    const css = block(fs.readFileSync(path.resolve(dir, file), "utf8"), selector);
+    const text = css.match(/--fx-primary-text:\s*(#[0-9a-f]{6})\b/i)?.[1] ?? "#ffffff";
+    const backgrounds = ["--fx-primary-gradient", "--fx-primary-gradient-hover", "--fx-primary-fill", "--fx-primary-fill-hover"]
+      .flatMap((token) => hexes(declaration(css, token)));
+    assert.ok(backgrounds.length >= 6, `${name}：底色没取全 ${backgrounds.join(", ")}`);
+    for (const background of backgrounds) {
+      const ratio = contrast(text, background);
+      assert.ok(ratio >= 4.5, `${name}：${text} 压在 ${background} 上只有 ${ratio.toFixed(2)}:1`);
+    }
+  });
+}

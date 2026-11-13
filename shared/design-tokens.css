@@ -399,7 +399,11 @@
     中文仍交给系统（苹方 / 微软雅黑）。
   */
   --fx-font: "Public Sans Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
-  --fx-font-mono: ui-monospace, "SF Mono", "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  /*
+    等宽字栈里没有中文字体：中文落到哪一款全看系统的回退（Windows 上常常是点阵味的宋体，和旁边的等宽
+    数字一大一小）。拉丁等宽字后面、通用 monospace 前面补上系统黑体：英文数字仍是等宽，中文是苹方 / 雅黑。
+  */
+  --fx-font-mono: ui-monospace, "SF Mono", "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Consolas, "Liberation Mono", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
 
   /* ═══════════════════════════════════════════════════════
      九、层叠次序

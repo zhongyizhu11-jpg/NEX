@@ -19,6 +19,10 @@
     3. 壳   顶栏是一枚浮在页面上的玻璃条（离边 12px、圆角 18px），侧栏、底部标签栏、弹层都是同一种玻璃。
     4. 控件 按钮、chip、徽标、分段控件全部胶囊玻璃，选中态是 Apple 蓝实心（#2563eb）加蓝色光晕；
             输入框是白 60% 的 12px 圆角玻璃。
+            主色控件上是白字：渐变的每个色标和白字都要 ≥ 4.5:1（WCAG AA 正文）。原来浅色的起点
+            #3b82f6 只有 3.7:1、深色那道 #60a5fa → #3b82f6 只有 2.5～3.7:1，手机亮屏上「新建规则」
+            这几个字发虚（2026-11 走查）。现在浅色、深色都是 #2c6bea / #2f6fe8 → #2563eb 这一档，
+            悬停再深一档；primaryContrast.test.ts 守着。
     5. 字   Inter（随面板自带 latin 变量字体，48KB，中文回落到苹方 / 微软雅黑），标题和大数字字重 500、
             字距收紧；数字等宽。
 
@@ -56,10 +60,12 @@ html[data-ui-theme="liquid-glass"] {
   --fx-accent-soft: rgb(37 99 235 / 12%);
   --fx-accent-fill: #2563eb;
   --fx-on-accent: #ffffff;
-  --fx-primary-gradient: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  --fx-primary-gradient-hover: linear-gradient(135deg, #2f74ee 0%, #1d4fd8 100%);
+  /* 白字压在这几个色上都 ≥ 4.5:1（#2c6bea 4.8、#2563eb 5.2、#1d4fd8 6.6），见文件头第 4 条 */
+  --fx-primary-gradient: linear-gradient(135deg, #2c6bea 0%, #2563eb 100%);
+  --fx-primary-gradient-hover: linear-gradient(135deg, #2563eb 0%, #1d4fd8 100%);
   --fx-primary-fill: #2563eb;
   --fx-primary-fill-hover: #1d4fd8;
+  --fx-primary-text: #ffffff;
   --fx-primary-stroke: rgb(59 130 246 / 70%);
   --fx-primary-shadow: 0 4px 14px rgb(37 99 235 / 35%), inset 0 1px 1px rgb(255 255 255 / 30%);
   /* 玻璃 */
@@ -116,10 +122,16 @@ html.dark[data-ui-theme="liquid-glass"] {
   --fx-accent-soft: rgb(96 165 250 / 16%);
   --fx-accent-fill: #3b82f6;
   --fx-on-accent: #0b1a33;
-  --fx-primary-gradient: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
-  --fx-primary-gradient-hover: linear-gradient(135deg, #4f98f5 0%, #2f74ee 100%);
-  --fx-primary-fill: #3b82f6;
-  --fx-primary-fill-hover: #2f74ee;
+  /*
+    主色控件仍是白字（--fx-on-accent 那份深字只给强调色 #3b82f6 上的小东西用）。原来这道 #60a5fa → #3b82f6
+    配白字只有 2.5～3.7:1；深色底上换成和浅色差不多深的一档（#2f6fe8 4.6、#2563eb 5.2、#1e5ae0 5.8），
+    在深色玻璃上照样是一块亮蓝。
+  */
+  --fx-primary-gradient: linear-gradient(135deg, #2f6fe8 0%, #2563eb 100%);
+  --fx-primary-gradient-hover: linear-gradient(135deg, #2868ec 0%, #1e5ae0 100%);
+  --fx-primary-fill: #2563eb;
+  --fx-primary-fill-hover: #1e5ae0;
+  --fx-primary-text: #ffffff;
   --fx-primary-stroke: rgb(96 165 250 / 70%);
   --fx-primary-shadow: 0 4px 16px rgb(59 130 246 / 45%), inset 0 1px 1px rgb(255 255 255 / 35%);
   --fx-lg-card: rgb(255 255 255 / 5%);
