@@ -363,16 +363,22 @@ html[data-ui-theme="deepspace"] .fx-ds-rule-note[data-tone="warn"] { color: var(
 /*
   手机上右边那一列是 auto 宽：第三行的「主机离线：入口 A / 出口 B」这类告警标签有一百五六十像素，把整列撑宽，
   左边规则名只剩两三个字（360 宽的安卓上「经 V3 …」，2026-11 手机走查）。右列最多占四成，告警标签自己截断，
-  名字那一列至少留出六成。桌面上下面 @media (min-width: 768px) 那一套整条重排，不受影响。
+  名字那一列至少留出六成。桌面上下面 @media (min-width: 1024px) 那一套整条重排，不受影响。
 */
-@media (max-width: 767px) {
+@media (max-width: 1023px) {
   html[data-ui-theme="deepspace"] .fx-ds-rule { grid-template-columns: minmax(0, 1fr) fit-content(40%); }
   html[data-ui-theme="deepspace"] .fx-ds-rule-lat { overflow: hidden; }
   html[data-ui-theme="deepspace"] .fx-ds-rule-lat > * { min-width: 0; max-width: 100%; }
 }
 /* 一行里放了两个 RouteMiniChain / 额外行时，第二个也占满一整行 */
 html[data-ui-theme="deepspace"] .fx-ds-rule > .fx-ds-rule-extra + .fx-ds-rule-extra { grid-row: auto; }
-@media (min-width: 768px) {
+/*
+  主机 / 转发 / 链路三张「一行一条」的表，原来 768px 起就排成桌面那张宽表 —— 列的最小宽度加起来 1080～1220px，
+  iPad 竖屏（内容区 720～790px）右边三四列被面板裁掉，「···」和开关根本点不到；iPad mini 横屏（976px）
+  也裁掉最后一两列（2026-11 iPad 走查）。现在 1023px 以下用手机那套分行排法（一行一条、分三四截），
+  1024～1279 用少一两列的表（下面各节里写了收掉哪一列），1280 起和原来一样。
+*/
+@media (min-width: 1024px) {
   html[data-ui-theme="deepspace"] .fx-ds-rule {
     grid-template-columns: minmax(180px, 1.3fr) minmax(200px, 1.7fr) 96px 128px 168px 84px auto;
     grid-template-areas:
@@ -387,6 +393,16 @@ html[data-ui-theme="deepspace"] .fx-ds-rule > .fx-ds-rule-extra + .fx-ds-rule-ex
   html[data-ui-theme="deepspace"] .fx-ds-rule-spark { height: 20px; }
   html[data-ui-theme="deepspace"] .fx-ds-rule-day { display: block; grid-area: day; }
   html[data-ui-theme="deepspace"] .fx-ds-rule-lat { justify-content: flex-start; }
+}
+/* 1024～1199（iPad 横屏）：收掉「近 24H ↓↑」那一列，走势线还在 */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  html[data-ui-theme="deepspace"] .fx-ds-rule {
+    grid-template-columns: minmax(170px, 1.3fr) minmax(190px, 1.7fr) 96px 128px 84px auto;
+    grid-template-areas:
+      "id path lat spark total actions"
+      "extra extra extra extra extra extra";
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-rule-day { display: none; }
 }
 
 /* 设置页「界面主题」的预览（.fx-uitheme-swatch）在 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
@@ -511,6 +527,21 @@ html[data-ui-theme="deepspace"] .fx-ds-topnav-item[data-active="true"] { color: 
 html[data-ui-theme="deepspace"] .fx-ds-topnav-item[data-active="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -11px; height: 2px; border-radius: 2px; background: var(--fx-primary-fill); }
 html[data-ui-theme="deepspace"] .fx-ds-topnav-badge { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--fx-down-soft); color: var(--fx-down-text); font-size: 10px; line-height: 16px; text-align: center; }
 html[data-ui-theme="deepspace"] .fx-ds-topnav-upgrade { color: var(--fx-primary-fill); }
+/*
+  平板竖屏（768–1023，iPad mini / iPad Pro 11 竖着拿）：顶栏一行放不下品牌 + 版本号 + 八个导航 + 搜索胶囊，原来导航被
+  横向裁掉（最右边的「管理」下拉根本看不到）、搜索胶囊被挤成「搜 / 索」两行、版本号贴着「总览」。这里收掉版本号，
+  搜索只留图标（⌘K 照样能用），导航项左右内边距 12 → 8，一行放得下。
+*/
+@media (min-width: 768px) and (max-width: 1023px) {
+  html[data-ui-theme="deepspace"] .workspace-appbar-version { display: none; }
+  html[data-ui-theme="deepspace"] .workspace-appbar-brand { flex: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-topnav { margin-left: 4px; }
+  html[data-ui-theme="deepspace"] .fx-ds-topnav-item { padding: 0 8px; }
+  html[data-ui-theme="deepspace"] .fx-ds-topnav-item[data-active="true"]::after { left: 8px; right: 8px; }
+  html[data-ui-theme="deepspace"] .workspace-appbar-search { width: 36px; padding: 0; justify-content: center; }
+  html[data-ui-theme="deepspace"] .workspace-appbar-search-label,
+  html[data-ui-theme="deepspace"] .workspace-appbar-kbd { display: none; }
+}
 
 /* ── 9. 订阅管理页（ClientSubscriptions.tsx，data-fx-page="subscriptions"）──────── */
 /*
@@ -564,7 +595,7 @@ html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips-aside { 
 /*
   和转发规则同一种面板：一块暗面板里一行一台，行间一道线。
   手机四截：● 系统 名字 … 状态签 ··· / 地区 · 地址 … N 转发 / CPU MEM DSK 三根细条 / ↓ ↑ 速率。
-  电脑（≥768px）是一张真表：状态 / 主机 / 系统 / 地区·地址 / CPU / 内存 / 磁盘 / 网速 / 转发 / 版本 / ···，
+  电脑（≥1024px）是一张真表：状态 / 主机 / 系统 / 地区·地址 / CPU / 内存 / 磁盘 / 网速 / 转发 / 版本 / ···，
   表头（.fx-ds-host-head）和行用同一套列宽。占用条 ≥70% 琥珀、≥85% 红；离线的行左边一道红线、占用全写「—」。
 */
 html[data-ui-theme="deepspace"] .fx-ds-host-list {
@@ -638,7 +669,7 @@ html[data-ui-theme="deepspace"] .fx-ds-host-tag[data-tone="down"] { color: var(-
 html[data-ui-theme="deepspace"] .fx-ds-host-version { display: none; font-family: var(--fx-ds-mono); font-size: 12px; color: var(--fx-text-muted); white-space: nowrap; }
 html[data-ui-theme="deepspace"] .fx-ds-host-actions { grid-area: actions; display: flex; align-items: center; gap: 2px; margin: -4px -6px -4px 0; }
 html[data-ui-theme="deepspace"] .fx-ds-host-actions button { min-height: 0; }
-@media (min-width: 768px) {
+@media (min-width: 1024px) {
   html[data-ui-theme="deepspace"] .fx-ds-host,
   html[data-ui-theme="deepspace"] .fx-ds-host-head {
     grid-template-columns: 14px minmax(130px, 1.3fr) 58px minmax(160px, 1.5fr) minmax(86px, .8fr) minmax(86px, .8fr) minmax(86px, .8fr) minmax(176px, 1.25fr) 44px minmax(110px, 1fr) 36px;
@@ -676,6 +707,16 @@ html[data-ui-theme="deepspace"] .fx-ds-host-actions button { min-height: 0; }
   html[data-ui-theme="deepspace"] .fx-ds-host-ver { justify-content: flex-start; flex-wrap: wrap; row-gap: 3px; padding: 6px 0; }
   html[data-ui-theme="deepspace"] .fx-ds-host-version { display: inline; }
   html[data-ui-theme="deepspace"] .fx-ds-host-actions { justify-content: flex-end; margin: 0; }
+}
+/* 1024～1199（iPad 横屏）：收掉「网速」一列（表头第 8 格一起），三根占用条各收窄一点 */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  html[data-ui-theme="deepspace"] .fx-ds-host,
+  html[data-ui-theme="deepspace"] .fx-ds-host-head {
+    grid-template-columns: 14px minmax(130px, 1.3fr) 58px minmax(160px, 1.5fr) minmax(80px, .8fr) minmax(80px, .8fr) minmax(80px, .8fr) 44px minmax(110px, 1fr) 36px;
+    grid-template-areas: "dot name os addr cpu mem dsk rules ver actions";
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-host-rate,
+  html[data-ui-theme="deepspace"] .fx-ds-host-head > :nth-child(8) { display: none; }
 }
 
 /* ── 11. 链路管理（深空）：隧道链路一整块面板里一行一条（Tunnels.tsx 的 renderTunnelRow）── */
@@ -764,7 +805,7 @@ html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="ok"] { color: var(--f
 html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="warn"] { color: var(--fx-warn); }
 html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="down"] { color: var(--fx-down); }
 html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="off"] { color: var(--fx-text-muted); }
-@media (min-width: 768px) {
+@media (min-width: 1024px) {
   html[data-ui-theme="deepspace"] .fx-ds-link-head,
   html[data-ui-theme="deepspace"] .fx-ds-link {
     /* 最后一列（⋯ / 开关 / 拖动）给定宽：表头那一格是空的，auto 会让表头和行的列对不齐 */
@@ -795,6 +836,25 @@ html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="off"] { color: var(--
   html[data-ui-theme="deepspace"] .fx-ds-link-days [data-latency-history] > span:first-child { display: none; }
   html[data-ui-theme="deepspace"] .fx-ds-link-foot { display: none; }
   html[data-ui-theme="deepspace"] .fx-ds-link-actions { justify-content: flex-end; }
+}
+/* 1024～1279：先收「24H 走势」（表头第 6 格），1199 以下再收「30 天可用」（第 7 格） */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  html[data-ui-theme="deepspace"] .fx-ds-link-head,
+  html[data-ui-theme="deepspace"] .fx-ds-link {
+    grid-template-columns: 12px 52px minmax(140px, 1fr) minmax(220px, 2.2fr) 76px minmax(170px, 210px) 84px 40px 120px;
+    grid-template-areas: "dot kind name path lat days total rules actions";
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-link-spark,
+  html[data-ui-theme="deepspace"] .fx-ds-link-head > :nth-child(6) { display: none; }
+}
+@media (min-width: 1024px) and (max-width: 1199px) {
+  html[data-ui-theme="deepspace"] .fx-ds-link-head,
+  html[data-ui-theme="deepspace"] .fx-ds-link {
+    grid-template-columns: 12px 52px minmax(140px, 1fr) minmax(220px, 2.2fr) 76px 84px 40px 120px;
+    grid-template-areas: "dot kind name path lat total rules actions";
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-link-days,
+  html[data-ui-theme="deepspace"] .fx-ds-link-head > :nth-child(7) { display: none; }
 }
 
 /* ── 12. 总览（Home.tsx 的 deepspace 分支 + features/dashboard/DeepspacePanels.tsx）──────── */

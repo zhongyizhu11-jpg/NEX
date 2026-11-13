@@ -45,7 +45,7 @@
 .workspace-appbar-version { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: var(--fx-radius-pill); background: var(--fx-l3-control-fill); color: var(--fx-text-muted); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .workspace-appbar-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 /* 搜索：一枚描弱线的胶囊，参考站顶栏的 Search 就是这个形状 */
-.workspace-appbar-search { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border: 0; border-radius: var(--fx-radius-pill); background: var(--fx-l3-control-fill); color: var(--fx-text-muted); font-size: 13px; transition: color 120ms, background-color 120ms; }
+.workspace-appbar-search { display: inline-flex; flex: none; align-items: center; gap: 8px; height: 36px; white-space: nowrap; padding: 0 12px; border: 0; border-radius: var(--fx-radius-pill); background: var(--fx-l3-control-fill); color: var(--fx-text-muted); font-size: 13px; transition: color 120ms, background-color 120ms; }
 .workspace-appbar-search:hover { color: var(--fx-text); background: var(--fx-hover); }
 .workspace-appbar-kbd { font-family: inherit; font-size: 11px; color: var(--fx-text-muted); }
 .workspace-appbar-account { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 999px; transition: background-color 120ms; }
@@ -1127,6 +1127,39 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
   .workspace-header { flex-wrap: wrap; }
   .workspace-header > div:first-child { flex: 1 1 130px; }
   .workspace-header-actions { flex: 0 1 auto; max-width: 100%; }
+}
+/*
+  平板宽度（640–1279，iPad 竖屏 / 横屏）：侧栏还在，内容区只剩 550～950px。页头一行要放「标题 + 状态」「近 24H
+  走势」「视图切换一组图标 + ···」，原来右边那组按钮不让（flex-shrink: 0），走势也不让（flex: none），被挤的只剩
+  标题 —— iPad mini 上「主 / 机 / 管 / 理」一字一行、「0 / 2 在 / 线」（2026-11 走查）。
+  这里：标题块至少留 300px（放得下标题 + 走势），放不下就让按钮那组整体换到下一行、靠右；标题本身不在汉字之间
+  断行（keep-all，英文照样在空格处换），状态那句同样；万一标题和走势仍挤不下，走势换到标题下面一行、靠右。
+*/
+@media (min-width: 640px) and (max-width: 1279px) {
+  .workspace-header { flex-wrap: wrap; row-gap: 12px; }
+  .workspace-header > .workspace-header-main,
+  .workspace-header > div.min-w-0:first-child { flex: 1 1 300px; }
+  .workspace-header-actions { margin-left: auto; max-width: 100%; }
+  .workspace-header-title { word-break: keep-all; overflow-wrap: normal; }
+  .workspace-header-meta { word-break: keep-all; }
+  .workspace-header-row { flex-wrap: wrap; row-gap: 4px; }
+  .workspace-header-row > div:first-child { min-width: auto; }
+  .workspace-header-aside { margin-left: auto; }
+  /*
+    规则页的筛选行：搜索、四五个下拉、「新建规则」在这个宽度上一行放不下，原来按 DOM 顺序折成三行，
+    「新建规则」孤零零落在第三行最右。改成两行：第一行搜索 + 新建（主操作留在手边），第二行是筛选下拉，自己换行。
+  */
+  .workspace-filter-search { max-width: 480px; }
+  .workspace-filter-action { order: 2; }
+  .workspace-filter-options { order: 3; flex: 1 1 100%; }
+  /*
+    下拉按自己的字宽，不再统一撑到 120 / 150px（iPad mini 上差 40px 就把「每页 12 条」挤到第三行）；
+    字号统一 14px —— 触屏上选择框被上面那条 15px 规则放大、「所有链路」那个按钮还是 12px，一排里三种字号。
+  */
+  .workspace-filter-options > button,
+  .workspace-filter-options > div > [data-slot="select-trigger"] { width: auto; min-width: 0; }
+  .workspace-filter-options [data-slot="select-trigger"][class],
+  .workspace-filter-options > [data-slot="button"][class] { font-size: 14px; }
 }
 /*
   手机上页头右侧的按钮一个尺寸：40px 高、圆角 pill；只有图标的（「＋」「···」）是 40×40 的圆。
