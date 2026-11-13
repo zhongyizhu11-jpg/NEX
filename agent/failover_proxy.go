@@ -51,6 +51,8 @@ type failoverProxy struct {
 	fastestSince     time.Time
 	// 最近一小时里自动切换（不含人工指定）的时刻：切得太勤就把驻留拉长（flapHoldLocked）。
 	autoSwitchTimes []time.Time
+	// flapWarmupUntil：刚起来的这一段（中继、出口还没全起来）里的自动切换不计入抖动抑制，见 flapWarmup。
+	flapWarmupUntil time.Time
 	// 这一轮驻留里「抖动抑制」事件报过了没有（每次切换之后重新算）。
 	flapHoldReported bool
 	// 计划切换：正在预热的那条、预检没过的那条（-1 = 没有）。
@@ -349,15 +351,16 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 		return false
 	}
 	p := &failoverProxy{
-		ruleID:      ruleID,
-		sourcePort:  sourcePort,
-		spec:        spec,
-		signature:   signature,
-		activeSince: time.Now(),
-		rng:         newFailoverRand(ruleID, sourcePort),
-		ln:          ln,
-		udp:         udpConn,
-		done:        make(chan struct{}),
+		ruleID:          ruleID,
+		sourcePort:      sourcePort,
+		spec:            spec,
+		signature:       signature,
+		activeSince:     time.Now(),
+		flapWarmupUntil: time.Now().Add(flapWarmup),
+		rng:             newFailoverRand(ruleID, sourcePort),
+		ln:              ln,
+		udp:             udpConn,
+		done:            make(chan struct{}),
 	}
 	p.ensureHealthStateLocked()
 	failoverMu.Lock()
@@ -508,7 +511,7 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 	p.activeSince = p.lastSwitchAt
 	p.precheckFailedIndex = -1
 	p.flapHoldReported = false
-	if reason != "pin" && !p.drillSwitchLocked(old, index, p.lastSwitchAt) {
+	if reason != "pin" && !p.drillSwitchLocked(old, index, p.lastSwitchAt) && !p.lastSwitchAt.Before(p.flapWarmupUntil) {
 		p.noteAutoSwitchLocked(p.lastSwitchAt)
 	}
 	next := p.spec.Targets[index]

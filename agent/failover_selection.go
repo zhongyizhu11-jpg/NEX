@@ -103,6 +103,15 @@ const flapHoldBase = 5 * time.Minute
 
 const flapHoldMax = time.Hour
 
+/*
+flapWarmup：线路刚在这台机器上起来的头一分半钟里，自动切换不计入抖动抑制。
+
+新建线路时中转上的中继、出口往往比入口晚起几秒，头几轮探测会判主线路不健康、切走、马上又切回。
+这是开机抖动，不是线路在漂；以前它们照样记账，一上来就用掉三次额度里的两次，之后真出故障切走再切回，
+切回就被压五分钟（2026-11 CI 的 E2E 偶发红过两次）。切换本身照常发生，只是不记进「一小时切了几次」。
+*/
+const flapWarmup = 90 * time.Second
+
 func (p *failoverProxy) noteAutoSwitchLocked(at time.Time) {
 	kept := p.autoSwitchTimes[:0]
 	for _, t := range p.autoSwitchTimes {
