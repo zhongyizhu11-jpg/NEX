@@ -123,13 +123,13 @@ function withFake(run: (fake: FakeDnspod) => Promise<void>) {
   };
 }
 
-test("只有腾讯云 DNSPod 支持分线路；默认线路是 DDNS 设置里的线路", () => {
+test("腾讯云 DNSPod 支持分线路（Cloudflare / Webhook 不支持）；默认线路是 DDNS 设置里的线路", () => {
   assert.equal(lines.ddnsLineSupport(settings()).supported, true);
   assert.equal(lines.ddnsLineSupport(settings()).rootDomain, "example.com");
-  for (const provider of ["cloudflare", "webhook", "huaweicloud", "aliyun"]) {
+  for (const provider of ["cloudflare", "webhook"]) {
     const support = lines.ddnsLineSupport(settings({ provider }));
     assert.equal(support.supported, false, provider);
-    assert.match(String(support.reason), /只有腾讯云 DNSPod 支持分线路/);
+    assert.match(String(support.reason), /分线路解析支持腾讯云 DNSPod、阿里云 DNS、华为云 DNS/);
   }
   assert.equal(lines.ddnsLineSupport(settings({ enabled: false })).supported, false);
   assert.equal(lines.ddnsLineSupport(settings({ tencentcloudSecretKey: "" })).supported, false);
@@ -230,7 +230,7 @@ test("免费套餐 TTL 下限：被拒后按 600 秒重写，记录 ID 只记一
 test("服务商不支持时拒绝写，不发请求", withFake(async (fake) => {
   await assert.rejects(
     lines.publishDdnsLineRecords(settings({ provider: "cloudflare" }), { domain: "entry.example.com", recordType: "A", line: TELECOM, values: ["198.51.100.1"] }),
-    /只有腾讯云 DNSPod 支持分线路/,
+    /不支持按运营商线路解析/,
   );
   await assert.rejects(
     lines.publishDdnsLineRecords(settings(), { domain: "entry.example.com", recordType: "A", line: TELECOM, values: [] }),

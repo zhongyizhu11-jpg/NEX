@@ -5143,7 +5143,7 @@ function createForwardGroupLineHook(group: LineGroupRow, ctx: ForwardGroupLineCo
   const domain = String(group.domain || "").trim().toLowerCase();
   const recordType = normalizeForwardGroupRecordType(group.recordType);
   const previouslyPublished = new Set<string>();
-  if (ctx.state && ctx.state.domain === domain && ctx.state.recordType === recordType) {
+  if (ctx.state && ctx.state.provider === ctx.provider && ctx.state.domain === domain && ctx.state.recordType === recordType) {
     for (const entry of Object.values(ctx.state.lines)) for (const value of entry.values) previouslyPublished.add(value);
   }
   const members: LinePlannerMember[] = [];

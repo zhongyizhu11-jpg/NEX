@@ -98,7 +98,7 @@ export type LinePlan = {
   lines: LinePlanEntry[];
 };
 
-/** 两条线路是不是同一条：两边都有 id 就比 id（DNSPod 的线路 ID），否则比名字。 */
+/** 两条线路是不是同一条：两边都有 id 就比 id（服务商的线路 ID），否则比名字。 */
 export function sameDdnsLine(a: DdnsLineRef, b: DdnsLineRef) {
   return a.id && b.id ? a.id === b.id : a.name === b.name;
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { RadioTower } from "lucide-react";
-import { MAX_MEMBER_DDNS_LINES, type DdnsLineRef } from "@shared/ddnsLines";
+import { MAX_MEMBER_DDNS_LINES, ddnsLineKey, type DdnsLineRef } from "@shared/ddnsLines";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,13 +11,14 @@ export type DdnsLineOptions = {
   /** 还在读、读失败、服务商不支持时为 false；按钮置灰，悬停看 reason。 */
   available: boolean;
   reason: string | null;
+  /** 线路带着所属服务商（DNSPod 不带）；别家的线路即使 ID 一样也不是同一条。 */
   lines: DdnsLineRef[];
   defaultLine: DdnsLineRef | null;
 };
 
 function sameLine(a: DdnsLineRef, b: DdnsLineRef | null) {
   if (!b) return false;
-  return a.id && b.id ? a.id === b.id : a.name === b.name;
+  return a.id && b.id ? ddnsLineKey(a) === ddnsLineKey(b) : a.name === b.name;
 }
 
 /** 「电信、联通」/「只在默认线路」。 */
@@ -42,14 +43,15 @@ export function MemberDdnsLinesButton({ value, onChange, memberLabel, options }:
   const current = value || [];
   const active = current.length > 0;
   const summary = describeMemberDdnsLines(current);
-  // 服务商那边已经没有的线路（换了套餐、换了域名）也列出来，让人能取消勾选。
-  const knownIds = new Set(options.lines.map((line) => line.id));
-  const listed = [...options.lines, ...current.filter((line) => !knownIds.has(line.id))];
+  // 服务商那边已经没有的线路（换了服务商、套餐或域名）也列出来，让人能取消勾选。
+  const knownKeys = new Set(options.lines.map((line) => ddnsLineKey(line)));
+  const listed = [...options.lines, ...current.filter((line) => !knownKeys.has(ddnsLineKey(line)))];
 
   const toggle = (line: DdnsLineRef, checked: boolean) => {
+    const key = ddnsLineKey(line);
     setDraft((items) => (checked
-      ? items.some((item) => item.id === line.id) ? items : [...items, line]
-      : items.filter((item) => item.id !== line.id)));
+      ? items.some((item) => ddnsLineKey(item) === key) ? items : [...items, line]
+      : items.filter((item) => ddnsLineKey(item) !== key)));
   };
 
   const title = !options.available
@@ -84,19 +86,20 @@ export function MemberDdnsLinesButton({ value, onChange, memberLabel, options }:
           </DialogHeader>
           <div className="grid max-h-[50svh] grid-cols-2 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-3">
             {listed.map((line) => {
-              const checked = draft.some((item) => item.id === line.id);
+              const key = ddnsLineKey(line);
+              const checked = draft.some((item) => ddnsLineKey(item) === key);
               const isDefault = sameLine(line, options.defaultLine);
-              const stale = !knownIds.has(line.id);
+              const stale = !knownKeys.has(key);
               const full = !checked && draft.length >= MAX_MEMBER_DDNS_LINES;
               return (
                 <label
-                  key={line.id}
+                  key={key}
                   className={cn(
                     "flex min-h-9 items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm",
                     checked ? "border-primary/50 bg-primary/5" : "border-border/60",
                     full && "opacity-50",
                   )}
-                  title={stale ? "DNSPod 现在的线路列表里没有这条（可能换了套餐或域名），建议取消勾选" : isDefault ? "组原来那条记录所在的线路" : undefined}
+                  title={stale ? "DNS 服务商现在的线路列表里没有这条（可能换了服务商、套餐或域名），建议取消勾选" : isDefault ? "组原来那条记录所在的线路" : undefined}
                 >
                   <Checkbox checked={checked} disabled={full} onCheckedChange={(next) => toggle(line, next)} aria-label={line.name} />
                   <span className="min-w-0 truncate">

@@ -8,6 +8,7 @@ import { GroupDdnsLineSummary, groupHasDdnsLineSummary } from "@/components/link
 import {
   DDNS_LINE_FALLBACK_LABELS,
   DDNS_LINE_FALLBACK_MODES,
+  ddnsLineProviderOf,
   normalizeDdnsLineFallback,
   parseDdnsLines,
   type DdnsLineFallbackMode,
@@ -1335,16 +1336,21 @@ export function ForwardGroupsContent({
     }
     : {
       available: false,
-      reason: ddnsLinesQuery.error ? `读取 DNSPod 线路失败：${ddnsLinesQuery.error.message}` : "正在读取 DNS 服务商的线路",
+      reason: ddnsLinesQuery.error ? `读取 DNS 服务商的线路失败：${ddnsLinesQuery.error.message}` : "正在读取 DNS 服务商的线路",
       lines: [],
       defaultLine: null,
     };
   const ddnsLineRoot = ddnsLinesQuery.data?.rootDomain || "";
+  const ddnsLineProviderLabel = ddnsLinesQuery.data?.providerLabel || "DNS 服务商";
   const formDomain = form.domain.trim().toLowerCase().replace(/\.+$/, "");
   const ddnsLineDomainWarning = ddnsLineRoot && formDomain && formDomain !== ddnsLineRoot && !formDomain.endsWith(`.${ddnsLineRoot}`)
-    ? `入口域名不在 DNSPod 主域名 ${ddnsLineRoot} 下，分线路记录写不进去`
+    ? `入口域名不在 ${ddnsLineProviderLabel} 的主域名 ${ddnsLineRoot} 下，分线路记录写不进去`
     : "";
   const formHasDdnsLines = showLineColumn && form.members.some((member) => (member.ddnsLines?.length ?? 0) > 0);
+  // 换过 DDNS 服务商：成员上还留着别家的线路，这些不生效（成员等于只在默认线路）。
+  const currentLineProvider = ddnsLinesQuery.data?.supported ? ddnsLinesQuery.data.provider : null;
+  const formHasForeignDdnsLines = !!currentLineProvider && formHasDdnsLines
+    && form.members.some((member) => (member.ddnsLines || []).some((line) => ddnsLineProviderOf(line) !== currentLineProvider));
   const updateMemberField = (key: string, patch: Partial<MemberForm>) => {
     setForm((prev) => ({
       ...prev,
@@ -1613,7 +1619,7 @@ export function ForwardGroupsContent({
         bandwidthMbps: isEntryGroup ? normalizeMemberBandwidthMbps(member.bandwidthMbps) : 0,
         aggregationWeight: isEntryGroup ? normalizeMemberWeight(member.aggregationWeight) : 0,
         activeSchedule: groupModeSupportsMemberSchedule(form.groupMode) ? member.activeSchedule || null : null,
-        // 服务商暂不支持线路时也原样带回去：换回 DNSPod 后配置还在（服务端不支持时不看它）。
+        // 服务商暂不支持线路时也原样带回去：换回原来的服务商后配置还在（服务端只看当前服务商的线路）。
         ddnsLines: isFailoverMode || isEntryGroup ? member.ddnsLines || [] : null,
       })),
     };
@@ -2603,6 +2609,9 @@ export function ForwardGroupsContent({
                       <p className="text-xs text-[var(--fx-warn)]">{ddnsLinesQuery.data.reason}；成员上的线路配置先保留，暂不生效，组照旧只发布默认线路。</p>
                     ) : null}
                     {ddnsLineDomainWarning ? <p className="text-xs text-[var(--fx-warn)]">{ddnsLineDomainWarning}</p> : null}
+                    {formHasForeignDdnsLines ? (
+                      <p className="text-xs text-[var(--fx-warn)]">有成员勾的是换服务商之前的线路（标着「已不可用」），这些线路不生效、成员只在默认线路，请按 {ddnsLineProviderLabel} 的线路重新勾选。</p>
+                    ) : null}
                   </div>
                 )}
                 {editingId && groupHasDdnsLineSummary(groups.find((group) => Number(group.id) === editingId) || {}) ? (
