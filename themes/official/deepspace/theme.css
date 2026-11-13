@@ -39,7 +39,8 @@ html[data-ui-theme="deepspace"] {
   --fx-ds-tone: var(--fx-primary-fill);
   --fx-ds-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent);
   --fx-ds-track: #e9ecf0;
-  --fx-ds-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  /* 标题、页签这些中文也走这一栈：拉丁等宽字后面补系统黑体，中文不落到系统随便挑的宋体 / 点阵字上 */
+  --fx-ds-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, "Liberation Mono", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
   --fx-card-fill: #ffffff;
   --fx-card-stroke: #e3e6ea;
   --fx-elevation-card: none;
@@ -359,6 +360,16 @@ html[data-ui-theme="deepspace"] .fx-ds-rule-extra:empty { display: none; }
 html[data-ui-theme="deepspace"] .fx-ds-rule-note { font-size: 11px; line-height: 16px; color: var(--fx-text-muted); }
 html[data-ui-theme="deepspace"] .fx-ds-rule-note[data-tone="down"] { color: var(--fx-down-text); }
 html[data-ui-theme="deepspace"] .fx-ds-rule-note[data-tone="warn"] { color: var(--fx-warn-text); }
+/*
+  手机上右边那一列是 auto 宽：第三行的「主机离线：入口 A / 出口 B」这类告警标签有一百五六十像素，把整列撑宽，
+  左边规则名只剩两三个字（360 宽的安卓上「经 V3 …」，2026-11 手机走查）。右列最多占四成，告警标签自己截断，
+  名字那一列至少留出六成。桌面上下面 @media (min-width: 768px) 那一套整条重排，不受影响。
+*/
+@media (max-width: 767px) {
+  html[data-ui-theme="deepspace"] .fx-ds-rule { grid-template-columns: minmax(0, 1fr) fit-content(40%); }
+  html[data-ui-theme="deepspace"] .fx-ds-rule-lat { overflow: hidden; }
+  html[data-ui-theme="deepspace"] .fx-ds-rule-lat > * { min-width: 0; max-width: 100%; }
+}
 /* 一行里放了两个 RouteMiniChain / 额外行时，第二个也占满一整行 */
 html[data-ui-theme="deepspace"] .fx-ds-rule > .fx-ds-rule-extra + .fx-ds-rule-extra { grid-row: auto; }
 @media (min-width: 768px) {
@@ -433,19 +444,23 @@ html.dark[data-ui-theme="deepspace"] {
   --fx-flow-in: #00e5a0;
   --fx-flow-out: #3ab8ff;
 }
+/*
+  浅色下的绿：白字要压得住。原来 #00a676 配白字只有 3.1:1（悬停 #008f66 也只有 4.1），手机亮屏上
+  「新建规则」这几个字发虚；1.0.1 起深一档 #00845f（4.7:1），悬停 #00714f（6.0:1）。
+*/
 html[data-ui-theme="deepspace"]:not(.dark) {
-  --fx-accent: #00a676 !important;
-  --fx-accent-strong: #00a676 !important;
-  --fx-accent-soft: rgb(0 166 118 / 10%) !important;
-  --fx-accent-fill: #00a676 !important;
+  --fx-accent: #00845f !important;
+  --fx-accent-strong: #00845f !important;
+  --fx-accent-soft: rgb(0 132 95 / 10%) !important;
+  --fx-accent-fill: #00845f !important;
   --fx-accent-fill-foreground: #ffffff !important;
   --fx-on-accent: #ffffff !important;
-  --fx-primary-gradient: linear-gradient(#00a676, #00a676) !important;
-  --fx-primary-gradient-hover: linear-gradient(#008f66, #008f66) !important;
-  --fx-primary-fill: #00a676 !important;
-  --fx-primary-fill-hover: #008f66 !important;
+  --fx-primary-gradient: linear-gradient(#00845f, #00845f) !important;
+  --fx-primary-gradient-hover: linear-gradient(#00714f, #00714f) !important;
+  --fx-primary-fill: #00845f !important;
+  --fx-primary-fill-hover: #00714f !important;
   --fx-primary-text: #ffffff !important;
-  --fx-primary-stroke: #00a676 !important;
+  --fx-primary-stroke: #00845f !important;
 }
 /* 标题、页签、徽标、读数全换等宽字：终端感 */
 html[data-ui-theme="deepspace"] .workspace-header-title,
@@ -726,7 +741,8 @@ html[data-ui-theme="deepspace"] .fx-ds-link-path { grid-area: path; display: fle
 html[data-ui-theme="deepspace"] .fx-ds-link-node { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 html[data-ui-theme="deepspace"] .fx-ds-link-edge { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--fx-primary-fill); white-space: nowrap; }
 html[data-ui-theme="deepspace"] .fx-ds-link-edge::before { content: "──"; letter-spacing: -.1em; }
-html[data-ui-theme="deepspace"] .fx-ds-link-edge::after { content: "──▶"; letter-spacing: -.1em; }
+/* ▶ 后面跟一个 U+FE0E（文字样式选择符）：iOS 上不跟的话可能画成一枚彩色 emoji 方块 */
+html[data-ui-theme="deepspace"] .fx-ds-link-edge::after { content: "──▶︎"; letter-spacing: -.1em; }
 html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="warn"] { color: var(--fx-warn); }
 html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="down"] { color: var(--fx-down); }
 html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="off"] { color: var(--fx-text-muted); }

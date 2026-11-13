@@ -3,7 +3,7 @@
 
   第五种气质，由 <html data-ui-theme="cinnabar"> 打开；没有这个属性这个文件一条都不生效。
   参考 deep.losantos.space（Rosélune 面板）的 Umbrella 那一套（2026-10-11 看过源码）：
-  **素白纸 / 墨黑底 + 朱红记号 + 小方角 + 全大写加宽字距**。经典是「浅灰托白卡」、极光是
+  **素白纸 / 墨黑底 + 朱红记号 + 小方角 + 加宽字距**。经典是「浅灰托白卡」、极光是
   「彩色柔光托玻璃卡」、墨金是「米白纸上的卡纸」、玫瑰是「胭脂纸上的白瓣」，朱砂是一份
   **技术规格书**：方方正正、线条清楚、每一节左上角一笔朱红。
 
@@ -14,18 +14,21 @@
   换的不止颜色（只换色对这位用户等于「没变」）：
 
     1. 底   浅色是近白的纸（#f6f6f4）铺一层极淡的方格，深色是墨黑（#0a0a0b）铺同一层格；
-            页面最上面一道 3px 的朱红斜纹（Umbrella 顶上那条红白斜纹）。
+            桌面上页面最上面一道 3px 的朱红斜纹（Umbrella 顶上那条红白斜纹）；手机上不画
+            （落在状态栏那一条里，看着像一道断开的红虚线，2026-11 用户反馈）。
     2. 卡   4px 小方角、一圈细线、**不投影**；卡的上沿左端一笔 24px 的朱红短线 —— 卡出了状态
             （告警 / 掉线）这一笔就换成状态色，扫一眼左上角就知道哪张有事。卡里的数字不再放在
             色块或托盘里，而是一张**规格表**：主机卡三个读数是被细线隔开的三格（上下各一道通栏线、
             格间竖线），规则卡的流量数字和链路卡的延迟行上面一道虚线。
-    3. 字   页面标题全大写加宽字距、前面一枚旋转 45° 的朱红小菱形；分组小标题、卡里的小标签、
-            分段控件的字都大写加宽字距；大数字用等宽字（像仪表读数），不再用衬线。
+    3. 字   页面标题加宽字距、前面一枚旋转 45° 的朱红小菱形；分组小标题、卡里的小标签
+            加宽字距；大数字用等宽字（像仪表读数），不再用衬线。
+            原来这些字都 text-transform: uppercase：中文界面里「Token 管理」变成「TOKEN 管理」、
+            英文界面整页大写，1.0.1 起不再改写大小写；中文上的字距也收窄了（加宽过头一个个字散开）。
     4. 控件 全部 3px 方角。分段控件是一圈细线的方框，选中格是一块实心的纸（深色下是墨灰）
             加一道朱红底线；筛选 chip 未选中一圈线，选中朱红线 + 朱红淡底 + 朱红字。主按钮仍是
-            主色渐变（跟「默认配色」换），只是方角、字加宽。底部标签栏是一条方角的实心条，
+            主色渐变（跟「默认配色」换），只是方角。底部标签栏是一条方角的实心条，
             选中项不是药丸是顶上一道朱红线。
-    5. 设置 和玫瑰一样把卡拆成编号的节（01 02 …），编号是朱红等宽字、节标题大写加宽，
+    5. 设置 和玫瑰一样把卡拆成编号的节（01 02 …），编号是朱红等宽字、节标题加宽字距，
             每节顶线左端一笔 44px 朱红；保存交给贴底保存栏（SaveDock.tsx，朱砂下是方角实心条）。
 
   不新增任何滚动内容上的 backdrop 模糊。
@@ -65,7 +68,7 @@ html[data-ui-theme="cinnabar"] {
   --fx-radius-surface: 4px;
   --fx-radius-modal: 6px;
   --fx-radius-inner: 3px;
-  --fx-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --fx-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
 }
 html.dark[data-ui-theme="cinnabar"] {
   /* 深色下强调色是浅蓝，字用深色 */
@@ -115,12 +118,17 @@ html[data-ui-theme="cinnabar"] body::after {
     linear-gradient(var(--fx-grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
     linear-gradient(90deg, var(--fx-grid-line) 1px, transparent 1px) 0 0 / 32px 32px;
 }
-/* 斜纹画在顶栏上沿（一层背景图叠在顶栏自己的底色上），iOS 上落在状态栏那一条里 */
-html[data-ui-theme="cinnabar"] .workspace-appbar {
-  background-image: repeating-linear-gradient(-45deg, var(--fx-cinnabar) 0 5px, transparent 5px 10px);
-  background-size: 100% 3px;
-  background-position: left top;
-  background-repeat: no-repeat;
+/*
+  斜纹画在顶栏上沿（一层背景图叠在顶栏自己的底色上），只在桌面上画：手机上它落在状态栏那一条里，
+  一截一截的红色短斜线看着像一道没画完的红虚线、像渲染出错（2026-11 用户在 iPhone 上截图指出）。
+*/
+@media (min-width: 768px) {
+  html[data-ui-theme="cinnabar"] .workspace-appbar {
+    background-image: repeating-linear-gradient(-45deg, var(--fx-cinnabar) 0 5px, transparent 5px 10px);
+    background-size: 100% 3px;
+    background-position: left top;
+    background-repeat: no-repeat;
+  }
 }
 html[data-ui-theme="cinnabar"] .auth-shell,
 html[data-ui-theme="cinnabar"] .public-home-shell,
@@ -174,12 +182,12 @@ html[data-ui-theme="cinnabar"] .fx-cardstyle-swatch[data-style="edge"] .fx-cards
 html[data-ui-theme="cinnabar"] .fx-host-card > div:first-child > span:first-child { border-radius: 3px; border: 1px solid var(--fx-stroke-base); background: transparent; }
 /*
   卡里的规格表。主机卡三个读数：上下各一道通栏细线、格与格之间一道竖线，没有底色；
-  标签在上（大写加宽）、等宽数字在下、细条贴格底。
+  标签在上（小字加宽）、等宽数字在下、细条贴格底。
 */
 html[data-ui-theme="cinnabar"] .fx-host-card .grid.grid-cols-3 { gap: 0; margin: 4px calc(-1 * var(--fx-card-padding)) 2px; padding: 0; border-block: 1px solid var(--fx-stroke-weak); }
 html[data-ui-theme="cinnabar"] .fx-host-spec { border-radius: 0; background: transparent; padding: 8px var(--fx-card-padding) 12px; }
 html[data-ui-theme="cinnabar"] .fx-host-spec + .fx-host-spec { border-left: 1px solid var(--fx-stroke-weak); }
-html[data-ui-theme="cinnabar"] .fx-host-spec > i { text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; }
+html[data-ui-theme="cinnabar"] .fx-host-spec > i { letter-spacing: .06em; font-size: 10.5px; }
 html[data-ui-theme="cinnabar"] .fx-host-spec-bar { left: var(--fx-card-padding); right: var(--fx-card-padding); bottom: 5px; height: 2px; border-radius: 0; background: var(--fx-stroke-weak); }
 /* 规则卡：流量大数字那一行上面一道虚线；地址行不再画线 */
 html[data-ui-theme="cinnabar"] .fx-rule-big { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--fx-stroke-base); }
@@ -188,11 +196,11 @@ html[data-ui-theme="cinnabar"] .fx-rule-path { margin-top: 10px; padding-top: 0;
 html[data-ui-theme="cinnabar"] .fx-tunnel-foot { border-top: 1px dashed var(--fx-stroke-base); }
 html[data-ui-theme="cinnabar"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
 
-/* ── 3. 字：大写加宽、朱红菱形、等宽读数 ─────────────────────── */
+/* ── 3. 字：加宽、朱红菱形、等宽读数 ─────────────────────────── */
+/* 不改写大小写（text-transform）：中文界面里夹着的英文词、整个英文界面都会被改成全大写 */
 html[data-ui-theme="cinnabar"] .workspace-main .workspace-header-title,
 html[data-ui-theme="cinnabar"] .fx-navbar-large-title {
-  text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: .04em;
   font-weight: 600;
 }
 /* 标题前一枚旋转 45° 的朱红小菱形 */
@@ -238,10 +246,10 @@ html[data-ui-theme="cinnabar"] .fx-rule-num > b { font-size: 22px; }
 html[data-ui-theme="cinnabar"] .fx-host-spec > b { font-size: 15px; }
 html[data-ui-theme="cinnabar"] .fx-summary-value { font-size: 22px; }
 html[data-ui-theme="cinnabar"] .fx-summary-label,
-html[data-ui-theme="cinnabar"] .fx-rule-num > i { text-transform: uppercase; letter-spacing: .1em; }
-/* 分组小标题：大写加宽、小字、前面一枚朱红小方块 */
+html[data-ui-theme="cinnabar"] .fx-rule-num > i { letter-spacing: .06em; }
+/* 分组小标题：加宽、小字、前面一枚朱红小方块 */
 html[data-ui-theme="cinnabar"] .fx-list-section-header,
-html[data-ui-theme="cinnabar"] .workspace-main .fx-list-section-header { color: var(--fx-text-secondary); text-transform: uppercase; letter-spacing: .16em; font-weight: 600; font-size: 11px; }
+html[data-ui-theme="cinnabar"] .workspace-main .fx-list-section-header { color: var(--fx-text-secondary); letter-spacing: .08em; font-weight: 600; font-size: 11px; }
 html[data-ui-theme="cinnabar"] .fx-list-section-header::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 8px; vertical-align: .18em; background: var(--fx-cinnabar); }
 /* 卡标题、对话框标题、详情里的小节标题：加宽一点 */
 html[data-ui-theme="cinnabar"] .workspace-main [data-slot="card-title"],
@@ -252,7 +260,7 @@ html[data-ui-theme="cinnabar"] .workspace-header-aside .fx-sparkline { color: va
 
 /* ── 4. 控件：全部 3px 方角 ──────────────────────────────────── */
 /*
-  分段控件：一圈细线的方框，选中格是一块实心的纸（深色下墨灰）加一道朱红底线，字大写加宽。
+  分段控件：一圈细线的方框，选中格是一块实心的纸（深色下墨灰）加一道朱红底线。
   不是灰槽里一块渐变（经典）、不是一行字加金线（墨金）、也不是药丸空槽（玫瑰）。
 */
 html[data-ui-theme="cinnabar"] .workspace-tabs,
@@ -261,7 +269,7 @@ html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab,
 html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab,
 html[data-ui-theme="cinnabar"] .workspace-tab-scroll { border-radius: 2px; }
 html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab,
-html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab { color: var(--fx-text-muted); font-size: 12.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab { color: var(--fx-text-muted); font-size: 12.5px; font-weight: 500; letter-spacing: .02em; }
 html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"],
 html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"] {
   color: var(--fx-text);
@@ -292,9 +300,9 @@ html[data-ui-theme="cinnabar"] .fx-filter-pill { border-radius: 3px !important; 
 html[data-ui-theme="cinnabar"] .workspace-main [data-icon-button],
 html[data-ui-theme="cinnabar"] .workspace-header-actions [data-slot="button"] { border-radius: 4px !important; }
 html[data-ui-theme="cinnabar"] [data-slot="badge"] { border-radius: 2px; letter-spacing: .04em; }
-/* 主按钮：主色渐变照旧（跟「默认配色」换），方角、字加宽 */
+/* 主按钮：主色渐变照旧（跟「默认配色」换），方角 */
 html[data-ui-theme="cinnabar"] .workspace-main [data-slot="button"][data-variant="default"],
-html[data-ui-theme="cinnabar"] .workspace-main [data-slot="button"]:not([data-variant]) { letter-spacing: .06em; box-shadow: none; }
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="button"]:not([data-variant]) { letter-spacing: .02em; box-shadow: none; }
 /* 外壳：顶栏、侧栏一道细线；手机顶部导航实心纸色 */
 html[data-ui-theme="cinnabar"] .workspace-appbar { border-bottom-color: var(--fx-stroke-weak); }
 html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: var(--fx-stroke-weak); }
@@ -321,7 +329,8 @@ html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="menu-button"][da
     box-shadow: inset 0 2px 0 var(--fx-cinnabar);
   }
   html[data-ui-theme="cinnabar"] .fx-tabbar-item-active > svg { color: var(--fx-cinnabar); }
-  html[data-ui-theme="cinnabar"] .fx-tabbar-label { letter-spacing: .06em; }
+  /* 底栏的字不加宽：360 宽的安卓上五格各只有六十来像素，加宽了四个字的标签就被截成「……」 */
+  html[data-ui-theme="cinnabar"] .fx-tabbar-label { letter-spacing: .02em; }
 }
 
 /* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
@@ -329,7 +338,7 @@ html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="menu-button"][da
 /* ── 5. 设置页：编号分节 + 贴底保存栏 ─────────────────────────── */
 /*
   和玫瑰同一个骨架（SaveDock.tsx 在这两套下都亮），样子换成规格书：每张卡去掉框，变成一节 ——
-  顶上一道细线、左端一笔 44px 朱红；标题前一个朱红等宽编号「01」，标题大写加宽。
+  顶上一道细线、左端一笔 44px 朱红；标题前一个朱红等宽编号「01」，标题加宽字距。
 */
 html[data-ui-theme="cinnabar"] .fx-settings-pane { counter-reset: fx-sec; }
 html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]),
@@ -360,8 +369,7 @@ html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-sl
 html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"] {
   font-size: 13.5px;
   font-weight: 600;
-  letter-spacing: .14em;
-  text-transform: uppercase;
+  letter-spacing: .08em;
   color: var(--fx-text);
 }
 html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"]::before {
@@ -377,7 +385,7 @@ html[data-ui-theme="cinnabar"] .fx-settings-pane [data-dock-save] { display: non
 html[data-ui-theme="cinnabar"] .fx-settings-pane .fx-list-row + .fx-list-row { border-top-color: var(--fx-stroke-weak); }
 html[data-ui-theme="cinnabar"] .fx-setting-sub { margin-left: 4px; padding: 2px 0 2px 16px; border-left: 1px solid var(--fx-stroke-base); }
 html[data-ui-theme="cinnabar"] .fx-setting-sub:empty { display: none; }
-/* 贴底保存栏：方角实心条，一道细线，按钮方角、字大写加宽 */
+/* 贴底保存栏：方角实心条，一道细线，按钮方角 */
 html[data-ui-theme="cinnabar"] .fx-save-dock,
 html.dark[data-ui-theme="cinnabar"] .fx-save-dock {
   border: 1px solid var(--fx-stroke-base);
@@ -388,10 +396,10 @@ html.dark[data-ui-theme="cinnabar"] .fx-save-dock {
   box-shadow: 0 14px 30px -18px rgb(10 10 11 / 35%);
 }
 html.dark[data-ui-theme="cinnabar"] .fx-save-dock { box-shadow: 0 14px 30px -18px rgb(0 0 0 / 90%); }
-html[data-ui-theme="cinnabar"] .fx-save-dock-actions [data-slot="button"] { border-radius: 3px !important; letter-spacing: .1em; text-transform: uppercase; font-size: 12px; }
-/* 个性化顶上的预览卡：方角细线，站点名大写加宽 */
+html[data-ui-theme="cinnabar"] .fx-save-dock-actions [data-slot="button"] { border-radius: 3px !important; letter-spacing: .04em; font-size: 12px; }
+/* 个性化顶上的预览卡：方角细线，站点名加宽 */
 html[data-ui-theme="cinnabar"] .fx-brand-preview { border: 1px solid var(--fx-stroke-base); border-radius: 4px; box-shadow: none; }
-html[data-ui-theme="cinnabar"] .fx-brand-preview-name { font-family: inherit; font-size: 18px; line-height: 1.3; font-weight: 600; font-style: normal; letter-spacing: .12em; text-transform: uppercase; }
+html[data-ui-theme="cinnabar"] .fx-brand-preview-name { font-family: inherit; font-size: 18px; line-height: 1.3; font-weight: 600; font-style: normal; letter-spacing: .06em; }
 html[data-ui-theme="cinnabar"] .fx-brand-preview-meta em { color: var(--fx-cinnabar); }
 
 /* ── 6. 页面里其它圆角：一律收成小方角（Umbrella 全站 3–4px）──── */

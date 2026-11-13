@@ -55,7 +55,7 @@ test("主题包在 SQLite 上跑通：安装 / 替换 / 卸载 / 导出 / 开机
       const giltCss = await themes.getInstalledUiThemeCss("gilt");
       assert.equal(giltCss.revision, gilt.theme.revision);
       assert.ok(giltCss.css.includes('[data-ui-theme="gilt"]'));
-      assert.equal((await themes.listOfficialUiThemes()).find((theme) => theme.id === "gilt").installedVersion, "1.0.0");
+      assert.equal((await themes.listOfficialUiThemes()).find((theme) => theme.id === "gilt").installedVersion, "1.0.1");
       // 再点一次是原地更新，不是报「已安装」
       assert.equal((await themes.installOfficialUiTheme("gilt")).replaced, true);
       await rejects(() => themes.installOfficialUiTheme("pearl"), /官方主题库里没有这套主题/, "NOT_FOUND");

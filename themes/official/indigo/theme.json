@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "indigo",
   "name": "靛蓝",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。",
   "author": "NEX",
   "homepage": "https://github.com/zhongyizhu11-jpg/NEX",

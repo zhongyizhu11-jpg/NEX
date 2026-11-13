@@ -213,7 +213,8 @@ html[data-ui-theme="indigo"] .fx-host-spec-bar > span[data-tone="warn"] { backgr
 html[data-ui-theme="indigo"] .fx-host-spec-bar > span[data-tone="down"] { background: var(--fx-down); }
 /* 统计条（SummaryStrip）照 HEX 的 .summary-grid：小标签是 11px 加宽字距的灰字，数字 26px / 650 */
 html[data-ui-theme="indigo"] .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
-html[data-ui-theme="indigo"] .fx-summary-cell > span:first-child { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--fx-text-muted); }
+/* 不改写大小写（text-transform: uppercase）：中文标签里夹的英文词（Telegram、Token……）和整个英文界面都会被改成全大写 */
+html[data-ui-theme="indigo"] .fx-summary-cell > span:first-child { font-size: 11px; letter-spacing: .06em; color: var(--fx-text-muted); }
 html[data-ui-theme="indigo"] .fx-summary-value { font-size: 26px; line-height: 32px; font-weight: 650; letter-spacing: -.01em; }
 @media (max-width: 767px) { html[data-ui-theme="indigo"] .fx-summary-value { font-size: 22px; line-height: 28px; } }
 /* 规则卡：流量大数字 22px / 600（HEX 的 .speed-pair strong），单位 11px 跟在后面；地址行上面一道细线照旧 */
@@ -232,7 +233,7 @@ html[data-ui-theme="indigo"] .workspace-main .workspace-header-title { font-size
 html[data-ui-theme="indigo"] .fx-navbar-large-title { font-weight: 650; letter-spacing: -.01em; }
 html[data-ui-theme="indigo"] .workspace-main .workspace-header { padding-bottom: 4px; }
 html[data-ui-theme="indigo"] .fx-list-section-header,
-html[data-ui-theme="indigo"] .workspace-main .fx-list-section-header { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="indigo"] .workspace-main .fx-list-section-header { font-size: 11px; letter-spacing: .08em; font-weight: 500; color: var(--fx-text-muted); }
 html[data-ui-theme="indigo"] .workspace-main [data-slot="card-title"] { font-weight: 650; letter-spacing: 0; }
 html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="group-label"] { letter-spacing: .08em; }
 

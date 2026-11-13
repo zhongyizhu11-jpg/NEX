@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "deepspace",
   "name": "深空",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "运维控制台：近黑底托暗色面板卡、1px 暗线、不投影不模糊；流量和延迟用等宽数字，带细边的分段方块、平色天蓝按钮、贴底通栏标签栏；桌面上顶部导航、转发一张表。建议配深色使用；浅色是冷白托白卡。",
   "author": "NEX",
   "homepage": "https://github.com/zhongyizhu11-jpg/NEX",
