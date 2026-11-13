@@ -112,6 +112,8 @@ function runScenario(): Outcome {
     const stillRunning = !!(await rules.getForwardRuleById(childId)).isRunning;
     const updatedAtBefore = String((await rules.getForwardRuleById(childId)).updatedAt);
     const second = await dbModule.syncForwardGroupRulesAfterUpgrade("9.9.9-test");
+    // 隔开一秒多：updatedAt 按秒存，同一秒里改写了也看不出来（以前这条靠运气过）
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     const third = await dbModule.syncForwardGroupRulesAfterUpgrade("9.9.10-test");
     const updatedAtAfter = String((await rules.getForwardRuleById(childId)).updatedAt);
     const upgrade = { staleSame, first, repairedSame, stillRunning, second, third, untouched: updatedAtBefore === updatedAtAfter };

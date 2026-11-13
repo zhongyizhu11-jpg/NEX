@@ -16,10 +16,8 @@ func fxpServerID(spec fxpSpec) string {
 
 func normalizeFXPSpec(spec fxpSpec) fxpSpec {
 	spec.Role = strings.ToLower(strings.TrimSpace(spec.Role))
-	spec.TransportVersion = strings.ToLower(strings.TrimSpace(spec.TransportVersion))
-	if spec.TransportVersion != forwardXWireGuardVersion {
-		spec.TransportVersion = "v1"
-	}
+	spec.TransportVersion = normalizeFXPTransportVersion(spec.TransportVersion)
+	normalizeFXPV3Options(&spec)
 	if spec.Role == fxpEntryGroupRole {
 		entries := make([]fxpSpec, 0, len(spec.Entries))
 		byIdentity := map[string]int{}
@@ -165,6 +163,9 @@ func fxpServerSignature(spec fxpSpec) string {
 	spec = normalizeFXPSpec(spec)
 	if isFXPEntryGroup(spec) {
 		parts := []string{spec.Role, spec.TransportVersion, strconv.Itoa(spec.TunnelID)}
+		if spec.TransportVersion == forwardXV3Version {
+			parts = append(parts, fxpV3OptionsSignature(spec))
+		}
 		for _, entry := range spec.Entries {
 			parts = append(parts, fxpServerSignature(entry))
 		}
@@ -254,6 +255,10 @@ func fxpServerSignature(spec fxpSpec) string {
 	}
 	for _, target := range spec.UDPTargets {
 		parts = append(parts, strconv.Itoa(target.RuleID), strings.TrimSpace(target.TargetIP), strconv.Itoa(target.TargetPort))
+	}
+	// V3 的外层选项只在 v3 上进签名：V1 / V2 的签名和以前一字不差，升级 Agent 不重启它们。
+	if spec.TransportVersion == forwardXV3Version {
+		parts = append(parts, fxpV3OptionsSignature(spec))
 	}
 	// TCP 目标表变了出口必须拿到新配置，否则新规则的连接会被出口拒掉。
 	parts = append(parts, "stream")

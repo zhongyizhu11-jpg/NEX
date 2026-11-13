@@ -149,3 +149,33 @@ func TestPortOccupancyDisabledUntilPanelAsks(t *testing.T) {
 		t.Fatalf("still disabled")
 	}
 }
+
+// 没有 systemd 的机器：Agent 托管的 socat 由 /etc/init.d 脚本拉起、父进程是 1、命令行里没有 forwardx，
+// 只有 /run/forwardx-socat-tcp-30022.pid 对得上。以前被报成外来程序占用自己规则的端口。
+func TestPortOccupancyTreatsSysVManagedServiceAsOwn(t *testing.T) {
+	files := map[string]string{
+		"/run/forwardx-socat-tcp-30022.pid": "15663\n",
+		"/proc/15663/stat":                  "15663 (socat) S 1 15663 15663 0",
+		"/proc/15663/cgroup":                "0::/\n",
+		"/proc/15663/cmdline":               "/usr/bin/socat\x00-b65536\x00TCP4-LISTEN:30022,fork,reuseaddr,nodelay\x00TCP:10.20.0.2:8080,nodelay\x00",
+		"/proc/777/stat":                    "777 (socat) S 1 777 777 0",
+		"/proc/777/cmdline":                 "/usr/bin/socat\x00TCP4-LISTEN:30023,fork\x00",
+	}
+	classifier := &portOccupancyClassifier{
+		selfPID: 100,
+		cache:   map[int]bool{},
+		readFile: func(path string) ([]byte, error) {
+			if value, ok := files[path]; ok {
+				return []byte(value), nil
+			}
+			return nil, errors.New("not found")
+		},
+		pidFiles: func() []string { return []string{"/run/forwardx-socat-tcp-30022.pid", "/run/forwardx-broken.pid"} },
+	}
+	if !classifier.managed(15663, "socat") {
+		t.Fatal("pid 文件对得上的 socat 是 Agent 自己托管的")
+	}
+	if classifier.managed(777, "socat") {
+		t.Fatal("别人起的 socat 照样算外来程序")
+	}
+}

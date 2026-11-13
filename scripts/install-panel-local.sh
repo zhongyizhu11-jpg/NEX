@@ -15,6 +15,10 @@ SCRIPT_STARTED_AT="$(date +%s)"
 # 上一次安装成功时依赖输入的指纹放在 node_modules 里：node_modules 被删掉指纹也跟着没了，不会误判「没变」。
 DEPS_FINGERPRINT_NAME=".forwardx-deps-fingerprint"
 ENABLE_ADMIN_ACCOUNT="false"
+# migrate-forwardx / rollback-forwardx 用：--yes 跳过确认、--target-db-config 导进外部空库、--backup-dir 指定回退用的备份
+ASSUME_YES="false"
+TARGET_DB_CONFIG=""
+ROLLBACK_BACKUP_DIR=""
 GITHUB_ACCELERATOR_URL=""
 GITHUB_ACCELERATOR_EXPLICIT="false"
 if [ "${FORWARDX_GITHUB_ACCELERATOR_URL+x}" = "x" ]; then
@@ -24,11 +28,18 @@ fi
 
 usage() {
   cat <<EOF
-Usage: $0 install|upgrade|uninstall|reset-admin|reset-password [--github-accelerator URL] [--enable-account]
+Usage: $0 install|upgrade|uninstall|reset-admin|reset-password|migrate-forwardx|rollback-forwardx [options]
 
 Options:
   --github-accelerator URL   Prefix GitHub API/raw/release URLs with this HTTP(S) accelerator.
   --enable-account           With reset-admin, enable the selected administrator account.
+  --yes                      With migrate-forwardx / rollback-forwardx, skip the confirmation prompt.
+  --target-db-config FILE    With migrate-forwardx, import into the empty MySQL/PostgreSQL database
+                             described by FILE (NEX database.json format) instead of a new SQLite file.
+  --backup-dir DIR           With rollback-forwardx, the backup created by migrate-forwardx.
+
+migrate-forwardx moves an original ForwardX (poouo/Forwardx) local panel to NEX: the original
+directory is kept as a backup and restored automatically if anything fails.
 
 Environment:
   FORWARDX_GITHUB_ACCELERATOR_URL   Same as --github-accelerator; an explicit empty value disables it.
@@ -40,7 +51,7 @@ parse_args() {
   local value=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      install|upgrade|update|uninstall|remove|reset-admin|reset-password)
+      install|upgrade|update|uninstall|remove|reset-admin|reset-password|migrate-forwardx|rollback-forwardx)
         if [ "$action_seen" = "true" ]; then
           echo "[ERROR] Multiple actions were provided: $1" >&2
           usage >&2
@@ -74,6 +85,19 @@ parse_args() {
       --enable-account)
         ENABLE_ADMIN_ACCOUNT="true"
         shift
+        ;;
+      --yes|-y)
+        ASSUME_YES="true"
+        shift
+        ;;
+      --target-db-config|--backup-dir)
+        if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
+          echo "[ERROR] $1 requires a path" >&2
+          usage >&2
+          exit 1
+        fi
+        if [ "$1" = "--target-db-config" ]; then TARGET_DB_CONFIG="$2"; else ROLLBACK_BACKUP_DIR="$2"; fi
+        shift 2
         ;;
       -h|--help)
         usage
@@ -929,6 +953,8 @@ install_runtime_dependencies() {
 
 write_env() {
   local jwt_secret="${JWT_SECRET:-}"
+  # 反向代理的信任范围（server/trustProxy.ts）：.env 每次升级都会重写，管理员设过的值要带过去
+  local trust_proxy="${FORWARDX_TRUST_PROXY:-$(get_env_value FORWARDX_TRUST_PROXY || true)}"
   if [ -z "$jwt_secret" ]; then
     jwt_secret="$(openssl rand -hex 32 2>/dev/null || date +%s%N | sha256sum | awk '{print $1}')"
   fi
@@ -945,6 +971,9 @@ FORWARDX_PORT_MANAGEMENT=local
 FORWARDX_GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL"
 FORWARDX_UPGRADE_COMMAND="/bin/bash $APP_DIR/scripts/install-panel-local.sh upgrade"
 EOF
+  if [ -n "$trust_proxy" ]; then
+    printf 'FORWARDX_TRUST_PROXY=%s\n' "$trust_proxy" >> "$APP_DIR/.env"
+  fi
 }
 
 # ── SSH 管理命令 fwxm（面板这一侧，脚本本体是 scripts/fwxm-panel.sh） ──
@@ -974,7 +1003,7 @@ install_panel_manager() {
   if [ ! -e "$PANEL_FWXM_LINK" ] || grep -q "$PANEL_FWXM_MARKER" "$PANEL_FWXM_LINK" 2>/dev/null; then
     cat > "$PANEL_FWXM_LINK.new" <<FWXM_DISPATCH
 #!/bin/bash
-# $PANEL_FWXM_MARKER：只装了面板时的 fwxm。同机装了 Agent 后会被 Agent 的 fwxm 换掉，它同样认 fwxm panel。
+# ${PANEL_FWXM_MARKER}：只装了面板时的 fwxm。同机装了 Agent 后会被 Agent 的 fwxm 换掉，它同样认 fwxm panel。
 [ "\${1:-}" = panel ] && shift
 exec "$PANEL_MANAGER" "\$@"
 FWXM_DISPATCH
@@ -1089,11 +1118,302 @@ reset_admin_password() {
   return "$status"
 }
 
+# ── 从原版 ForwardX 迁移（migrate-forwardx / rollback-forwardx） ──
+# 用在跑着原版 ForwardX（poouo/Forwardx）本机面板的机器上：数据导进全新的 NEX 数据库，原版的目录整个留作备份。
+#   1. 先把 NEX 下载、装好依赖放在旁边的临时目录（这一步不碰原版，失败了原版照常跑）；
+#   2. 用 NEX 的迁移命令只读检查原版的库，列出能迁的数据，等确认；
+#   3. 停原版服务，把原版目录整个挪成备份（${APP_DIR}.forwardx-backup-时间），NEX 挪到原位，
+#      带上原版的 .env（端口、JWT 密钥）和 data/ 里除数据库文件以外的东西；
+#   4. dist/migrate-forwardx.js 从备份里的原版数据库导进全新的 NEX 数据库，起 NEX 服务、等它就绪；
+#   5. 第 3 步以后任何一步失败都自动回退：NEX 目录挪开、原版目录挪回、服务文件换回、原版服务重启。
+# 迁完以后想退回原版：rollback-forwardx（NEX 运行期间新写的数据不会带回原版）。
+FORWARDX_MIGRATION_MARKER="${FORWARDX_MIGRATION_MARKER:-/etc/nex/forwardx-migration.last}"
+
+forwardx_panel_kind() {
+  # 部署目录里装的是哪家的面板：forwardx / nex / none（看 package.json 的描述，两边的 name 都是 forwardx）
+  local pkg="$1/package.json"
+  if [ ! -f "$pkg" ]; then
+    echo none
+  elif grep -q '"description": *"NEX' "$pkg"; then
+    echo nex
+  else
+    echo forwardx
+  fi
+}
+
+forwardx_package_version() {
+  sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$1/package.json" 2>/dev/null | head -1
+}
+
+panel_service_files() {
+  printf "%s\n" "/etc/systemd/system/$SERVICE_NAME.service" "/etc/init.d/$SERVICE_NAME"
+}
+
+stop_panel_service() {
+  if is_systemd_host; then
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service "$SERVICE_NAME" stop 2>/dev/null || true
+  elif [ -x "/etc/init.d/$SERVICE_NAME" ]; then
+    "/etc/init.d/$SERVICE_NAME" stop 2>/dev/null || true
+  fi
+}
+
+start_panel_service() {
+  if is_systemd_host; then
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl restart "$SERVICE_NAME"
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service "$SERVICE_NAME" restart
+  elif [ -x "/etc/init.d/$SERVICE_NAME" ]; then
+    "/etc/init.d/$SERVICE_NAME" restart
+  else
+    echo "[ERROR] Service manager not found for $SERVICE_NAME"
+    return 1
+  fi
+}
+
+wait_local_panel_ready() {
+  # /api/database-health 不查业务、不要登录：数据库连上并且 healthy 才算起来了
+  local attempt=0 body=""
+  local limit="${FORWARDX_MIGRATE_READY_TIMEOUT:-90}"
+  while [ "$attempt" -lt "$limit" ]; do
+    body="$(curl -fsS -m 3 "http://127.0.0.1:${PORT}/api/database-health" 2>/dev/null || true)"
+    case "$body" in
+      *'"state":"healthy"'*) return 0 ;;
+    esac
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  echo "[ERROR] NEX 面板 ${limit} 秒内没有就绪（http://127.0.0.1:${PORT}/api/database-health：${body:-无响应}）"
+  return 1
+}
+
+forwardx_migration_cli() {
+  # 用 NEX 目录里的迁移命令；.env 交给 dotenv（JWT_SECRET 要和面板用的同一把，密钥类设置靠它加密）
+  local app_dir="$1"
+  shift
+  (
+    cd "$app_dir" || exit 1
+    env DOTENV_CONFIG_PATH="$app_dir/.env" DOTENV_CONFIG_OVERRIDE=true node dist/migrate-forwardx.js "$@"
+  )
+}
+
+forwardx_source_args() {
+  # 原版部署（目录 $1）的数据库在哪：database.json / mysql.json / .env，配置里写的部署目录换成 $1
+  local source_dir="$1"
+  printf "%s\n" \
+    --source-config "$source_dir/data/database.json" \
+    --source-mysql-config "$source_dir/data/mysql.json" \
+    --source-env-file "$source_dir/.env" \
+    --default-sqlite "$source_dir/data/forwardx.db" \
+    --map-path "$APP_DIR=$source_dir"
+}
+
+backup_forwardx_fwxm() {
+  # 原版装的 /usr/local/bin/fwxm（forwardx-manage.sh）会从原版仓库重装面板：留一份到备份里再删掉，
+  # NEX 的 fwxm 才装得上（install_panel_manager 不覆盖别人的 fwxm）。回退时放回去。
+  local backup_dir="$1"
+  if [ -f "$PANEL_FWXM_LINK" ] && grep -q "ForwardX Manager" "$PANEL_FWXM_LINK" 2>/dev/null; then
+    cp -p "$PANEL_FWXM_LINK" "$backup_dir/service/fwxm.forwardx"
+    rm -f "$PANEL_FWXM_LINK"
+  fi
+}
+
+rollback_forwardx_local() {
+  local backup_dir="$1"
+  local failed_dir="" file="" saved=""
+  if [ ! -d "$backup_dir/app" ]; then
+    echo "[ERROR] 备份目录里没有原版面板：$backup_dir/app"
+    return 1
+  fi
+  echo "[NEX] 回退到原版 ForwardX：$backup_dir"
+  stop_panel_service
+  if [ -e "$APP_DIR" ]; then
+    failed_dir="${APP_DIR}.nex-failed-$(date +%Y%m%d%H%M%S)"
+    mv "$APP_DIR" "$failed_dir"
+  fi
+  mv "$backup_dir/app" "$APP_DIR"
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    saved="$backup_dir/service/$(basename "$file")"
+    if [ -f "$saved" ]; then
+      cp -p "$saved" "$file"
+    elif [ -e "$file" ] && [ -f "$backup_dir/service/.none-$(basename "$file")" ]; then
+      rm -f "$file"
+    fi
+  done < <(panel_service_files)
+  if [ -f "$backup_dir/service/fwxm.forwardx" ]; then
+    mkdir -p "$(dirname "$PANEL_FWXM_LINK")"
+    cp -p "$backup_dir/service/fwxm.forwardx" "$PANEL_FWXM_LINK"
+  fi
+  if ! start_panel_service; then
+    echo "[ERROR] 原版面板目录和服务文件已经换回，但服务没起来，请手动检查：$SERVICE_NAME"
+    return 1
+  fi
+  echo "[DONE] 已回到原版 ForwardX（目录 ${APP_DIR}）"
+  if [ -n "$failed_dir" ]; then
+    echo "[INFO] NEX 的目录留在 ${failed_dir}，确认不要了可以删掉"
+  fi
+}
+
+migrate_forwardx_local() {
+  local kind source_version release_version backup_dir staging stamp file db_file arg status=0
+  local -a inspect_args=() import_args=() target_args=()
+  require_root
+  kind="$(forwardx_panel_kind "$APP_DIR")"
+  if [ "$kind" = none ]; then
+    echo "[ERROR] 没在 $APP_DIR 找到原版 ForwardX 面板（用 FORWARDX_PANEL_DIR 指定部署目录）"
+    return 1
+  fi
+  if [ "$kind" = nex ]; then
+    echo "[ERROR] $APP_DIR 已经是 NEX 面板了，不用迁移；升级请用 upgrade"
+    return 1
+  fi
+  if [ -n "$TARGET_DB_CONFIG" ] && [ ! -f "$TARGET_DB_CONFIG" ]; then
+    echo "[ERROR] 目标数据库配置不存在：$TARGET_DB_CONFIG"
+    return 1
+  fi
+  source_version="$(forwardx_package_version "$APP_DIR")"
+  resolve_runtime_env
+  stamp="$(date +%Y%m%d%H%M%S)"
+  backup_dir="${APP_DIR}.forwardx-backup-${stamp}"
+  staging="${APP_DIR}.nex-staging"
+  echo "[NEX] 检测到原版 ForwardX 面板：目录 ${APP_DIR}，版本 ${source_version:-未知}，服务 ${SERVICE_NAME}，端口 ${PORT}"
+
+  # 1. NEX 先装在旁边（不碰原版）
+  panel_step 1 "检查发布资产"
+  install_deps
+  release_version="$(resolve_release_version)"
+  rm -rf "$staging"
+  (
+    APP_DIR="$staging"
+    download_panel_bundle "$release_version"
+    install_runtime_dependencies
+  )
+  if [ ! -f "$staging/dist/migrate-forwardx.js" ]; then
+    rm -rf "$staging"
+    echo "[ERROR] NEX v$release_version 的发布包里没有迁移命令 dist/migrate-forwardx.js，原版面板没有改动"
+    return 1
+  fi
+  cp -p "$APP_DIR/.env" "$staging/.env" 2>/dev/null || true
+
+  # 2. 只读检查原版的库
+  echo "[NEX] 检查原版面板的数据库（只读）"
+  inspect_args=()
+  while IFS= read -r arg; do inspect_args+=("$arg"); done < <(forwardx_source_args "$APP_DIR")
+  if ! forwardx_migration_cli "$staging" inspect "${inspect_args[@]}"; then
+    rm -rf "$staging"
+    echo "[ERROR] 原版面板的数据库检查没通过，原版面板没有改动"
+    return 1
+  fi
+  echo "[NEX] 接下来：停掉原版服务 → 原版目录整个挪到 $backup_dir/app 作为备份 → 装上 NEX v$release_version 并导入数据"
+  if [ -n "$TARGET_DB_CONFIG" ]; then
+    echo "[NEX] 数据导进 $TARGET_DB_CONFIG 指定的数据库（必须是空库）"
+  else
+    echo "[NEX] 数据导进新的 SQLite 数据库 $APP_DIR/data/forwardx.db（原版的数据库留在备份里，不改动）"
+  fi
+  echo "[NEX] 迁移后已接入的原版 Agent 会在下一次心跳时自动换成 NEX 的 Agent"
+  if [ "$ASSUME_YES" != "true" ] && ! confirm_yes "确认从原版 ForwardX 迁移到 NEX？[y/N] "; then
+    rm -rf "$staging"
+    echo "[INFO] 已取消，原版面板没有改动"
+    return 0
+  fi
+
+  # 3. 停服务、整个目录挪成备份（同一个文件系统上 mv 是瞬间的，原版的文件一个不改）
+  stop_panel_service
+  mkdir -p "$backup_dir/service"
+  mv "$APP_DIR" "$backup_dir/app"
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    if [ -f "$file" ]; then cp -p "$file" "$backup_dir/service/"; else : > "$backup_dir/service/.none-$(basename "$file")"; fi
+  done < <(panel_service_files)
+  {
+    echo "MODE=local"
+    echo "APP_DIR=$APP_DIR"
+    echo "SERVICE_NAME=$SERVICE_NAME"
+    echo "SOURCE_VERSION=$source_version"
+    echo "NEX_VERSION=$release_version"
+    echo "CREATED_AT=$stamp"
+  } > "$backup_dir/manifest"
+  mkdir -p "$(dirname "$FORWARDX_MIGRATION_MARKER")"
+  printf "%s\n" "$backup_dir" > "$FORWARDX_MIGRATION_MARKER"
+  backup_forwardx_fwxm "$backup_dir"
+  echo "[NEX] 原版已备份到 $backup_dir"
+
+  # 4. 换上 NEX、导数据、起服务；失败就回退
+  mv "$staging" "$APP_DIR"
+  mkdir -p "$APP_DIR/data"
+  cp -a "$backup_dir/app/data/." "$APP_DIR/data/" 2>/dev/null || true
+  for db_file in forwardx.db forwardx.db-wal forwardx.db-shm forwardx.db.nex-import; do
+    rm -f "$APP_DIR/data/$db_file"
+  done
+  write_env
+  if [ -n "$TARGET_DB_CONFIG" ]; then
+    target_args=(--target-config "$TARGET_DB_CONFIG")
+  else
+    target_args=(--target-sqlite "$APP_DIR/data/forwardx.db.nex-import")
+  fi
+  import_args=()
+  while IFS= read -r arg; do import_args+=("$arg"); done < <(forwardx_source_args "$backup_dir/app")
+  echo "[NEX] 导入数据"
+  if ! forwardx_migration_cli "$APP_DIR" import "${import_args[@]}" "${target_args[@]}" --report "$backup_dir/migration-report.json"; then
+    status=1
+  fi
+  if [ "$status" = 0 ]; then
+    if [ -n "$TARGET_DB_CONFIG" ]; then
+      cp "$TARGET_DB_CONFIG" "$APP_DIR/data/database.json"
+    else
+      mv "$APP_DIR/data/forwardx.db.nex-import" "$APP_DIR/data/forwardx.db"
+      printf '{\n  "type": "sqlite",\n  "sqlite": {\n    "path": "%s"\n  }\n}\n' "$(json_escape "$APP_DIR/data/forwardx.db")" > "$APP_DIR/data/database.json"
+    fi
+    chmod 600 "$APP_DIR/data/database.json" 2>/dev/null || true
+    write_service || status=1
+  fi
+  if [ "$status" = 0 ]; then
+    restart_service || status=1
+  fi
+  if [ "$status" = 0 ]; then
+    wait_local_panel_ready || status=1
+  fi
+  if [ "$status" != 0 ]; then
+    echo "[ERROR] 迁移没有完成，自动回退到原版 ForwardX"
+    rollback_forwardx_local "$backup_dir" || true
+    return 1
+  fi
+  install_panel_manager "$APP_DIR/scripts/fwxm-panel.sh" local
+  echo "[DONE] 已从原版 ForwardX ${source_version:-} 迁到 NEX v${release_version}（$(elapsed_seconds)s）"
+  echo "[INFO] 迁移报告：$backup_dir/migration-report.json"
+  echo "[INFO] 原版备份：${backup_dir}；确认没问题后可以删掉。要退回原版：bash install-panel-local.sh rollback-forwardx --backup-dir $backup_dir"
+}
+
+rollback_forwardx_local_action() {
+  local backup_dir="$ROLLBACK_BACKUP_DIR"
+  require_root
+  if [ -z "$backup_dir" ] && [ -f "$FORWARDX_MIGRATION_MARKER" ]; then
+    backup_dir="$(head -1 "$FORWARDX_MIGRATION_MARKER")"
+  fi
+  if [ -z "$backup_dir" ] || [ ! -d "$backup_dir/app" ]; then
+    echo "[ERROR] 找不到原版备份（用 --backup-dir 指定 ${APP_DIR}.forwardx-backup-时间 目录）"
+    return 1
+  fi
+  echo "[WARN] 回退会停掉 NEX，换回 $backup_dir 里的原版 ForwardX；迁移以后在 NEX 里新写的数据不会带回原版。"
+  echo "[WARN] 已经换成 NEX Agent 的主机要在原版面板里重新执行一次安装命令，才会换回原版的 Agent。"
+  if [ "$ASSUME_YES" != "true" ] && ! confirm_yes "确认回退到原版 ForwardX？[y/N] "; then
+    echo "[INFO] 已取消"
+    return 0
+  fi
+  rollback_forwardx_local "$backup_dir"
+  rm -f "$FORWARDX_MIGRATION_MARKER"
+}
+
 case "$ACTION" in
   install) install_panel ;;
   upgrade|update) upgrade_panel ;;
   uninstall|remove) uninstall_panel ;;
   reset-admin|reset-password) reset_admin_password ;;
+  migrate-forwardx) migrate_forwardx_local ;;
+  rollback-forwardx) rollback_forwardx_local_action ;;
   *)
     usage
     exit 1

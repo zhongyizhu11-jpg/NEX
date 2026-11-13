@@ -14,6 +14,7 @@ import {
 import { realmConfigPathForPort, realmServiceNameForPort, socatServiceNameForPort } from "./forwardRuntimeConfigs";
 import { normalizeForwardRuleProtocol } from "@shared/forwardTypes";
 import { isForwardXWireGuardV2 } from "./forwardXWireGuard";
+import { isForwardXV3Tunnel } from "@shared/forwardXV3";
 import { legacyRealmCleanupCmds, legacySocatCleanupCmds, socatKillByProtocolCmd } from "./agentHeartbeatRuntime";
 import { isNginxTunnelMode } from "./agentHeartbeatNginx";
 import { cleanupGuardBackendCmds } from "./agentHeartbeatProtocolGuard";
@@ -186,7 +187,7 @@ export function createDisabledRuleRemovalBuilder(ctx: HeartbeatRequestContext, d
         ],
         fxp: tunnel && isForwardXTunnel(tunnel) ? {
           role: "entry",
-          transportVersion: isForwardXWireGuardV2(tunnel) ? "v2" : "v1",
+          transportVersion: isForwardXV3Tunnel(tunnel) ? "v3" : isForwardXWireGuardV2(tunnel) ? "v2" : "v1",
           tunnelId: tunnel.id,
           ruleId: rule.id,
           listenPort: rule.sourcePort,

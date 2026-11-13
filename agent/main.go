@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.256"
+var Version = "2.2.257"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -798,6 +798,13 @@ type fxpSpec struct {
 	MultipathMaxPending int               `json:"multipathMaxPending,omitempty"`
 	// MultipathReplicate：复制模式，每一片从两条腿各发一份（FXP 2.2.133 起认）。
 	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
+	// NEX V3 的外层选项（见 fxp_v3_transport.go），原样交给 FXP，只在 transportVersion=v3 时有。
+	V3Transport  string `json:"v3Transport,omitempty"`
+	V3Host       string `json:"v3Host,omitempty"`
+	V3Path       string `json:"v3Path,omitempty"`
+	V3UserAgent  string `json:"v3UserAgent,omitempty"`
+	V3ServerName string `json:"v3ServerName,omitempty"`
+	V3Multiplex  *bool  `json:"v3Multiplex,omitempty"`
 }
 
 // fxpMultipathLeg is one parallel path from the entry to the exit, either a
@@ -871,7 +878,13 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath, "config file")
 	onceRegister := flag.Bool("register", false, "register and exit")
 	printVersion := flag.Bool("version", false, "print the Agent version and exit")
+	printDistribution := flag.Bool("distribution", false, "print the Agent release distribution (nex) and exit")
 	flag.Parse()
+	if *printDistribution {
+		// 原版 ForwardX 的 Agent 不认这个参数（报错退出），运维和脚本可以据此分辨装的是哪一家的 Agent。
+		fmt.Println(Distribution)
+		return
+	}
 	if *printVersion {
 		// fwxm 和安装脚本靠它判断这个二进制认不认 proxyUrl（老版本不认这个参数，直接报错退出）。
 		fmt.Println(Version)
@@ -1140,6 +1153,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
 	addGostRuntimeReport(payload)
+	addAgentDistributionReport(payload)
 	addHostHealthCounters(payload)
 	// 1 / 5 / 15 分钟负载（2.2.255 起）：不在紧凑数组 m 里，读不到就不带，见 load_average.go
 	addLoadAverageReport(payload)

@@ -124,3 +124,28 @@ func TestPinSwitchesDoNotCountAsFlapping(t *testing.T) {
 		t.Fatalf("人工指定的切换不该触发抖动抑制：%s", got)
 	}
 }
+
+// 线路刚起来那一分半钟的开机抖动（中继还没全起来，切走又马上切回）不计入抖动抑制；过了这段照常记。
+func TestStartupWarmupSwitchesDoNotCountAsFlapping(t *testing.T) {
+	proxy := scheduleProxy(2, nil, 0)
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	proxy.flapWarmupUntil = time.Now().Add(flapWarmup)
+	for i := 0; i < 4; i++ {
+		proxy.setActiveLocked((i+1)%2, "health check")
+	}
+	if got := proxy.recentAutoSwitchesLocked(time.Now()); got != 0 {
+		t.Fatalf("开机抖动里的切换不该记账，记了 %d 次", got)
+	}
+	if got := proxy.flapHoldLocked(time.Now()); got != 0 {
+		t.Fatalf("开机抖动不该触发抖动抑制：%s", got)
+	}
+	// 过了预热期：照常记账，切满三次照样压。
+	proxy.flapWarmupUntil = time.Now().Add(-time.Second)
+	for i := 0; i < 3; i++ {
+		proxy.setActiveLocked((i+1)%2, "health check")
+	}
+	if got := proxy.flapHoldLocked(time.Now()); got != flapHoldBase {
+		t.Fatalf("过了预热期切了三次应压 %s，实际 %s", flapHoldBase, got)
+	}
+}

@@ -204,6 +204,7 @@ func register(cfg Config) error {
 		"agentVersion": Version,
 		"fxpVersion":   reportedFXPVersion(),
 	}
+	addAgentDistributionReport(payload)
 	var out map[string]any
 	return post(cfg, "/api/agent/register", payload, &out)
 }

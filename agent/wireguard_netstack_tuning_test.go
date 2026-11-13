@@ -8,7 +8,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
-func TestTuneWireGuardNetstackRaisesBuffersAndUsesCubic(t *testing.T) {
+func TestTuneWireGuardNetstackRaisesBuffersAndKeepsReno(t *testing.T) {
 	dev, err := newWireGuardNetTUN(netip.MustParseAddr("10.77.0.1"), 1380)
 	if err != nil {
 		t.Fatalf("create netstack: %v", err)
@@ -37,8 +37,9 @@ func TestTuneWireGuardNetstackRaisesBuffersAndUsesCubic(t *testing.T) {
 	if err := s.TransportProtocolOption(tcp.ProtocolNumber, &cc); err != nil {
 		t.Fatal(err)
 	}
-	if string(cc) != "cubic" {
-		t.Fatalf("congestion control = %q", cc)
+	// 这一版 gVisor 的 cubic 会把窗口降到 0 卡死连接（见 wireguard_netstack_tuning.go）。
+	if string(cc) != "reno" {
+		t.Fatalf("congestion control = %q, want reno", cc)
 	}
 	var sack tcpip.TCPSACKEnabled
 	if err := s.TransportProtocolOption(tcp.ProtocolNumber, &sack); err != nil || !bool(sack) {

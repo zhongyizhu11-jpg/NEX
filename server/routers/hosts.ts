@@ -29,7 +29,7 @@ import { ensureHostLiveStream, getHostLiveMetric, markHostLiveFocus } from "../h
 import { getMissingBundledAgentAssets } from "../agentAssets";
 import { pushTunnelEndpointRefresh, requireHostAccess, requireHostsAccess } from "./helpers";
 import { AGENT_VERSION, APP_VERSION, REPO_URL } from "../_core/systemRouter";
-import { isAgentUpgradeCompleted, isHostAgentUpgradeUnnecessary } from "../agentRouteUtils";
+import { agentUpgradeTargetDistributionFor, isAgentUpgradeCompleted, isHostAgentUpgradeUnnecessary } from "../agentRouteUtils";
 import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
 import { normalizeVersion } from "@shared/version";
 import { scheduleHostGeoRefresh } from "../hostGeo";
@@ -2039,12 +2039,12 @@ export const hostsRouter = router({
         }
         const targetVersion = normalizeVersion(input.targetVersion || AGENT_VERSION);
         const currentVersion = normalizeVersion((host as any).agentVersion);
-        if (isHostAgentUpgradeUnnecessary({ agentVersion: currentVersion, fxpVersion: (host as any).fxpVersion }, targetVersion, AGENT_VERSION)) {
+        if (isHostAgentUpgradeUnnecessary({ agentVersion: currentVersion, fxpVersion: (host as any).fxpVersion, agentDistribution: host.agentDistribution }, targetVersion, AGENT_VERSION)) {
           return { success: true, pushed: false, alreadyLatest: true };
         }
         appendPanelLog("info", `[AgentUpgrade] request host=${host.id} name=${host.name} current=${currentVersion || "-"} fxp=${(host as any).fxpVersion || "-"} target=${targetVersion}`);
         await assertAgentReleaseAssetsReady(targetVersion);
-        await db.requestHostAgentUpgrade(input.hostId, targetVersion);
+        await db.requestHostAgentUpgrade(input.hostId, targetVersion, null, null, agentUpgradeTargetDistributionFor(host));
         const configuredPanelUrl = (await db.getSetting("panelPublicUrl")) || "";
         const panelUrl = /^https?:\/\//.test(configuredPanelUrl) ? configuredPanelUrl.replace(/\/+$/, "") : "";
         const pushed = pushAgentUpgrade(input.hostId, targetVersion, panelUrl);
@@ -2081,7 +2081,7 @@ export const hostsRouter = router({
         }
         const upgradeHosts = onlineHosts.filter((host) => {
           const currentVersion = normalizeVersion((host as any).agentVersion);
-          if (isHostAgentUpgradeUnnecessary({ agentVersion: currentVersion, fxpVersion: (host as any).fxpVersion }, targetVersion, AGENT_VERSION)) {
+          if (isHostAgentUpgradeUnnecessary({ agentVersion: currentVersion, fxpVersion: (host as any).fxpVersion, agentDistribution: host.agentDistribution }, targetVersion, AGENT_VERSION)) {
             skippedLatest += 1;
             return false;
           }
@@ -2091,7 +2091,7 @@ export const hostsRouter = router({
           const { host, wave, delayMs, requestedAt } = rollout;
           const currentVersion = normalizeVersion((host as any).agentVersion);
           appendPanelLog("info", `[AgentUpgrade] request host=${host.id} name=${host.name} current=${currentVersion || "-"} target=${targetVersion} batch=true wave=${wave + 1} delayMs=${delayMs}`);
-          await db.requestHostAgentUpgrade(host.id, targetVersion, null, requestedAt);
+          await db.requestHostAgentUpgrade(host.id, targetVersion, null, requestedAt, agentUpgradeTargetDistributionFor(host));
           requested += 1;
           if (delayMs === 0) {
             if (pushAgentUpgrade(host.id, targetVersion, panelUrl)) pushed += 1;

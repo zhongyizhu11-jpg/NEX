@@ -283,6 +283,8 @@ const tables: TableDef[] = [
       c("agentToken", "text"), c("entryIp", "text"), c("tunnelEntryIp", "text"), c("osInfo", "text"), c("cpuInfo", "text"),
       c("memoryTotal", "bigint"), c("agentVersion", "text"), c("fxpVersion", "varchar", { length: 64 }),
       c("runtimeVersion", "varchar", { length: 64 }), c("agentCapabilities", "text"),
+      // Agent 的发行来源（nex / forwardx，shared/agentDistribution.ts）和「这次升级要换成哪一家的 Agent」。
+      c("agentDistribution", "varchar", { length: 32 }), c("agentUpgradeTargetDistribution", "varchar", { length: 32 }),
       // Agent 2.2.256 起上报：能不能开 IPv6 监听（shared/hostIpv6Listen.ts）。NULL = 没报过，按能用。
       c("ipv6ListenAvailable", "bool"),
       c("mimicAvailable", "bool"), c("mimicVersion", "text"), c("mimicStatus", "varchar", { length: 64 }),
@@ -837,6 +839,11 @@ const tables: TableDef[] = [
       c("multipathReplicate", "bool", { notNull: true, default: false }),
       // 单连接多路并发（shared/tunnelParallelStreams.ts）：入口把一条连接拆到 N 条并行连接，出口重组。1 = 单路。
       c("parallelStreams", "int", { notNull: true, default: 1 }),
+      // NEX V3（forwardxVersion = v3，shared/forwardXV3.ts）：外层 http / ws / tls，HTTP / WS 的 Host、
+      // 路径、User-Agent，TLS 的 SNI，是否多路复用（默认关）。不是 V3 的隧道这几列为空 / false。
+      c("v3Transport", "varchar", { length: 8 }), c("v3Host", "text"), c("v3Path", "text"),
+      c("v3UserAgent", "text"), c("v3ServerName", "text"),
+      c("v3Multiplex", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),

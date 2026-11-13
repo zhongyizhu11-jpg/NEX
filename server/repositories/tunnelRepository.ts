@@ -35,6 +35,7 @@ import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/p
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
+import { noteTunnelRunningRestored } from "../agentHeartbeatGate";
 import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
 import {
@@ -1887,6 +1888,8 @@ export async function updateTunnelRunningStatus(id: number, isRunning: boolean) 
   const db = await getDb();
   if (!db) return;
   await db.update(tunnels).set({ isRunning, updatedAt: nowDate() }).where(eq(tunnels.id, id));
+  // 等这条隧道的入口规则（见 agentHeartbeatGate 的 rememberHostWaitingForTunnels）下一次心跳就能恢复。
+  if (isRunning) noteTunnelRunningRestored(id);
 }
 
 export async function updateTunnelTestResult(id: number, data: {

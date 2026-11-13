@@ -19,6 +19,8 @@ import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
 import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, recordTunnelExitPorts, tunnelExitPortFor, type TunnelExitPortEntry } from "./tunnelExitPorts";
 import * as db from "./db";
+import { classifyHeartbeatAgentDistribution, NEX_AGENT_DISTRIBUTION, normalizeAgentDistribution } from "../shared/agentDistribution";
+import { isForwardxAgentMigrationEnabled, markForwardxAgentMigrationQueued, shouldQueueForwardxAgentMigration } from "./forwardxAgentMigration";
 import { getIpChangeProbeTasksForHost, hasPendingIpChangeProbeDelivery } from "./ipChange/runtime";
 import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
@@ -50,6 +52,7 @@ import {
   buildBusyAgentHeartbeatResponse,
   buildPresenceAgentHeartbeatResponse,
   buildReportedRuntimeHeartbeatPatch,
+  rememberHostWaitingForTunnels,
   selectAgentHeartbeatInterval,
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
@@ -57,7 +60,7 @@ import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { anomalyAwareRuleMbps } from "./ops/trafficAnomalyThrottles";
-import { getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
+import { getHostWireGuardPlane, getTunnelRuntimeGeneration, getTunnelRuntimeTopologyStatus, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
@@ -135,6 +138,7 @@ import {
   isForwardXWireGuardV2,
   type ForwardXWireGuardNodePlan,
 } from "./forwardXWireGuard";
+import { forwardXV3SpecFields, isForwardXV3Tunnel } from "@shared/forwardXV3";
 import { agentActionIssueTracker, agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
 import { resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
@@ -255,7 +259,7 @@ import {
   shouldUseProtocolGuard,
 } from "./agentHeartbeatProtocolGuard";
 import { buildAccessLimitCleanupCmds, buildAccessLimitCmds } from "./agentHeartbeatAccessLimits";
-import type { HeartbeatRequestContext, TunnelEgressHelper } from "./agentHeartbeatContext";
+import type { HeartbeatRequestContext, HeartbeatTunnelRow, TunnelEgressHelper } from "./agentHeartbeatContext";
 import { createGostRuntimePlan } from "./agentHeartbeatGostPlan";
 import { createDisabledRuleRemovalBuilder } from "./agentHeartbeatRuleRemoval";
 import { createForwardXWireGuardPlanner } from "./agentHeartbeatWireGuardPlan";
@@ -497,6 +501,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 没报（旧 Agent）就保留库里的值；报了就以这次为准。
     const nextFxpVersion = normalizeReportedFxpVersion(req.body?.fxpVersion);
     const fxpVersionChanged = !!nextFxpVersion && nextFxpVersion !== String((host as any).fxpVersion || "");
+    // 发行来源（NEX / 原版 ForwardX，shared/agentDistribution.ts）：这次认不出来（精简心跳）就保留库里的值。
+    const forwardxAgentMigrationEnabled = await isForwardxAgentMigrationEnabled();
+    const reportedAgentDistribution = classifyHeartbeatAgentDistribution(req.body, { unknownAsForwardx: forwardxAgentMigrationEnabled });
+    const agentDistributionChanged = !!reportedAgentDistribution
+      && reportedAgentDistribution !== normalizeAgentDistribution(host.agentDistribution);
     /*
       2.2.227 起 Agent 每次心跳都带上：实测的 gost 运行时版本和能力（ssEgressUdp / ssEgress2022，见
       shared/ssEgress.ts）。报了就以这次为准（运行时回滚后能力会消失）；没报（旧 Agent）保留库里的值，
@@ -632,6 +641,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || addressChanged
       || agentVersionChanged
       || fxpVersionChanged
+      || agentDistributionChanged
       || capabilitiesChanged
       || runtimeVersionChanged
       || ipv6ListenStoredChanged
@@ -657,6 +667,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     } else await db.updateHostHeartbeat(host.id, {
       agentVersion: nextAgentVersion || (host as any).agentVersion || null,
       ...(nextFxpVersion ? { fxpVersion: nextFxpVersion } : {}),
+      ...(agentDistributionChanged ? { agentDistribution: reportedAgentDistribution } : {}),
       ...(reportedCapabilities !== null ? { agentCapabilities: reportedCapabilities } : {}),
       ...(reportedRuntimeVersion !== null ? { runtimeVersion: reportedRuntimeVersion || null } : {}),
       ...(ipv6ListenStoredChanged ? { ipv6ListenAvailable: reportedIpv6Listen } : {}),
@@ -694,6 +705,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (addressApplied) Object.assign(host as any, reportedAddress);
     // Agent 2.2.255+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
     await syncHostDetectedAddressesSafely(host, req.body);
+    if (agentDistributionChanged) {
+      appendPanelLog(
+        "info",
+        `[AgentUpgrade] host=${host.id} distribution=${String(host.agentDistribution || "-")} -> ${reportedAgentDistribution}`,
+      );
+      host.agentDistribution = reportedAgentDistribution;
+    }
     if (fxpVersionChanged) {
       appendPanelLog(
         "info",
@@ -848,9 +866,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const pluginInventorySignature = agentPluginInventorySignature(reportedPluginInventoryForFastPath);
     const mimicEnvironmentSignature = stableStateSignature(mimicEnvironment || null);
     const panelMigrationForFastPath = await getPanelMigrationAgentDirective(Number(host.id));
+    // 从原版 ForwardX 迁过来、还要排「换成 NEX Agent」的主机：走完整心跳（排队在完整心跳里做）
+    const forwardxAgentMigrationDue = shouldQueueForwardxAgentMigration({
+      enabled: forwardxAgentMigrationEnabled,
+      hostId: Number(host.id),
+      agentDistribution: host.agentDistribution,
+      agentUpgradeRequested: host.agentUpgradeRequested,
+    });
     const stablePlan = agentStableHeartbeatPlanCache.match(host.id, {
       forceReconcile,
       hasBlockingWork: !!(host as any).agentUpgradeRequested
+        || forwardxAgentMigrationDue
         || !!panelMigrationForFastPath
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
@@ -1667,7 +1693,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             actions.push({
               tunnelId, ruleId: 0, statusType: "tunnel", op: "remove", forwardType: "forwardx-tunnel",
               sourcePort: Number(localExit.listenPort), targetIp: host.ip, targetPort: Number(localExit.listenPort), protocol: "both", commands: [],
-              fxp: { role: "exit", tunnelId, ruleId: 0, listenPort: Number(localExit.listenPort) },
+              // V3 的出口进程身份带着 v3（Agent 的 fxpServerID），撤的时候要说清楚是哪个版本。
+              fxp: { role: "exit", tunnelId, ruleId: 0, listenPort: Number(localExit.listenPort), ...(isForwardXV3Tunnel(tunnel) ? { transportVersion: "v3" } : {}) },
             } as any);
           }
         }
@@ -2387,6 +2414,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         fxpSpec.egressShaping = egress.mode;
         if (egress.mode === "manual") fxpSpec.egressMbps = egress.mbps;
         else if (await egressHint()) fxpSpec.egressHintMbps = await egressHint();
+      }
+      // NEX V3（shared/forwardXV3.ts）：外层选项逐跳都带，入口、中转、出口读的是同一行隧道配置。
+      if (isForwardXV3Tunnel(tunnel)) {
+        const v3Fields = forwardXV3SpecFields(tunnel);
+        if (!v3Fields) return null;
+        // 面板保存时已经拒了 V3 + 抗丢包传输；库里要是还留着旧值（比如直接改库），这里不下发，
+        // 免得 FXP 拒掉整份配置、隧道上别的规则跟着起不来。多路径（中转叠加 / 热备 / 单连接
+        // 多路并发）照常下发：FXP 2.2.141 起每条腿是一条自己的 V3 物理连接。
+        delete fxpSpec.lossTolerant;
+        fxpSpec.transportVersion = "v3";
+        Object.assign(fxpSpec, v3Fields);
+        return fxpSpec;
       }
       if (!isForwardXWireGuardV2(tunnel)) {
         fxpSpec.transportVersion = "v1";
@@ -4534,11 +4573,40 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     }
 
+    /*
+      从原版 ForwardX 迁过来的面板（server/forwardxAgentMigration.ts）：原版 Agent 自动排一次升级，
+      换成 NEX 发的 Agent。不看版本号 —— 原版的版本号可能比 NEX 的还高。
+    */
+    if (shouldQueueForwardxAgentMigration({
+      enabled: forwardxAgentMigrationEnabled,
+      hostId: Number(host.id),
+      agentDistribution: host.agentDistribution,
+      agentUpgradeRequested: host.agentUpgradeRequested,
+    })) {
+      await db.requestHostAgentUpgrade(host.id, AGENT_VERSION, null, new Date(responseIssuedAt), NEX_AGENT_DISTRIBUTION);
+      markForwardxAgentMigrationQueued(Number(host.id));
+      Object.assign(host, {
+        agentUpgradeRequested: true,
+        agentUpgradeTargetVersion: AGENT_VERSION,
+        agentUpgradeReleaseVersion: null,
+        agentUpgradeTargetDistribution: NEX_AGENT_DISTRIBUTION,
+        agentUpgradeRequestedAt: new Date(responseIssuedAt),
+      });
+      appendPanelLog(
+        "info",
+        `[AgentMigration] queued host=${host.id} name=${String(host.name || "-")} version=${effectiveAgentVersion || "-"} distribution=forwardx target=${AGENT_VERSION}/nex`,
+      );
+    }
     const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
     const agentUpgradeCompleted = (host as any).agentUpgradeRequested
       && agentVersion
       && isAgentUpgradeCompleted(
-        { agentVersion, fxpVersion: nextFxpVersion || (host as any).fxpVersion },
+        {
+          agentVersion,
+          fxpVersion: nextFxpVersion || host.fxpVersion,
+          agentDistribution: host.agentDistribution,
+          agentUpgradeTargetDistribution: host.agentUpgradeTargetDistribution,
+        },
         requestedTargetVersion,
         AGENT_VERSION,
       );
@@ -4965,15 +5033,86 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }
 
     if (hasReportedRuntimeState) {
-      const recoverableRules = (rules as any[]).filter((rule: any) => (
-        rule
-        && runtimeBool(rule.isEnabled)
-        && !runtimeBool(rule.pendingDelete)
-        && !runtimeBool(rule.isRunning)
-        && !rule.tunnelId
-        && Number(rule.sourcePort || 0) > 0
-        && localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort))
-      ));
+      /*
+        隧道入口规则也按本机监听恢复：主机地址变了、短暂掉线、面板重启都会把这台机器的运行状态清掉
+        （resetAgentRuntimeStateForHost），普通规则下一次心跳就按本机监听恢复了，隧道规则以前被排除在外，
+        只能等 Agent 再报一次 —— 可 Agent 那边配置没变、不会重下发，于是流量照通、面板一直写「没在运行」
+        （动态 IP 的机器隔几分钟就来一次）。现在：本机上这条规则的监听对得上（转发类型按隧道算：FXP 隧道是
+        forwardx，传输版本 V1 / V2 / V3 也要对上），并且它走的隧道已经报了在跑，就一起恢复。
+        守卫、内核直通这类本机形态不一样的对不上，照旧等 Agent 报。
+
+        隧道本身（tunnels.isRunning）也一样被清：这台是入口时 resetAgentRuntimeStateForHost 连它走的隧道一起
+        写成没在运行，可出口那台什么都没变 —— FXP 隧道的出口动作只看「出口报过的运行状态」（内存里的
+        tunnelRuntimeStatus，只清地址变了的那台），不会重下发、出口也就不会再报；规则这边又要等隧道在跑，
+        两头互相等，只能碰运气等入口的隧道测速把隧道写回来（2026-11 联调：隔几分钟清一次，规则 8 一直没恢复）。
+        所以：单跳隧道（没有中转）在这台是入口、出口那台报过的运行状态还在（自它上次报告以来出口没被清过、
+        隧道没改过），就按出口的报告把隧道恢复成在运行，规则接着按上面的条件恢复。出口没报过、报的是没在跑、
+        或者是多跳隧道，照旧等各自的上报。
+      */
+      const exitConfirmedTunnelIds = new Set<number>();
+      const tunnelExitRuntimeConfirmed = (tunnel: HeartbeatTunnelRow) => {
+        const tunnelId = Number(tunnel?.id || 0);
+        if (
+          tunnelId <= 0
+          || !runtimeBool(tunnel?.isEnabled)
+          || !isTunnelProtocolEnabled(forwardProtocolSettings, tunnel)
+          || (tunnelHopsByTunnelId.get(tunnelId) || []).length > 0
+          || !isCurrentHostTunnelEntry(tunnel)
+          || Number(tunnel?.exitHostId || 0) === Number(host.id)
+        ) return false;
+        const extraExitHostIds = (tunnelExitNodesByTunnelId.get(tunnelId) || [])
+          .filter((node) => runtimeBool(node?.isEnabled, true))
+          .map((node) => Number(node?.hostId || 0))
+          .filter((hostId: number) => hostId > 0);
+        return getTunnelRuntimeTopologyStatus(tunnelId, {
+          entryHostIds: tunnelEntryHostIds(tunnel),
+          hopHostIds: [],
+          primaryExitHostId: Number(tunnel.exitHostId || 0),
+          extraExitHostIds,
+          relayMode: String(tunnel.relayMode || "chain"),
+          loadBalanceEnabled: runtimeBool(tunnel.loadBalanceEnabled),
+          loadBalanceStrategy: String(tunnel.loadBalanceStrategy || "none"),
+        }).running;
+      };
+      for (const tunnel of hostTunnels) {
+        if (!tunnel || runtimeBool(tunnel.isRunning) || !tunnelExitRuntimeConfirmed(tunnel)) continue;
+        exitConfirmedTunnelIds.add(Number(tunnel.id));
+      }
+      if (exitConfirmedTunnelIds.size > 0) {
+        await mapWithConcurrency(Array.from(exitConfirmedTunnelIds), 8, async (tunnelId: number) => {
+          await db.updateTunnelRunningStatus(tunnelId, true);
+          const tunnel = tunnelById.get(tunnelId);
+          if (tunnel) tunnel.isRunning = true;
+        });
+        appendPanelLog(
+          "info",
+          `[AgentReconcile] host=${host.id} recovered tunnel running state from exit runtime reports tunnels=${Array.from(exitConfirmedTunnelIds).join(",")}`,
+        );
+      }
+      // 本机监听对得上、就差隧道没在跑的规则：记下在等哪几条隧道，隧道一回来就作废稳定快路径（见 agentHeartbeatGate）。
+      const waitingTunnelIds = new Set<number>();
+      const recoverableRules = (rules as any[]).filter((rule: any) => {
+        if (
+          !rule
+          || !runtimeBool(rule.isEnabled)
+          || runtimeBool(rule.pendingDelete)
+          || runtimeBool(rule.isRunning)
+          || Number(rule.sourcePort || 0) <= 0
+        ) return false;
+        if (!rule.tunnelId) return localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort));
+        const ruleTunnel = tunnelById.get(rule.tunnelId);
+        if (!ruleTunnel || !runtimeBool(ruleTunnel.isEnabled)) return false;
+        const expectedForwardType = rule.forwardType === "gost"
+          ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
+          : rule.forwardType;
+        const localMatches = localRuleMatches(rule, String(expectedForwardType || ""), Number(rule.sourcePort));
+        if (!runtimeBool(ruleTunnel.isRunning)) {
+          if (localMatches) waitingTunnelIds.add(Number(ruleTunnel.id));
+          return false;
+        }
+        return localMatches;
+      });
+      rememberHostWaitingForTunnels(host.id, waitingTunnelIds);
       if (recoverableRules.length > 0) {
         await mapWithConcurrency(recoverableRules, 16, async (rule: any) => {
           await setRuntimeRuleRunning(Number(rule.id), true);

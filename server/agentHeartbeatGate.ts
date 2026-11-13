@@ -298,6 +298,52 @@ export function invalidateAgentStableHeartbeatPlan(hostId?: unknown) {
   agentStableHeartbeatPlanCache.invalidate(hostId);
 }
 
+/*
+  「本机监听对得上、就差隧道报在跑」的入口规则在等哪几条隧道：隧道编号 → 在等的主机。
+
+  运行状态被清掉后，入口规则要等它走的隧道回到「在运行」才能按本机监听恢复（agentHeartbeatRoute 的
+  recoverableRules）。可这台入口机这时多半已经走上了稳定快路径：完整对账（含恢复）要等 5 分钟一次的
+  核对才再跑。隧道又常常是从别的路回来的 —— 出口报状态、入口的隧道测速、自检、手动测速 —— 这些路不
+  一定会去敲入口机，于是规则一直停在「没在运行」，直到下一次被清（动态 IP 的机器隔几分钟就清一次，
+  永远等不到）。所以心跳里把「在等哪些隧道」记下来，隧道写成在运行时（updateTunnelRunningStatus）
+  把这些主机的稳定快路径作废，它们下一次心跳就走完整对账、把规则恢复。
+*/
+const hostsWaitingForTunnelRunning = new Map<number, Set<number>>();
+
+export function rememberHostWaitingForTunnels(hostIdValue: unknown, tunnelIdValues: Iterable<unknown>) {
+  const hostId = Number(hostIdValue);
+  if (!Number.isInteger(hostId) || hostId <= 0) return;
+  const wanted = new Set<number>();
+  for (const value of tunnelIdValues) {
+    const tunnelId = Number(value);
+    if (Number.isInteger(tunnelId) && tunnelId > 0) wanted.add(tunnelId);
+  }
+  for (const [tunnelId, hosts] of hostsWaitingForTunnelRunning) {
+    if (wanted.has(tunnelId)) continue;
+    hosts.delete(hostId);
+    if (hosts.size === 0) hostsWaitingForTunnelRunning.delete(tunnelId);
+  }
+  for (const tunnelId of wanted) {
+    let hosts = hostsWaitingForTunnelRunning.get(tunnelId);
+    if (!hosts) {
+      hosts = new Set<number>();
+      hostsWaitingForTunnelRunning.set(tunnelId, hosts);
+    }
+    hosts.add(hostId);
+  }
+}
+
+/** 隧道回到在运行：在等它的主机作废稳定快路径（下一次心跳走完整对账），返回这些主机。 */
+export function noteTunnelRunningRestored(tunnelIdValue: unknown) {
+  const tunnelId = Number(tunnelIdValue);
+  const hosts = hostsWaitingForTunnelRunning.get(tunnelId);
+  if (!hosts) return [] as number[];
+  hostsWaitingForTunnelRunning.delete(tunnelId);
+  const hostIds = Array.from(hosts);
+  for (const hostId of hostIds) agentStableHeartbeatPlanCache.invalidate(hostId);
+  return hostIds;
+}
+
 export function shouldPersistAgentPresence(input: {
   wasOnline: boolean;
   lastHeartbeat: unknown;

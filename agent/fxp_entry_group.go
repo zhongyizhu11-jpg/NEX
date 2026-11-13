@@ -20,23 +20,30 @@ type fxpProcess struct {
 const fxpEntryGroupRole = "entry-group"
 
 func normalizeFXPTransportVersion(version string) string {
-	if strings.EqualFold(strings.TrimSpace(version), forwardXWireGuardVersion) {
-		return forwardXWireGuardVersion
+	normalized := strings.ToLower(strings.TrimSpace(version))
+	if normalized == "" {
+		return "v1"
 	}
-	return "v1"
+	// 不认识的版本原样留着，由 validateFXPTransport 拒掉：以前一律归成 v1，更新的面板下发的
+	// 新传输会被这台 Agent 悄悄按 V1 跑。V3 同理不能落回 v1，进程身份、配置路径也不能和 V1 混。
+	return normalized
+}
+
+func isKnownFXPTransportVersion(version string) bool {
+	return version == "v1" || version == forwardXWireGuardVersion || version == forwardXV3Version
 }
 
 func isSharedFXPEntry(spec fxpSpec) bool {
 	version := normalizeFXPTransportVersion(spec.TransportVersion)
 	return strings.EqualFold(strings.TrimSpace(spec.Role), "entry") &&
-		(version == "v1" || version == forwardXWireGuardVersion) &&
+		isKnownFXPTransportVersion(version) &&
 		spec.TunnelID > 0 && spec.RuleID > 0 && spec.ListenPort > 0
 }
 
 func isFXPEntryGroup(spec fxpSpec) bool {
 	version := normalizeFXPTransportVersion(spec.TransportVersion)
 	return strings.EqualFold(strings.TrimSpace(spec.Role), fxpEntryGroupRole) &&
-		(version == "v1" || version == forwardXWireGuardVersion) &&
+		isKnownFXPTransportVersion(version) &&
 		spec.TunnelID > 0
 }
 
@@ -115,6 +122,11 @@ func buildSharedFXPEntryGroup(entries []fxpSpec, tunnelID int, transportVersion 
 		TransportVersion: transportVersion,
 		TunnelID:         tunnelID,
 		Entries:          compatible,
+	}
+	// 入口组的外层选项取自第一条入口：同一条隧道的入口读的是同一行隧道配置，选项一样
+	// （validateFXPTransport 会核对）。
+	if transportVersion == forwardXV3Version && len(compatible) > 0 {
+		copyFXPV3Options(&group, compatible[0])
 	}
 	group = normalizeFXPSpec(group)
 	return group, tunnelID > 0 && len(group.Entries) > 0

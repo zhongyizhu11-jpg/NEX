@@ -17,6 +17,8 @@ await build({
   entryPoints: {
     index: "server/index.ts",
     "migrate-legacy": "server/legacyMigrationCli.ts",
+    // 从原版 ForwardX 迁到 NEX：安装脚本的 migrate-forwardx 动作调它（server/forwardxMigrationCli.ts）
+    "migrate-forwardx": "server/forwardxMigrationCli.ts",
     "reset-admin-password": "server/resetAdminPasswordCli.ts",
   },
   bundle: true,
@@ -46,4 +48,4 @@ const __dirname = __forwardxDirname(__filename);
   },
 });
 
-console.log("Server build complete: dist/index.js, dist/migrate-legacy.js, dist/reset-admin-password.js");
+console.log("Server build complete: dist/index.js, dist/migrate-legacy.js, dist/migrate-forwardx.js, dist/reset-admin-password.js");

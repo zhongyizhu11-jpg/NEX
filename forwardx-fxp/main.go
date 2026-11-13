@@ -103,7 +103,12 @@ type fxpHandshake struct {
 }
 
 type secureConn struct {
-	conn          net.Conn
+	conn net.Conn
+	// logical：这是一条 V3 连接（内层连接本身，或多路复用会话里的一个逻辑流）。加密由
+	// V3 的内层记录层做，这里只读写「4 字节长度 + 明文」的逻辑帧，下面那些密钥、计数、
+	// 读缓冲都不用（见 v3_session.go）。logicalBuf 是读逻辑帧的缓冲，只由读协程碰。
+	logical       bool
+	logicalBuf    []byte
 	lenWriteAEAD  cipher.AEAD
 	dataWriteAEAD cipher.AEAD
 	lenReadAEAD   cipher.AEAD
@@ -230,7 +235,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.140"
+	fxpRuntimeVersion             = "2.2.141"
 	fxpFallbackRetry              = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -416,6 +421,7 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 		// 承载方式跟着这条规则 / 中转走，同一个出口在两种承载下是两份端点状态（连接池里
 		// 的连接不能混用）。
 		endpoint.lossTolerant = fallback.lossTolerant
+		endpoint.transport = fallback.transport
 		if endpoint.Host == "" || endpoint.Port <= 0 || endpoint.Port > 65535 || endpoint.UDPPort <= 0 || endpoint.UDPPort > 65535 {
 			return
 		}
@@ -1007,6 +1013,13 @@ func main() {
 		cfg.LimitOut,
 	)
 	log.Printf("forwardx-fxp udp wire packet limit=%dB transport=%s", configureFXPUDPWireLimit(cfg), cfg.TransportVersion)
+	for _, item := range append([]config{cfg}, cfg.Entries...) {
+		if v3Enabled(item) {
+			log.Printf("fxp V3 %s role=%s tunnel=%d rule=%d auth=v3-inner maxStreamsPerSession=128 maxPhysicalSessions=%d", v3Describe(item), item.Role, item.TunnelID, item.RuleID, v3PoolSessionLimit)
+			break
+		}
+	}
+	defer v3Outbound.Close()
 	// 启动时就把帧加密算法的实测结果打出来（没写死时），排查「跑不满」能第一眼看到
 	// 这台机器的 AES 快不快。
 	if pinned := normalizeAEADConfig(cfg.AEAD); pinned != "" {
@@ -1163,7 +1176,11 @@ func secureDialTimeout(cfg config) time.Duration {
 // dialSecureTCP 返回一条握完手、确认过的安全连接：池里有预热好的就直接用，
 // 没有才现拨。多路径的腿走这里。
 func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, error) {
-	state := fxpEndpointStateFor(exitEndpoint{Host: host, Port: port, Key: cfg.Key, lossTolerant: cfg.LossTolerant})
+	state := fxpEndpointStateFor(exitEndpoint{Host: host, Port: port, Key: cfg.Key, lossTolerant: cfg.LossTolerant, transport: v3TransportIdentity(cfg)})
+	if v3Enabled(cfg) {
+		conn, sec, _, err := dialV3Transport(state, host, port, cfg)
+		return conn, sec, err
+	}
 	if conn, sec, ok := state.take(cfg); ok {
 		return conn, sec, nil
 	}
@@ -1173,6 +1190,9 @@ func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, er
 // dialSecureTCPFresh 不碰连接池，现拨一条并完整握手。连接池预热和后台探测用它：
 // 它们要的就是真实地走一遍网络。
 func dialSecureTCPFresh(host string, port int, cfg config) (net.Conn, *secureConn, error) {
+	if v3Enabled(cfg) {
+		return dialV3Fresh(host, port, cfg)
+	}
 	conn, err := dialNextHop(host, port, secureDialTimeout(cfg), cfg)
 	if err != nil {
 		return nil, nil, err
@@ -1683,6 +1703,12 @@ func handleExitSession(conn net.Conn, cfg config) error {
 
 func handleExitSessionWithStartup(conn net.Conn, cfg config, in *fxpInbound) error {
 	defer conn.Close()
+	if v3Enabled(cfg) {
+		// V3：外层 + 内层握手代替 FXP 安全握手，之后每条业务连接走和 V1 同一段处理。
+		return serveV3Inbound("exit", conn, cfg, in, func(sec *secureConn, in *fxpInbound) error {
+			return handleExitBusiness(sec, cfg, in)
+		})
+	}
 	sec, err := newExitSecureConn(conn, cfg)
 	if err != nil {
 		probeDelay()
@@ -1694,6 +1720,11 @@ func handleExitSessionWithStartup(conn net.Conn, cfg config, in *fxpInbound) err
 	if lossCarrierRefusesTCP("exit", cfg, conn) {
 		return nil
 	}
+	return handleExitBusiness(sec, cfg, in)
+}
+
+// handleExitBusiness 处理一条已经认证过的业务连接：读 hello、核对目标、连目标。
+func handleExitBusiness(sec *secureConn, cfg config, in *fxpInbound) error {
 	frame, err := awaitSecureHello(sec, in.stop())
 	if err != nil {
 		return quietHelloError(err)
@@ -1884,6 +1915,11 @@ func runRelay(done <-chan struct{}, cfg config) error {
 
 func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEndpointSelector, in *fxpInbound) error {
 	defer upConn.Close()
+	if v3Enabled(cfg) {
+		return serveV3Inbound("relay", upConn, cfg, in, func(sec *secureConn, in *fxpInbound) error {
+			return handleRelayBusiness(sec, cfg, selector, in)
+		})
+	}
 	// Accept upstream encrypted connection (like exit)
 	upSec, err := newExitSecureConn(upConn, cfg)
 	if err != nil {
@@ -1896,6 +1932,12 @@ func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEn
 	if lossCarrierRefusesTCP("relay", cfg, upConn) {
 		return nil
 	}
+	return handleRelayBusiness(upSec, cfg, selector, in)
+}
+
+// handleRelayBusiness 处理上一跳的一条已经认证过的业务连接：读 hello，连下一跳，双向转发。
+func handleRelayBusiness(upSec *secureConn, cfg config, selector *exitEndpointSelector, in *fxpInbound) error {
+	upConn := upSec.conn
 	frame, err := awaitSecureHello(upSec, in.stop())
 	if err != nil {
 		return quietHelloError(err)
@@ -1931,6 +1973,10 @@ func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEn
 	// Connect to downstream (like entry)
 	downCfg := cfg
 	downCfg.Key = cfg.RelayKey
+	if strings.TrimSpace(hello.MultipathSessionID) != "" {
+		// 多路径的一条腿：V3 时下一跳也是它自己的物理连接（V1 / V2 原样不变）。
+		downCfg = v3LegConfig(downCfg)
+	}
 	selectionKey := strings.TrimSpace(hello.SelectionKey)
 	if selectionKey == "" {
 		selectionKey = strings.TrimSpace(hello.ProxySourceIP)
@@ -2766,6 +2812,9 @@ func (c *secureConn) writeFrame(plain []byte) error {
 }
 
 func (c *secureConn) readFrame() ([]byte, error) {
+	if c.logical {
+		return c.readLogicalFrame()
+	}
 	if c.ackPending {
 		if err := c.consumeHandshakeAck(); err != nil {
 			return nil, err
@@ -2782,6 +2831,9 @@ func (c *secureConn) writeEncryptedFrame(plain []byte) error {
 func (c *secureConn) writeFrames(frames ...[]byte) error {
 	if c == nil {
 		return errors.New("nil secure connection")
+	}
+	if c.logical {
+		return c.writeLogicalFrames(frames)
 	}
 	if c.shaper != nil {
 		total := 0
@@ -2837,6 +2889,13 @@ func (c *secureConn) appendSealedFrameLocked(dst []byte, plain []byte) []byte {
 // 写出（明文侧 writev、中转一次封装）。交出的切片都指向读缓冲，只在下一次读之前
 // 有效，和 readFrame 一样。
 func (c *secureConn) readFrames(dst [][]byte, max int) ([][]byte, error) {
+	if c.logical {
+		frame, err := c.readLogicalFrame()
+		if err != nil {
+			return dst, err
+		}
+		return append(dst, frame), nil
+	}
 	if c.ackPending {
 		if err := c.consumeHandshakeAck(); err != nil {
 			return dst, err

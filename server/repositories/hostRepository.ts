@@ -364,6 +364,8 @@ export async function getHostStatusRows(input: Omit<HostListQuery, keyof PageReq
       agentUpgradeRequested: hosts.agentUpgradeRequested,
       agentUpgradeTargetVersion: hosts.agentUpgradeTargetVersion,
       agentUpgradeRequestedAt: hosts.agentUpgradeRequestedAt,
+      agentDistribution: hosts.agentDistribution,
+      agentUpgradeTargetDistribution: hosts.agentUpgradeTargetDistribution,
       updatedAt: hosts.updatedAt,
     })
     .from(hosts)
@@ -385,6 +387,8 @@ export async function getHostUpgradeCandidates(input: Omit<HostListQuery, keyof 
       agentUpgradeRequested: hosts.agentUpgradeRequested,
       agentUpgradeTargetVersion: hosts.agentUpgradeTargetVersion,
       agentUpgradeRequestedAt: hosts.agentUpgradeRequestedAt,
+      agentDistribution: hosts.agentDistribution,
+      agentUpgradeTargetDistribution: hosts.agentUpgradeTargetDistribution,
     })
     .from(hosts);
   const rows = condition ? await query.where(condition) : await query;
@@ -1103,6 +1107,8 @@ export async function requestHostAgentUpgrade(
   targetVersion: string | null,
   releaseVersion?: string | null,
   requestedAt?: Date | null,
+  // 非空：这次升级还要把 Agent 换成这一家发的（从原版 ForwardX 迁过来时是 "nex"），见 shared/agentDistribution.ts
+  targetDistribution?: string | null,
 ) {
   const db = await getDb();
   if (!db) return;
@@ -1110,6 +1116,7 @@ export async function requestHostAgentUpgrade(
     agentUpgradeRequested: true,
     agentUpgradeTargetVersion: targetVersion,
     agentUpgradeReleaseVersion: releaseVersion || null,
+    agentUpgradeTargetDistribution: targetDistribution || null,
     agentUpgradeRequestedAt: requestedAt || nowDate(),
     updatedAt: nowDate(),
   }).where(eq(hosts.id, hostId));
@@ -1122,6 +1129,7 @@ export async function clearHostAgentUpgradeRequest(hostId: number) {
     agentUpgradeRequested: false,
     agentUpgradeTargetVersion: null,
     agentUpgradeReleaseVersion: null,
+    agentUpgradeTargetDistribution: null,
     updatedAt: nowDate(),
   }).where(eq(hosts.id, hostId));
 }
@@ -1136,6 +1144,7 @@ export async function clearStaleHostAgentUpgradeRequests(timeoutMs = 10 * 60 * 1
      SET ${quoteIdentifier("agentUpgradeRequested")} = ?,
          ${quoteIdentifier("agentUpgradeTargetVersion")} = NULL,
          ${quoteIdentifier("agentUpgradeReleaseVersion")} = NULL,
+         ${quoteIdentifier("agentUpgradeTargetDistribution")} = NULL,
          ${quoteIdentifier("updatedAt")} = ?
      WHERE ${quoteIdentifier("agentUpgradeRequested")} = ?
        AND ${quoteIdentifier("agentUpgradeRequestedAt")} IS NOT NULL

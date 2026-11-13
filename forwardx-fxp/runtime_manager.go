@@ -207,6 +207,8 @@ func stripTCPOnlyFields(cfg *config) {
 	cfg.LossTolerant = false
 	// UDP 直连只看 udpTargets；TCP 目标表变了不该把 UDP 监听连同会话一起重启。
 	cfg.StreamTargets = nil
+	// V3 的外层只套在 TCP 承载上，UDP 直连不经过它：改外层选项不重启 UDP 监听。
+	cfg.V3Transport, cfg.V3Host, cfg.V3Path, cfg.V3UserAgent, cfg.V3ServerName, cfg.V3Multiplex = "", "", "", "", "", nil
 }
 
 func listenSlotKey(network, host string, port int) string {
@@ -250,7 +252,7 @@ func buildEntryPlans(entries []config, grouped bool) ([]tcpListenPlan, []udpServ
 		res := &entryResources{
 			cfg:        entry,
 			gate:       newConnGate(entry.MaxConnections, entry.MaxIPs),
-			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant}, entry.ExitStrategy),
+			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant, transport: v3TransportIdentity(entry)}, entry.ExitStrategy),
 			inLimiter:  newLimiter(entry.LimitIn),
 			outLimiter: newLimiter(entry.LimitOut),
 		}
@@ -412,7 +414,7 @@ func buildRelayPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 	var tcpPlans []tcpListenPlan
 	var udpPlans []udpServePlan
 	newSelector := func() *exitEndpointSelector {
-		return newExitEndpointSelector(cfg.Exits, exitEndpoint{Host: cfg.RelayExitHost, Port: cfg.RelayExitPort, UDPPort: cfg.UDPRelayExitPort, Key: cfg.RelayKey, lossTolerant: cfg.LossTolerant}, cfg.ExitStrategy)
+		return newExitEndpointSelector(cfg.Exits, exitEndpoint{Host: cfg.RelayExitHost, Port: cfg.RelayExitPort, UDPPort: cfg.UDPRelayExitPort, Key: cfg.RelayKey, lossTolerant: cfg.LossTolerant, transport: v3TransportIdentity(cfg)}, cfg.ExitStrategy)
 	}
 	if protocolHas(cfg, "tcp") {
 		tcpPlans = append(tcpPlans, tcpListenPlan{

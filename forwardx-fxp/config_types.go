@@ -11,6 +11,9 @@ type exitEndpoint struct {
 	CapacityMbps int `json:"capacityMbps,omitempty"`
 	// lossTolerant 不上线：拨这个端点用不用抗丢包传输（跟着规则 / 中转的 LossTolerant）。
 	lossTolerant bool
+	// transport 不上线：V3 的外层选项（v3TransportIdentity），V1 / V2 为空。选项不同的
+	// 同一个出口是两份端点状态 —— 预热好的连接是按外层选项握的手，不能混用。
+	transport string
 }
 
 // udpTarget is deliberately configured on the exit runtime. UDP direct packets
@@ -121,8 +124,20 @@ type config struct {
 	MultipathMaxPending int            `json:"multipathMaxPending,omitempty"`
 	// MultipathReplicate：复制模式（见 helloFrame.MultipathReplicate），用带宽换可靠。
 	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
-	// TransportVersion 是 Agent 写进来的隧道传输版本（v1 / v2），决定 UDP 单包上限。
+	// TransportVersion 是 Agent 写进来的隧道传输版本（v1 / v2 / v3）。v2 决定 UDP 单包上限；
+	// v3 让下一跳的 TCP 承载换成 V3 传输（见 v3_transport.go）。
 	TransportVersion string `json:"transportVersion,omitempty"`
+	// V3 传输的外层选项（只在 transportVersion 是 v3 时有意义，其它版本写了就拒）：
+	// V3Transport 是外层 http / ws / tls；V3Host 填了就在 HTTP 请求里带 Host 头；
+	// V3Path 是请求路径（两端必须一致，出口按它核对）；V3UserAgent 是 User-Agent；
+	// V3ServerName 是 TLS 的 SNI（留空不发）；V3Multiplex 是多条业务连接共用一条
+	// 物理连接，没写按开（和上游一致），NEX 面板总是显式写。
+	V3Transport  string `json:"v3Transport,omitempty"`
+	V3Host       string `json:"v3Host,omitempty"`
+	V3Path       string `json:"v3Path,omitempty"`
+	V3UserAgent  string `json:"v3UserAgent,omitempty"`
+	V3ServerName string `json:"v3ServerName,omitempty"`
+	V3Multiplex  *bool  `json:"v3Multiplex,omitempty"`
 	// UDPWirePacketSize 显式覆盖 UDP 单包上限（字节），0 表示按传输版本取默认值。
 	UDPWirePacketSize int `json:"udpWirePacketSize,omitempty"`
 	// UDPFEC 是隧道的「抗丢包」开关：UDP 直连额外发 Reed-Solomon 冗余包，接收端

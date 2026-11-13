@@ -139,6 +139,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
 	addGostRuntimeReport(payload)
+	addAgentDistributionReport(payload)
 	addAgentRuntimeReport(payload)
 	addLoadAverageReport(payload)
 	tcpConnections, udpConnections := connectionCounts()

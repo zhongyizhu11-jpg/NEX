@@ -41,14 +41,14 @@ cleanup() {
     wait "$PANEL_PID" 2>/dev/null
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "[e2e] 失败（退出码 $rc）。面板日志最后 60 行："
+    echo "[e2e] 失败（退出码 ${rc}）。面板日志最后 60 行："
     tail -n 60 "$OUT/panel.log" 2>/dev/null || true
   fi
   exit "$rc"
 }
 trap cleanup EXIT
 
-echo "[e2e] 起面板：http://0.0.0.0:$PORT（数据在 $OUT/data）"
+echo "[e2e] 起面板：http://0.0.0.0:${PORT}（数据在 $OUT/data）"
 (
   cd "$ROOT"
   DATABASE_TYPE=sqlite \
