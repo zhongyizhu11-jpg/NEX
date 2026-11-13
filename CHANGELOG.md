@@ -4,6 +4,12 @@ NEX 面板每个版本的主要变化，新的在上面。括号里是同一版�
 
 完整的发布文件见 [GitHub Releases](https://github.com/zhongyizhu11-jpg/NEX/releases)，升级方法见[升级和备份](https://zhongyizhu11-jpg.github.io/NEX/guide/upgrade-backup)。
 
+## 2.3.528（Agent 2.2.257、FXP 2.2.141，不变）
+
+### 调整
+
+- 主题库撤掉 2.3.526 加的控制台、精修、深色运维三套（手机上和经典几乎一样）。升级时从主题库装上的这三套会被删掉，站点默认是它们的回到经典。
+
 ## 2.3.527（Agent 2.2.257、FXP 2.2.141）
 
 ### 新增
