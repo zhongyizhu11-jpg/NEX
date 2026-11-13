@@ -3,7 +3,7 @@
 
   第四种气质，由 <html data-ui-theme="rose"> 打开；没有这个属性这个文件一条都不生效。
   参考的是 deep.losantos.space（Rosélune 面板）默认的 Romance 那一套（2026-10-11 看过源码，
-  记录在 design/losantos-settings-2026-10-11/）：**粉底 + 斜体衬线 + 全药丸 + 浮着的半透明卡**。
+  记录在 design/losantos-settings-2026-10-11/）：**粉底 + 衬线（参考站是斜体，这里不斜，见第 3 条）+ 全药丸 + 浮着的半透明卡**。
   经典是「浅灰托白卡」、极光是「彩色柔光托玻璃卡」、墨金是「米白纸上平贴的卡纸」，玫瑰是
   「胭脂色的纸上浮着几片白瓣」—— 暖、软、轻，像一本精装的旅行手帐。
 
@@ -18,9 +18,11 @@
             一枚托盘里，链路卡的延迟一行在一枚托盘里；托盘下面的地址行不再画线。主机卡的
             系统图标是一枚胭脂色圆章。「彩色描边」四档照常：这里描边是把状态色调进那道软影和
             一圈 1px 的内描边，卡身仍是白瓣。
-    3. 字   页面大标题、统计大数字、规则卡的流量数字用**斜体衬线**（Iowan Old Style / Palatino /
-            Georgia，中文回落宋体），字重 400 —— 墨金是直立的粗衬线，这里是轻的斜体。
-            分组小标题玫瑰色斜体。正文仍是无衬线。
+    3. 字   页面大标题、统计大数字、规则卡的流量数字用**细衬线**（Iowan Old Style / Palatino /
+            Georgia，中文回落宋体），字重 400 —— 墨金是粗衬线，这里是轻的。
+            分组小标题玫瑰色衬线。正文仍是无衬线。
+            原来这几处是斜体：中文字体没有斜体，浏览器把方块字硬拧斜，手机上看着像乱码
+            （2026-11 用户反馈），1.0.1 起一律直立，数字和英文也不斜（同一行里一半斜一半正更怪）。
     4. 控件 全部药丸：分段控件是**一圈玫瑰色细线的空槽**，选中格是主色 12% 的淡底 + 墨字，
             不再是一块渐变；筛选 chip 未选中只有一圈线，选中淡底 + 主色字；搜索框、输入框是
             白 84% 的半透；主按钮仍是主色渐变（跟「默认配色」换），加一道带色的软影和顶部
@@ -183,7 +185,7 @@ html[data-ui-theme="rose"] .fx-tunnel-foot { margin-top: 12px; padding: 9px 12px
 /* 首页的统计条：格与格之间的线换成玫瑰色细线 */
 html[data-ui-theme="rose"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
 
-/* ── 3. 斜体衬线 ─────────────────────────────────────────────── */
+/* ── 3. 细衬线（不斜：中文没有斜体，硬斜像乱码）─────────────────────── */
 html[data-ui-theme="rose"] .workspace-main .workspace-header-title,
 html[data-ui-theme="rose"] .fx-navbar-large-title,
 html[data-ui-theme="rose"] .workspace-main .fx-pane-title,
@@ -191,7 +193,7 @@ html[data-ui-theme="rose"] .fx-rule-num > b,
 html[data-ui-theme="rose"] .fx-summary-value,
 html[data-ui-theme="rose"] .fx-host-spec > b {
   font-family: var(--fx-font-display);
-  font-style: italic;
+  font-style: normal;
   font-weight: 400;
   letter-spacing: 0;
 }
@@ -199,7 +201,7 @@ html[data-ui-theme="rose"] .workspace-main .workspace-header-title,
 html[data-ui-theme="rose"] .fx-navbar-large-title { font-size: 30px; line-height: 36px; }
 @media (max-width: 767px) {
   html[data-ui-theme="rose"] .fx-navbar-large-title { font-size: 28px; line-height: 34px; }
-  /* 斜体衬线比无衬线宽：手机上标题收到 26px、不折行；右边那组走势 + 读数放不下时整组掉到下一行 */
+  /* 衬线比无衬线宽：手机上标题收到 26px、不折行；右边那组走势 + 读数放不下时整组掉到下一行 */
   html[data-ui-theme="rose"] .workspace-main .workspace-header-title { font-size: 26px; line-height: 32px; white-space: nowrap; }
   html[data-ui-theme="rose"] .workspace-header-row { flex-wrap: wrap; }
   /* 掉下去的那组走势拉成通栏；右上的 ··· 钉在标题那一行右边，不再悬在走势和标题之间 */
@@ -218,9 +220,9 @@ html[data-ui-theme="rose"] .workspace-main .workspace-header {
   padding-bottom: 10px;
   background: linear-gradient(90deg, var(--fx-stroke-base), color-mix(in srgb, var(--fx-rose) 36%, transparent) 32%, transparent 80%) left bottom / 100% 1px no-repeat;
 }
-/* 分组小标题：玫瑰色斜体小字 */
+/* 分组小标题：玫瑰色衬线小字（不斜） */
 html[data-ui-theme="rose"] .fx-list-section-header,
-html[data-ui-theme="rose"] .workspace-main .fx-list-section-header { color: var(--fx-rose); font-family: var(--fx-font-display); font-style: italic; font-weight: 400; font-size: 13.5px; letter-spacing: .02em; }
+html[data-ui-theme="rose"] .workspace-main .fx-list-section-header { color: var(--fx-rose); font-family: var(--fx-font-display); font-style: normal; font-weight: 400; font-size: 13.5px; letter-spacing: .02em; }
 /* 走势线用玫瑰色 */
 html[data-ui-theme="rose"] .fx-rule-spark,
 html[data-ui-theme="rose"] .workspace-header-aside .fx-sparkline { color: var(--fx-rose); }
@@ -294,8 +296,8 @@ html[data-ui-theme="rose"] .workspace-layout [data-sidebar="sidebar"] { border-r
 /* ── 5. 设置页：编号分节 + 贴底保存栏（参考 Rosélune 设置页，2026-10-11 用户「全做到第四套」）── */
 /*
   经典的设置页是一摞卡片，每张一个框、一个保存按钮。玫瑰下改成一页顺着往下读的表单：
-  每张卡去掉框和影子，变成一「节」—— 顶上一道从左边淡入的玫瑰色细线，标题前面一枚斜体编号
-  「01」「02」…（CSS 计数，按页面上出现的顺序），标题是斜体衬线；节与节之间只有留白和那道线。
+  每张卡去掉框和影子，变成一「节」—— 顶上一道从左边淡入的玫瑰色细线，标题前面一枚玫瑰色编号
+  「01」「02」…（CSS 计数，按页面上出现的顺序），标题是衬线；节与节之间只有留白和那道线。
   卡里各自的保存按钮藏起来，交给页底那一条贴底保存栏（SaveDock.tsx，有改动才亮）。
   没登记到保存栏的卡（端口 / SSL 要确认重启、协议和菜单在弹窗里改）按钮照常显示。
 */
@@ -322,7 +324,7 @@ html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="
 html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"],
 html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-content"],
 html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-footer"] { padding-inline: 2px; }
-/* 节标题：斜体编号 + 斜体衬线；标题前那枚小图标收掉（编号已经是记号了） */
+/* 节标题：玫瑰色编号 + 衬线；标题前那枚小图标收掉（编号已经是记号了） */
 html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"] {
   font-family: var(--fx-font-display);
   font-size: 18px;
@@ -333,7 +335,7 @@ html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="
 html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"]::before {
   content: counter(fx-sec, decimal-leading-zero);
   margin-right: 4px;
-  font: italic 400 13px/1 var(--fx-font-display);
+  font: 400 13px/1 var(--fx-font-display);
   letter-spacing: .02em;
   color: var(--fx-rose);
 }

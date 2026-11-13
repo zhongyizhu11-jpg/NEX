@@ -27,8 +27,14 @@ export const UI_THEME_API_VERSION = 1;
 export const BUILTIN_UI_THEME_IDS = ["classic", "pearl", "liquid-glass"] as const;
 export type BuiltinUiThemeId = typeof BUILTIN_UI_THEME_IDS[number];
 
-/** 官方主题库里的那几套：前五套原来内置，后三套（控制台 / 精修 / 深色运维）2.3.525 之后新加。顺序就是主题库里的显示顺序。 */
-export const OFFICIAL_UI_THEME_IDS = ["deepspace", "gilt", "rose", "cinnabar", "indigo", "console", "refined", "nightops"] as const;
+/** 官方主题库里的那几套（原来都是内置的）。顺序就是主题库里的显示顺序。 */
+export const OFFICIAL_UI_THEME_IDS = ["deepspace", "gilt", "rose", "cinnabar", "indigo"] as const;
+
+/**
+ * 2.3.526 加进主题库、2.3.528 又撤掉的三套（控制台 / 精修 / 深色运维）：在手机上和经典几乎一样，
+ * 不值得占着主题库。升级时把从主题库装上的这几套删掉，站点默认是它们的回到经典（server/uiThemes.ts）。
+ */
+export const RETIRED_OFFICIAL_UI_THEME_IDS = ["console", "refined", "nightops"] as const;
 export type OfficialUiThemeId = typeof OFFICIAL_UI_THEME_IDS[number];
 
 export const UI_THEME_LIMITS = {
