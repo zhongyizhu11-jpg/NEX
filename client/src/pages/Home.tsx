@@ -297,8 +297,9 @@ function DashboardContent() {
         header={attentionHeader}
       />
       <NetworkMapSlot enabled={mapEnabled} cacheScope={accountCacheScope} onOpen={setLocation} collapsible />
-      <OpsHomeExtras isAdmin={isAdmin} />
       {isAdmin ? trafficSection : accountSection}
+      {/* 「最近动态」（只给管理员）排在流量下面（2026-11 用户要求），不再夹在地图和流量中间 */}
+      <OpsHomeExtras isAdmin={isAdmin} />
       {isAdmin ? accountSection : trafficSection}
       <MobileAppSettings snapshot={mobileReminderSnapshot} />
     </div>
