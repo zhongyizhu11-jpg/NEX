@@ -709,15 +709,23 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 			return
 		}
 	}
+	// 读 PROXY 头时多读到的字节（以及透传模式下的头本身）要先补给路径，再接着原样拷 —— 由保护期接着写：
+	// 上游回第一个字节之前就关了，这条连接当场换下一条路径、把这些字节重发过去（failover_early_close.go）。
+	// 连接从拨通这一刻就记在这条路径名下（按负载分、强制切换都靠它），保护期里换了路再挪过去。
+	p.trackConn(index, client)
+	trackedIndex := index
+	upstream, index, ok := p.guardedStart(client, upstream, index, visitor, attempted, prefix)
+	if !ok {
+		p.untrackConn(trackedIndex, client)
+		p.inbound.record(false, time.Now())
+		return
+	}
+	if index != trackedIndex {
+		p.untrackConn(trackedIndex, client)
+		p.trackConn(index, client)
+	}
 	p.inbound.record(true, time.Now())
 	defer upstream.Close()
-	// 读 PROXY 头时多读到的字节（以及透传模式下的头本身）要先补给路径，再接着原样拷。
-	if len(prefix) > 0 {
-		if _, err := upstream.Write(prefix); err != nil {
-			return
-		}
-	}
-	p.trackConn(index, client)
 	defer p.untrackConn(index, client)
 	// 等两个方向都结束（带半关闭 linger），客户端半关闭后仍能收完响应。
 	relayTCPBidirectional(client, upstream, tcpRelayHalfCloseLinger)
