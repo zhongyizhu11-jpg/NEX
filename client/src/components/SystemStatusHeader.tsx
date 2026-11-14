@@ -19,17 +19,20 @@ export type SystemHealth = {
   connections?: { tcp: number; udp: number; reported: number };
 };
 
-/** 首页那一格的补充行：手机上只放得下一个数，TCP 优先；桌面两个都给，完整的挂在 title 上。 */
+/**
+ * 首页那一格的补充行：TCP 和 UDP 都给（2026-11 用户要手机上也看到 UDP）。
+ * 两段各自不折行，窄了 UDP 那段整段换到下一行，不会截成「TCP 72 · UD…」；完整的挂在 title 上。
+ */
 export function connectionsHint(connections: { tcp: number; udp: number }) {
   const tcp = `TCP ${connections.tcp.toLocaleString(getFormatLocale())}`;
   const udp = `UDP ${connections.udp.toLocaleString(getFormatLocale())}`;
   return {
     full: `${tcp} · ${udp}`,
     node: (
-      <>
-        <span className="sm:hidden">{tcp}</span>
-        <span className="hidden sm:inline">{tcp} · {udp}</span>
-      </>
+      <span className="inline-flex flex-wrap gap-x-2">
+        <span className="whitespace-nowrap">{tcp}</span>
+        <span className="whitespace-nowrap">{udp}</span>
+      </span>
     ),
   };
 }

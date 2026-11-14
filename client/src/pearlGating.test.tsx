@@ -61,13 +61,20 @@ test("外壳：珍珠顶栏只在珍珠下挂；经典顶栏、底部标签栏�
   assert.match(source, /<PearlNavMarker collapsed=\{isDesktopCollapsed \|\| isMobile\} \/>/);
 });
 
-test("首页：日期铭牌和系统在线只在珍珠下；默认布局所有主题都是 数字 → 需要关注 → 地图（2026-11）", () => {
+test("首页：所有主题都照珍珠画（日期铭牌 + 系统在线、页面根带 fx-ov-pearl），顺序 数字 → 需要关注 → 地图（2026-11）", () => {
   const source = strip(fs.readFileSync(path.join(ROOT, "pages/Home.tsx"), "utf8"));
   const badges = [...source.matchAll(/<PearlHeaderBadges\b/g)];
   assert.equal(badges.length, 1);
-  assert.match(source, /actions=\{pearl \? <PearlHeaderBadges \/> : undefined\}/);
+  assert.match(source, /actions=\{<PearlHeaderBadges \/>\}/);
+  assert.match(source, /className="fx-ov-pearl /);
+  // 系统设置整页的卡片、订阅管理顶上那排数字卡也照珍珠画（同一份 overview-pearl.css）
+  assert.match(fs.readFileSync(path.join(ROOT, "pages/Settings.tsx"), "utf8"), /className="fx-set-pearl /);
+  assert.match(fs.readFileSync(path.join(ROOT, "pages/ClientSubscriptions.tsx"), "utf8"), /className="fx-ov-stats"/);
+  // 不再有按主题换排法的分支（原来深空自己一套）
+  assert.doesNotMatch(source, /useUiTheme|deepspace/);
+  const css = fs.readFileSync(path.join(ROOT, "index.css"), "utf8");
+  assert.match(css, /@import "\.\/styles\/overview-pearl\.css";/);
   const status = source.indexOf("{renderStatusHeader(attentionListed)}");
-  // 深空分支（更靠前）自己也有一张地图；这里只看默认那条 return 里的顺序
   const attention = source.indexOf("<AttentionSection", status);
   const map = source.indexOf("<NetworkMapSlot", status);
   assert.ok(status > 0 && status < attention && attention < map, "数字 → 需要关注 → 地图");
