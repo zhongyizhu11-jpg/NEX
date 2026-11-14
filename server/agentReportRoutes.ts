@@ -1428,17 +1428,18 @@ agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Respon
       res.status(401).json({ error: "Invalid token" });
       return;
     }
-    const results = (Array.isArray(req.body?.results) ? req.body.results : [])
-      .filter((item: any) => item && Number.isInteger(Number(item.ruleId)) && Number(item.ruleId) > 0 && typeof item.down === "boolean")
-      .slice(0, 2048)
-      .map((item: any) => ({
-        ruleId: Number(item.ruleId),
-        down: item.down === true,
-        latencyMs: typeof item.latencyMs === "number" && Number.isFinite(item.latencyMs) ? item.latencyMs : null,
-      }));
+    const raw: unknown[] = Array.isArray(req.body?.results) ? req.body.results : [];
+    const results = raw.slice(0, 2048).flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown };
+      const ruleId = Number(record.ruleId);
+      if (!Number.isInteger(ruleId) || ruleId <= 0 || typeof record.down !== "boolean") return [];
+      const latencyMs = typeof record.latencyMs === "number" && Number.isFinite(record.latencyMs) ? record.latencyMs : null;
+      return [{ ruleId, down: record.down, latencyMs }];
+    });
     const outcome = await ingestRouteHopFastReports({
       hostId: Number(host.id),
-      hostName: String((host as any).name || ""),
+      hostName: String((host as { name?: unknown }).name || ""),
       results,
     });
     res.json({ success: true, recorded: outcome.recorded });

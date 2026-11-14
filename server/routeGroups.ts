@@ -798,7 +798,25 @@ export async function ingestRouteHopProbeReports(input: {
 */
 export type RouteHopProbeSpec = { intervalMs: number; timeoutMs: number; failThreshold: number; recoverOks: number };
 
-export function routeHopProbeSpecForParent(parent: any): RouteHopProbeSpec {
+/** 快速探测用到的中继规则字段（库里的行、心跳里运行时的视图都行）。 */
+type RelayRuleLike = {
+  id?: unknown;
+  hostId?: unknown;
+  tunnelId?: unknown;
+  targetIp?: unknown;
+  targetPort?: unknown;
+  protocol?: unknown;
+  isEnabled?: unknown;
+  pendingDelete?: unknown;
+  routeParentRuleId?: unknown;
+  routePathKey?: unknown;
+  routeHopIndex?: unknown;
+  failoverSeconds?: unknown;
+  routeFailureThreshold?: unknown;
+};
+type TunnelLike = { id?: unknown; exitHostId?: unknown };
+
+export function routeHopProbeSpecForParent(parent: RelayRuleLike | null | undefined): RouteHopProbeSpec {
   const failoverSeconds = Math.max(1, Math.floor(Number(parent?.failoverSeconds) || 60));
   const intervalMs = Math.min(5000, Math.max(1000, Math.round((failoverSeconds * 1000) / 2)));
   const threshold = Math.min(10, Math.max(1, Math.floor(Number(parent?.routeFailureThreshold) || 3)));
@@ -806,7 +824,7 @@ export function routeHopProbeSpecForParent(parent: any): RouteHopProbeSpec {
 }
 
 /** 这条中继规则的「下一跳」该由哪台机器探：gost 中继是它所在的机器，隧道段是隧道出口机；探不了返回 0。 */
-export function routeHopProberHostId(rule: any, tunnel: any): number {
+export function routeHopProberHostId(rule: RelayRuleLike | null | undefined, tunnel: TunnelLike | null | undefined): number {
   if (!rule || Number(rule.routeParentRuleId || 0) <= 0) return 0;
   if (Number(rule.tunnelId || 0) > 0) {
     if (!tunnel || Number(tunnel.id) !== Number(rule.tunnelId)) return 0;
@@ -816,25 +834,30 @@ export function routeHopProberHostId(rule: any, tunnel: any): number {
   return Number(rule.hostId || 0);
 }
 
+export type RouteHopGostProbe = { ruleId: number; tunnelId: number; targetIp: string; targetPort: number; method: string; probeKey: string; routeHop: RouteHopProbeSpec };
+
 /**
  * 给一台机器的快速探测：按 ruleId 返回规格（隧道段的已经在 ruleLatencyProbes 里了，只挂上规格），
  * 外加 gost 中继要新加的几条探测。只认启用的、TCP 能探的（纯 UDP 的中继探不了 TCP 连接，留给普通探测）。
  */
-export async function buildRouteHopFastProbes(input: { hostId: number; rules: any[]; tunnelById: Map<number, any> }) {
+export async function buildRouteHopFastProbes(input: { hostId: number; rules: readonly unknown[]; tunnelById: { get(id: number): unknown } }) {
   const hostId = Number(input.hostId);
-  const relays = (input.rules || []).filter((rule: any) => rule
-    && Number(rule.routeParentRuleId || 0) > 0
-    && !dbBool(rule.pendingDelete)
-    && dbBool(rule.isEnabled)
-    && normalizeForwardRuleProtocol(rule.protocol, "both") !== "udp"
-    && String(rule.targetIp || "").trim() !== ""
-    && Number(rule.targetPort || 0) > 0
-    && routeHopProberHostId(rule, input.tunnelById.get(Number(rule.tunnelId || 0))) === hostId);
+  const tunnelOf = (rule: RelayRuleLike) => input.tunnelById.get(Number(rule.tunnelId || 0)) as TunnelLike | undefined;
+  const relays = (input.rules || [] as readonly unknown[])
+    .map((rule) => rule as RelayRuleLike | null)
+    .filter((rule): rule is RelayRuleLike => !!rule
+      && Number(rule.routeParentRuleId || 0) > 0
+      && !dbBool(rule.pendingDelete)
+      && dbBool(rule.isEnabled)
+      && normalizeForwardRuleProtocol(rule.protocol, "both") !== "udp"
+      && String(rule.targetIp || "").trim() !== ""
+      && Number(rule.targetPort || 0) > 0
+      && routeHopProberHostId(rule, tunnelOf(rule)) === hostId);
   const specByRuleId = new Map<number, RouteHopProbeSpec>();
-  const gostProbes: Array<{ ruleId: number; tunnelId: number; targetIp: string; targetPort: number; method: string; probeKey: string; routeHop: RouteHopProbeSpec }> = [];
+  const gostProbes: RouteHopGostProbe[] = [];
   if (relays.length === 0) return { specByRuleId, gostProbes };
-  const parents = await getForwardRulesByIds(Array.from(new Set(relays.map((rule: any) => Number(rule.routeParentRuleId))))) as any[];
-  const parentById = new Map(parents.map((rule: any) => [Number(rule.id), rule]));
+  const parents = await getForwardRulesByIds(Array.from(new Set(relays.map((rule) => Number(rule.routeParentRuleId))))) as unknown as RelayRuleLike[];
+  const parentById = new Map(parents.map((rule) => [Number(rule.id), rule]));
   for (const relay of relays) {
     const parent = parentById.get(Number(relay.routeParentRuleId));
     if (!parent || dbBool(parent.pendingDelete) || !dbBool(parent.isEnabled)) continue;
@@ -865,30 +888,31 @@ export async function ingestRouteHopFastReports(input: {
   const nowMs = input.nowMs ?? Date.now();
   const reports = (input.results || []).slice(0, 2048);
   if (reports.length === 0) return { recorded: 0, flipped: [] as number[] };
-  const relayRows = await getForwardRulesByIds(Array.from(new Set(reports.map((report) => Number(report.ruleId))))) as any[];
-  const relayById = new Map(relayRows.map((rule: any) => [Number(rule.id), rule]));
-  const tunnelIds = Array.from(new Set(relayRows.map((rule: any) => Number(rule.tunnelId || 0)).filter((id) => id > 0)));
-  const tunnels = tunnelIds.length > 0 ? await getTunnelsByIds(tunnelIds) as any[] : [];
-  const tunnelById = new Map(tunnels.map((tunnel: any) => [Number(tunnel.id), tunnel]));
+  const relayRows = await getForwardRulesByIds(Array.from(new Set(reports.map((report) => Number(report.ruleId))))) as unknown as RelayRuleLike[];
+  const relayById = new Map(relayRows.map((rule) => [Number(rule.id), rule]));
+  const tunnelIds = Array.from(new Set(relayRows.map((rule) => Number(rule.tunnelId || 0)).filter((id) => id > 0)));
+  const tunnels = tunnelIds.length > 0 ? await getTunnelsByIds(tunnelIds) as unknown as TunnelLike[] : [];
+  const tunnelById = new Map(tunnels.map((tunnel) => [Number(tunnel.id), tunnel]));
   const accepted = reports.filter((report) => {
     const relay = relayById.get(Number(report.ruleId));
-    return relay && !dbBool(relay.pendingDelete)
+    return !!relay && !dbBool(relay.pendingDelete)
       && routeHopProberHostId(relay, tunnelById.get(Number(relay.tunnelId || 0))) === hostId;
   });
   if (accepted.length === 0) return { recorded: 0, flipped: [] as number[] };
-  const parents = await getForwardRulesByIds(Array.from(new Set(accepted.map((report) => Number(relayById.get(Number(report.ruleId)).routeParentRuleId))))) as any[];
-  const parentById = new Map(parents.map((rule: any) => [Number(rule.id), rule]));
+  const relayOf = (report: { ruleId: number }) => relayById.get(Number(report.ruleId)) as RelayRuleLike;
+  const parents = await getForwardRulesByIds(Array.from(new Set(accepted.map((report) => Number(relayOf(report).routeParentRuleId))))) as unknown as RelayRuleLike[];
+  const parentById = new Map(parents.map((rule) => [Number(rule.id), rule]));
   const pathsByParent = new Map<number, RoutePath[]>();
   const nextHostIds = new Set<number>();
-  const pathOf = (relay: any) => {
+  const pathOf = (relay: RelayRuleLike) => {
     const parent = parentById.get(Number(relay.routeParentRuleId));
     if (!parent) return null;
-    const paths = pathsByParent.get(Number(parent.id)) || routePathsOf(parent as RouteGroupRule);
+    const paths = pathsByParent.get(Number(parent.id)) || routePathsOf(parent as unknown as RouteGroupRule);
     pathsByParent.set(Number(parent.id), paths);
     return paths.find((item) => item.key === String(relay.routePathKey || "")) || null;
   };
   for (const report of accepted) {
-    const relay = relayById.get(Number(report.ruleId));
+    const relay = relayOf(report);
     const path = pathOf(relay);
     const next = path ? relayNextHostId(path, Number(relay.routeHopIndex)) : null;
     if (next) nextHostIds.add(Number(next));
@@ -898,7 +922,7 @@ export async function ingestRouteHopFastReports(input: {
   const flipped = new Map<number, boolean>();
   const breakerFlips = new Map<number, boolean>();
   for (const report of accepted) {
-    const relay = relayById.get(Number(report.ruleId));
+    const relay = relayOf(report);
     const parentId = Number(relay.routeParentRuleId);
     if (!parentById.has(parentId)) continue;
     const path = pathOf(relay);
@@ -928,7 +952,7 @@ export async function ingestRouteHopFastReports(input: {
   for (const [parentId, down] of flipped) {
     const parent = parentById.get(parentId);
     appendPanelLog(down ? "warn" : "info", `[RouteGroup] rule=${parentId} 下一跳${down ? "断了" : "恢复"}（快速探测）: host=${hostId} ${input.hostName}`);
-    await refreshTouchedHosts(parent, new Set<number>(), down ? "route-hop-down" : "route-hop-recovered");
+    await refreshTouchedHosts(parent as unknown as Parameters<typeof refreshTouchedHosts>[0], new Set<number>(), down ? "route-hop-down" : "route-hop-recovered");
   }
   return { recorded, flipped: Array.from(flipped.keys()) };
 }
