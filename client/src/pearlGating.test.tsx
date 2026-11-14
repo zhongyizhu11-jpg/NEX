@@ -67,6 +67,9 @@ test("首页：所有主题都照珍珠画（日期铭牌 + 系统在线、页�
   assert.equal(badges.length, 1);
   assert.match(source, /actions=\{<PearlHeaderBadges \/>\}/);
   assert.match(source, /className="fx-ov-pearl /);
+  // 系统设置整页的卡片、订阅管理顶上那排数字卡也照珍珠画（同一份 overview-pearl.css）
+  assert.match(fs.readFileSync(path.join(ROOT, "pages/Settings.tsx"), "utf8"), /className="fx-set-pearl /);
+  assert.match(fs.readFileSync(path.join(ROOT, "pages/ClientSubscriptions.tsx"), "utf8"), /className="fx-ov-stats"/);
   // 不再有按主题换排法的分支（原来深空自己一套）
   assert.doesNotMatch(source, /useUiTheme|deepspace/);
   const css = fs.readFileSync(path.join(ROOT, "index.css"), "utf8");

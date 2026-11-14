@@ -716,7 +716,8 @@ function SettingsContent() {
   );
 
   return (
-    <div className="space-y-6">
+    /* fx-set-pearl：系统设置在所有主题下都照「珍珠」的卡片画（2026-11 用户要求），样式在 styles/overview-pearl.css */
+    <div className="fx-set-pearl space-y-6">
       <WorkspaceHeader title="系统设置" description="配置面板、通知、外观与数据维护。" />
       {/*
         密钥类设置落库是加密的（server/settingsEncryption.ts），密钥是面板的 JWT_SECRET / jwt.secret。

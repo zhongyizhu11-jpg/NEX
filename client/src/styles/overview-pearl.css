@@ -1,5 +1,6 @@
 /*
   总览页在所有主题下都照「珍珠」的样子画（2026-11 用户要求）。页面根带 .fx-ov-pearl（pages/Home.tsx）。
+  后来又加了两处：订阅管理顶上那排数字卡（.fx-ov-stats）、系统设置整页的卡片（.fx-set-pearl，见文件末尾）。
 
   珍珠自己那份在 theme-pearl.css（只在选了珍珠时才挂），这里只管「不是珍珠」的主题，摆法照搬：
     · 标题下一道细线，标题 24px 粗体；右边日期铭牌 + 「系统在线」绿边胶囊（PearlHeaderBadges）
@@ -10,22 +11,22 @@
   颜色和影子不用珍珠的瓷面：卡底、描边、阴影都取这套主题自己的令牌（液态玻璃照样是毛玻璃），
   看着还是这套主题，只是摆法和珍珠一样。
 */
-html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) {
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats, .fx-set-pearl) {
   --fx-ovp-surface: var(--fx-card-fill, var(--fx-l1-surface));
   --fx-ovp-stroke: color-mix(in srgb, var(--fx-card-stroke, var(--fx-stroke-weak)) 70%, transparent);
   --fx-ovp-shadow: var(--fx-elevation-card);
   --fx-ovp-well-stroke: color-mix(in srgb, var(--fx-stroke-weak) 50%, transparent);
 }
-html[data-ui-theme="liquid-glass"] :is(.fx-ov-pearl, .fx-ov-stats) { --fx-ovp-surface: var(--fx-lg-card); --fx-ovp-stroke: var(--fx-lg-card-stroke); }
+html[data-ui-theme="liquid-glass"] :is(.fx-ov-pearl, .fx-ov-stats, .fx-set-pearl) { --fx-ovp-surface: var(--fx-lg-card); --fx-ovp-stroke: var(--fx-lg-card-stroke); }
 
 /* ── 标题 ───────────────────────────────────────────────── */
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header { padding: 4px 0 16px; border-bottom: 1px solid var(--fx-stroke-weak); }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header-title { font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.025em; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header-meta { margin-top: 4px; color: var(--fx-text-muted); font-size: 14px; line-height: 20px; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) .workspace-header { padding: 4px 0 16px; border-bottom: 1px solid var(--fx-stroke-weak); }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) .workspace-header-title { font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.025em; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) .workspace-header-meta { margin-top: 4px; color: var(--fx-text-muted); font-size: 14px; line-height: 20px; }
 @media (max-width: 639px) {
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header { padding: 2px 0 14px; }
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header-title { font-size: 20px; line-height: 28px; }
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header-meta { font-size: 12px; line-height: 16px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) .workspace-header { padding: 2px 0 14px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) .workspace-header-title { font-size: 20px; line-height: 28px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) .workspace-header-meta { font-size: 12px; line-height: 16px; }
 }
 html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-pearl-header-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-pearl-spec-plate { padding: 8.8px 13.6px; border: 1px solid rgb(255 255 255 / 10%); border-radius: 12px; background: #20282c; color: #e4ece7; font: 500 12px/18px ui-monospace, SFMono-Regular, Consolas, monospace; box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%); }
@@ -134,16 +135,16 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl .system-health .system-health-ver
 }
 
 /* ── 分组列表：整组一张卡，组名是卡头，行收进卡里一块凹进去的框 ── */
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) {
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) {
   padding: 0 16px 16px;
   border: 1px solid var(--fx-ovp-stroke);
   border-radius: 16px;
   background: var(--fx-ovp-surface);
   box-shadow: var(--fx-ovp-shadow);
 }
-html[data-ui-theme="liquid-glass"] .fx-ov-pearl section:has(> .fx-grouped-list) { -webkit-backdrop-filter: var(--fx-lg-blur); backdrop-filter: var(--fx-lg-blur); }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:not(:has(> .fx-list-section-header)):has(> .fx-grouped-list) { padding-top: 16px; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) > .fx-list-section-header {
+html[data-ui-theme="liquid-glass"] :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) { -webkit-backdrop-filter: var(--fx-lg-blur); backdrop-filter: var(--fx-lg-blur); }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:not(:has(> .fx-list-section-header)):has(> .fx-grouped-list) { padding-top: 16px; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) > .fx-list-section-header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -156,7 +157,7 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) >
   letter-spacing: 0;
   text-transform: none;
 }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) > .fx-grouped-list {
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) > .fx-grouped-list {
   border: 1px solid var(--fx-ovp-well-stroke);
   border-radius: 14px;
   background: color-mix(in srgb, var(--fx-l0-page) 35%, transparent);
@@ -164,8 +165,32 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) >
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) > p { padding: 8px 8px 0; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) > p { padding: 8px 8px 0; }
 @media (max-width: 639px) {
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) { padding: 0 12px 12px; }
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl section:has(> .fx-grouped-list) > .fx-list-section-header { padding: 16px 4px 12px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) { padding: 0 12px 12px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-set-pearl) section:has(> .fx-grouped-list) > .fx-list-section-header { padding: 16px 4px 12px; }
 }
+
+/*
+  ── 系统设置的卡片（.fx-set-pearl，pages/Settings.tsx）──────────────
+  照珍珠：卡是中性细线 + 卡底 + 软影、16px 圆角（不按状态染边）；卡里每一项设置（SettingRow）是一格浅底、细边、
+  14px 圆角的小框，项与项隔 10px。左边（手机上是索引页）的分组栏走上面「分组列表」那条：整组一张卡。
+  只改「彩色描边」这一种卡片风格（默认就是它），另外三种（状态光 / 渐变卡头 / 纯白）照原样，和珍珠一致。
+*/
+html:not([data-ui-theme="pearl"]):not([data-card-style]) .fx-set-pearl [data-slot="card"],
+html:not([data-ui-theme="pearl"])[data-card-style="edge"] .fx-set-pearl [data-slot="card"] {
+  border: 1px solid var(--fx-stroke-weak);
+  border-radius: 16px;
+  background: var(--fx-ovp-surface);
+  box-shadow: var(--fx-ovp-shadow);
+}
+html:not([data-ui-theme="pearl"]) .fx-set-pearl [data-slot="card-title"] { font-weight: 600; letter-spacing: -.01em; }
+html:not([data-ui-theme="pearl"]) .fx-set-pearl [data-slot="card"] .fx-list-row:not(.fx-grouped-list .fx-list-row) {
+  padding: 12px 14px;
+  border: 1px solid var(--fx-ovp-well-stroke);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--fx-l0-page) 50%, transparent);
+}
+html:not([data-ui-theme="pearl"]) .fx-set-pearl [data-slot="card"] .fx-list-row:not(.fx-grouped-list .fx-list-row) + .fx-list-row { margin-top: 10px; border-top: 1px solid var(--fx-ovp-well-stroke); }
+html[data-ui-theme="liquid-glass"]:not([data-card-style]) .fx-set-pearl [data-slot="card"],
+html[data-ui-theme="liquid-glass"][data-card-style="edge"] .fx-set-pearl [data-slot="card"] { border-color: var(--fx-lg-card-stroke); }
