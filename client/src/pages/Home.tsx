@@ -2,7 +2,6 @@ import { getFormatLocale } from "@/i18n";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import PearlHeaderBadges from "@/components/PearlHeaderBadges";
-import { useUiTheme } from "@/hooks/useUiTheme";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { quotaSourceLabel } from "@shared/ledgerLabels";
 import { formatMoneyCents as money } from "@shared/formatMoney";
@@ -21,15 +20,13 @@ import OpsHomeExtras from "@/features/ops/slots/HomeExtras";
 import { NetworkMapSlot } from "@/features/dashboard/NetworkMapSlot";
 import { QuickStartSection } from "@/features/dashboard/QuickStartSection";
 import { TrafficSurface, type TrafficChartPoint } from "@/features/dashboard/TrafficSurface";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 
 // 未登录才用得到的落地页不进入口包；外面 App 的 Suspense 兜着。
 const PublicHome = lazy(() => import("./PublicHome"));
 const CustomPublicHome = lazy(() => import("./PublicHome").then((mod) => ({ default: mod.CustomPublicHome })));
-// 「深空」主题的事件日志 + 地区表：只有选了深空才取
-const DeepspacePanels = lazy(() => import("@/features/dashboard/DeepspacePanels"));
 
 const LOGIN_WELCOME_TOAST_KEY = "forwardx.loginWelcome";
 
@@ -62,14 +59,6 @@ function getExpiryStatus(value: string | Date | null | undefined) {
 function DashboardContent() {
   const compactLayout = useCompactLayout();
   const { user } = useAuth();
-  // 「珍珠」主题照上游仪表盘：标题右边日期铭牌 + 系统在线，四张统计卡排在地图前面。别的主题顺序和节点都不变。
-  const uiTheme = useUiTheme();
-  const pearl = uiTheme === "pearl";
-  /*
-    「深空」换的是排法，不是数据：数字格在最上，下面一张两栏的面板 ——
-    左边流量 + 地区，右边小地图 + 事件日志（手机上一栏：事件、流量、地区，地图不放）。
-  */
-  const deepspace = uiTheme === "deepspace";
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
   const trafficTotalsQuery = trpc.dashboard.trafficTotals.useQuery(undefined, {
@@ -261,7 +250,6 @@ function DashboardContent() {
         }}
       />
   );
-  const statusHeader = renderStatusHeader();
 
   const header = (
       <WorkspaceHeader title="总览" status={health ? (
@@ -273,42 +261,20 @@ function DashboardContent() {
             `${health.forwards.total} 条转发`,
           ].filter(Boolean).join(" · ")}
         </span>
-      ) : null} actions={pearl ? <PearlHeaderBadges /> : undefined} />
+      ) : null} actions={<PearlHeaderBadges />} />
   );
   const mapEnabled = !health || health.hosts.total > 0;
   const attentionListed = ((health as SystemHealth | undefined)?.attention?.rows?.length ?? 0) > 0;
   const headline = health ? systemHealthHeadline(health as SystemHealth) : null;
   const attentionHeader = headline && headline.tone !== "healthy" ? headline.text : "需要关注";
 
-  if (deepspace) {
-    return (
-      <div className="fx-ds-ov space-y-3" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
-        {header}
-        {statusHeader}
-        <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} dense={compactLayout} />
-        <div className="fx-ds-ov-grid">
-          <div className="fx-ds-ov-main">{isAdmin ? trafficSection : accountSection}</div>
-          <div className="fx-ds-ov-map">
-            <NetworkMapSlot enabled={mapEnabled} cacheScope={accountCacheScope} onOpen={setLocation} />
-          </div>
-          <Suspense fallback={null}>
-            <DeepspacePanels
-              attention={(health as SystemHealth | undefined)?.attention}
-              isAdmin={isAdmin}
-              onOpen={setLocation}
-              mapEnabled={mapEnabled}
-            />
-          </Suspense>
-        </div>
-        <OpsHomeExtras isAdmin={isAdmin} />
-        {isAdmin ? accountSection : trafficSection}
-        <MobileAppSettings snapshot={mobileReminderSnapshot} />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
+    /*
+      fx-ov-pearl：总览在所有主题下都照「珍珠」的样子画（2026-11 用户要求）—— 标题下一道细线、右边日期铭牌 +
+      系统在线，四张统计卡各是一张淡彩卡，「需要关注」等分组整组一张卡。样式在 styles/overview-pearl.css，
+      用的是各主题自己的卡底和阴影令牌；珍珠自己那份在 theme-pearl.css 里，不重复。
+    */
+    <div className="fx-ov-pearl space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下总览整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/*
         标题下面那一行是此刻的数（「4 台主机 · 19 条线路 · 19 条转发」），不是一句说明书。

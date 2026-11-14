@@ -10,6 +10,7 @@
 */
 @import "./styles/ui-theme-shared.css";
 @import "./styles/compact.css";
+@import "./styles/overview-pearl.css";
 
 @custom-variant dark (&:is(.dark *));
 
