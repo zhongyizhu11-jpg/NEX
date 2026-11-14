@@ -4376,7 +4376,8 @@ function TunnelsContent() {
             </div>
           </div>
           <div className="fx-tunnel-route">
-            {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, !compactLayout)}
+            {/* 手机上按画出来的节点数排：两个横排，三个起竖排（带出口组的隧道跳数是 2、画出来却是 3 个，以前挤成「香.. 美... 负载均...」） */}
+            {renderTunnelRoute(tunnel, true, !isMobile && hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, !compactLayout)}
           </div>
           {/* fx-tunnel-meta：精简手机行上累计和延迟那两行并成一行（compact.css），标准下照旧两行 */}
           <div className="fx-tunnel-meta">
@@ -5117,9 +5118,9 @@ function TunnelsContent() {
                           <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
                         ) : usableEntryGroups.map((group: any) => (
                           <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                            <span className="inline-flex min-w-0 flex-col">
+                            <span className="fx-select-two inline-flex min-w-0 flex-col">
                               <span className="truncate">{group.name}</span>
-                              <span className="truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
+                              <span className="fx-select-sub truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
                             </span>
                           </SelectItem>
                         ))}
@@ -5202,9 +5203,9 @@ function TunnelsContent() {
                     <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
                   ) : usableEntryGroups.map((group: any) => (
                     <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                      <span className="inline-flex min-w-0 flex-col">
+                      <span className="fx-select-two inline-flex min-w-0 flex-col">
                         <span className="truncate">{group.name}</span>
-                        <span className="truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
+                        <span className="fx-select-sub truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
                       </span>
                     </SelectItem>
                   ))}
@@ -5278,9 +5279,9 @@ function TunnelsContent() {
                     <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用出口组</div>
                   ) : usableExitGroups.map((group: any) => (
                     <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                      <span className="inline-flex min-w-0 flex-col">
+                      <span className="fx-select-two inline-flex min-w-0 flex-col">
                         <span className="truncate">{group.name}</span>
-                        <span className="truncate text-xs text-muted-foreground">{groupHostSummary(group, hosts)}</span>
+                        <span className="fx-select-sub truncate text-xs text-muted-foreground">{groupHostSummary(group, hosts)}</span>
                       </span>
                     </SelectItem>
                   ))}

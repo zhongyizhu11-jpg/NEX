@@ -2759,9 +2759,9 @@ export function ForwardGroupsContent({
                       <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
                     ) : usableEntryGroups.map((group: any) => (
                       <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                        <span className="inline-flex min-w-0 flex-col">
+                        <span className="fx-select-two inline-flex min-w-0 flex-col">
                           <span className="truncate">{group.name}</span>
-                          <span className="truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
+                          <span className="fx-select-sub truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
                         </span>
                       </SelectItem>
                     ))}
@@ -3008,11 +3008,12 @@ export function ForwardGroupsContent({
                             <HostStatusLabel
                               host={hostById.get(Number(member.hostId))}
                               label={memberLabel(member)}
-                              className="min-w-0 flex-1 text-sm font-medium"
+                              // 手机上一行：拖动 + 序号 + 名字占满，后面的输入框换到下一行（以前名字被挤成 0 宽，只剩一个圆点）
+                              className="min-w-0 flex-1 basis-[calc(100%-4rem)] text-sm font-medium sm:basis-auto"
                               labelClassName="truncate"
                             />
                           ) : (
-                            <div className="flex min-w-0 items-center gap-2">
+                            <div className="flex min-w-0 flex-1 basis-[calc(100%-4rem)] items-center gap-2 sm:basis-auto">
                               <Route className="h-4 w-4 text-primary" />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-medium">{memberLabel(member)}</p>
@@ -3021,26 +3022,31 @@ export function ForwardGroupsContent({
                           )}
                           {form.groupMode === "exit" && member.memberType === "host" && (
                             <>
-                              <div className="flex h-7 w-[56px] items-center justify-center">
+                              {/* 手机上没有表头：勾选框旁边直接写它是什么（sm 起表头在上面，这几个字收起） */}
+                              <label className="flex h-7 items-center justify-center gap-1.5 sm:w-[56px]">
                                 <Checkbox
                                   checked={!!hostPrivateAddress(hostById.get(Number(member.hostId || 0))) && sameAddress(member.connectHost, hostPrivateAddress(hostById.get(Number(member.hostId || 0))))}
                                   disabled={!hostPrivateAddress(hostById.get(Number(member.hostId || 0)))}
                                   onCheckedChange={(checked) => updateExitMemberUsePrivate(member.key, checked)}
                                   aria-label={"为" + memberLabel(member) + "使用内网IP"}
                                 />
-                              </div>
-                              <div className="flex h-7 w-[56px] items-center justify-center">
+                                <span className="text-xs text-muted-foreground sm:hidden">内网</span>
+                              </label>
+                              <label className="flex h-7 items-center justify-center gap-1.5 sm:w-[56px]">
                                 <Checkbox
                                   checked={!!hostIpv6Address(hostById.get(Number(member.hostId || 0))) && sameAddress(member.connectHost, hostIpv6Address(hostById.get(Number(member.hostId || 0))))}
                                   disabled={!hostIpv6Address(hostById.get(Number(member.hostId || 0)))}
                                   onCheckedChange={(checked) => updateExitMemberUseIpv6(member.key, checked)}
                                   aria-label={"为" + memberLabel(member) + "使用IPv6转发"}
                                 />
-                              </div>
+                                <span className="text-xs text-muted-foreground sm:hidden">IPv6</span>
+                              </label>
                             </>
                           )}
                           {showAggregationColumns && (
                             <>
+                              <label className="flex items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground sm:hidden">上行</span>
                               <Input
                                 type="number"
                                 min={0}
@@ -3051,6 +3057,9 @@ export function ForwardGroupsContent({
                                 placeholder="0"
                                 aria-label={memberLabel(member) + "的上行带宽 Mbps"}
                               />
+                              </label>
+                              <label className="flex items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground sm:hidden">权重</span>
                               <Input
                                 type="number"
                                 min={0}
@@ -3061,6 +3070,7 @@ export function ForwardGroupsContent({
                                 placeholder="0"
                                 aria-label={memberLabel(member) + "的聚合权重"}
                               />
+                              </label>
                             </>
                           )}
                           {showLineColumn && <div className="flex h-7 w-[44px] items-center justify-center">
@@ -3078,11 +3088,12 @@ export function ForwardGroupsContent({
                               onChange={(activeSchedule) => updateMemberField(member.key, { activeSchedule })}
                             />
                           </div>}
-                          {form.groupMode !== "port" && <div className="flex h-7 w-[52px] items-center justify-center">
+                          {form.groupMode !== "port" && <label className="flex h-7 items-center justify-center gap-1.5 sm:w-[52px]">
                             <Checkbox aria-label={`启用 ${memberLabel(member)}`} checked={member.isEnabled} onCheckedChange={(checked) => {
                               setForm({ ...form, members: form.members.map((m) => m.key === member.key ? { ...m, isEnabled: checked } : m) });
                             }} title={member.isEnabled ? "关闭后该成员不参与转发组切换" : "开启后该成员可参与转发组切换"} />
-                          </div>}
+                            <span className="text-xs text-muted-foreground sm:hidden">启用</span>
+                          </label>}
                           <div className="flex h-7 w-9 items-center justify-end">
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label={`移除成员 ${memberLabel(member)}`} onClick={() => removeMember(member.key)}>
                               <Trash2 className="h-3.5 w-3.5" />

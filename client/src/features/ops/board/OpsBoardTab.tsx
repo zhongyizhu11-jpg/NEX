@@ -117,7 +117,7 @@ export default function OpsBoardTab() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SegmentedControl ariaLabel="时间范围" value={range} options={RANGE_OPTIONS} onChange={setRange} listClassName="grid grid-cols-3 gap-1" />
         <Select value={String(refreshSeconds)} onValueChange={(value) => setRefreshSeconds(Number(value))}>
-          <SelectTrigger className="h-8 w-[8.5rem] text-xs" aria-label="自动刷新"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-8 w-auto min-w-[8.5rem] gap-2 text-xs" aria-label="自动刷新"><SelectValue /></SelectTrigger>
           <SelectContent>
             {OPS_BOARD_REFRESH_OPTIONS.map((seconds) => (
               <SelectItem key={seconds} value={String(seconds)}>{seconds > 0 ? `每 ${seconds} 秒刷新` : "不自动刷新"}</SelectItem>

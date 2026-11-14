@@ -7957,12 +7957,13 @@ function RulesContent() {
       ) : badge;
     }
     if (compactRow) {
+      /*
+        表格这一格只有 110～150px：路径排在徽标后面只露得出一个箭头，后面的主机名被裁掉、连省略号都没有
+        （2026-11 桌面走查）。这里只放徽标，整条路径挂在悬停提示上；规则名下面那行和卡片视图照旧画路径。
+      */
       return (
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-1 overflow-hidden" title={getTunnelRouteText(tunnel, hosts)}>
           {badge}
-          <div className="min-w-0 flex-1 text-muted-foreground">
-            {renderTunnelRoute(tunnel, false)}
-          </div>
           {warningBadge}
         </div>
       );
@@ -8054,7 +8055,7 @@ function RulesContent() {
       return <LatencyRating isTimeout timeoutText="超时" className="whitespace-nowrap" />;
     }
     if (typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs)) {
-      return <LatencyRating latencyMs={t.latestLatencyMs} className="whitespace-nowrap" />;
+      return <LatencyRating latencyMs={t.latestLatencyMs} className="whitespace-nowrap" badge={false} />;
     }
     return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
   };
