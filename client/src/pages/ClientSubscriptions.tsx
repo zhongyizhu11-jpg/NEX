@@ -10,6 +10,7 @@ import { ProxyNodeShareDialog } from "@/components/proxy/ProxyNodeShareDialog";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -92,6 +93,8 @@ import {
   Layers,
   Link2,
   Package,
+  Server,
+  TriangleAlert,
   Pencil,
   Plug,
   Plus,
@@ -324,6 +327,7 @@ function renderTokenFailure(token: any) {
 
 export default function ClientSubscriptionsPage() {
   const [, navigate] = useLocation();
+  const compactLayout = useCompactLayout();
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
 
@@ -1130,15 +1134,19 @@ export default function ClientSubscriptionsPage() {
         {/*
           顶上这一排概览。
           原来一进来就是两张大卡片，得逐个展开才知道「我现在到底有几条线路、有没有
-          东西要处理」。这几个数就是这一页的全部问题，摆在最前面 —— 一条摘要，和主机页
-          同一种画法，不是四张各带图标的卡片。
+          东西要处理」。这几个数就是这一页的全部问题，摆在最前面。
+          2026-11 起和总览那四张卡一个样（用户要求大小颜色和主页一样）：外面包一层 fx-ov-stats
+          （styles/overview-pearl.css），每格带图标和颜色；标准布局下也带 data-fx-std-page，数字不按精简缩小。
         */}
+        <div className="fx-ov-stats" data-fx-std-page={compactLayout ? undefined : ""}>
         <SummaryStrip
           ariaLabel="订阅概况"
           items={[
             {
               key: "nodes",
               label: "客户端线路",
+              icon: Waypoints,
+              iconTone: "violet",
               value: preview?.nodes.length ?? 0,
               hint: `中转 ${relayPreviewNodes.length} · 直连 ${directPreviewNodes.length}`,
               loading: previewQuery.isLoading,
@@ -1150,11 +1158,13 @@ export default function ClientSubscriptionsPage() {
               */
               onClick: (preview?.nodes.length ?? 0) > 0 ? () => setPreviewOpen(true) : undefined,
             },
-            { key: "landing", label: "落地节点", value: nodeCount, hint: healthSummary.subtitle, loading: nodesQuery.isLoading, cacheKey: "subscriptions.stats.landing", fallbackValue: 0 },
-            { key: "tokens", label: "订阅链接", value: tokens.length, hint: tokens.length > 0 ? "导入客户端用的地址" : "还没建", loading: tokensQuery.isLoading, cacheKey: "subscriptions.stats.tokens", fallbackValue: 0 },
+            { key: "landing", label: "落地节点", icon: Server, iconTone: "sky", value: nodeCount, hint: healthSummary.subtitle, loading: nodesQuery.isLoading, cacheKey: "subscriptions.stats.landing", fallbackValue: 0 },
+            { key: "tokens", label: "订阅链接", icon: Link2, iconTone: "teal", value: tokens.length, hint: tokens.length > 0 ? "导入客户端用的地址" : "还没建", loading: tokensQuery.isLoading, cacheKey: "subscriptions.stats.tokens", fallbackValue: 0 },
             {
               key: "pending",
               label: "待处理",
+              icon: TriangleAlert,
+              iconTone: "orange",
               value: pendingCount,
               hint: pendingSubtitle,
               tone: pendingCount > 0 ? "warn" : undefined,
@@ -1166,6 +1176,7 @@ export default function ClientSubscriptionsPage() {
             },
           ]}
         />
+        </div>
 
         {/*
           订阅链接排在最前面。

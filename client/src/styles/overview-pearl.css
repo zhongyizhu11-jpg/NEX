@@ -10,13 +10,13 @@
   颜色和影子不用珍珠的瓷面：卡底、描边、阴影都取这套主题自己的令牌（液态玻璃照样是毛玻璃），
   看着还是这套主题，只是摆法和珍珠一样。
 */
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl {
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) {
   --fx-ovp-surface: var(--fx-card-fill, var(--fx-l1-surface));
   --fx-ovp-stroke: color-mix(in srgb, var(--fx-card-stroke, var(--fx-stroke-weak)) 70%, transparent);
   --fx-ovp-shadow: var(--fx-elevation-card);
   --fx-ovp-well-stroke: color-mix(in srgb, var(--fx-stroke-weak) 50%, transparent);
 }
-html[data-ui-theme="liquid-glass"] .fx-ov-pearl { --fx-ovp-surface: var(--fx-lg-card); --fx-ovp-stroke: var(--fx-lg-card-stroke); }
+html[data-ui-theme="liquid-glass"] :is(.fx-ov-pearl, .fx-ov-stats) { --fx-ovp-surface: var(--fx-lg-card); --fx-ovp-stroke: var(--fx-lg-card-stroke); }
 
 /* ── 标题 ───────────────────────────────────────────────── */
 html:not([data-ui-theme="pearl"]) .fx-ov-pearl .workspace-header { padding: 4px 0 16px; border-bottom: 1px solid var(--fx-stroke-weak); }
@@ -37,8 +37,9 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-pearl-online::before { conten
 }
 
 /* ── 四张统计卡 ─────────────────────────────────────────── */
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary,
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-overview-card .fx-summary {
+/* 订阅管理顶上那排（.fx-ov-stats 包着的 SummaryStrip）也用这一套，大小颜色和总览一样（2026-11 用户要求） */
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary,
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-overview-card .fx-summary {
   gap: 16px;
   padding: 0;
   border: 0;
@@ -48,8 +49,8 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-overview-card .fx-summary {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell,
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-overview-card .fx-summary-cell {
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell,
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-overview-card .fx-summary-cell {
   --fx-ovp-tone-a: #14b8a6;
   --fx-ovp-tone-b: #0d9488;
   position: relative;
@@ -64,20 +65,20 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-overview-card .fx-summary-cel
     var(--fx-ovp-surface);
   box-shadow: var(--fx-ovp-shadow);
 }
-html[data-ui-theme="liquid-glass"] .fx-ov-pearl .fx-summary-cell { -webkit-backdrop-filter: var(--fx-lg-blur); backdrop-filter: var(--fx-lg-blur); }
-html.dark:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell {
+html[data-ui-theme="liquid-glass"] :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell { -webkit-backdrop-filter: var(--fx-lg-blur); backdrop-filter: var(--fx-lg-blur); }
+html.dark:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell {
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--fx-ovp-tone-a) 7%, transparent), color-mix(in srgb, var(--fx-ovp-tone-b) 7%, transparent)),
     var(--fx-ovp-surface);
 }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-ovp-stroke); }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:has(.fx-tile[data-tone="teal"]) { --fx-ovp-tone-a: #3b82f6; --fx-ovp-tone-b: #2563eb; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:has(.fx-tile[data-tone="green"]) { --fx-ovp-tone-a: #10b981; --fx-ovp-tone-b: #059669; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:has(.fx-tile[data-tone="orange"]) { --fx-ovp-tone-a: #f97316; --fx-ovp-tone-b: #ea580c; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:has(.fx-tile[data-tone="violet"]) { --fx-ovp-tone-a: #8b5cf6; --fx-ovp-tone-b: #7c3aed; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:has(.fx-tile[data-tone="pink"]) { --fx-ovp-tone-a: #ec4899; --fx-ovp-tone-b: #db2777; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:not(:has(.fx-tile)) { padding-right: 16px; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell .fx-tile {
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-ovp-stroke); }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:has(.fx-tile[data-tone="teal"]) { --fx-ovp-tone-a: #3b82f6; --fx-ovp-tone-b: #2563eb; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:has(.fx-tile[data-tone="green"]) { --fx-ovp-tone-a: #10b981; --fx-ovp-tone-b: #059669; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:has(.fx-tile[data-tone="orange"]) { --fx-ovp-tone-a: #f97316; --fx-ovp-tone-b: #ea580c; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:has(.fx-tile[data-tone="violet"]) { --fx-ovp-tone-a: #8b5cf6; --fx-ovp-tone-b: #7c3aed; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:has(.fx-tile[data-tone="pink"]) { --fx-ovp-tone-a: #ec4899; --fx-ovp-tone-b: #db2777; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:not(:has(.fx-tile)) { padding-right: 16px; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell .fx-tile {
   position: absolute;
   top: 16px;
   right: 16px;
@@ -88,23 +89,23 @@ html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell .fx-tile {
   color: #fff;
   box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
 }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell .fx-tile > svg { width: 20px; height: 20px; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell > span:first-child { color: var(--fx-text-muted); font-size: 12px; font-weight: 500; line-height: 16px; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell .fx-tile > svg { width: 20px; height: 20px; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell > span:first-child { color: var(--fx-text-muted); font-size: 12px; font-weight: 500; line-height: 16px; }
 /* 精简布局（根上没有 data-fx-std-page）照 compact.css 的小一号数字，和珍珠在精简下一样 */
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl[data-fx-std-page] .fx-summary-value { font-size: 24px; line-height: 30px; font-weight: 700; letter-spacing: -.025em; }
-html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell > span:last-child:not(:first-child):not(:nth-child(2)) { font-size: 12px; line-height: 16px; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats)[data-fx-std-page] .fx-summary-value { font-size: 24px; line-height: 30px; font-weight: 700; letter-spacing: -.025em; }
+html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell > span:last-child:not(:first-child):not(:nth-child(2)) { font-size: 12px; line-height: 16px; }
 @media (max-width: 639px) {
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary { gap: 12px; }
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell,
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-overview-card .fx-summary-cell { min-height: 0; padding: 16px; }
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell .fx-tile { display: none; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary { gap: 12px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell,
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-overview-card .fx-summary-cell { min-height: 0; padding: 16px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell .fx-tile { display: none; }
 }
 @media (min-width: 640px) and (max-width: 1023px) {
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (min-width: 640px) {
-  html:not([data-ui-theme="pearl"]) .fx-ov-pearl .fx-summary-cell:has(.fx-tile) > span:last-child:not(:first-child):not(:nth-child(2)) { margin-right: -52px; }
+  html:not([data-ui-theme="pearl"]) :is(.fx-ov-pearl, .fx-ov-stats) .fx-summary-cell:has(.fx-tile) > span:last-child:not(:first-child):not(:nth-child(2)) { margin-right: -52px; }
 }
 
 /* ── 运行状态：外层不再是卡，「运行正常 / 几处需要关注」一张横条卡 ── */
