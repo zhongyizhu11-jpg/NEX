@@ -90,6 +90,8 @@ type routeProbeSample struct {
 }
 
 type routeTargetStats struct {
+	// 新连接「上游回之前就关」的计数（failover_early_close.go）；正常回了就清零，拨号成功不清。
+	earlyClose   failoverEarlyCloseState
 	samples      []routeProbeSample
 	availability []bool
 	// 连续失败次数：探测不通和真实连接拨不通都算一次，一次探测成功或一次正常的真实拨号清零。

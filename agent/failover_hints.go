@@ -184,3 +184,8 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 		p.updateFallbackActiveLocked(reason)
 	}
 }
+
+// activeRelayDownLocked 正走的那条此刻是不是被面板标成「中转断了」。
+func (p *failoverProxy) activeRelayDownLocked() bool {
+	return p.activeIndex >= 0 && p.activeIndex < len(p.relayDown) && p.relayDown[p.activeIndex]
+}

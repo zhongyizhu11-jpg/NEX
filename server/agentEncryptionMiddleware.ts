@@ -37,6 +37,8 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/fxp-link-shaping",
   "/api/agent/fxp-conn-stats",
   "/api/agent/tcping",
+  // 线路组「下一跳」的快速探测结论（Agent 2.2.258 起，agent/route_hop_probe.go）
+  "/api/agent/route-hop-probes",
   "/api/agent/protocol-block",
   "/api/agent/rule-status",
   "/api/agent/rule-status-batch",

@@ -439,8 +439,9 @@ test("几个落地一起分（2.3.501）：主线路的每条目标带线路、�
   ]);
 });
 
-test("按线路保存：线路上的探测地址、「几个落地怎么用」落到 routeLines 和展开的每条路径上（以前探测地址被丢掉）", () => {
+test("按线路保存：线路上的探测地址、「几个落地怎么用」落到 routeLines；并列两个落地时路径各探各的落地，不共用线路的探测地址", () => {
   const probe = { ip: "198.51.100.99", port: 8443 };
   assert.deepEqual(outcome.savedLines.lines, [["main", "least_load", probe], ["bk", null, null]]);
-  assert.deepEqual(outcome.savedLines.paths, [["main", "least_load", probe], ["main", "least_load", probe], ["bk", null, null]]);
+  // main 并列了两个落地：一个探测地址分不出是哪个挂了，展开的路径不带它（各按自己的落地探）
+  assert.deepEqual(outcome.savedLines.paths, [["main", "least_load", null], ["main", "least_load", null], ["bk", null, null]]);
 });
