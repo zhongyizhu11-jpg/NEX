@@ -948,10 +948,10 @@ export function RouteGroupFields({
                 */
                 udpOnly
                   // 只转 UDP：拨号地址上多半只有 UDP 服务，连 TCP 只会一直失败（agent 的 failoverProbeTarget）。
-                  ? "每 5 秒探一次每条路径，同时每台中转探它的下一跳。UDP 没有握手：留空就 ping 路径的拨号地址，"
+                  ? "按切换设置的节奏（1～5 秒）探每条路径，同时每台中转探它的下一跳。UDP 没有握手：留空就 ping 路径的拨号地址，"
                     + "填了就连它的 TCP 端口。落地或第一跳中转禁 ping 的，一定要填一个。"
-                  : "每 5 秒对每条路径连一次 TCP，同时每台中转探它的下一跳。留空就探路径的拨号地址；"
-                    + "直连落地是用户态转发（gost、realm）时，给它填一个能反映整条路径的探测地址。"
+                  : "按切换设置的节奏（1～5 秒）对每条路径连一次 TCP，同时每台中转探它的下一跳。留空就探路径的拨号地址；"
+                    + "直连落地是用户态转发（gost、realm）时，给它填一个能反映整条路径的探测地址。并列了几个落地的线路不用它，各探各的落地。"
               }
             >
               <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">

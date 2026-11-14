@@ -81,12 +81,20 @@ export type RouteHopProbe = {
   nextHostId?: number;
   /** 最近几次的结果（新的在后），给「按段成功率」用。 */
   recent?: boolean[];
+  /**
+   * 快速探测（Agent 2.2.258 起，route_hop_probe.go）判出的结论：探的机器自己按线路组节奏连续失败 / 连续恢复才翻，
+   * 翻了立刻报。新鲜（ROUTE_HOP_FAST_STALE_MS 内报过）时以它为准，不再等一分钟一轮的普通探测数够三次。
+   */
+  fastDown?: boolean;
+  fastAt?: number;
 };
 
 export type RouteHopHint = { down: boolean; reason: string; hopIndex: number };
 
 /** 中转跳连续几次探不通才算这条路径在这一跳断了。探测一分钟一轮，三次就是两三分钟。 */
 export const ROUTE_HOP_DOWN_THRESHOLD = 3;
+/** 快速探测每 30 秒报一次全量；超过 90 秒没报就当这条快速通道没在跑，退回普通探测的结论。 */
+export const ROUTE_HOP_FAST_STALE_MS = 90 * 1000;
 /** 中转多久没报探测结果就不再拿它的旧结论说事：机器掉线时说「中转断了」是对的，但说的该是掉线，不是探测。 */
 const ROUTE_HOP_STALE_MS = 15 * 60 * 1000;
 const ROUTE_STATS_STALE_MS = 10 * 60 * 1000;
@@ -200,7 +208,8 @@ function pathDownState(probes: Map<string, RouteHopProbe> | undefined, pathKey: 
   for (const probe of probes.values()) {
     if (probe.pathKey !== pathKey) continue;
     if (nowMs - probe.at > ROUTE_HOP_STALE_MS) continue;
-    if (probe.consecutiveFailures < ROUTE_HOP_DOWN_THRESHOLD) continue;
+    const fastFresh = !!probe.fastAt && nowMs - probe.fastAt <= ROUTE_HOP_FAST_STALE_MS;
+    if (fastFresh ? !probe.fastDown : probe.consecutiveFailures < ROUTE_HOP_DOWN_THRESHOLD) continue;
     if (!worst || probe.hopIndex < worst.hopIndex) worst = probe;
   }
   return worst;
@@ -250,10 +259,68 @@ export function recordRouteHopProbe(input: {
     consecutiveFailures: input.ok ? 0 : (previous?.consecutiveFailures || 0) + 1,
     nextHostId: Number(input.nextHostId || 0) || 0,
     recent: [...(previous?.recent || []), !!input.ok].slice(-ROUTE_HOP_RECENT),
+    // 普通探测不碰快速探测的结论
+    fastDown: previous?.fastDown,
+    fastAt: previous?.fastAt,
   });
   const after = pathDownState(probes, pathKey, nowMs);
   const breaker = Number(input.nextHostId || 0) > 0
     ? noteNodeProbe(Number(input.nextHostId), `${ruleId}:${key}`, !!input.ok, (previous?.consecutiveFailures || 0) + (input.ok ? 0 : 1), nowMs)
+    : null;
+  return { downChanged: !!before !== !!after, down: !!after, breaker };
+}
+
+/**
+ * 收一次快速探测的结论（down 已经是探的那台机器按连续次数判好的）。翻没翻和 recordRouteHopProbe 一样返回。
+ */
+export function recordRouteHopFastState(input: {
+  parentRuleId: number;
+  pathKey: string;
+  hopIndex: number;
+  hostId: number;
+  hostName: string;
+  nextLabel: string;
+  down: boolean;
+  latencyMs: number | null;
+  nextHostId?: number | null;
+  nowMs?: number;
+}) {
+  const nowMs = input.nowMs ?? Date.now();
+  const ruleId = integer(input.parentRuleId);
+  const pathKey = String(input.pathKey || "").trim();
+  const hopIndex = Math.max(0, integer(input.hopIndex));
+  if (ruleId <= 0 || !pathKey) return { downChanged: false, down: false };
+  let probes = hopProbesByRule.get(ruleId);
+  if (!probes) {
+    probes = new Map();
+    hopProbesByRule.set(ruleId, probes);
+  }
+  const before = pathDownState(probes, pathKey, nowMs);
+  const key = hopKey(pathKey, hopIndex);
+  const previous = probes.get(key);
+  const ok = !input.down;
+  const latency = ok && typeof input.latencyMs === "number" && Number.isFinite(input.latencyMs) && input.latencyMs >= 0
+    ? Math.round(input.latencyMs * 10) / 10
+    : previous?.latencyMs ?? null;
+  const flipped = !previous || previous.fastDown !== !!input.down;
+  probes.set(key, {
+    pathKey,
+    hopIndex,
+    hostId: Number(input.hostId),
+    hostName: String(input.hostName || "").trim() || `主机 ${input.hostId}`,
+    nextLabel: String(input.nextLabel || "").trim() || "落地",
+    ok,
+    latencyMs: ok ? latency : null,
+    at: nowMs,
+    consecutiveFailures: ok ? 0 : Math.max(previous?.consecutiveFailures || 0, ROUTE_HOP_DOWN_THRESHOLD),
+    nextHostId: Number(input.nextHostId || 0) || 0,
+    recent: flipped ? [...(previous?.recent || []), ok].slice(-ROUTE_HOP_RECENT) : (previous?.recent || [ok]),
+    fastDown: !!input.down,
+    fastAt: nowMs,
+  });
+  const after = pathDownState(probes, pathKey, nowMs);
+  const breaker = Number(input.nextHostId || 0) > 0
+    ? noteNodeProbe(Number(input.nextHostId), `${ruleId}:${key}`, ok, ok ? 0 : ROUTE_HOP_DOWN_THRESHOLD, nowMs)
     : null;
   return { downChanged: !!before !== !!after, down: !!after, breaker };
 }

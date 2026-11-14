@@ -309,6 +309,9 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 			*/
 			if pinChanged {
 				existing.updateFallbackActiveLocked("panel pin")
+			} else if existing.activeRelayDownLocked() {
+				// 新规格里正走的那条带着「中转断了」：立刻换，不等下一轮探测（中转后面的落地挂了，这一刻就是故障）。
+				existing.updateFallbackActiveLocked("relay down")
 			}
 			existing.mu.Unlock()
 			existing.signature = signature

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.257"
+var Version = "2.2.258"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -655,6 +655,8 @@ type ruleLatencyProbe struct {
 	ProbeKey    string                  `json:"probeKey,omitempty"`
 	TopologyKey string                  `json:"topologyKey,omitempty"`
 	GroupHealth *forwardGroupHealthSpec `json:"forwardGroupHealth,omitempty"`
+	// 线路组「下一跳」的快速探测（2.2.258 起，见 route_hop_probe.go）：带了就由这台机器按它的节奏单独探。
+	RouteHop *routeHopProbeSpec `json:"routeHop,omitempty"`
 }
 
 type hostProbeServiceProbe struct {
@@ -954,6 +956,7 @@ func main() {
 	// 快速转发的表留在内核里时，流量采集第一轮之前就得把 conntrack 计数接上。
 	startFlowOffloadLoop()
 	go agentMetricsScheduler(cfg)
+	go routeHopProbeLoop(cfg)
 	go agentDNSWatchScheduler()
 	go agentExtLoop(cfg)
 	// 端口接入限制快照失败后面板不会重发（期望状态没变），由 Agent 自己重试 / 定期核对。

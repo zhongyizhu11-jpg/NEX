@@ -41,7 +41,7 @@ import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
-import { ingestRouteHopProbeReports } from "./routeGroups";
+import { ingestRouteHopFastReports, ingestRouteHopProbeReports } from "./routeGroups";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { recordRuleProbeFailure } from "./ruleProbeFailure";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
@@ -1417,6 +1417,37 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
 });
 
 // Agent TCPing 上报接口
+/**
+ * 线路组「下一跳」的快速探测结论（Agent 2.2.258 起，agent/route_hop_probe.go）：探的机器自己按连续次数判好
+ * 断 / 通，翻转时立刻报、平时 30 秒报一次全量。面板记下来，翻了马上推入口机（server/routeGroups.ts）。
+ */
+agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const results = (Array.isArray(req.body?.results) ? req.body.results : [])
+      .filter((item: any) => item && Number.isInteger(Number(item.ruleId)) && Number(item.ruleId) > 0 && typeof item.down === "boolean")
+      .slice(0, 2048)
+      .map((item: any) => ({
+        ruleId: Number(item.ruleId),
+        down: item.down === true,
+        latencyMs: typeof item.latencyMs === "number" && Number.isFinite(item.latencyMs) ? item.latencyMs : null,
+      }));
+    const outcome = await ingestRouteHopFastReports({
+      hostId: Number(host.id),
+      hostName: String((host as any).name || ""),
+      results,
+    });
+    res.json({ success: true, recorded: outcome.recorded });
+  } catch (error) {
+    console.warn(`[Agent RouteHop] ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: "route hop report failed" });
+  }
+});
+
 agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
   try {
     const host = await getAgentHostIdentityFromRequest(req);

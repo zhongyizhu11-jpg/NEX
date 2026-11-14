@@ -31,8 +31,8 @@ import { getHostNamesByIds, getHostsByIds } from "./repositories/hostRepository"
 import { getUserById } from "./repositories/userRepository";
 import { getProxyNodesForSubscription } from "./repositories/proxySubscriptionRepository";
 import { dbBool } from "./repositories/repositoryUtils";
-import { findAvailablePort, getTunnelById, getTunnelExitNodes, isPortUsedOnHost } from "./repositories/tunnelRepository";
-import { forgetRouteStats, recordRouteHopProbe, routeRuleIdsProbingHost } from "./routeGroupStats";
+import { findAvailablePort, getTunnelById, getTunnelExitNodes, getTunnelsByIds, isPortUsedOnHost } from "./repositories/tunnelRepository";
+import { forgetRouteStats, recordRouteHopFastState, recordRouteHopProbe, routeRuleIdsProbingHost } from "./routeGroupStats";
 import { ROUTE_ENTRY_RELAY_INDEX, routePathRelayPlan, routeRelayTargetNode, type RouteRelayTarget } from "../shared/routeLines";
 import { getForwardRulesByTunnel } from "./repositories/forwardRuleRepository";
 import { reconcileForwardRuleTunnelExits, reserveTunnelExitPort, usesSharedTunnelPrimaryListener } from "./repositories/tunnelRepository";
@@ -782,6 +782,152 @@ export async function ingestRouteHopProbeReports(input: {
   for (const [parentId, down] of flipped) {
     const parent = parentById.get(parentId);
     appendPanelLog(down ? "warn" : "info", `[RouteGroup] rule=${parentId} 中转跳${down ? "断了" : "恢复"}: host=${hostId} ${input.hostName}`);
+    await refreshTouchedHosts(parent, new Set<number>(), down ? "route-hop-down" : "route-hop-recovered");
+  }
+  return { recorded, flipped: Array.from(flipped.keys()) };
+}
+
+/*
+  ── 下一跳快速探测（Agent 2.2.258 起）─────────────────────────────────
+  中转后面的落地挂了，入口机自己看不出来（gost 中转照样接住连接）；以前靠中转机一分钟一轮的普通探测 + 连续
+  三次，两三分钟才切。现在面板给「真正去拨下一跳」的那台机器下发一条带 routeHop 的探测：
+    · gost 中继（不走隧道）：中继规则所在的机器，探它的 target（下一跳 / 落地）
+    · 隧道段的中继：隧道出口机（拨 target 的是它）；target 是出口机本机（127.0.0.1）的不探
+  节奏跟线路组的切换设置走（和入口 Agent 自己的探测一样：切换秒数的一半，1～5 秒），连续「失败几次算断」次不通
+  就判断、连续 3 次通算恢复，翻转立刻报 /api/agent/route-hop-probes，面板马上推入口机。
+*/
+export type RouteHopProbeSpec = { intervalMs: number; timeoutMs: number; failThreshold: number; recoverOks: number };
+
+export function routeHopProbeSpecForParent(parent: any): RouteHopProbeSpec {
+  const failoverSeconds = Math.max(1, Math.floor(Number(parent?.failoverSeconds) || 60));
+  const intervalMs = Math.min(5000, Math.max(1000, Math.round((failoverSeconds * 1000) / 2)));
+  const threshold = Math.min(10, Math.max(1, Math.floor(Number(parent?.routeFailureThreshold) || 3)));
+  return { intervalMs, timeoutMs: 2000, failThreshold: threshold, recoverOks: 3 };
+}
+
+/** 这条中继规则的「下一跳」该由哪台机器探：gost 中继是它所在的机器，隧道段是隧道出口机；探不了返回 0。 */
+export function routeHopProberHostId(rule: any, tunnel: any): number {
+  if (!rule || Number(rule.routeParentRuleId || 0) <= 0) return 0;
+  if (Number(rule.tunnelId || 0) > 0) {
+    if (!tunnel || Number(tunnel.id) !== Number(rule.tunnelId)) return 0;
+    if (String(rule.targetIp || "").trim() === "127.0.0.1") return 0;
+    return Number(tunnel.exitHostId || 0);
+  }
+  return Number(rule.hostId || 0);
+}
+
+/**
+ * 给一台机器的快速探测：按 ruleId 返回规格（隧道段的已经在 ruleLatencyProbes 里了，只挂上规格），
+ * 外加 gost 中继要新加的几条探测。只认启用的、TCP 能探的（纯 UDP 的中继探不了 TCP 连接，留给普通探测）。
+ */
+export async function buildRouteHopFastProbes(input: { hostId: number; rules: any[]; tunnelById: Map<number, any> }) {
+  const hostId = Number(input.hostId);
+  const relays = (input.rules || []).filter((rule: any) => rule
+    && Number(rule.routeParentRuleId || 0) > 0
+    && !dbBool(rule.pendingDelete)
+    && dbBool(rule.isEnabled)
+    && normalizeForwardRuleProtocol(rule.protocol, "both") !== "udp"
+    && String(rule.targetIp || "").trim() !== ""
+    && Number(rule.targetPort || 0) > 0
+    && routeHopProberHostId(rule, input.tunnelById.get(Number(rule.tunnelId || 0))) === hostId);
+  const specByRuleId = new Map<number, RouteHopProbeSpec>();
+  const gostProbes: Array<{ ruleId: number; tunnelId: number; targetIp: string; targetPort: number; method: string; probeKey: string; routeHop: RouteHopProbeSpec }> = [];
+  if (relays.length === 0) return { specByRuleId, gostProbes };
+  const parents = await getForwardRulesByIds(Array.from(new Set(relays.map((rule: any) => Number(rule.routeParentRuleId))))) as any[];
+  const parentById = new Map(parents.map((rule: any) => [Number(rule.id), rule]));
+  for (const relay of relays) {
+    const parent = parentById.get(Number(relay.routeParentRuleId));
+    if (!parent || dbBool(parent.pendingDelete) || !dbBool(parent.isEnabled)) continue;
+    const spec = routeHopProbeSpecForParent(parent);
+    specByRuleId.set(Number(relay.id), spec);
+    if (Number(relay.tunnelId || 0) > 0) continue;
+    gostProbes.push({
+      ruleId: Number(relay.id),
+      tunnelId: 0,
+      targetIp: String(relay.targetIp).trim(),
+      targetPort: Number(relay.targetPort),
+      method: "tcping",
+      probeKey: `route-hop:${Number(relay.id)}`,
+      routeHop: spec,
+    });
+  }
+  return { specByRuleId, gostProbes };
+}
+
+/** 收快速探测的结论。只认「这条中继的下一跳本来就该由报告的机器探」的（routeHopProberHostId）。 */
+export async function ingestRouteHopFastReports(input: {
+  hostId: number;
+  hostName: string;
+  results: Array<{ ruleId: number; down: boolean; latencyMs?: number | null }>;
+  nowMs?: number;
+}) {
+  const hostId = Number(input.hostId);
+  const nowMs = input.nowMs ?? Date.now();
+  const reports = (input.results || []).slice(0, 2048);
+  if (reports.length === 0) return { recorded: 0, flipped: [] as number[] };
+  const relayRows = await getForwardRulesByIds(Array.from(new Set(reports.map((report) => Number(report.ruleId))))) as any[];
+  const relayById = new Map(relayRows.map((rule: any) => [Number(rule.id), rule]));
+  const tunnelIds = Array.from(new Set(relayRows.map((rule: any) => Number(rule.tunnelId || 0)).filter((id) => id > 0)));
+  const tunnels = tunnelIds.length > 0 ? await getTunnelsByIds(tunnelIds) as any[] : [];
+  const tunnelById = new Map(tunnels.map((tunnel: any) => [Number(tunnel.id), tunnel]));
+  const accepted = reports.filter((report) => {
+    const relay = relayById.get(Number(report.ruleId));
+    return relay && !dbBool(relay.pendingDelete)
+      && routeHopProberHostId(relay, tunnelById.get(Number(relay.tunnelId || 0))) === hostId;
+  });
+  if (accepted.length === 0) return { recorded: 0, flipped: [] as number[] };
+  const parents = await getForwardRulesByIds(Array.from(new Set(accepted.map((report) => Number(relayById.get(Number(report.ruleId)).routeParentRuleId))))) as any[];
+  const parentById = new Map(parents.map((rule: any) => [Number(rule.id), rule]));
+  const pathsByParent = new Map<number, RoutePath[]>();
+  const nextHostIds = new Set<number>();
+  const pathOf = (relay: any) => {
+    const parent = parentById.get(Number(relay.routeParentRuleId));
+    if (!parent) return null;
+    const paths = pathsByParent.get(Number(parent.id)) || routePathsOf(parent as RouteGroupRule);
+    pathsByParent.set(Number(parent.id), paths);
+    return paths.find((item) => item.key === String(relay.routePathKey || "")) || null;
+  };
+  for (const report of accepted) {
+    const relay = relayById.get(Number(report.ruleId));
+    const path = pathOf(relay);
+    const next = path ? relayNextHostId(path, Number(relay.routeHopIndex)) : null;
+    if (next) nextHostIds.add(Number(next));
+  }
+  const names = nextHostIds.size > 0 ? await getHostNamesByIds(Array.from(nextHostIds)) : new Map<number, string>();
+  let recorded = 0;
+  const flipped = new Map<number, boolean>();
+  const breakerFlips = new Map<number, boolean>();
+  for (const report of accepted) {
+    const relay = relayById.get(Number(report.ruleId));
+    const parentId = Number(relay.routeParentRuleId);
+    if (!parentById.has(parentId)) continue;
+    const path = pathOf(relay);
+    const hopIndex = Math.max(0, Math.floor(Number(relay.routeHopIndex) || 0));
+    const nextId = path ? relayNextHostId(path, hopIndex) : null;
+    const latency = typeof report.latencyMs === "number" && Number.isFinite(report.latencyMs) && report.latencyMs >= 0 ? report.latencyMs : null;
+    const result = recordRouteHopFastState({
+      parentRuleId: parentId,
+      pathKey: String(relay.routePathKey || ""),
+      hopIndex,
+      hostId,
+      hostName: input.hostName,
+      nextLabel: nextId ? (names.get(Number(nextId)) || `主机 ${nextId}`) : "落地",
+      down: !!report.down,
+      latencyMs: latency,
+      nextHostId: nextId ? Number(nextId) : null,
+      nowMs,
+    });
+    recorded += 1;
+    if (result.downChanged) flipped.set(parentId, result.down);
+    if (result.breaker) breakerFlips.set(result.breaker.hostId, result.breaker.tripped);
+  }
+  for (const [nodeId, tripped] of breakerFlips) {
+    appendPanelLog(tripped ? "warn" : "info", `[RouteGroup] 节点${tripped ? "熔断" : "解除熔断"}: host=${nodeId}（快速探测）`);
+    await refreshRulesThroughHost(nodeId, tripped ? "route-node-breaker" : "route-node-breaker-cleared").catch(() => undefined);
+  }
+  for (const [parentId, down] of flipped) {
+    const parent = parentById.get(parentId);
+    appendPanelLog(down ? "warn" : "info", `[RouteGroup] rule=${parentId} 下一跳${down ? "断了" : "恢复"}（快速探测）: host=${hostId} ${input.hostName}`);
     await refreshTouchedHosts(parent, new Set<number>(), down ? "route-hop-down" : "route-hop-recovered");
   }
   return { recorded, flipped: Array.from(flipped.keys()) };

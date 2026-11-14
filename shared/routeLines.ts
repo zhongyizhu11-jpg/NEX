@@ -490,6 +490,13 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
     const used = perLine[lineIndex].slice(0, quota[lineIndex]);
     // 按权重是一条线路一个数：展开出来的几条路径一起分它那一份（2.3.498 以前每条都拿整份，候选多的线路分得多）
     const weight = Math.max(1, Math.round(line.weight / Math.max(1, used.length)));
+    /*
+      线路上填的探测地址只代表一个落地：这条线路并列了两个以上落地时，拿同一个地址判断它们就分不出是哪个挂了
+      （主备切不过去，「按负载分」还会往挂了的那个上送）。这时不用它，每条路径按自己的落地探（入口直连的探落地本身，
+      经过中转的由中转机快速探下一跳）。
+    */
+    const lineDestKeys = new Set(used.map((combo) => combo.dest.destHostId ? `h${combo.dest.destHostId}` : combo.dest.dest ? `${combo.dest.dest.ip}:${combo.dest.dest.port}` : `n${combo.dest.destNodeId ?? ""}`));
+    const lineProbe = lineDestKeys.size > 1 ? null : (line.probe ?? null);
     used.forEach((combo, comboIndex) => {
       // 落地池的成员按机器记（h7），不按地址：那台换了 IP，这条路径的 key 和历史不变
       const destPart = combo.dest.destHostId ? `h${combo.dest.destHostId}` : combo.dest.dest ? `${combo.dest.dest.ip}:${combo.dest.dest.port}` : "";
@@ -507,7 +514,7 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
         ...(combo.dest.destHostId ? { destHostId: combo.dest.destHostId } : {}),
         weight,
         // 线路上填的探测地址给它展开出来的每一条路径（以前这里写死 null，编辑框里填了也被丢掉）
-        probe: line.probe ?? null,
+        probe: lineProbe,
         dial: null,
         issue: null,
         tier: lineIndex,

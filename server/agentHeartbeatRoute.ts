@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { buildRouteHopFastProbes } from "./routeGroups";
 import { parseFailoverTargets } from "../shared/failoverTargets";
 import { loadAverageToStored, parseAgentLoadAverage } from "../shared/hostLoadAverage";
 import {
@@ -4543,6 +4544,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       })
       .filter(Boolean)
       .sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
+    /*
+      线路组「下一跳」的快速探测（Agent 2.2.258 起）：隧道段的中继已经在上面这份里，挂上 routeHop 规格；
+      gost 中继另加一条。老 Agent 不认 routeHop，gost 那几条（tunnelId 为 0）它也不会当探测跑。
+    */
+    const routeHopFast = await buildRouteHopFastProbes({ hostId: Number(host.id), rules: agentAllRules as any[], tunnelById: tunnelById as Map<number, any> });
+    if (routeHopFast.specByRuleId.size > 0) {
+      for (const probe of ruleLatencyProbes as any[]) {
+        const spec = routeHopFast.specByRuleId.get(Number(probe.ruleId));
+        if (spec) probe.routeHop = spec;
+      }
+      (ruleLatencyProbes as any[]).push(...routeHopFast.gostProbes);
+      (ruleLatencyProbes as any[]).sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
+    }
     // 自动换 IP 的探测借同一个通道下发（保留的 serviceId 段，不进 host_probe_services 表），见 server/ipChange/。
     const hostProbeServices = [
       // URL 连接检测只发给够版本的 Agent：用这一次心跳报上来的版本，升级后的第一次心跳就拿得到
