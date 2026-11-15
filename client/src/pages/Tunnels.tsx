@@ -4376,11 +4376,8 @@ function TunnelsContent() {
             </div>
           </div>
           <div className="fx-tunnel-route">
-            {/*
-              手机上按画出来的节点数排：两个横排，三个起竖排（带出口组的隧道跳数是 2、画出来却是 3 个，以前挤成「香.. 美... 负载均...」）。
-              线上不再标延迟：卡片下面那行就是这条链路的延迟和走势，线上再写一遍是重复，还把主机名挤短（2026-11 用户要求）。
-            */}
-            {renderTunnelRoute(tunnel, true, !isMobile && hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, false)}
+            {/* 横排、线下标延迟（2.3.532 改成手机竖排、线上不标延迟，用户看过后要求还原成原来的样子） */}
+            {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, !compactLayout)}
           </div>
           {/* fx-tunnel-meta：精简手机行上累计和延迟那两行并成一行（compact.css），标准下照旧两行 */}
           <div className="fx-tunnel-meta">
