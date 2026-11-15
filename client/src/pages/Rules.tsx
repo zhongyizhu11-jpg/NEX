@@ -3337,6 +3337,7 @@ function RulesContent() {
     },
     onError: (error) => toast.error(error.message || "操作失败"),
   });
+  const routeLandingCredentialCheck = trpc.rules.routeLandingCredentialCheck.useMutation();
   const updateMutation = trpc.rules.update.useMutation({
     onSuccess: (data, variables) => {
       invalidateRuleProbeStatuses([Number(variables.id)]);
@@ -5047,6 +5048,30 @@ function RulesContent() {
     }
     if (kernelForwardWarning) {
       toast.warning(kernelForwardWarning);
+    }
+    /*
+      线路组里的落地和订阅节点凭据不一样：切到那个落地后订阅会连不上（2026-11 用户要求保存时提醒）。
+      查不了（网络错）不拦，照常保存。
+    */
+    if (failoverPayload.routeGroup && form.targetNodeId && (form.routeGroup?.lines?.length ?? 0) > 0) {
+      const check = await routeLandingCredentialCheck.mutateAsync({
+        proxyNodeId: form.targetNodeId,
+        lines: (form.routeGroup?.lines || []).map((line) => ({
+          name: line.name,
+          dests: line.dests.map((item) => ({ dest: item.dest ?? null, destNodeId: item.destNodeId ?? null })),
+        })),
+      }).catch(() => null);
+      const issues = check?.issues || [];
+      if (issues.length > 0) {
+        const listed = issues.slice(0, 4).map((issue) => `${issue.line} → ${issue.landing}${issue.reason === "unknown" ? "（不是节点，没法确认）" : ""}`).join("；");
+        const confirmed = await confirmDialog({
+          title: "有落地和订阅节点的凭据不一样",
+          description: `${listed}${issues.length > 4 ? ` 等 ${issues.length} 个` : ""}。线路切到这些落地时，订阅里的客户端会连不上。建议把这几台建成一个落地池，线路落地选这个池（凭据自动一致）。`,
+          confirmText: "仍然保存",
+          cancelText: "返回修改",
+        });
+        if (!confirmed) return;
+      }
     }
     if (editingId && editingOriginalProtocol === "both" && form.protocol !== "both") {
       const confirmed = await confirmDialog({
