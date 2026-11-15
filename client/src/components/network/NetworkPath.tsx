@@ -40,6 +40,11 @@ export type NetworkNodeSpec = {
   health?: NetworkHealth;
   /** 右上角挂一个小标记（协议、版本之类）。列表里慎用，会抢点的注意力 */
   badge?: ReactNode;
+  /** 点名字打开详情（负载均衡出口：点开看是哪几台）。名字底下画一道虚线表示能点 */
+  onActivate?: () => void;
+  activateLabel?: string;
+  /** 跟在名字后面、不会被省略号吃掉的一小段（「负载均衡 ×3」的「×3」：名字可以缩，台数要一直看得见） */
+  nameSuffix?: string;
 };
 
 export type NetworkEdgeSpec = {
@@ -72,15 +77,37 @@ export function NetworkNode({
       <span className="flex shrink-0 items-center gap-2 pt-[7px]">
         <StatusDot health={health} />
       </span>
-      <span className="flex min-w-0 flex-col">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-primary-type font-medium text-foreground">{node.name}</span>
-          {node.badge}
+      {node.onActivate ? (
+        <button
+          type="button"
+          className="fx-path-node-button flex min-w-0 flex-col rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={node.activateLabel || node.name}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            node.onActivate?.();
+          }}
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-primary-type font-medium text-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4">{node.name}</span>
+            {node.nameSuffix ? <span className="shrink-0 text-primary-type font-medium text-foreground">{node.nameSuffix}</span> : null}
+            {node.badge}
+          </span>
+          {node.sublabel ? (
+            <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
+          ) : null}
+        </button>
+      ) : (
+        <span className="flex min-w-0 flex-col">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-primary-type font-medium text-foreground">{node.name}</span>
+            {node.badge}
+          </span>
+          {node.sublabel ? (
+            <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
+          ) : null}
         </span>
-        {node.sublabel ? (
-          <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
-        ) : null}
-      </span>
+      )}
     </div>
   );
 }
@@ -206,14 +233,19 @@ export function NetworkPath({
     名字只在放不下时才缩、缩了就打省略号，谁也不叠谁。
   */
   if (direction === "horizontal") {
+    /*
+      三个点横排时手机上很挤：线最短收到 32px、间距 8px，把省下的宽度留给名字。
+      能点的节点（「负载均衡 ×2」）不缩 —— 缩成「负.」就看不出是什么、也不像能点了，让主机名先缩。
+    */
+    const tight = nodes.length >= 3;
     return (
-      <div className={cn("flex min-w-0 flex-row items-start gap-3", className)}>
+      <div className={cn("flex min-w-0 flex-row items-start", tight ? "gap-2" : "gap-3", className)}>
         {nodes.map((node, index) => {
           const edge = index < nodes.length - 1 ? (edges[index] || {}) : null;
           return (
             <Fragment key={node.id}>
-              <NetworkNode node={node} orientation="horizontal" className="min-w-0 shrink" />
-              {edge ? <NetworkEdge edge={edge} orientation="horizontal" className="mt-[10px]" /> : null}
+              <NetworkNode node={node} orientation="horizontal" className={node.onActivate ? "shrink-0" : "min-w-0 shrink"} />
+              {edge ? <NetworkEdge edge={edge} orientation="horizontal" className={cn("mt-[10px]", tight && "min-w-8")} /> : null}
             </Fragment>
           );
         })}

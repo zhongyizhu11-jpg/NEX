@@ -2150,6 +2150,8 @@ function TunnelsContent() {
   const panelFlags = usePanelFlags();
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  // 链路卡片上点「负载均衡 ×3」：弹窗列出是哪几台（2026-11 用户要求）
+  const [exitGroupDialogTunnel, setExitGroupDialogTunnel] = useState<TunnelListItem | null>(null);
   const [form, setForm] = useState<TunnelForm>(defaultForm);
   const [listenPortExplicit, setListenPortExplicit] = useState(false);
   const nginxCertFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2617,7 +2619,7 @@ function TunnelsContent() {
     return <StatusDot health={health} size="large" label={message} />;
   };
   /* 一条隧道的路径（节点 + 边）。卡片画成 NetworkPath，深空的行把它压成一行「入口 ── ms ──▶ 出口」，两边用同一份 */
-  const tunnelPathOf = (tunnel: TunnelListItem, showVia = true, showLatency = true) => {
+  const tunnelPathOf = (tunnel: TunnelListItem, showVia = true, showLatency = true, exitDialog = false) => {
     const entryGroup = Number(tunnel?.entryGroupId || 0) > 0 ? entryGroupById.get(Number(tunnel.entryGroupId)) : null;
     /*
       换成 Path 语言：位置本身说明谁是入口谁是出口，不再给每个节点贴
@@ -2639,10 +2641,11 @@ function TunnelsContent() {
       latencyMs: showLatency && typeof tunnel?.lastLatencyMs === "number" ? tunnel.lastLatencyMs : null,
       // 链路卡的副标题已经写了模式（「GOST TLS · 直连」），线旁边不再重复一遍，路径就是一行
       via: showVia ? getTunnelModeDisplay(tunnel?.mode, true, tunnel?.forwardxVersion) : undefined,
+      onLoadBalanceClick: exitDialog ? () => setExitGroupDialogTunnel(tunnel) : undefined,
     });
   };
-  const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true, showLatency = true) => {
-    const path = tunnelPathOf(tunnel, showVia, showLatency);
+  const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true, showLatency = true, exitDialog = false) => {
+    const path = tunnelPathOf(tunnel, showVia, showLatency, exitDialog);
     return (
       <div title={path.title}>
         <NetworkPath nodes={path.nodes} edges={path.edges} orientation={orientation ?? (compact ? "auto" : "vertical")} />
@@ -4377,7 +4380,7 @@ function TunnelsContent() {
           </div>
           <div className="fx-tunnel-route">
             {/* 横排、线下标延迟（2.3.532 改成手机竖排、线上不标延迟，用户看过后要求还原成原来的样子） */}
-            {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, !compactLayout)}
+            {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, !compactLayout, true)}
           </div>
           {/* fx-tunnel-meta：精简手机行上累计和延迟那两行并成一行（compact.css），标准下照旧两行 */}
           <div className="fx-tunnel-meta">
@@ -5380,6 +5383,60 @@ function TunnelsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {(() => {
+        /*
+          负载均衡出口是哪几台：主出口 + 负载均衡里的其余出口，每台一行（在线状态、地区、权重），
+          顶上写用的什么策略。只看，不改 —— 改去编辑隧道或出口组。
+        */
+        const tunnel = exitGroupDialogTunnel;
+        if (!tunnel) return null;
+        const exits: Array<{ hostId: number; weight: number | null }> = [];
+        const seen = new Set<number>();
+        const push = (hostId: number, weight: number | null) => {
+          if (hostId > 0 && !seen.has(hostId)) {
+            seen.add(hostId);
+            exits.push({ hostId, weight });
+          }
+        };
+        push(Number(tunnel.exitHostId || 0), null);
+        const lbExits: unknown[] = Array.isArray(tunnel.loadBalanceExits) ? tunnel.loadBalanceExits : [];
+        for (const raw of lbExits) {
+          const exit = (raw && typeof raw === "object" ? raw : {}) as { hostId?: unknown; weight?: unknown };
+          push(Number(exit?.hostId || 0), Number(exit?.weight) > 0 ? Number(exit.weight) : null);
+        }
+        const hostLookup = new Map((hosts || []).map((host) => [Number(host.id), host] as const));
+        // 只要策略名（「按权重」），后面那句解释在编辑框里看
+        const strategy = String(EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(tunnel.loadBalanceStrategy)] || "").split(" - ")[0];
+        const online = exits.filter((exit) => hostLookup.get(exit.hostId)?.isOnline).length;
+        return (
+          <Dialog open onOpenChange={(open) => { if (!open) setExitGroupDialogTunnel(null); }}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>负载均衡出口 · {exits.length} 台</DialogTitle>
+                <DialogDescription>{tunnel.name} · {strategy} · {online} 台在线</DialogDescription>
+              </DialogHeader>
+              <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+                {exits.map((exit) => {
+                  const host = hostLookup.get(exit.hostId);
+                  const region = host ? hostRegionText(host) : "";
+                  return (
+                    <li key={exit.hostId} className="flex min-w-0 items-center gap-3 px-3 py-2.5">
+                      <StatusDot health={host?.isOnline ? "healthy" : "down"} />
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-primary-type font-medium">{tunnelHopHostName(tunnel, exit.hostId, hosts) || `主机 ${exit.hostId}`}</span>
+                        {region ? <span className="truncate text-meta text-muted-foreground">{region}</span> : null}
+                      </span>
+                      <span className="shrink-0 text-meta text-muted-foreground">
+                        {host?.isOnline ? "在线" : "离线"}{exit.weight ? ` · 权重 ${exit.weight}` : ""}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </div>
   );
 }

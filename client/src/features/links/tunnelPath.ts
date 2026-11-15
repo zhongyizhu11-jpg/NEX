@@ -40,6 +40,11 @@ export type TunnelPathContext = {
   latencyMs?: number | null;
   /** 经过什么转发实现（NEX V1/V2、GOST…） */
   via?: string;
+  /**
+   * 点「负载均衡」那个节点时调用（链路卡片用：弹窗列出是哪几台）。传了它，节点只写「负载均衡 ×3」，
+   * 不再在底下列一串成员名 —— 那一行在手机上挤不下，点开看更清楚（2026-11 用户要求）。
+   */
+  onLoadBalanceClick?: () => void;
 };
 
 export type TunnelPath = {
@@ -94,12 +99,21 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
   const extraExitNames = getTunnelLoadBalanceExitNames(tunnel, hosts);
   if (extraExitNames.length > 0) {
     const allExits = getTunnelExitNames(tunnel, hosts);
-    nodes.push({
-      id: "load-balance-exits",
-      name: "负载均衡出口",
-      sublabel: allExits.join(" / "),
-      health,
-    });
+    nodes.push(context.onLoadBalanceClick
+      ? {
+        id: "load-balance-exits",
+        name: "负载均衡",
+        nameSuffix: `×${allExits.length}`,
+        health,
+        onActivate: context.onLoadBalanceClick,
+        activateLabel: `负载均衡出口，共 ${allExits.length} 台，点开查看`,
+      }
+      : {
+        id: "load-balance-exits",
+        name: "负载均衡出口",
+        sublabel: allExits.join(" / "),
+        health,
+      });
   }
 
   /*
