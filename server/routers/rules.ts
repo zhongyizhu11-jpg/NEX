@@ -35,6 +35,7 @@ import { ruleTrafficQueryCache } from "../ruleLatencyQueryCache";
 import { idSetFingerprint } from "../queryCache";
 import { withRulePortWarnings } from "../rulePortOccupancy";
 import { withAnomalyThrottles } from "../ops/trafficAnomalyThrottles";
+import { checkRouteLandingCredentials } from "../routeLandingCredentials";
 
 /** 看一条规则的线路状态：管理员随便看，别人只能看自己的。 */
 async function requireRuleVisible(user: { id: number; role: string }, ruleId: number) {
@@ -163,7 +164,27 @@ async function getRuleListRepositoryInput(
   };
 }
 
+const routeLandingCredentialInput = z.object({
+  proxyNodeId: z.number().int().nullable().optional(),
+  lines: z.array(z.object({
+    name: z.string().max(100).optional(),
+    dests: z.array(z.object({
+      dest: z.object({ ip: z.string().max(255), port: z.number().int() }).nullable().optional(),
+      destNodeId: z.number().int().nullable().optional(),
+    })).max(32),
+  })).max(32),
+});
+
 export const rulesRouter = router({
+  /**
+   * 保存线路组前问一句：线路里的落地和订阅绑定的节点凭据一样吗（server/routeLandingCredentials.ts）。
+   * 不一样的切过去订阅会连不上；只返回「哪条线路的哪个落地、为什么」，不带凭据内容。
+   */
+  routeLandingCredentialCheck: protectedProcedure
+    .input(routeLandingCredentialInput)
+    .mutation(async ({ input, ctx }) => ({
+      issues: await checkRouteLandingCredentials({ user: ctx.user, proxyNodeId: input.proxyNodeId, lines: input.lines }),
+    })),
   /**
    * 线路组每条路径的质量历史（route_path_quality_stats）：延迟、丢包、抖动、可用率、评分，
    * 按时间桶合并（最多约 360 个点一条）。入口 Agent 每次心跳报评分，面板每条路径一分钟留一行、
