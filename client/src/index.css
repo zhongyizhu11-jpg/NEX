@@ -1597,6 +1597,12 @@
   --host-runtime-w: 112px;
   --host-flow-w: 112px;
 }
+/* 1500 以上（iPad 缩放到 85% 时页面约 1620 宽）表有 1300 多：流量三列放宽到 150，多出来的不全堆给「资源」 */
+@media (min-width: 1500px) {
+  .host-management-table.host-table-fit {
+    --host-flow-w: 150px;
+  }
+}
 /*
   触屏上全局把按钮撑到 44px（见下面 pointer: coarse 那条），「操作」三个按钮 3 × 44 + 间距 + 内边距 = 152，
   还按 120 给就往左溢出 24px，图表按钮压在「系统累计」那一列上（iPad 截图里那个小波浪）。

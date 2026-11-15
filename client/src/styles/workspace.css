@@ -65,6 +65,13 @@
   拉到 1440 时四列卡每张 330px，里面的字只占一半，剩下一半是空 —— 留白放在两边比塞进每张卡里好看。
 */
 .workspace-main { width: 100%; max-width: 1280px; margin-inline: auto; min-width: 0; }
+/*
+  1800 以下不限宽（2026-11 用户 iPad Pro 截图：Safari 缩放后页面约 1620 宽，内容卡在 1280 居中，
+  左右各空出 70px 左右，主机表却要横着滚）。大屏上照旧 1280 居中，免得一行拉得太长。
+*/
+@media (max-width: 1799px) {
+  .workspace-main { max-width: none; }
+}
 .workspace-main .route-content-enter > div { min-width: 0; }
 /*
   页面标题照参考站压紧：一行 20px 的粗标题，主操作在同一行右侧；说明和状态是下面一行
