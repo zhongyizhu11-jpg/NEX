@@ -1585,13 +1585,53 @@
   background: color-mix(in oklab, var(--muted) 28%, var(--card));
 }
 
+/* 冻结列的宽度（标准表 320 / 120；平板那套 host-table-fit 名称列 248，见 Hosts.tsx HOST_TABLE_COLUMNS_STANDARD_FIT） */
+.host-management-table {
+  --host-name-w: 320px;
+  --host-actions-w: 120px;
+  --host-runtime-w: 128px;
+  --host-flow-w: 128px;
+}
+.host-management-table.host-table-fit {
+  --host-name-w: 248px;
+  --host-runtime-w: 112px;
+  --host-flow-w: 112px;
+}
+/*
+  触屏上全局把按钮撑到 44px（见下面 pointer: coarse 那条），「操作」三个按钮 3 × 44 + 间距 + 内边距 = 152，
+  还按 120 给就往左溢出 24px，图表按钮压在「系统累计」那一列上（iPad 截图里那个小波浪）。
+*/
+@media (pointer: coarse) {
+  .host-management-table {
+    --host-actions-w: 152px;
+  }
+}
+/* 平板那套资源格子只有 70px 左右一格：不画 CPU / RAM / Disk 前面的小图标，字和百分比放得下 */
+.host-table-fit .fx-host-res-icon {
+  display: none;
+}
+
+/*
+  冻结列一定要不透明：有的主题 --card 是半透明的（玻璃效果），横着滚时底下的「系统累计」「实时网络」
+  从「操作」那一列里透出来，字叠字（2026-11 用户的 iPad 截图）。卡片色叠在页面底色上，最底下再垫一层实色。
+*/
 .host-table-frozen-cell {
-  background: var(--card);
+  --fx-frozen-base: #ffffff;
+  background:
+    linear-gradient(var(--card), var(--card)),
+    linear-gradient(var(--background), var(--background)),
+    var(--fx-frozen-base);
   transition: background-color 150ms ease;
+}
+.dark .host-table-frozen-cell {
+  --fx-frozen-base: #0b0d12;
 }
 
 .host-table-row:hover > .host-table-frozen-cell {
-  background: color-mix(in oklab, var(--muted) 28%, var(--card));
+  background:
+    linear-gradient(color-mix(in oklab, var(--muted) 28%, var(--card)), color-mix(in oklab, var(--muted) 28%, var(--card))),
+    linear-gradient(var(--background), var(--background)),
+    var(--fx-frozen-base);
 }
 
 .host-table-frozen-left::after,
