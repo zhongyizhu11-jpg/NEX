@@ -900,7 +900,7 @@ function HostListResourceRow({
         <div className="min-w-0 cursor-help rounded-sm px-1 py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" tabIndex={0} aria-label={tooltip}>
           <div className="flex min-w-0 items-center justify-between gap-1.5">
             <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-              <Icon className="h-3.5 w-3.5 shrink-0" />
+              <Icon className="fx-host-res-icon h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{label}</span>
             </div>
             <span className="shrink-0 text-right text-[11px] font-semibold tabular-nums text-foreground">{formatValue(value)}</span>
@@ -934,7 +934,7 @@ function HostListResourceBundle({
 }) {
   return (
     <TooltipProvider delayDuration={120}>
-      <div className="grid min-w-[300px] grid-cols-3 gap-1.5">
+      <div className="fx-host-res grid min-w-[204px] grid-cols-3 gap-1.5">
         <HostListResourceRow
           icon={Cpu}
           label="CPU"
@@ -1423,7 +1423,22 @@ const HOST_TABLE_COLUMNS_STANDARD: HostTableColumnMeta[] = [
   { key: "traffic", label: "累计流量", minWidth: 96, defaultWidth: "calc(25% - 191px)", basis: 144 },
   { key: "realtime", label: "实时网络", minWidth: 96, defaultWidth: "calc(25% - 191px)", basis: 144 },
   { key: "systemTotal", label: "系统累计", minWidth: 96, defaultWidth: "calc(25% - 191px)", basis: 144 },
-  { key: "actions", label: "操作", required: true, pin: "end", minWidth: 120, defaultWidth: 120, basis: 120 },
+  { key: "actions", label: "操作", required: true, pin: "end", minWidth: 120, defaultWidth: "var(--host-actions-w)", basis: 120 },
+];
+/*
+  平板宽度（iPad 横屏：1376 宽减掉侧栏，表只有 1100 左右）用这一套（2026-11 用户发来 iPad Pro 截图）：
+  原来那套最少 1340，横着滚，右边冻结的「操作」盖在「实时网络 / 系统累计」上。这里名称列收到 248、
+  资源格子收到 232（小了就不画图标），三列流量各 112：合计 1048（触屏上「操作」宽到 152，合计 1080），iPad 横屏不横滚。
+  实际列宽是表头上的 w-[var(--host-*-w)] 定的（index.css 里 .host-table-fit 换值），资源列拿剩下的宽度。
+*/
+const HOST_TABLE_COLUMNS_STANDARD_FIT: HostTableColumnMeta[] = [
+  { key: "name", label: "设备名称", required: true, pin: "start", minWidth: 200, defaultWidth: 248, basis: 248 },
+  { key: "runtime", label: "运行信息", minWidth: 96, defaultWidth: 112, basis: 112 },
+  { key: "resources", label: "资源", minWidth: 160, defaultWidth: "calc(40% - 192px)", basis: 232 },
+  { key: "traffic", label: "累计流量", minWidth: 96, defaultWidth: "calc(20% - 96px)", basis: 112 },
+  { key: "realtime", label: "实时网络", minWidth: 96, defaultWidth: "calc(20% - 96px)", basis: 112 },
+  { key: "systemTotal", label: "系统累计", minWidth: 96, defaultWidth: "calc(20% - 96px)", basis: 112 },
+  { key: "actions", label: "操作", required: true, pin: "end", minWidth: 120, defaultWidth: "var(--host-actions-w)", basis: 120 },
 ];
 /* 精简的表：七列合计 1130，table-fixed 下按比例缩放，1366 宽不横滚（最小宽度按 1000 / 1130 缩） */
 const HOST_TABLE_COLUMNS_COMPACT: HostTableColumnMeta[] = [
@@ -1618,7 +1633,7 @@ const HostTableRow = memo(function HostTableRow({
     >
       {renderHostTableCells(columns, {
         name: (
-        <TableCell key="name" className="host-table-frozen-cell host-table-frozen-left sticky left-0 z-20 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card px-3 py-2.5" style={hostFrozenColumnStyle(columns, "name")}>
+        <TableCell key="name" className="host-table-frozen-cell host-table-frozen-left sticky left-0 z-20 w-[var(--host-name-w)] min-w-[var(--host-name-w)] max-w-[var(--host-name-w)] border-r border-border/60 bg-card px-3 py-2.5" style={hostFrozenColumnStyle(columns, "name")}>
           <div className="flex min-w-0 items-center gap-2">
             {sortingEnabled && (
               <SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />
@@ -1670,7 +1685,7 @@ const HostTableRow = memo(function HostTableRow({
         </TableCell>
         ),
         runtime: (
-        <TableCell key="runtime" className="w-[128px] whitespace-nowrap py-2.5 text-center">
+        <TableCell key="runtime" className="w-[var(--host-runtime-w)] whitespace-nowrap py-2.5 text-center">
           <div className="flex flex-col items-center justify-center gap-1.5 text-center">
             <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium tabular-nums text-muted-foreground" title={uptimeTitle}>
               <Clock className="h-3.5 w-3.5 shrink-0" />
@@ -1727,7 +1742,7 @@ const HostTableRow = memo(function HostTableRow({
         </TableCell>
         ),
         actions: (
-        <TableCell key="actions" className="host-table-frozen-cell host-table-frozen-right sticky right-0 z-20 w-[120px] min-w-[120px] max-w-[120px] border-l border-border/60 bg-card px-2 py-2.5 text-right">
+        <TableCell key="actions" className="host-table-frozen-cell host-table-frozen-right sticky right-0 z-20 w-[var(--host-actions-w)] min-w-[var(--host-actions-w)] max-w-[var(--host-actions-w)] border-l border-border/60 bg-card px-2 py-2.5 text-right">
           <HostActionButtons
             host={host}
             onEdit={actions.edit}
@@ -1783,12 +1798,17 @@ function HostsContent() {
     就是在看不见的地方跑一个 3D 地球、列表却是空的。手机上按精简卡片显示，记住的选择不动。
   */
   const compactLayout = useCompactLayout();
-  const hostColumnDefinitions = compactLayout ? HOST_TABLE_COLUMNS_COMPACT : HOST_TABLE_COLUMNS_STANDARD;
+  // iPad 横屏这类宽度（侧栏占掉一块后表不到 1340）：标准表换成收窄的那套列宽
+  // 1680 以下侧栏占掉一块后原来那套 1340 都放不下（照样横滚），一并用收窄的
+  const hostTableFit = useMediaQuery("(max-width: 1679px)") && !compactLayout;
+  const coarsePointer = useMediaQuery("(pointer: coarse)");
+  const hostColumnDefinitions = compactLayout ? HOST_TABLE_COLUMNS_COMPACT : hostTableFit ? HOST_TABLE_COLUMNS_STANDARD_FIT : HOST_TABLE_COLUMNS_STANDARD;
   const hostColumnSettings = useTableColumnSettings("hosts", hostColumnDefinitions);
   const hostColumnMeta = useMemo(() => new Map(hostColumnDefinitions.map((column) => [column.key, column])), [hostColumnDefinitions]);
   const hostTableMinWidth = Math.round(tableColumnsMinWidth(
     hostColumnSettings.visibleColumns,
-    (key) => hostColumnMeta.get(key)?.basis ?? 120,
+    // 触屏上「操作」列是 152（index.css 的 --host-actions-w），最小宽度跟着算
+    (key) => (key === "actions" && coarsePointer && !compactLayout ? 152 : hostColumnMeta.get(key)?.basis ?? 120),
   ) * HOST_TABLE_MIN_WIDTH_RATIO[compactLayout ? "compact" : "standard"]);
   // 表头每一列：positioned = 本身就是 sticky（冻结列），不要再加 relative 把 sticky 盖掉
   const hostTableHeads: Record<string, { content: ReactNode; className: string; positioned?: boolean }> = compactLayout ? {
@@ -1803,29 +1823,29 @@ function HostsContent() {
     name: {
       content: "设备名称",
       positioned: true,
-      className: "host-table-frozen-cell host-table-frozen-left sticky left-0 z-30 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card",
+      className: "host-table-frozen-cell host-table-frozen-left sticky left-0 z-30 w-[var(--host-name-w)] min-w-[var(--host-name-w)] max-w-[var(--host-name-w)] border-r border-border/60 bg-card",
     },
-    runtime: { content: "运行信息", className: "w-[128px] whitespace-nowrap text-center" },
+    runtime: { content: "运行信息", className: "w-[var(--host-runtime-w)] whitespace-nowrap text-center" },
     resources: {
       content: <span className="inline-flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5" />资源</span>,
       className: "min-w-[204px] whitespace-nowrap",
     },
     traffic: {
       content: <span className="inline-flex items-center gap-1.5"><ArrowRightLeft className="h-3.5 w-3.5" />累计流量</span>,
-      className: "w-[128px] whitespace-nowrap px-3 text-center",
+      className: "w-[var(--host-flow-w)] whitespace-nowrap px-3 text-center",
     },
     realtime: {
       content: <span className="inline-flex items-center gap-1.5"><Wifi className="h-3.5 w-3.5" />实时网络</span>,
-      className: "w-[128px] whitespace-nowrap px-3 text-center",
+      className: "w-[var(--host-flow-w)] whitespace-nowrap px-3 text-center",
     },
     systemTotal: {
       content: <span className="inline-flex items-center gap-1.5"><Activity className="h-3.5 w-3.5" />系统累计</span>,
-      className: "w-[128px] whitespace-nowrap px-3 text-center",
+      className: "w-[var(--host-flow-w)] whitespace-nowrap px-3 text-center",
     },
     actions: {
       content: "操作",
       positioned: true,
-      className: "host-table-frozen-cell host-table-frozen-right sticky right-0 z-30 w-[120px] min-w-[120px] max-w-[120px] border-l border-border/60 bg-card px-2 text-right",
+      className: "host-table-frozen-cell host-table-frozen-right sticky right-0 z-30 w-[var(--host-actions-w)] min-w-[var(--host-actions-w)] max-w-[var(--host-actions-w)] border-l border-border/60 bg-card px-2 text-right",
     },
   };
   /*
@@ -3272,7 +3292,7 @@ function HostsContent() {
             <Card className="host-table-shell hidden overflow-hidden border-border bg-card sm:block">
               <CardContent className="p-0">
                 <Table
-                  className={cn("host-management-table w-full table-fixed", compactLayout && "fx-hosts-table-dense")}
+                  className={cn("host-management-table w-full table-fixed", compactLayout && "fx-hosts-table-dense", hostTableFit && "host-table-fit")}
                   style={{ minWidth: hostTableMinWidth }}
                 >
                   <colgroup>

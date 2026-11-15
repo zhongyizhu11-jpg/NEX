@@ -33,11 +33,22 @@ test("主机页：精简 + 桌面把两档卡片都换成表，地图照旧；�
 test("主机页精简的表：七列、不冻结、1000 最小宽；行走 dense", () => {
   const source = read("Hosts.tsx");
   // 列、列宽现在按「列设置」（按账号存）出；默认的最小宽度照旧：精简 1130 列宽按 1000 / 1130 缩到 1000，标准 1340
-  assert.match(source, /cn\("host-management-table w-full table-fixed", compactLayout && "fx-hosts-table-dense"\)/);
+  assert.match(source, /cn\("host-management-table w-full table-fixed", compactLayout && "fx-hosts-table-dense", hostTableFit && "host-table-fit"\)/);
   assert.match(source, /style=\{\{ minWidth: hostTableMinWidth \}\}/);
   assert.match(source, /HOST_TABLE_MIN_WIDTH_RATIO = \{ standard: 1, compact: 1000 \/ 1130 \}/);
   assert.match(source, /dense=\{compactLayout\}/);
   assert.match(source, /system: \{ content: "系统 · Agent", className: "whitespace-nowrap" \}/);
+});
+
+test("主机列表在 iPad 宽度不横滚：收窄那套列、触屏操作列 152、冻结列不透明", () => {
+  const source = read("Hosts.tsx");
+  assert.match(source, /const hostTableFit = useMediaQuery\("\(max-width: 1679px\)"\) && !compactLayout;/);
+  assert.match(source, /compactLayout \? HOST_TABLE_COLUMNS_COMPACT : hostTableFit \? HOST_TABLE_COLUMNS_STANDARD_FIT : HOST_TABLE_COLUMNS_STANDARD/);
+  assert.match(source, /key === "actions" && coarsePointer && !compactLayout \? 152/);
+  const css = fs.readFileSync(path.resolve(import.meta.dirname, "../index.css"), "utf8");
+  assert.match(css, /\.host-management-table\.host-table-fit \{[^}]*--host-name-w: 248px;/);
+  assert.match(css, /@media \(pointer: coarse\) \{\s*\.host-management-table \{\s*--host-actions-w: 152px;/);
+  assert.match(css, /\.host-table-frozen-cell \{[^}]*var\(--fx-frozen-base\)/, "冻结列底下垫实色，半透明主题也不透字");
 });
 
 test("规则表精简：入口地址写全不截（不再只写端口），列宽让给入口；24H 为零不画", () => {
