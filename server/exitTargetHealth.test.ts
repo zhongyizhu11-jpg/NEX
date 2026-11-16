@@ -10,6 +10,7 @@ import {
   latencyOrderedExitHostIds,
   exitTargetBaseline,
   setExitTargetBaselineForTest,
+  peekExitTargetBaselineForTest,
   updateExitTargetBaseline,
   resetExitTargetStates,
   setExitTargetStateForTest,
@@ -17,6 +18,10 @@ import {
   withRuleExitTargets,
   type ExitTargetState,
 } from "./exitTargetHealth";
+
+const exitTargetBaselineRaw = (ruleId: number, hostId: number) => {
+  return peekExitTargetBaselineForTest(ruleId, hostId)?.normalMs;
+};
 
 function state(partial: Partial<ExitTargetState> & { hostId: number }): ExitTargetState {
   const now = Date.now();
@@ -155,24 +160,35 @@ test("GOST 延迟优先：按延迟排顺序，差不多快时不来回换", () 
   assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [1, 2, 3]);
 });
 
-test("平时值：头一小时取平均，之后慢慢跟；偏太多的那次先封顶", () => {
+test("平时延迟 = 最低延迟：更低的马上跟下来，更高的只慢慢往上跟", () => {
   resetExitTargetStates();
   const base = Date.now();
+  const step = 5 * 60_000;
   for (let i = 0; i < 6; i += 1) {
-    updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 10 + (i % 2), jitterMs: 2 }), base + i * 5 * 60_000);
+    updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 14, minMs: 10 + (i % 3), jitterMs: 2 }), base + i * step);
   }
   const ready = exitTargetBaseline(30, 1);
   assert.ok(ready, "攒够半小时（6 次）才有平时值");
-  assert.equal(Math.round(ready!.medianMs * 10) / 10, 10.5);
+  assert.equal(ready!.normalMs, 10, "取的是最低延迟，不是中位数");
   // 5 分钟内的不算
-  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 500 }), base + 5 * 5 * 60_000 + 1000);
-  assert.equal(Math.round(exitTargetBaseline(30, 1)!.medianMs * 10) / 10, 10.5);
-  // 突然 500ms：先封顶到 3 倍 + 5，头一小时按平均算，平时值不会一下被带到几百
-  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 500 }), base + 6 * 5 * 60_000);
-  assert.ok(exitTargetBaseline(30, 1)!.medianMs < 16);
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 8, minMs: 8 }), base + 5 * step + 1000);
+  assert.equal(exitTargetBaseline(30, 1)!.normalMs, 10);
+  // 量到更低的：马上跟下来
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 9, minMs: 8 }), base + 6 * step);
+  assert.equal(exitTargetBaseline(30, 1)!.normalMs, 8);
+  // 头一小时更高的不往上跟
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 320, minMs: 300 }), base + 7 * step);
+  assert.equal(exitTargetBaseline(30, 1)!.normalMs, 8);
+  // 过了头一小时，一阵子拥堵（最低值也到了 300）：平时值只往上挪一点点
+  for (let i = 8; i < 14; i += 1) updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 320, minMs: 300 }), base + i * step);
+  const drifted = exitTargetBaseline(30, 1)!.normalMs;
+  assert.ok(drifted > 8 && drifted < 10, `只慢慢往上跟：${drifted}`);
+  // 老 Agent 没报最低延迟：拿中位数
+  updateExitTargetBaseline(state({ ruleId: 31, hostId: 1, medianMs: 40, minMs: null }), base);
+  assert.equal(exitTargetBaselineRaw(31, 1), 40);
   // 连不上的不算
-  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, down: true }), base + 7 * 5 * 60_000);
-  assert.equal(exitTargetBaseline(30, 1)!.samples, 7);
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, down: true }), base + 20 * step);
+  assert.equal(exitTargetBaseline(30, 1)!.samples, 14);
 });
 
 test("不稳：抖动要同时超过门槛和平时的 2 倍 + 5ms", () => {
@@ -190,8 +206,8 @@ test("链路弹窗：写平时值、比平时慢多少、数据从哪来", () =>
   const now = Date.now();
   setExitTargetStateForTest(state({ hostId: 1, medianMs: 9, source: "traffic", conns: 4 }));
   setExitTargetStateForTest(state({ hostId: 2, medianMs: 120, source: "probe" }));
-  setExitTargetBaselineForTest(7, 1, { medianMs: 8, jitterMs: 2, samples: 20, updatedAt: now });
-  setExitTargetBaselineForTest(7, 2, { medianMs: 10, jitterMs: 2, samples: 20, updatedAt: now });
+  setExitTargetBaselineForTest(7, 1, { normalMs: 8, jitterMs: 2, samples: 20, updatedAt: now });
+  setExitTargetBaselineForTest(7, 2, { normalMs: 10, jitterMs: 2, samples: 20, updatedAt: now });
   const summary = exitTargetSummaryForTunnel(tunnel, [1, 2]);
   assert.deepEqual(summary.exits.map((item) => [item.hostId, item.baselineMs, item.slowerMs, item.source]), [
     [1, 8, null, "traffic"],

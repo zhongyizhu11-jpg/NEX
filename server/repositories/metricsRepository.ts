@@ -3469,6 +3469,31 @@ export async function getTcpingSeriesByRule(
 }
 
 /**
+ * 这台机器测这几条规则的延迟记录里，最近一段时间的最低延迟（负载均衡「平时值」的起点，2.3.536）。
+ * 只算通的那几次，记录少于 minRows 条的不给（数据太少，最低值不可信）。
+ */
+export async function getRuleLatencyFloors(hostId: number, ruleIds: readonly number[], since: Date, minRows = 10) {
+  const out = new Map<number, number>();
+  const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))).slice(0, 500);
+  if (ids.length === 0 || !(hostId > 0)) return out;
+  const q = quoteIdentifier;
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = await queryRaw<{ ruleId: unknown; floor: unknown; total: unknown }>(
+    `SELECT ${q("ruleId")} AS ${q("ruleId")}, MIN(${q("latencyMs")}) AS ${q("floor")}, COUNT(*) AS ${q("total")}
+       FROM ${q("tcping_stats")}
+      WHERE ${q("hostId")} = ? AND ${q("ruleId")} IN (${placeholders}) AND ${q("recordedAt")} >= ?
+        AND ${q("latencyMs")} IS NOT NULL AND ${q("isTimeout")} = ${boolLiteral(false)}
+      GROUP BY ${q("ruleId")}`,
+    [hostId, ...ids, epochSeconds(since)],
+  );
+  for (const row of rows) {
+    const floor = Number(row.floor);
+    if (Number(row.total) >= minRows && Number.isFinite(floor) && floor >= 0) out.set(Number(row.ruleId), floor);
+  }
+  return out;
+}
+
+/**
  * 端到端探测一直不通的转发（订阅「自动隐藏不通的节点」用）。
  *
  * 只看最近一小段时间的探测：判定本身只要最近几次，窗口给宽一点是为了探测间隔

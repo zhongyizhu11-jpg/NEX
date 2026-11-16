@@ -3,6 +3,7 @@ import { pushAgentRefresh } from "./agentEvents";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
 import { getForwardGroupById } from "./repositories/forwardGroupRepository";
 import { getSetting, setSetting } from "./repositories/settingsRepository";
+import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
@@ -70,14 +71,17 @@ const states = new Map<string, ExitTargetState>();
   每台出口到每条规则目标的「平时水平」（2.3.536，用户：「延迟抖动的判断方法不准」）。
 
   固定门槛判不准：目标近的规则平时 7ms，目标远的平时 200ms，同一个「抖动超过 30ms」对谁都不合适。这里按
-  （规则, 出口）记一个慢慢跟的平时值：每 5 分钟拿当时的中位延迟、抖动更新一次，头一小时取平均，之后按约 6 小时
-  的时间常数平滑（一阵子变差不会马上把平时值带歪；偏离太多的那次先按 3 倍封顶再算）。
+  （规则, 出口）记一个平时值，每 5 分钟更新一次：
+    · 平时延迟 = 这条路的最低延迟（用户：「一般规则延迟记录的最小延迟是平时正常延迟」—— 最低延迟就是路程本身，
+      高出来的都是排队、抖动）。量到更低的马上跟下来；量到的最低值比平时高，只按约 6 小时的时间常数慢慢往上跟
+      （路由真的换远了，几个小时后平时值跟上；一阵子拥堵不会把平时值带歪）。
+    · 平时抖动：头一小时取平均，之后同样约 6 小时平滑（偏离太多的那次先按 3 倍封顶再算）。
   判断时跟它比：抖动要同时超过「检测与切换」的门槛和「平时的 2 倍 + 5ms」才算不稳；延迟比平时高出「延迟差多少
   才换」那么多，弹窗写「比平时慢」。
 
   只记在内存里，每 10 分钟存一份到设置表（面板重启后接着用）。超过 3 天没更新的丢掉。
 */
-export type ExitTargetBaseline = { medianMs: number; jitterMs: number; samples: number; updatedAt: number };
+export type ExitTargetBaseline = { normalMs: number; jitterMs: number; samples: number; updatedAt: number };
 const BASELINE_STEP_MS = 5 * 60_000;
 const BASELINE_READY_SAMPLES = 6;
 const BASELINE_WARMUP_SAMPLES = 12;
@@ -100,9 +104,9 @@ async function loadBaselines() {
     const now = Date.now();
     for (const [key, value] of Object.entries(parsed)) {
       if (!Array.isArray(value) || value.length < 4) continue;
-      const [medianMs, jitterMs, samples, updatedAt] = value.map(Number);
-      if (![medianMs, jitterMs, samples, updatedAt].every(Number.isFinite) || now - updatedAt > BASELINE_MAX_AGE_MS) continue;
-      if (!baselines.has(key)) baselines.set(key, { medianMs, jitterMs, samples, updatedAt });
+      const [normalMs, jitterMs, samples, updatedAt] = value.map(Number);
+      if (![normalMs, jitterMs, samples, updatedAt].every(Number.isFinite) || now - updatedAt > BASELINE_MAX_AGE_MS) continue;
+      if (!baselines.has(key)) baselines.set(key, { normalMs, jitterMs, samples, updatedAt });
     }
   } catch {
     // 读不到 / 坏了：从头记
@@ -119,9 +123,34 @@ async function saveBaselinesIfDue(nowMs: number) {
     .slice(0, BASELINE_MAX_ENTRIES);
   const payload: Record<string, [number, number, number, number]> = {};
   for (const [key, value] of entries) {
-    payload[key] = [Math.round(value.medianMs * 10) / 10, Math.round(value.jitterMs * 10) / 10, value.samples, value.updatedAt];
+    payload[key] = [Math.round(value.normalMs * 10) / 10, Math.round(value.jitterMs * 10) / 10, value.samples, value.updatedAt];
   }
   await setSetting(BASELINE_SETTING_KEY, JSON.stringify(payload)).catch(() => { baselinesDirty = true; });
+}
+
+/*
+  从转发规则的延迟记录起步（用户：「一般规则延迟记录的最小延迟是平时正常延迟」）：这台机器以前就在测这条规则
+  （主出口一直在测）的，拿它最近 24 小时记录里的最低延迟当平时延迟，马上就能用，不用等半小时。
+  每个（规则, 出口）只查一次；查不到的照常自己攒。
+*/
+const baselineSeedTried = new Set<string>();
+const BASELINE_SEED_WINDOW_MS = 24 * 3600_000;
+
+async function seedBaselinesFromRuleRecords(hostId: number, ruleIds: number[], nowMs: number) {
+  const missing = ruleIds.filter((ruleId) => {
+    const key = stateKey(ruleId, hostId);
+    return !baselines.has(key) && !baselineSeedTried.has(key);
+  });
+  if (missing.length === 0) return;
+  for (const ruleId of missing) baselineSeedTried.add(stateKey(ruleId, hostId));
+  const floors = await getRuleLatencyFloors(hostId, missing, new Date(nowMs - BASELINE_SEED_WINDOW_MS)).catch(() => new Map<number, number>());
+  for (const [ruleId, floor] of floors) {
+    const key = stateKey(ruleId, hostId);
+    if (baselines.has(key)) continue;
+    // 抖动没有可靠的历史（以前那套记录算不准抖动），先记 0：不稳只按门槛判，攒起来后再跟
+    baselines.set(key, { normalMs: floor, jitterMs: 0, samples: BASELINE_READY_SAMPLES, updatedAt: nowMs });
+    baselinesDirty = true;
+  }
 }
 
 /** 这台出口到这条规则目标的平时水平；还没攒够（半小时）返回 null。 */
@@ -134,25 +163,37 @@ export function exitTargetBaseline(ruleId: number, hostId: number): ExitTargetBa
 export function updateExitTargetBaseline(state: ExitTargetState, nowMs: number) {
   const median = state.medianMs ?? state.latencyMs;
   if (state.down || median == null || (state.samples || 0) < 5) return;
+  // 这一次的最低延迟：Agent 2.2.260 起报 minMs（窗口里最低的一次 / 真实连接的最小 RTT），老的没有就拿中位数
+  const floor = state.minMs != null && state.minMs > 0 ? Math.min(state.minMs, median) : median;
   const key = stateKey(state.ruleId, state.hostId);
   const current = baselines.get(key);
   if (current && nowMs - current.updatedAt < BASELINE_STEP_MS) return;
   const jitter = state.jitterMs ?? 0;
   if (!current || nowMs - current.updatedAt > BASELINE_MAX_AGE_MS) {
-    baselines.set(key, { medianMs: median, jitterMs: jitter, samples: 1, updatedAt: nowMs });
+    baselines.set(key, { normalMs: floor, jitterMs: jitter, samples: 1, updatedAt: nowMs });
   } else {
     const samples = current.samples + 1;
     const alpha = samples <= BASELINE_WARMUP_SAMPLES ? 1 / samples : BASELINE_ALPHA;
-    const cappedMedian = Math.min(median, current.medianMs * 3 + 5);
     const cappedJitter = Math.min(jitter, current.jitterMs * 3 + 5);
+    // 更低的马上跟下来；头一小时就是取最低，之后更高的才慢慢往上跟（先按 3 倍封顶）
+    const normalMs = floor <= current.normalMs
+      ? floor
+      : samples <= BASELINE_WARMUP_SAMPLES
+        ? current.normalMs
+        : current.normalMs + (Math.min(floor, current.normalMs * 3 + 5) - current.normalMs) * BASELINE_ALPHA;
     baselines.set(key, {
-      medianMs: current.medianMs + (cappedMedian - current.medianMs) * alpha,
+      normalMs,
       jitterMs: current.jitterMs + (cappedJitter - current.jitterMs) * alpha,
       samples: Math.min(samples, 100000),
       updatedAt: nowMs,
     });
   }
   baselinesDirty = true;
+}
+
+/** 只给测试用：不管攒没攒够都返回 */
+export function peekExitTargetBaselineForTest(ruleId: number, hostId: number) {
+  return baselines.get(stateKey(ruleId, hostId)) || null;
 }
 
 /** 只给测试用 */
@@ -174,6 +215,7 @@ export function resetExitTargetStates() {
   states.clear();
   latencyLeaderByRule.clear();
   baselines.clear();
+  baselineSeedTried.clear();
   baselinesLoaded = true;
   baselinesDirty = false;
 }
@@ -253,6 +295,7 @@ export async function ingestExitTargetReports(input: {
   const reports = (input.results || []).filter((report) => Number(report.ruleId) > 0).slice(0, 2048);
   if (reports.length === 0 || hostId <= 0) return { recorded: 0, flipped: [] as number[] };
   await loadBaselines();
+  await seedBaselinesFromRuleRecords(hostId, Array.from(new Set(reports.map((report) => Number(report.ruleId)))), nowMs);
   const rules = await getForwardRulesByIds(Array.from(new Set(reports.map((report) => Number(report.ruleId))))) as Array<{ id: number; tunnelId?: number | null; pendingDelete?: unknown; routeParentRuleId?: number | null }>;
   const ruleById = new Map(rules.map((rule) => [Number(rule.id), rule]));
   const tunnelIds = Array.from(new Set(rules.map((rule) => Number(rule.tunnelId || 0)).filter((id) => id > 0)));
@@ -357,7 +400,7 @@ export type ExitTargetExitSummary = {
   lossPct: number | null;
   /** 按现在的分配方式会分到流量的规则条数（NEX 隧道是面板按同一套规则估的，GOST 是真实的节点顺序） */
   activeRules: number;
-  /** 平时到目标的延迟（各条规则平时值的中位数；还没攒够半小时为 null） */
+  /** 平时到目标的延迟 = 这条路的最低延迟（各条规则平时值的中位数；还没攒够半小时为 null） */
   baselineMs: number | null;
   /** 有平时值的规则条数（几条规则目标远近不同时，弹窗不写数字，写「跟平时差不多」） */
   baselineRules: number;
@@ -538,9 +581,9 @@ export function exitTargetSummaryForTunnel(
       if (!state.down && median != null) entry.medians.push(median);
       const baseline = exitTargetBaseline(ruleId, state.hostId);
       if (baseline) {
-        entry.baselines.push(baseline.medianMs);
-        if (!state.down && median != null && median - baseline.medianMs > detect.latencyMarginMs) {
-          entry.slower = Math.max(entry.slower, median - baseline.medianMs);
+        entry.baselines.push(baseline.normalMs);
+        if (!state.down && median != null && median - baseline.normalMs > detect.latencyMarginMs) {
+          entry.slower = Math.max(entry.slower, median - baseline.normalMs);
         }
       }
       if (state.source === "traffic") entry.traffic += 1;
