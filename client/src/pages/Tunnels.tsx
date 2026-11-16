@@ -131,6 +131,8 @@ import {
   Upload,
   XCircle,
   Wand2,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
@@ -2157,6 +2159,23 @@ function TunnelsContent() {
     { tunnelId: Number(exitGroupDialogTunnel?.id || 0) || 1 },
     { enabled: !!exitGroupDialogTunnel, refetchInterval: exitGroupDialogTunnel ? 5_000 : false },
   );
+  const refreshAfterExitChange = () => Promise.all([
+    utils.tunnels.list.invalidate(),
+    utils.tunnels.listPage.invalidate(),
+    utils.forwardGroups.options.invalidate(),
+    utils.forwardGroups.listPage.invalidate(),
+  ]);
+  const setExitPinMutation = trpc.tunnels.setExitPin.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.hostId ? "已切到这台，只用它" : "已交回自动");
+      void refreshAfterExitChange();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const reorderExitMutation = trpc.forwardGroups.reorder.useMutation({
+    onSuccess: () => { void refreshAfterExitChange(); },
+    onError: (error) => toast.error(error.message),
+  });
   const [form, setForm] = useState<TunnelForm>(defaultForm);
   const [listenPortExplicit, setListenPortExplicit] = useState(false);
   const nginxCertFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -5390,11 +5409,17 @@ function TunnelsContent() {
       </Dialog>
       {(() => {
         /*
-          负载均衡出口是哪几台：主出口 + 负载均衡里的其余出口，每台一行（在线状态、地区、权重），
-          顶上写用的什么策略。只看，不改 —— 改去编辑隧道或出口组。
+          负载均衡出口是哪几台：每台一行（在线状态、到目标的延迟/抖动、权重）。
+          2.3.534：可以手动切换（「只用这台」/「交回自动」，tunnels.setExitPin）；
+          用出口组的链路可以 ↑↓ 调顺序（就是出口组成员顺序，forwardGroups.reorder，手机上不用拖）。
         */
-        const tunnel = exitGroupDialogTunnel;
-        if (!tunnel) return null;
+        const snapshot = exitGroupDialogTunnel;
+        if (!snapshot) return null;
+        // 用列表里最新的那份，切换/排序后马上反映出来
+        const tunnel = (rawTunnelItems.find((item) => Number(item.id) === Number(snapshot.id)) || snapshot) as TunnelListItem;
+        const exitGroup = Number(tunnel.exitGroupId || 0) > 0 ? exitGroupById.get(Number(tunnel.exitGroupId)) : null;
+        type ExitMemberLite = { id: number; hostId?: number | null; memberType?: string; priority?: number | null; aggregationWeight?: number | null };
+        const groupMembers = (exitGroup ? enabledHostGroupMembers(exitGroup) : []) as ExitMemberLite[];
         const exits: Array<{ hostId: number; weight: number | null }> = [];
         const seen = new Set<number>();
         const push = (hostId: number, weight: number | null) => {
@@ -5403,16 +5428,41 @@ function TunnelsContent() {
             exits.push({ hostId, weight });
           }
         };
-        push(Number(tunnel.exitHostId || 0), null);
-        const lbExits: unknown[] = Array.isArray(tunnel.loadBalanceExits) ? tunnel.loadBalanceExits : [];
-        for (const raw of lbExits) {
-          const exit = (raw && typeof raw === "object" ? raw : {}) as { hostId?: unknown; weight?: unknown };
-          push(Number(exit?.hostId || 0), Number(exit?.weight) > 0 ? Number(exit.weight) : null);
+        if (groupMembers.length > 0) {
+          // 出口组：按组里的顺序，停用的成员不算
+          for (const member of groupMembers) push(Number(member.hostId), Number(member.aggregationWeight) > 0 ? Number(member.aggregationWeight) : null);
+        } else {
+          push(Number(tunnel.exitHostId || 0), null);
+          const lbExits: unknown[] = Array.isArray(tunnel.loadBalanceExits) ? tunnel.loadBalanceExits : [];
+          const ordered = lbExits
+            .map((raw) => (raw && typeof raw === "object" ? raw : {}) as { hostId?: unknown; weight?: unknown; isEnabled?: unknown; seq?: unknown })
+            .filter((exit) => exit.isEnabled !== false)
+            .sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0));
+          for (const exit of ordered) push(Number(exit.hostId || 0), Number(exit.weight) > 0 ? Number(exit.weight) : null);
         }
         const hostLookup = new Map((hosts || []).map((host) => [Number(host.id), host] as const));
+        const hostName = (hostId: number) => tunnelHopHostName(tunnel, hostId, hosts) || `主机 ${hostId}`;
         // 只要策略名（「按权重」），后面那句解释在编辑框里看
         const strategy = String(EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(tunnel.loadBalanceStrategy)] || "").split(" - ")[0];
         const online = exits.filter((exit) => hostLookup.get(exit.hostId)?.isOnline).length;
+        const pinHostId = Number((tunnel as { balancePinHostId?: number | null }).balancePinHostId || 0);
+        const pinActive = pinHostId > 0 && exits.some((exit) => exit.hostId === pinHostId);
+        const pinOnline = pinActive && !!hostLookup.get(pinHostId)?.isOnline;
+        const canPin = exits.length > 1 && (user?.role === "admin" || Number(tunnel.userId) === Number(user?.id));
+        const canReorder = exits.length > 1 && groupMembers.length > 1 && user?.role === "admin";
+        const busy = setExitPinMutation.isPending || reorderExitMutation.isPending;
+        const setPin = (hostId: number | null) => setExitPinMutation.mutate({ tunnelId: Number(tunnel.id), hostId });
+        const move = (hostId: number, delta: -1 | 1) => {
+          if (!exitGroup) return;
+          // 整组成员（含停用的、非主机的）按顺序排，只和相邻的那台启用出口对调
+          const all = [...((exitGroup.members || []) as ExitMemberLite[])].sort((a, b) => Number(a?.priority || 0) - Number(b?.priority || 0));
+          const from = all.findIndex((member) => member?.memberType === "host" && Number(member?.hostId) === hostId);
+          const neighborHostId = exits[exits.findIndex((exit) => exit.hostId === hostId) + delta]?.hostId;
+          const to = all.findIndex((member) => member?.memberType === "host" && Number(member?.hostId) === neighborHostId);
+          if (from < 0 || to < 0) return;
+          [all[from], all[to]] = [all[to], all[from]];
+          reorderExitMutation.mutate({ groupId: Number(exitGroup.id), memberIds: all.map((member) => Number(member.id)) });
+        };
         // 每台出口到规则目标的情况（server/exitTargetHealth.ts）：取它在各条规则上最差的那次
         const targetByHost = new Map((exitTargetsQuery.data || []).map((item) => [Number(item.hostId), item] as const));
         const targetText = (hostId: number) => {
@@ -5432,33 +5482,69 @@ function TunnelsContent() {
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>负载均衡出口 · {exits.length} 台</DialogTitle>
-                <DialogDescription>{tunnel.name} · {strategy} · {online} 台在线</DialogDescription>
+                <DialogDescription>
+                  {tunnel.name} · {pinActive ? "手动指定" : strategy} · {online} 台在线
+                </DialogDescription>
               </DialogHeader>
+              {pinActive ? (
+                <div className={cn("fx-lb-pin-banner", !pinOnline && "is-warn")}>
+                  <span className="min-w-0 flex-1">
+                    {pinOnline ? `只用 ${hostName(pinHostId)}，不自动切换` : `${hostName(pinHostId)} 离线，已临时按自动分配`}
+                  </span>
+                  {canPin ? (
+                    <Button size="sm" variant="outline" disabled={busy} onClick={() => setPin(null)}>交回自动</Button>
+                  ) : null}
+                </div>
+              ) : null}
               <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
-                {exits.map((exit) => {
+                {exits.map((exit, index) => {
                   const host = hostLookup.get(exit.hostId);
                   const region = host ? hostRegionText(host) : "";
                   const target = targetText(exit.hostId);
                   const dotHealth = !host?.isOnline || target?.tone === "down" ? "down" : target?.tone === "warn" ? "degraded" : "healthy";
+                  const isPinned = pinActive && exit.hostId === pinHostId;
+                  const idle = pinActive && pinOnline && !isPinned;
                   return (
-                    <li key={exit.hostId} className="flex min-w-0 items-center gap-3 px-3 py-2.5">
+                    <li key={exit.hostId} className={cn("flex min-w-0 items-center gap-2.5 px-3 py-2.5", idle && "opacity-55")}>
+                      {canReorder ? (
+                        <span className="fx-lb-move">
+                          <button type="button" aria-label="上移" disabled={busy || index === 0} onClick={() => move(exit.hostId, -1)}>
+                            <ChevronUp className="h-4 w-4" />
+                          </button>
+                          <button type="button" aria-label="下移" disabled={busy || index === exits.length - 1} onClick={() => move(exit.hostId, 1)}>
+                            <ChevronDown className="h-4 w-4" />
+                          </button>
+                        </span>
+                      ) : null}
                       <StatusDot health={dotHealth} />
                       <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-primary-type font-medium">{tunnelHopHostName(tunnel, exit.hostId, hosts) || `主机 ${exit.hostId}`}</span>
-                        {region ? <span className="truncate text-meta text-muted-foreground">{region}</span> : null}
+                        <span className="truncate text-primary-type font-medium">
+                          {hostName(exit.hostId)}
+                          {index === 0 && !pinActive ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">主</span> : null}
+                        </span>
+                        <span className="truncate text-meta text-muted-foreground">
+                          {[host?.isOnline ? "在线" : "离线", region, exit.weight ? `权重 ${exit.weight}` : ""].filter(Boolean).join(" · ")}
+                        </span>
                         {target ? (
                           <span className={cn("truncate text-meta", target.tone === "down" ? "text-[var(--fx-down-text)]" : target.tone === "warn" ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")}>
                             {target.text}
                           </span>
                         ) : null}
                       </span>
-                      <span className="shrink-0 text-meta text-muted-foreground">
-                        {host?.isOnline ? "在线" : "离线"}{exit.weight ? ` · 权重 ${exit.weight}` : ""}
-                      </span>
+                      {isPinned ? (
+                        <span className="fx-lb-badge shrink-0">正在用</span>
+                      ) : canPin ? (
+                        <Button size="sm" variant="outline" className="shrink-0" disabled={busy || !host?.isOnline} onClick={() => setPin(exit.hostId)}>
+                          只用这台
+                        </Button>
+                      ) : null}
                     </li>
                   );
                 })}
               </ul>
+              {canReorder ? (
+                <p className="text-meta text-muted-foreground">↑↓ 调的是出口组「{exitGroup?.name}」的顺序，用这个组的链路都跟着变。</p>
+              ) : null}
             </DialogContent>
           </Dialog>
         );

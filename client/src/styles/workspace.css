@@ -2182,6 +2182,23 @@ html.fx-theme-fading *::after {
   color: var(--primary); background: color-mix(in oklab, var(--primary) 12%, transparent);
 }
 /* 加减按钮、恢复默认：视觉 32px / 一行字高，触屏命中区用 ::after 撑回 44（全局那条会把它们撑成 44 高的块） */
+/* 负载均衡出口弹窗（2.3.534）：手动指定的提示条、↑↓ 调顺序 */
+.fx-lb-pin-banner {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border-radius: 12px;
+  font-size: 13.5px; line-height: 1.35;
+  color: var(--primary); background: color-mix(in oklab, var(--primary) 10%, transparent);
+}
+.fx-lb-pin-banner.is-warn { color: var(--fx-warn-text); background: color-mix(in oklab, var(--fx-warn-text) 10%, transparent); }
+.fx-lb-move { display: inline-flex; flex-direction: column; flex-shrink: 0; margin-left: -4px; }
+.fx-lb-move > button {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 22px; min-height: 0; border-radius: 6px; color: var(--muted-foreground);
+}
+.fx-lb-move > button:hover:not(:disabled) { color: var(--foreground); background: var(--accent); }
+.fx-lb-move > button:disabled { opacity: 0.3; }
+@media (pointer: coarse) {
+  .fx-lb-move > button { min-height: 0; width: 36px; height: 24px; }
+}
 .fx-lb-step-btn { position: relative; min-height: 32px; }
 @media (pointer: coarse) {
   .fx-lb-step-btn { min-height: 32px; }

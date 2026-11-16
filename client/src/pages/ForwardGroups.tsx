@@ -93,6 +93,8 @@ import {
   Activity,
   CheckCircle2,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Globe,
   GripVertical,
   Layers3,
@@ -3021,18 +3023,31 @@ export function ForwardGroupsContent({
                           }}
                           className={"flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 sm:grid sm:gap-1.5 " + memberRowGridClass}
                         >
-                          <GripVertical className="h-4 w-4 cursor-grab text-muted-foreground" />
+                          {/* ↑↓：手机上拖不动，点着调顺序（2.3.534）；电脑上照样能拖 */}
+                          <span className="flex items-center">
+                            <GripVertical className="hidden h-4 w-4 cursor-grab text-muted-foreground sm:block" />
+                            {form.members.length > 1 ? (
+                              <span className="fx-lb-move">
+                                <button type="button" aria-label={`上移 ${memberLabel(member)}`} disabled={index === 0} onClick={() => moveMember(member.key, form.members[index - 1].key)}>
+                                  <ChevronUp className="h-4 w-4" />
+                                </button>
+                                <button type="button" aria-label={`下移 ${memberLabel(member)}`} disabled={index === form.members.length - 1} onClick={() => moveMember(member.key, form.members[index + 1].key)}>
+                                  <ChevronDown className="h-4 w-4" />
+                                </button>
+                              </span>
+                            ) : null}
+                          </span>
                           <span className="flex h-6 w-6 items-center justify-center rounded bg-muted text-xs">{index + 1}</span>
                           {member.memberType === "host" ? (
                             <HostStatusLabel
                               host={hostById.get(Number(member.hostId))}
                               label={memberLabel(member)}
                               // 手机上一行：拖动 + 序号 + 名字占满，后面的输入框换到下一行（以前名字被挤成 0 宽，只剩一个圆点）
-                              className="min-w-0 flex-1 basis-[calc(100%-4rem)] text-sm font-medium sm:basis-auto"
+                              className="min-w-0 flex-1 basis-[calc(100%-6.5rem)] text-sm font-medium sm:basis-auto"
                               labelClassName="truncate"
                             />
                           ) : (
-                            <div className="flex min-w-0 flex-1 basis-[calc(100%-4rem)] items-center gap-2 sm:basis-auto">
+                            <div className="flex min-w-0 flex-1 basis-[calc(100%-6.5rem)] items-center gap-2 sm:basis-auto">
                               <Route className="h-4 w-4 text-primary" />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-medium">{memberLabel(member)}</p>

@@ -850,6 +850,8 @@ const tables: TableDef[] = [
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),
       c("balanceDetect", "text"),
+      // 负载均衡手动切换：只用这一台出口（主机 id），空 = 自动（2.3.534）
+      c("balancePinHostId", "int"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("disabledByGroup", "bool", { notNull: true, default: false }),
       c("isRunning", "bool", { notNull: true, default: false }),
       c("lastLatencyMs", "int"), c("lastTestStatus", "text"), c("lastTestMessage", "text"), c("lastTestAt", "epoch"),

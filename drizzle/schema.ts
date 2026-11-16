@@ -1324,6 +1324,8 @@ export const tunnels = table("tunnels", {
   loadBalanceStrategy: varchar("loadBalanceStrategy", { length: 32 }).notNull().default("round_robin"),
   /** 负载均衡的「检测与切换」（JSON；空 = 跟出口组 / 默认值），保存时从出口组带过来，和 loadBalanceStrategy 一样 */
   balanceDetect: text("balanceDetect"),
+  /** 负载均衡手动切换：只用这一台出口（主机 id）；空 = 自动。这台离线时面板不理它，照常自动分。 */
+  balancePinHostId: int("balancePinHostId"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   disabledByGroup: boolean("disabledByGroup").notNull().default(false),
   isRunning: boolean("isRunning").notNull().default(false),

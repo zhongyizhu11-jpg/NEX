@@ -2623,6 +2623,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       每台出口的 FXP 会不会回报「连上目标没有」（2.2.142 起，见 forwardx-fxp/target_health.go）：
       会的才让入口等结果、当场换出口。按主机上报的 FXP 版本判断；老出口照旧只看它本身通不通。
     */
+    /*
+      负载均衡手动切换（tunnels.balancePinHostId，2.3.534）：只用这一台出口。这台离线时不理它，照常自动分 ——
+      手动指定的那台挂了还死守着，等于让整条链路断着。
+    */
+    const pinOnlineCache = new Map<number, boolean>();
+    const pinnedExitHostId = async (tunnel: unknown): Promise<number> => {
+      const hostId = Number((tunnel as { balancePinHostId?: number | null } | null)?.balancePinHostId || 0);
+      if (hostId <= 0) return 0;
+      if (!pinOnlineCache.has(hostId)) {
+        const rows = await db.getHostsByIds([hostId]).catch(ignoreErrorWith("AgentHeartbeat exit pin", [])) as Array<{ id: number; isOnline?: unknown }>;
+        pinOnlineCache.set(hostId, rows.some((row) => Number(row.id) === hostId && runtimeBool(row.isOnline)));
+      }
+      return pinOnlineCache.get(hostId) ? hostId : 0;
+    };
     const exitTargetStatusCache = new Map<number, boolean>();
     const exitTargetStatusForHostIds = async (hostIds: number[]): Promise<boolean[] | null> => {
       if (hostIds.length < 2) return null;
@@ -3093,7 +3107,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         GOST 没法在一条连接里换出口：每台出口自己探规则的目标（exitTargetHealth），连不上的从这条规则的出口里
         摘掉，恢复后加回（翻转时面板立刻推给入口机，Agent 走 GOST 的热更新，正在传的连接不断）。全都连不上时不摘。
       */
-      const excluded = nodes.length > 1 ? exitTargetExcludedHostIds(Number(rule.id), nodeHostIds) : new Set<number>();
+      // 手动切换优先：指定了（而且在线）就只用那一台
+      const pinHostId = nodes.length > 1 ? await pinnedExitHostId(tunnel) : 0;
+      const pinned = pinHostId > 0 && nodeHostIds.includes(pinHostId);
+      const excluded = pinned
+        ? new Set(nodeHostIds.filter((hostId) => Number(hostId) !== pinHostId).map(Number))
+        : nodes.length > 1 ? exitTargetExcludedHostIds(Number(rule.id), nodeHostIds) : new Set<number>();
       const keptNodes = excluded.size > 0 ? nodes.filter((_, index) => !excluded.has(Number(nodeHostIds[index]))) : nodes;
       const keptHostIds = excluded.size > 0 ? nodeHostIds.filter((hostId) => !excluded.has(Number(hostId))) : nodeHostIds;
       // 按权重 / 按负载：份数写进节点的 metadata.weight，gost 的 rand 按它加权随机（gostExitSelector）。
@@ -4080,7 +4099,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             continue;
           }
           if (tunnel && isForwardXTunnel(tunnel)) {
-            const entryRoutes = await forwardXEntryRoutes(rule, tunnel);
+            const allEntryRoutes = await forwardXEntryRoutes(rule, tunnel);
+            // 手动切换：只留指定的那台出口（它在这些出口里、而且在线时）
+            const entryPinHostId = await pinnedExitHostId(tunnel);
+            const entryRoutes = entryPinHostId > 0 && allEntryRoutes.length > 1 && allEntryRoutes.some((route) => Number((route as { hostId?: number }).hostId || 0) === entryPinHostId)
+              ? allEntryRoutes.filter((route) => Number((route as { hostId?: number }).hostId || 0) === entryPinHostId)
+              : allEntryRoutes;
             const entryRoute = entryRoutes[0] || { host: "", port: 0, key: "" };
             if (!entryRoute.host || entryRoute.port <= 0 || !entryRoute.key) {
               appendPanelLog("error", `[TunnelRoute] invalid NEX entry route tunnel=${tunnel.id} rule=${rule.id} nextHost=${entryRoute.host || "-"} nextPort=${entryRoute.port || "-"}`);

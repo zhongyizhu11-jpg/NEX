@@ -440,6 +440,11 @@ export const forwardGroupsRouter = router({
     .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.groupId}`, async () => {
       await db.reorderForwardGroupMembers(input.groupId, input.memberIds);
       await db.runForwardGroupFailover(input.groupId, { forcePriority: true, forceSync: true });
+      // 出口组：顺序就是主备顺序、也决定主出口，用这个组的链路要跟着换（syncTunnelExitGroupEndpoints）
+      const group = await db.getForwardGroupById(input.groupId) as { groupMode?: string | null } | null;
+      if (String(group?.groupMode || "") === "exit") {
+        await db.refreshForwardGroupReferences(input.groupId, { reason: "exit-group-reordered" });
+      }
       return { success: true };
     })),
 

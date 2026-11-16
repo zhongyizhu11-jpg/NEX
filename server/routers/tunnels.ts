@@ -833,6 +833,26 @@ export const tunnelsRouter = router({
       if (!tunnel || !await canAccessTunnelRecord(tunnel, ctx.user)) return [];
       return exitTargetSummaryForTunnel(input.tunnelId);
     }),
+  /**
+   * 负载均衡手动切换：只用某一台出口（hostId=null 交回自动）。
+   * 只能指定这条链路自己的出口；那台离线时下发不理它（agentHeartbeatRoute pinnedExitHostId）。
+   */
+  setExitPin: protectedProcedure
+    .input(z.object({ tunnelId: z.number().int().positive(), hostId: z.number().int().positive().nullable() }))
+    .mutation(async ({ input, ctx }) => {
+      const tunnel = await db.getTunnelById(input.tunnelId) as Record<string, unknown> | null;
+      if (!tunnel) throw new Error("链路不存在");
+      if (ctx.user.role !== "admin" && Number(tunnel.userId) !== Number(ctx.user.id)) throw new Error("无权修改这条链路");
+      const extraExitNodes = await hopRepo.getTunnelExitNodes(input.tunnelId) as Array<{ hostId?: number | null }>;
+      const exitHostIds = [Number(tunnel.exitHostId || 0), ...(extraExitNodes || []).map((node) => Number(node.hostId || 0))]
+        .filter((hostId) => hostId > 0);
+      if (input.hostId != null && !exitHostIds.includes(input.hostId)) throw new Error("这台不是这条链路的出口");
+      await db.updateTunnel(input.tunnelId, { balancePinHostId: input.hostId });
+      const entryHostIds = await getTunnelEntryTestHostIds(tunnel);
+      await refreshTunnelRuntimeHosts(input.tunnelId, [...entryHostIds, ...exitHostIds], input.hostId ? "tunnel-exit-pinned" : "tunnel-exit-unpinned", { urgent: true });
+      appendPanelLog("info", `[Tunnel] exit pin tunnel=${input.tunnelId} host=${input.hostId ?? "auto"} by user=${ctx.user.id}`);
+      return { success: true, hostId: input.hostId };
+    }),
   list: protectedProcedure.query(async ({ ctx }) => {
       const accessScope = await getLinkAccessScope(ctx.user);
       const scope = visibleTunnelQueryScope(ctx.user, accessScope);
