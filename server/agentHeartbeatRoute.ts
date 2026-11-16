@@ -154,7 +154,9 @@ import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "@shared/hostIpv6Listen";
 import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { recordHostRateSample } from "./hostRateBuckets";
-import { forwardXExitStrategy } from "./tunnelExitStrategy";
+import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrategy";
+import { balanceDetectForRuntime } from "@shared/loadBalance";
+import { exitTargetExcludedHostIds, exitTargetProbeSpec, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
 import {
   getMimicLifecycleRevisionSignature,
   latestConfigRevision,
@@ -2581,16 +2583,71 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       return hostIds.map((id) => exitBandwidthCache.get(id) || 0);
     };
-    const exitWeightsForHostIds = async (strategy: unknown, hostIds: number[]) => {
+    /*
+      出口组「按权重」时每台手填的份数（成员的 aggregationWeight，2.3.534 起）：全部填了才按它分，
+      有空的就照旧按线路带宽算（混着比没有意义）。
+    */
+    const exitManualWeightCache = new Map<number, Map<number, number>>();
+    const exitManualWeights = async (tunnel: unknown, hostIds: number[]): Promise<number[] | null> => {
+      const groupId = Number((tunnel as { exitGroupId?: number | null } | null)?.exitGroupId || 0);
+      if (groupId <= 0) return null;
+      let weights = exitManualWeightCache.get(groupId);
+      if (!weights) {
+        weights = new Map<number, number>();
+        const group = await db.getForwardGroupById(groupId).catch(() => null) as { members?: Array<{ hostId?: number | null; aggregationWeight?: number | null }> } | null;
+        for (const member of group?.members || []) {
+          const weight = Math.floor(Number(member?.aggregationWeight) || 0);
+          if (Number(member?.hostId || 0) > 0 && weight > 0) weights.set(Number(member.hostId), weight);
+        }
+        exitManualWeightCache.set(groupId, weights);
+      }
+      const manual = hostIds.map((hostId) => weights!.get(Number(hostId)) || 0);
+      return manual.every((weight) => weight > 0) ? manual : null;
+    };
+    const exitWeightsForHostIds = async (strategy: unknown, hostIds: number[], tunnel?: unknown) => {
       const normalized = normalizeExitGroupStrategy(strategy);
-      if ((normalized !== "weighted" && normalized !== "least_load") || hostIds.length < 2) return null;
+      if ((normalized !== "weighted" && normalized !== "least_load" && normalized !== "auto" && normalized !== "latency") || hostIds.length < 2) return null;
+      if (normalized === "weighted" && tunnel) {
+        const manual = await exitManualWeights(tunnel, hostIds);
+        if (manual) return manual;
+      }
       return exitGroupWeights(strategy, await exitBandwidthsForHostIds(hostIds));
     };
-    // 交给 FXP 的线路带宽（「按负载」「按访客固定」用）。
+    // 交给 FXP 的线路带宽（「按负载」「自动」「延迟优先」「按访客固定」用）。
     const exitCapacitiesForHostIds = async (strategy: unknown, hostIds: number[]) => {
       const normalized = normalizeExitGroupStrategy(strategy);
-      if ((normalized !== "least_load" && normalized !== "ip_hash") || hostIds.length < 2) return null;
+      if ((normalized !== "least_load" && normalized !== "ip_hash" && normalized !== "auto" && normalized !== "latency") || hostIds.length < 2) return null;
       return exitGroupCapacities(strategy, await exitBandwidthsForHostIds(hostIds));
+    };
+    /*
+      每台出口的 FXP 会不会回报「连上目标没有」（2.2.142 起，见 forwardx-fxp/target_health.go）：
+      会的才让入口等结果、当场换出口。按主机上报的 FXP 版本判断；老出口照旧只看它本身通不通。
+    */
+    /*
+      负载均衡手动切换（tunnels.balancePinHostId，2.3.534）：只用这一台出口。这台离线时不理它，照常自动分 ——
+      手动指定的那台挂了还死守着，等于让整条链路断着。
+    */
+    const pinOnlineCache = new Map<number, boolean>();
+    const pinnedExitHostId = async (tunnel: unknown): Promise<number> => {
+      const hostId = Number((tunnel as { balancePinHostId?: number | null } | null)?.balancePinHostId || 0);
+      if (hostId <= 0) return 0;
+      if (!pinOnlineCache.has(hostId)) {
+        const rows = await db.getHostsByIds([hostId]).catch(ignoreErrorWith("AgentHeartbeat exit pin", [])) as Array<{ id: number; isOnline?: unknown }>;
+        pinOnlineCache.set(hostId, rows.some((row) => Number(row.id) === hostId && runtimeBool(row.isOnline)));
+      }
+      return pinOnlineCache.get(hostId) ? hostId : 0;
+    };
+    const exitTargetStatusCache = new Map<number, boolean>();
+    const exitTargetStatusForHostIds = async (hostIds: number[]): Promise<boolean[] | null> => {
+      if (hostIds.length < 2) return null;
+      const missing = Array.from(new Set(hostIds.filter((id) => id > 0 && !exitTargetStatusCache.has(id))));
+      if (missing.length > 0) {
+        const rows = await db.getHostsByIds(missing).catch(ignoreErrorWith("AgentHeartbeat exit fxp versions", [])) as Array<{ id: number; fxpVersion?: string | null }>;
+        for (const id of missing) exitTargetStatusCache.set(id, false);
+        for (const row of rows) exitTargetStatusCache.set(Number(row.id), fxpSupportsTargetAware(row.fxpVersion));
+      }
+      const flags = hostIds.map((id) => exitTargetStatusCache.get(id) === true);
+      return flags.some(Boolean) ? flags : null;
     };
     /*
       出口组「故障切换优先同出口 IP」（2.3.520）：每个出口带上那台主机的出口地址（hostEgressAddress）。先写进 FXP 规格，
@@ -3046,11 +3103,23 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         ));
         nodeHostIds.push(endpoint.exitHostId);
       }
+      /*
+        GOST 没法在一条连接里换出口：每台出口自己探规则的目标（exitTargetHealth），连不上的从这条规则的出口里
+        摘掉，恢复后加回（翻转时面板立刻推给入口机，Agent 走 GOST 的热更新，正在传的连接不断）。全都连不上时不摘。
+      */
+      // 手动切换优先：指定了（而且在线）就只用那一台
+      const pinHostId = nodes.length > 1 ? await pinnedExitHostId(tunnel) : 0;
+      const pinned = pinHostId > 0 && nodeHostIds.includes(pinHostId);
+      const excluded = pinned
+        ? new Set(nodeHostIds.filter((hostId) => Number(hostId) !== pinHostId).map(Number))
+        : nodes.length > 1 ? exitTargetExcludedHostIds(Number(rule.id), nodeHostIds) : new Set<number>();
+      const keptNodes = excluded.size > 0 ? nodes.filter((_, index) => !excluded.has(Number(nodeHostIds[index]))) : nodes;
+      const keptHostIds = excluded.size > 0 ? nodeHostIds.filter((hostId) => !excluded.has(Number(hostId))) : nodeHostIds;
       // 按权重 / 按负载：份数写进节点的 metadata.weight，gost 的 rand 按它加权随机（gostExitSelector）。
       // 以前是把出口按份数重复列，可每一份各记各的失败：权重 5 的出口挂了要失败 5 次才全部跳过。
-      const weights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, nodeHostIds);
-      if (!weights) return nodes;
-      return nodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: weights[index] } }));
+      const weights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, keptHostIds, tunnel);
+      if (!weights) return keptNodes;
+      return keptNodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: weights[index] } }));
     };
     const gostRelayFailoverHopMetadata = { strategy: "fifo", maxFails: 1, failTimeout: "5s" };
     const gostTunnelExitTargetAddr = async (rule: any, tunnel: any) => {
@@ -4030,7 +4099,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             continue;
           }
           if (tunnel && isForwardXTunnel(tunnel)) {
-            const entryRoutes = await forwardXEntryRoutes(rule, tunnel);
+            const allEntryRoutes = await forwardXEntryRoutes(rule, tunnel);
+            // 手动切换：只留指定的那台出口（它在这些出口里、而且在线时）
+            const entryPinHostId = await pinnedExitHostId(tunnel);
+            const entryRoutes = entryPinHostId > 0 && allEntryRoutes.length > 1 && allEntryRoutes.some((route) => Number((route as { hostId?: number }).hostId || 0) === entryPinHostId)
+              ? allEntryRoutes.filter((route) => Number((route as { hostId?: number }).hostId || 0) === entryPinHostId)
+              : allEntryRoutes;
             const entryRoute = entryRoutes[0] || { host: "", port: 0, key: "" };
             if (!entryRoute.host || entryRoute.port <= 0 || !entryRoute.key) {
               appendPanelLog("error", `[TunnelRoute] invalid NEX entry route tunnel=${tunnel.id} rule=${rule.id} nextHost=${entryRoute.host || "-"} nextPort=${entryRoute.port || "-"}`);
@@ -4094,10 +4168,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             // 并排中转时 entryRoutes 是几台中转（固定主备），权重只给出口组的出口。
             const entryExitsAreRelays = tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || []);
             const entryExitHostIds = entryRoutes.map((route) => Number((route as any).hostId || 0));
-            const entryExitWeights = entryExitsAreRelays ? null : await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
+            const entryExitWeights = entryExitsAreRelays ? null : await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds, tunnel);
             const entryExitCapacities = entryExitsAreRelays ? null : await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
             // 每个出口从哪个 IP 出去（2.3.520，见 exitIpsForHostIds）。并排中转不是出口，不带。
             const entryExitIps = entryExitsAreRelays ? null : await exitIpsForHostIds(entryExitHostIds);
+            // 负载均衡：入口机的 FXP 新（2.2.142 起）才给「自动 / 延迟优先」、出口回报连目标的结果、检测参数。
+            const entryHostFxpVersion = (host as { fxpVersion?: string | null }).fxpVersion;
+            const tunnelBalance = tunnel as { loadBalanceStrategy?: string | null; balanceDetect?: string | null };
+            const entryFxpTargetAware = !entryExitsAreRelays && entryRoutes.length > 1 && fxpSupportsTargetAware(entryHostFxpVersion);
+            const entryExitTargetStatus = entryFxpTargetAware ? await exitTargetStatusForHostIds(entryExitHostIds) : null;
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,
@@ -4111,7 +4190,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               ...(multipathLegs.length >= 2 ? { multipathEnabled: true, multipathLegs, ...(runtimeBool((tunnel as any).multipathReplicate) ? { multipathReplicate: true } : {}) } : {}),
               exitStrategy: tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || [])
                 ? "fallback"
-                : forwardXExitStrategy((tunnel as any).loadBalanceStrategy),
+                : forwardXExitStrategy(tunnelBalance.loadBalanceStrategy, fxpSupportsTargetAware(entryHostFxpVersion)),
+              ...(entryFxpTargetAware ? { balanceDetect: balanceDetectForRuntime(tunnelBalance.balanceDetect) } : {}),
               exitPeerId: wireGuardV2 ? String(Number((entryRoute as any).hostId || 0)) : undefined,
               ...(!wireGuardV2 && useUdpOverTcp ? { udpExitPort: Number((entryRoute as any).udpPort || 0) } : {}),
               exits: entryRoutes.map((route, index) => ({
@@ -4123,6 +4203,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 ...(entryExitWeights ? { weight: entryExitWeights[index] } : {}),
                 ...(entryExitCapacities ? { capacityMbps: entryExitCapacities[index] } : {}),
                 ...(entryExitIps?.[index] ? { exitIp: entryExitIps[index] } : {}),
+                ...(entryExitTargetStatus?.[index] ? { targetStatus: true } : {}),
               })),
               targetIp: fxpTarget.targetIp,
               targetPort: fxpTarget.targetPort,
@@ -4557,6 +4638,55 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       hopProbes.push(...routeHopFast.gostProbes);
       hopProbes.sort((left, right) => Number(left.ruleId) - Number(right.ruleId));
+    }
+    /*
+      负载均衡链路：这台机器是出口之一时，按链路的「检测与切换」节奏探规则的目标（server/exitTargetHealth.ts）。
+      主出口上面已经有这条规则的普通探测，挂上快速规格；其余出口另加一条 fastOnly（Agent 2.2.259 起不进
+      一分钟一轮的普通探测；老 Agent 照样探，面板只收主出口的普通结果，多出来的那几条会被丢掉）。
+    */
+    {
+      type ExitTargetProbe = { ruleId: number; tunnelId?: number; targetIp?: string; targetPort?: number; method?: string; probeKey?: string; routeHop?: RouteHopProbeSpec; fastOnly?: boolean };
+      const exitProbes = ruleLatencyProbes as ExitTargetProbe[];
+      const probeByRule = new Map(exitProbes.map((probe) => [Number(probe.ruleId), probe]));
+      let added = false;
+      type BalanceRule = { id: number; tunnelId?: number | null; pendingDelete?: unknown; isEnabled?: unknown; isRunning?: unknown; routeParentRuleId?: number | null; protocol?: string | null; targetPort?: number | null };
+      type BalanceTunnel = { id: number; isEnabled?: unknown; exitHostId?: number | null; loadBalanceEnabled?: unknown; loadBalanceStrategy?: string | null; balanceDetect?: string | null };
+      for (const rule of agentAllRules as unknown as BalanceRule[]) {
+        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !runtimeBool(rule.isRunning)) continue;
+        if (Number(rule.routeParentRuleId || 0) > 0 || String(rule.protocol || "").toLowerCase() === "udp") continue;
+        const tunnel = tunnelById.get(Number(rule.tunnelId || 0)) as BalanceTunnel | undefined;
+        if (!tunnel || !runtimeBool(tunnel.isEnabled) || !tunnelBalancesExits(tunnel)) continue;
+        const extraExitNodes = (tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []) as Array<{ hostId?: number | null; isEnabled?: unknown }>;
+        const exitHostIds = [
+          Number(tunnel.exitHostId || 0),
+          ...extraExitNodes
+            .filter((node) => runtimeBool(node?.isEnabled, true))
+            .map((node) => Number(node.hostId)),
+        ];
+        if (exitHostIds.length < 2 || !exitHostIds.includes(Number(host.id))) continue;
+        const spec = exitTargetProbeSpec(tunnelBalanceDetect(tunnel));
+        const existing = probeByRule.get(Number(rule.id));
+        if (existing) {
+          if (!existing.routeHop) existing.routeHop = spec;
+          continue;
+        }
+        const egressHelper = tunnelEgressHelpers.get(Number(rule.id));
+        const targetIp = String(egressHelper ? egressHelper.runtime.server : processTarget(rule) || "").trim();
+        const targetPort = Number(egressHelper ? egressHelper.runtime.port : rule.targetPort);
+        if (!targetIp || !(targetPort > 0 && targetPort <= 65535)) continue;
+        exitProbes.push({
+          ruleId: Number(rule.id),
+          tunnelId: Number(tunnel.id),
+          targetIp,
+          targetPort,
+          method: "tcping",
+          probeKey: `exit-target:${Number(rule.id)}:${Number(host.id)}`,
+          routeHop: spec,
+          fastOnly: true,
+        });
+        added = true;
+      }
+      if (added) exitProbes.sort((left, right) => Number(left.ruleId) - Number(right.ruleId));
     }
     // 自动换 IP 的探测借同一个通道下发（保留的 serviceId 段，不进 host_probe_services 表），见 server/ipChange/。
     const hostProbeServices = [

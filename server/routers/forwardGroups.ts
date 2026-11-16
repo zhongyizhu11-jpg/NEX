@@ -74,6 +74,17 @@ const baseSchema = z.object({
   remark: z.string().max(255).nullable().optional(),
   groupMode: z.enum(["port", "failover", "chain", "entry", "exit"]).default("failover"),
   exitStrategy: exitGroupStrategySchema.optional().default("round_robin"),
+  /** 出口组的「检测与切换」（shared/loadBalance.ts），不传 = 不动原来的。 */
+  balanceDetect: z.object({
+    intervalSeconds: z.number().int().min(1).max(60).optional(),
+    failThreshold: z.number().int().min(1).max(10).optional(),
+    recoverThreshold: z.number().int().min(1).max(10).optional(),
+    latencyMarginMs: z.number().int().min(10).max(2000).optional(),
+    jitterMs: z.number().int().min(5).max(1000).optional(),
+    jitterHoldSeconds: z.number().int().min(5).max(600).optional(),
+    jitterAction: z.enum(["reduce", "switch", "ignore"]).optional(),
+    slowStart: z.boolean().optional(),
+  }).nullable().optional(),
   entryGroupId: z.number().nullable().optional(),
   groupType: z.enum(["host", "tunnel"]),
   protocol: z.enum(["tcp", "udp", "both"]).optional().default("both"),
@@ -429,6 +440,11 @@ export const forwardGroupsRouter = router({
     .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.groupId}`, async () => {
       await db.reorderForwardGroupMembers(input.groupId, input.memberIds);
       await db.runForwardGroupFailover(input.groupId, { forcePriority: true, forceSync: true });
+      // 出口组：顺序就是主备顺序、也决定主出口，用这个组的链路要跟着换（syncTunnelExitGroupEndpoints）
+      const group = await db.getForwardGroupById(input.groupId) as { groupMode?: string | null } | null;
+      if (String(group?.groupMode || "") === "exit") {
+        await db.refreshForwardGroupReferences(input.groupId, { reason: "exit-group-reordered" });
+      }
       return { success: true };
     })),
 

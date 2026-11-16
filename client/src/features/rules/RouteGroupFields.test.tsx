@@ -12,6 +12,7 @@ import {
   type RouteMode,
 } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
+import { ROUTE_SPREADS } from "@shared/routeGroupModel";
 import { expandRouteLines, newRouteLine, routeLinesFromPaths, type RouteLine } from "@shared/routeLines";
 import { RouteGroupFields, followRoutePath, lineModeHint, routeGroupPayload, routePathIndexFor, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
 import { SegmentLatencyContext, type SegmentLatencyHook } from "./segmentLatency";
@@ -127,7 +128,9 @@ test("手动主备在「怎么切」下面直接选走哪条，没有「自动�
 
 test("按权重：分法六选一（含「自动」），按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
   const html = render(group("weighted"));
-  for (const label of ["按权重", "按负载", "轮流", "随机", "按访客固定", "自动"]) assert.match(html, new RegExp(`role="radio"[^>]*>${label}<`), `少了「${label}」`);
+  // 2.3.534 起和出口组同一个下拉框（统一负载均衡）：框里显示选中的那种，下拉里只有线路组能分连接的六种
+  assert.match(html, /role="combobox"[^>]*aria-label="新连接怎么分"/);
+  assert.deepEqual([...ROUTE_SPREADS], ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto"]);
   assert.match(render(group("weighted", { spread: "auto" })), /沿途主机的负载自动算权重/, "选中「自动」时下面那句说它会怎么做");
   assert.match(html, /data-testid="route-line-weights"/);
   assert.match(html, /aria-label="主线路 的权重"/);

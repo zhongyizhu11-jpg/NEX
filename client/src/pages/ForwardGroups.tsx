@@ -93,6 +93,8 @@ import {
   Activity,
   CheckCircle2,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Globe,
   GripVertical,
   Layers3,
@@ -114,8 +116,8 @@ import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CS
 import { toast } from "sonner";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
-import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
-import { LinkSpreadPicker } from "@/features/links/LinkSpreadPicker";
+import { BalanceDetectPanel, BalanceStrategySelect, BalanceSummaryLine } from "@/features/links/LoadBalanceFields";
+import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeBalanceStrategy, type BalanceDetect } from "@shared/loadBalance";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -192,7 +194,10 @@ type MemberForm = {
 type GroupForm = {
   name: string;
   groupMode: GroupMode;
-  exitStrategy: ExitGroupStrategy;
+  /** 出口组的分配方式；新建时是空的，要人自己挑（统一负载均衡，2026-11） */
+  exitStrategy: ExitGroupStrategy | null;
+  /** 出口组的「检测与切换」（shared/loadBalance.ts） */
+  balanceDetect: BalanceDetect;
   entryGroupId: number | null;
   groupType: GroupType;
   protocol: ForwardRuleProtocol;
@@ -231,8 +236,9 @@ type GroupForm = {
 const makeDefaultForm = (): GroupForm => ({
   name: "",
   groupMode: "failover",
-  // 新建出口组默认「按负载」：按实时流量和线路带宽分，最能把几台一起跑满。
-  exitStrategy: "least_load",
+  // 新建出口组不预选分配方式（用户要求「新建自己选」），下拉框里「自动」标着推荐。
+  exitStrategy: null,
+  balanceDetect: { ...DEFAULT_BALANCE_DETECT },
   entryGroupId: null,
   groupType: "host",
   protocol: "both",
@@ -1096,7 +1102,9 @@ export function ForwardGroupsContent({
     setForm({
       name: group.name || "",
       groupMode,
-      exitStrategy: normalizeExitGroupStrategy(group.exitStrategy),
+      // 老的「只用第一个」在统一的下拉框里是「主备」（坏了自动换下一台）
+      exitStrategy: (normalizeBalanceStrategy(group.exitStrategy) ?? normalizeExitGroupStrategy(group.exitStrategy)) as ExitGroupStrategy,
+      balanceDetect: normalizeBalanceDetect(group.balanceDetect),
       entryGroupId: group.entryGroupId ? Number(group.entryGroupId) : null,
       groupType: "host",
       protocol: normalizeForwardRuleProtocol(group.protocol, "both"),
@@ -1300,6 +1308,8 @@ export function ForwardGroupsContent({
       meta: getTunnelRouteText(t, hosts),
     }));
   const showExitAddressColumns = form.groupMode === "exit" && effectiveGroupType === "host";
+  // 出口组「按权重」：每台多一个权重框（不填 = 按线路带宽自动算）
+  const showExitWeightColumn = showExitAddressColumns && form.exitStrategy === "weighted";
   // Entry groups running bandwidth aggregation get per-front-VPS uplink and
   // weight columns, so the member table gains two fields.
   const showAggregationColumns = form.groupMode === "entry"
@@ -1311,7 +1321,9 @@ export function ForwardGroupsContent({
   const memberRowGridClass = form.groupMode === "port"
     ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_36px]"
     : showExitAddressColumns
-    ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_44px_52px_36px]"
+    ? showExitWeightColumn
+      ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_64px_44px_52px_36px]"
+      : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_44px_52px_36px]"
     : showAggregationColumns
       ? showLineColumn
         ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_44px_44px_52px_36px]"
@@ -1572,6 +1584,9 @@ export function ForwardGroupsContent({
     if (supportsSwitchNotify && form.telegramSwitchNotifyEnabled && telegramSettingsLoaded && !telegramReady) {
       return toast.error("请先在系统设置中配置并启用 Telegram 机器人");
     }
+    if (isExitGroup && !form.exitStrategy) {
+      return toast.error("请选择分配方式（不知道选哪个就用「自动」）");
+    }
     const payload = {
       ...form,
       name: form.name.trim(),
@@ -1579,6 +1594,7 @@ export function ForwardGroupsContent({
       entryGroupId: isChainGroup || isPortMode ? form.entryGroupId || null : null,
       groupType: "host" as const,
       exitStrategy: isExitGroup ? normalizeExitGroupStrategy(form.exitStrategy) : "round_robin",
+      ...(isExitGroup ? { balanceDetect: form.balanceDetect } : {}),
       domain: isFailoverMode || isEntryGroup ? form.domain.trim() || null : null,
       recordType: isChainGroup || isExitGroup ? "A" : form.recordType,
       ddnsDualStack: (isFailoverMode || isEntryGroup) && form.recordType !== "CNAME" && form.ddnsDualStack,
@@ -1617,7 +1633,8 @@ export function ForwardGroupsContent({
         priority: index,
         // Bandwidth aggregation is an entry group concept; other modes send 0.
         bandwidthMbps: isEntryGroup ? normalizeMemberBandwidthMbps(member.bandwidthMbps) : 0,
-        aggregationWeight: isEntryGroup ? normalizeMemberWeight(member.aggregationWeight) : 0,
+        // 出口组「按权重」：每台填的份数（全部填了才按它分，有空的就按线路带宽算，server 见 exitManualWeights）
+        aggregationWeight: isEntryGroup || (isExitGroup && form.exitStrategy === "weighted") ? normalizeMemberWeight(member.aggregationWeight) : 0,
         activeSchedule: groupModeSupportsMemberSchedule(form.groupMode) ? member.activeSchedule || null : null,
         // 服务商暂不支持线路时也原样带回去：换回原来的服务商后配置还在（服务端只看当前服务商的线路）。
         ddnsLines: isFailoverMode || isEntryGroup ? member.ddnsLines || [] : null,
@@ -2522,27 +2539,30 @@ export function ForwardGroupsContent({
             </div>
 
             {form.groupMode === "exit" && (
-              <FormField className="grid gap-2 rounded-md border border-border/60 bg-muted/15 p-3 sm:grid-cols-[120px_minmax(0,1fr)] sm:items-center">
-                <Label>出口策略</Label>
-                <div className="space-y-1.5">
-                  <LinkSpreadPicker
+              <div className="space-y-3">
+                <FormField className="space-y-2 rounded-xl border border-border/60 bg-muted/15 p-3">
+                  <Label>分配方式</Label>
+                  <BalanceStrategySelect
                     value={form.exitStrategy}
-                    options={EXIT_GROUP_PICKER_OPTIONS}
-                    labels={EXIT_GROUP_PICKER_LABELS}
                     onChange={(exitStrategy) => setForm({ ...form, exitStrategy })}
-                    ariaLabel="出口策略"
-                    hint={form.exitStrategy === "none"
-                      ? "只用顺序第一台已启用的出口，其余不参与。"
-                      : form.exitStrategy === "fallback"
-                        ? "按顺序优先用第一台，坏了换下一台。"
-                        : form.exitStrategy === "weighted"
-                          ? exitWeightHint(form.members, hostById)
-                          : form.exitStrategy === "least_load"
-                            ? exitLoadHint(form.members, hostById)
-                          : `${LINK_SPREAD_LABELS[form.exitStrategy].hint}。`}
                   />
-                </div>
-              </FormField>
+                  <BalanceSummaryLine
+                    strategy={form.exitStrategy}
+                    detect={form.balanceDetect}
+                    extra={form.exitStrategy === "weighted"
+                      ? exitWeightHint(form.members, hostById)
+                      : form.exitStrategy === "least_load" || form.exitStrategy === "auto"
+                        ? exitLoadHint(form.members, hostById)
+                        : undefined}
+                  />
+                </FormField>
+                <BalanceDetectPanel
+                  value={form.balanceDetect}
+                  onChange={(balanceDetect) => setForm({ ...form, balanceDetect })}
+                  strategy={form.exitStrategy}
+                  {...exitManualWeightProps(form.members, hostById)}
+                />
+              </div>
             )}
 
             {(form.groupMode === "failover" || form.groupMode === "entry") && (
@@ -2975,6 +2995,7 @@ export function ForwardGroupsContent({
                               <>
                                 <span className="text-center">内网</span>
                                 <span className="text-center">IPv6</span>
+                                {showExitWeightColumn && <span className="text-center">权重</span>}
                               </>
                             )}
                             {showAggregationColumns && (
@@ -3002,18 +3023,31 @@ export function ForwardGroupsContent({
                           }}
                           className={"flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-2 sm:grid sm:gap-1.5 " + memberRowGridClass}
                         >
-                          <GripVertical className="h-4 w-4 cursor-grab text-muted-foreground" />
+                          {/* ↑↓：手机上拖不动，点着调顺序（2.3.534）；电脑上照样能拖 */}
+                          <span className="flex items-center">
+                            <GripVertical className="hidden h-4 w-4 cursor-grab text-muted-foreground sm:block" />
+                            {form.members.length > 1 ? (
+                              <span className="fx-lb-move">
+                                <button type="button" aria-label={`上移 ${memberLabel(member)}`} disabled={index === 0} onClick={() => moveMember(member.key, form.members[index - 1].key)}>
+                                  <ChevronUp className="h-4 w-4" />
+                                </button>
+                                <button type="button" aria-label={`下移 ${memberLabel(member)}`} disabled={index === form.members.length - 1} onClick={() => moveMember(member.key, form.members[index + 1].key)}>
+                                  <ChevronDown className="h-4 w-4" />
+                                </button>
+                              </span>
+                            ) : null}
+                          </span>
                           <span className="flex h-6 w-6 items-center justify-center rounded bg-muted text-xs">{index + 1}</span>
                           {member.memberType === "host" ? (
                             <HostStatusLabel
                               host={hostById.get(Number(member.hostId))}
                               label={memberLabel(member)}
                               // 手机上一行：拖动 + 序号 + 名字占满，后面的输入框换到下一行（以前名字被挤成 0 宽，只剩一个圆点）
-                              className="min-w-0 flex-1 basis-[calc(100%-4rem)] text-sm font-medium sm:basis-auto"
+                              className="min-w-0 flex-1 basis-[calc(100%-6.5rem)] text-sm font-medium sm:basis-auto"
                               labelClassName="truncate"
                             />
                           ) : (
-                            <div className="flex min-w-0 flex-1 basis-[calc(100%-4rem)] items-center gap-2 sm:basis-auto">
+                            <div className="flex min-w-0 flex-1 basis-[calc(100%-6.5rem)] items-center gap-2 sm:basis-auto">
                               <Route className="h-4 w-4 text-primary" />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-sm font-medium">{memberLabel(member)}</p>
@@ -3041,6 +3075,21 @@ export function ForwardGroupsContent({
                                 />
                                 <span className="text-xs text-muted-foreground sm:hidden">IPv6</span>
                               </label>
+                              {showExitWeightColumn && (
+                                <label className="flex items-center justify-center gap-1.5 sm:w-[64px]">
+                                  <span className="text-xs text-muted-foreground sm:hidden">权重</span>
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    max={MAX_MEMBER_WEIGHT}
+                                    value={member.aggregationWeight === "0" ? "" : member.aggregationWeight}
+                                    onChange={(e) => updateMemberField(member.key, { aggregationWeight: e.target.value })}
+                                    className="h-7 w-[56px] text-center text-xs"
+                                    placeholder="自动"
+                                    aria-label={memberLabel(member) + "的权重"}
+                                  />
+                                </label>
+                              )}
                             </>
                           )}
                           {showAggregationColumns && (
@@ -3259,16 +3308,31 @@ export default function ForwardGroupsPage() {
   );
 }
 
+/** 「实际效果」那句话用：每台都手填了权重时，把份数和名字带过去（「新连接按 5 : 3 分给 A、B」）。 */
+function exitManualWeightProps(members: MemberForm[], hostById: Map<number, any>) {
+  const enabled = members.filter((member) => member.isEnabled && Number(member.hostId || 0) > 0);
+  const weights = enabled.map((member) => Math.floor(Number(member.aggregationWeight) || 0));
+  if (enabled.length < 2 || !weights.every((weight) => weight > 0)) return {};
+  return {
+    weights,
+    memberNames: enabled.map((member) => String(hostById.get(Number(member.hostId))?.name || `主机 ${member.hostId}`)),
+  };
+}
+
 /**
  * 「按权重」的出口组：把按线路带宽算出来的份数直接写给用户看（500M · 300M → 5:3）。
  * 算法和下发时同一个（shared/exitStrategy.ts 的 exitGroupWeights），这里看到的就是实际分法。
  */
 function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
-  const hosts = members
-    .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
+  const enabled = members.filter((member) => member.isEnabled && Number(member.hostId || 0) > 0);
+  const hosts = enabled
     .map((member) => hostById.get(Number(member.hostId)))
     .filter(Boolean);
   if (hosts.length < 2) return "按每台出口的线路带宽分新连接，带宽大的多分。至少要两台出口。";
+  // 每台都手填了权重：按填的分（和下发时 server 的 exitManualWeights 同一个规则）
+  const manual = enabled.map((member) => Math.floor(Number(member.aggregationWeight) || 0));
+  if (manual.every((weight) => weight > 0)) return `按填的权重分：${manual.join(" : ")}。`;
+  if (manual.some((weight) => weight > 0)) return "有的出口没填权重：要全部填了才按填的分，现在按线路带宽算。";
   const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
   const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
   if (unknown.length > 0) return `${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在按平均分。`;
@@ -3294,9 +3358,3 @@ function exitLoadHint(members: MemberForm[], hostById: Map<number, any>) {
   return `${base}线路带宽：${hosts.map((host: any, index: number) => `${String(host.name || host.id)} ${bandwidths[index]}M`).join(" · ")}。`;
 }
 
-// 出口策略的按钮：常用的排前面，「只用第一个」放最后（它其实是不分）。
-const EXIT_GROUP_PICKER_OPTIONS = ["least_load", "fallback", "round_robin", "weighted", "random", "ip_hash", "none"] as const satisfies readonly ExitGroupStrategy[];
-const EXIT_GROUP_PICKER_LABELS: Record<ExitGroupStrategy, { label: string }> = {
-  ...LINK_SPREAD_LABELS,
-  none: { label: "只用第一个" },
-};

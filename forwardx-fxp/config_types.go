@@ -9,6 +9,9 @@ type exitEndpoint struct {
 	Weight int `json:"weight,omitempty"`
 	// CapacityMbps 是出口主机的线路带宽，「按负载」「按访客固定」按它折算每台该分多少。没写按一样大。
 	CapacityMbps int `json:"capacityMbps,omitempty"`
+	// TargetStatus（面板按出口机的 FXP 版本给）：这台出口会在连完目标后回一帧结果（2.2.142 起）。
+	// 入口只对这样的出口等结果、按「出口 + 目标」记健康和延迟；老出口照旧只看它本身通不通。
+	TargetStatus bool `json:"targetStatus,omitempty"`
 	// lossTolerant 不上线：拨这个端点用不用抗丢包传输（跟着规则 / 中转的 LossTolerant）。
 	lossTolerant bool
 	// transport 不上线：V3 的外层选项（v3TransportIdentity），V1 / V2 为空。选项不同的
@@ -54,38 +57,40 @@ type multipathLeg struct {
 }
 
 type config struct {
-	Role                     string         `json:"role"`
-	Entries                  []config       `json:"entries,omitempty"`
-	TunnelID                 int            `json:"tunnelId"`
-	RuleID                   int            `json:"ruleId"`
-	ListenPort               int            `json:"listenPort"`
-	UDPListenPort            int            `json:"udpListenPort,omitempty"`
-	ListenHost               string         `json:"listenHost,omitempty"`
-	Protocol                 string         `json:"protocol"`
-	ExitHost                 string         `json:"exitHost"`
-	ExitPort                 int            `json:"exitPort"`
-	UDPExitPort              int            `json:"udpExitPort,omitempty"`
-	Exits                    []exitEndpoint `json:"exits,omitempty"`
-	ExitStrategy             string         `json:"exitStrategy,omitempty"`
-	TargetIP                 string         `json:"targetIp"`
-	TargetPort               int            `json:"targetPort"`
-	UDPTargets               []udpTarget    `json:"udpTargets,omitempty"`
-	StreamTargets            []streamTarget `json:"streamTargets,omitempty"`
-	Key                      string         `json:"key"`
-	LimitIn                  int64          `json:"limitIn"`
-	LimitOut                 int64          `json:"limitOut"`
-	MaxConnections           int            `json:"maxConnections"`
-	MaxIPs                   int            `json:"maxIPs"`
-	AccessScope              string         `json:"accessScope"`
-	BlockHTTP                bool           `json:"blockHttp"`
-	BlockSocks               bool           `json:"blockSocks"`
-	BlockTLS                 bool           `json:"blockTls"`
-	ProxyProtocolReceive     bool           `json:"proxyProtocolReceive"`
-	ProxyProtocolSend        bool           `json:"proxyProtocolSend"`
-	ProxyProtocolExitReceive bool           `json:"proxyProtocolExitReceive"`
-	ProxyProtocolExitSend    bool           `json:"proxyProtocolExitSend"`
-	ProxyProtocolVersion     int            `json:"proxyProtocolVersion"`
-	TCPFastOpen              bool           `json:"tcpFastOpen"`
+	Role          string         `json:"role"`
+	Entries       []config       `json:"entries,omitempty"`
+	TunnelID      int            `json:"tunnelId"`
+	RuleID        int            `json:"ruleId"`
+	ListenPort    int            `json:"listenPort"`
+	UDPListenPort int            `json:"udpListenPort,omitempty"`
+	ListenHost    string         `json:"listenHost,omitempty"`
+	Protocol      string         `json:"protocol"`
+	ExitHost      string         `json:"exitHost"`
+	ExitPort      int            `json:"exitPort"`
+	UDPExitPort   int            `json:"udpExitPort,omitempty"`
+	Exits         []exitEndpoint `json:"exits,omitempty"`
+	ExitStrategy  string         `json:"exitStrategy,omitempty"`
+	// BalanceDetect：负载均衡的「检测与切换」（面板 shared/loadBalance.ts），只在有几台出口时有用。
+	BalanceDetect            *balanceDetectConfig `json:"balanceDetect,omitempty"`
+	TargetIP                 string               `json:"targetIp"`
+	TargetPort               int                  `json:"targetPort"`
+	UDPTargets               []udpTarget          `json:"udpTargets,omitempty"`
+	StreamTargets            []streamTarget       `json:"streamTargets,omitempty"`
+	Key                      string               `json:"key"`
+	LimitIn                  int64                `json:"limitIn"`
+	LimitOut                 int64                `json:"limitOut"`
+	MaxConnections           int                  `json:"maxConnections"`
+	MaxIPs                   int                  `json:"maxIPs"`
+	AccessScope              string               `json:"accessScope"`
+	BlockHTTP                bool                 `json:"blockHttp"`
+	BlockSocks               bool                 `json:"blockSocks"`
+	BlockTLS                 bool                 `json:"blockTls"`
+	ProxyProtocolReceive     bool                 `json:"proxyProtocolReceive"`
+	ProxyProtocolSend        bool                 `json:"proxyProtocolSend"`
+	ProxyProtocolExitReceive bool                 `json:"proxyProtocolExitReceive"`
+	ProxyProtocolExitSend    bool                 `json:"proxyProtocolExitSend"`
+	ProxyProtocolVersion     int                  `json:"proxyProtocolVersion"`
+	TCPFastOpen              bool                 `json:"tcpFastOpen"`
 	// TCPCongestion 是给 FXP 自己收发的每条 TCP 连接设的拥塞控制算法：空 / auto
 	// 表示系统默认是 cubic、reno 时换成 bbr；off 表示保持系统默认；也可以直接写
 	// 算法名。见 tcp_congestion.go。

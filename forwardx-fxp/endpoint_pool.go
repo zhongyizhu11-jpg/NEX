@@ -459,6 +459,8 @@ func fxpEndpointMaintenanceLoop() {
 		for _, state := range states {
 			state.maintain(now)
 		}
+		// 负载均衡的「出口连得上目标吗」：按各条规则的「多久探一次」派探测（target_health.go）。
+		maintainTargetProbes(now)
 	}
 }
 

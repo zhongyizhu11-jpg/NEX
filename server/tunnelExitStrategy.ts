@@ -1,4 +1,6 @@
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { FXP_TARGET_AWARE_VERSION } from "@shared/loadBalance";
+import { isAgentVersionAtLeast } from "@shared/version";
 
 export type ExitGroupTunnelMember = {
   hostId?: number | null;
@@ -66,9 +68,20 @@ export function planExitGroupTunnelEndpoints(
     });
 }
 
-export function forwardXExitStrategy(value: unknown) {
+/**
+ * 交给 FXP 的出口策略。auto（自动）/ latency（延迟优先）只有 FXP 2.2.142 起认得（老的会当轮流），
+ * 入口机的 FXP 还旧时换成最接近的「按负载」。
+ */
+export function forwardXExitStrategy(value: unknown, supportsTargetAware = true) {
   const strategy = normalizeExitGroupStrategy(value);
-  return strategy === "none" ? "round_robin" : strategy;
+  if (strategy === "none") return "round_robin";
+  if (!supportsTargetAware && (strategy === "auto" || strategy === "latency")) return "least_load";
+  return strategy;
+}
+
+/** 这台机器上的 FXP 认不认「出口回报连目标的结果」、auto / latency 策略（2.2.142 起）。 */
+export function fxpSupportsTargetAware(fxpVersion: unknown) {
+  return isAgentVersionAtLeast(String(fxpVersion || ""), FXP_TARGET_AWARE_VERSION);
 }
 
 /**
@@ -89,7 +102,7 @@ export function gostExitSelector(value: unknown) {
   const strategy = normalizeExitGroupStrategy(value);
   return {
     strategy: strategy === "fallback" ? "fifo"
-      : strategy === "random" || strategy === "weighted" || strategy === "least_load" ? "random"
+      : strategy === "random" || strategy === "weighted" || strategy === "least_load" || strategy === "auto" || strategy === "latency" ? "random"
         : strategy === "ip_hash" ? "hash" : "round",
     maxFails: 1,
     failTimeout: strategy === "fallback" ? "5s" : "15s",

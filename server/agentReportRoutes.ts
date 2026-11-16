@@ -42,6 +42,7 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopFastReports, ingestRouteHopProbeReports } from "./routeGroups";
+import { ingestExitTargetReports } from "./exitTargetHealth";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { recordRuleProbeFailure } from "./ruleProbeFailure";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
@@ -1429,20 +1430,30 @@ agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Respon
       return;
     }
     const raw: unknown[] = Array.isArray(req.body?.results) ? req.body.results : [];
+    const numberOrNull = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : null);
     const results = raw.slice(0, 2048).flatMap((item) => {
       if (!item || typeof item !== "object") return [];
-      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown };
+      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown };
       const ruleId = Number(record.ruleId);
       if (!Number.isInteger(ruleId) || ruleId <= 0 || typeof record.down !== "boolean") return [];
-      const latencyMs = typeof record.latencyMs === "number" && Number.isFinite(record.latencyMs) ? record.latencyMs : null;
-      return [{ ruleId, down: record.down, latencyMs }];
+      return [{
+        ruleId,
+        down: record.down,
+        latencyMs: numberOrNull(record.latencyMs),
+        // Agent 2.2.259 起多报的几项（负载均衡每台出口到目标的延迟 / 抖动 / 丢包）
+        medianMs: numberOrNull(record.medianMs),
+        jitterMs: numberOrNull(record.jitterMs),
+        lossPct: numberOrNull(record.lossPct),
+        samples: numberOrNull(record.samples),
+      }];
     });
-    const outcome = await ingestRouteHopFastReports({
-      hostId: Number(host.id),
-      hostName: String((host as { name?: unknown }).name || ""),
-      results,
-    });
-    res.json({ success: true, recorded: outcome.recorded });
+    const hostName = String((host as { name?: unknown }).name || "");
+    // 同一条通道两种用途：线路组「下一跳」、负载均衡「这台出口连得上目标吗」。各收各的，互不认对方的规则。
+    const [outcome, exitTargets] = await Promise.all([
+      ingestRouteHopFastReports({ hostId: Number(host.id), hostName, results }),
+      ingestExitTargetReports({ hostId: Number(host.id), hostName, results }),
+    ]);
+    res.json({ success: true, recorded: outcome.recorded + exitTargets.recorded });
   } catch (error) {
     console.warn(`[Agent RouteHop] ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: "route hop report failed" });

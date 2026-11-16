@@ -696,6 +696,8 @@ const tables: TableDef[] = [
     columns: [
       c("id", "id"), c("name", "text", { notNull: true }), c("remark", "text"), c("groupType", "varchar", { length: 32, notNull: true, default: "host" }),
       c("groupMode", "varchar", { length: 32, notNull: true, default: "failover" }), c("exitStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }), c("entryGroupId", "int"),
+      // 负载均衡的「检测与切换」（shared/loadBalance.ts，JSON；空 = 默认值）
+      c("balanceDetect", "text"),
       c("forwardType", "varchar", { length: 32, notNull: true, default: "iptables" }), c("failoverRuntimeInheritanceEnabled", "bool", { notNull: true, default: false }), c("domain", "text"),
       c("recordType", "varchar", { length: 16, notNull: true, default: "A" }), c("sourcePort", "int", { notNull: true, default: 1 }),
       c("protocol", "varchar", { length: 16, notNull: true, default: "both" }), c("targetIp", "text", { notNull: true }),
@@ -847,6 +849,9 @@ const tables: TableDef[] = [
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),
+      c("balanceDetect", "text"),
+      // 负载均衡手动切换：只用这一台出口（主机 id），空 = 自动（2.3.534）
+      c("balancePinHostId", "int"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("disabledByGroup", "bool", { notNull: true, default: false }),
       c("isRunning", "bool", { notNull: true, default: false }),
       c("lastLatencyMs", "int"), c("lastTestStatus", "text"), c("lastTestMessage", "text"), c("lastTestAt", "epoch"),

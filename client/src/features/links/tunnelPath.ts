@@ -99,6 +99,14 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
   const extraExitNames = getTunnelLoadBalanceExitNames(tunnel, hosts);
   if (extraExitNames.length > 0) {
     const allExits = getTunnelExitNames(tunnel, hosts);
+    /*
+      主出口就在「负载均衡 ×N」那几台里：最后一跳正是主出口时不再单独画它（2026-11 用户：「Po0 → jinx → 负载均衡 ×3」
+      看着像串着走了两台，其实 jinx 是三台出口之一）。入口那一个保留。
+    */
+    const lastHopId = visibleHopIds.length > 0 ? Number(visibleHopIds[visibleHopIds.length - 1]) : 0;
+    if (lastHopId > 0 && lastHopId === Number(tunnel?.exitHostId || 0) && nodes.length >= 2) {
+      nodes.pop();
+    }
     nodes.push(context.onLoadBalanceClick
       ? {
         id: "load-balance-exits",

@@ -1620,6 +1620,28 @@ function DashboardLayoutContent({
   }, [isMobile, setOpenMobile]);
 
   const pearl = uiTheme === "pearl";
+  /*
+    页面往下滚了没有：液态玻璃主题手机上顶栏是透明的（logo 直接压在壁纸上），滚起来内容会从顶栏底下
+    清清楚楚地透出来、和「NEX」叠在一起（2026-11 用户截图）。滚了就给顶栏一层磨砂，回到顶上再撤掉。
+  */
+  const [appbarScrolled, setAppbarScrolled] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setAppbarScrolled(window.scrollY > 4);
+    };
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, []);
   const appbarSearchButton = (
             <button
               type="button"
@@ -1768,7 +1790,7 @@ function DashboardLayoutContent({
         手机上顶栏也在（品牌 + 搜索 + 账户），导航仍交给底部标签栏。
       */}
       {pearl ? null : (
-      <header className="workspace-appbar">
+      <header className="workspace-appbar" data-scrolled={appbarScrolled ? "" : undefined}>
         <div className="workspace-appbar-inner">
           {!isMobile && !deepspaceTopNav ? (
             <button

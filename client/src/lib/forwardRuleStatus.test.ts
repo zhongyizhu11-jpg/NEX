@@ -280,3 +280,18 @@ test("灰点的规则说出原因：先用 Agent 报的失败原因，没有就�
     assert.equal(resolveForwardRuleNotRunningReason({ state, title: "x" }, [{ level: "error", label: "监听没起来", message: "" }]), null);
   }
 });
+
+test("负载均衡链路：主出口连不上目标、别的出口能通时标橙不标红，写清楚是哪台", () => {
+  const now = Date.now();
+  const base = { ruleEnabled: true, ruleRunning: true, groupEnabled: true, groupConfigStatus: "available" as const, latestLatencyMs: null, latestLatencyAt: now - 10_000 };
+  const switched = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 2, exitTargetNote: "3 台出口里 jinx(39.9y) 连不上目标，已切走" }, now);
+  assert.deepEqual(switched, { state: "pending", title: "3 台出口里 jinx(39.9y) 连不上目标，已切走" });
+  // 一台都通不了：照旧红
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 0, exitTargetNote: "3 台出口都连不好目标" }, now).state, "error");
+  // 主出口通、别的出口抖：橙色写出来
+  const jittery = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40, exitTargetOk: 3, exitTargetNote: "3 台出口里 jinx(39.9y) 到目标抖动 63ms，已少分" }, now);
+  assert.equal(jittery.state, "pending");
+  assert.match(jittery.title, /抖动 63ms/);
+  // 不是负载均衡链路：和以前一样
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40 }, now).state, "running");
+});

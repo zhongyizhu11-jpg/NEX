@@ -1,8 +1,11 @@
 import { LINK_SPREAD_LABELS } from "./linkTerms";
 import { proxyLoadBalanceWeights } from "./linkWeights";
+import { BALANCE_STRATEGY_LABELS } from "./loadBalance";
 
 export const EXIT_GROUP_STRATEGIES = [
   "none",
+  "auto",
+  "latency",
   "fallback",
   "round_robin",
   "random",
@@ -16,6 +19,8 @@ export type ExitGroupStrategy = (typeof EXIT_GROUP_STRATEGIES)[number];
 // 名字和线路组的分配方式同一套（shared/linkTerms.ts）。
 export const EXIT_GROUP_STRATEGY_LABELS: Record<ExitGroupStrategy, string> = {
   none: "只用第一个出口",
+  auto: `${BALANCE_STRATEGY_LABELS.auto.label} - ${BALANCE_STRATEGY_LABELS.auto.hint}`,
+  latency: `${BALANCE_STRATEGY_LABELS.latency.label} - ${BALANCE_STRATEGY_LABELS.latency.hint}`,
   fallback: `${LINK_SPREAD_LABELS.fallback.label} - ${LINK_SPREAD_LABELS.fallback.hint}`,
   round_robin: `${LINK_SPREAD_LABELS.round_robin.label} - ${LINK_SPREAD_LABELS.round_robin.hint}`,
   random: `${LINK_SPREAD_LABELS.random.label} - ${LINK_SPREAD_LABELS.random.hint}`,
@@ -44,7 +49,8 @@ export function exitGroupUsesMultipleExits(value: unknown) {
 export function exitGroupWeights(strategy: unknown, bandwidthsMbps: readonly number[]): number[] | null {
   // 「按负载」在 GOST / nginx 上没有实时负载可看：GOST 退成按带宽加权轮流，nginx 是 least_conn + 权重。
   const normalized = normalizeExitGroupStrategy(strategy);
-  if (normalized !== "weighted" && normalized !== "least_load") return null;
+  // 自动 / 延迟优先在 GOST / nginx 上同样看不到实时延迟和负载，和「按负载」一样退成按带宽加权
+  if (normalized !== "weighted" && normalized !== "least_load" && normalized !== "auto" && normalized !== "latency") return null;
   return proxyLoadBalanceWeights(bandwidthsMbps);
 }
 
@@ -54,7 +60,7 @@ export function exitGroupWeights(strategy: unknown, bandwidthsMbps: readonly num
  */
 export function exitGroupCapacities(strategy: unknown, bandwidthsMbps: readonly number[]): number[] | null {
   const normalized = normalizeExitGroupStrategy(strategy);
-  if (normalized !== "least_load" && normalized !== "ip_hash") return null;
+  if (normalized !== "least_load" && normalized !== "ip_hash" && normalized !== "auto" && normalized !== "latency") return null;
   if (bandwidthsMbps.length < 2 || bandwidthsMbps.some((value) => !(value > 0))) return null;
   return bandwidthsMbps.map((value) => Math.floor(value));
 }

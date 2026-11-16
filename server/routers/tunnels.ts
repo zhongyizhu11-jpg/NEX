@@ -40,6 +40,8 @@ import {
   tunnelParallelStreamsUnavailableReason,
 } from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
+import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { exitTargetSummaryForTunnel } from "../exitTargetHealth";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import { lossTolerantBlockerMessage, lossTolerantBlockers } from "../../shared/lossTolerantGate";
 import {
@@ -89,7 +91,18 @@ const forwardXV3InputFields = {
   v3Multiplex: z.boolean().nullable().optional(),
 };
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
-const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"]);
+const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load", "auto", "latency"]);
+/** 负载均衡的「检测与切换」（shared/loadBalance.ts），字段不全的按默认值补。 */
+const balanceDetectSchema = z.object({
+  intervalSeconds: z.number().int().min(1).max(60).optional(),
+  failThreshold: z.number().int().min(1).max(10).optional(),
+  recoverThreshold: z.number().int().min(1).max(10).optional(),
+  latencyMarginMs: z.number().int().min(10).max(2000).optional(),
+  jitterMs: z.number().int().min(5).max(1000).optional(),
+  jitterHoldSeconds: z.number().int().min(5).max(600).optional(),
+  jitterAction: z.enum(["reduce", "switch", "ignore"]).optional(),
+  slowStart: z.boolean().optional(),
+}).nullable();
 const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate", "hot_standby"]);
 const MAX_TUNNEL_HOPS = 10;
 const MAX_EXTRA_TUNNEL_EXITS = 4;
@@ -328,6 +341,14 @@ function inheritedExitGroupStrategy(group: any, requested: unknown) {
     return normalizeExitGroupStrategy(group.exitStrategy);
   }
   return normalizeTunnelLoadBalanceStrategy(requested);
+}
+
+/** 检测参数和分配方式一样：用出口组时跟出口组，否则用这条链路自己填的（和默认一样就存 null）。 */
+function inheritedBalanceDetect(group: { groupMode?: unknown; balanceDetect?: unknown } | null | undefined, requested: unknown) {
+  if (group && String(group.groupMode || "") === "exit") {
+    return serializeBalanceDetect(group.balanceDetect);
+  }
+  return serializeBalanceDetect(requested);
 }
 
 async function requireEntryGroupAccess(ctx: any, entryGroupId: number | null | undefined, requireEnabled = false) {
@@ -801,6 +822,37 @@ const tunnelCreateProcedure = protectedProcedure.use(async ({ ctx, next }) => {
 });
 
 export const tunnelsRouter = router({
+  /**
+   * 负载均衡链路每台出口到规则目标的情况（链路卡「负载均衡 ×N」弹窗用，server/exitTargetHealth.ts）。
+   * 只读内存里的快速探测结果，不查探测历史。
+   */
+  exitTargets: protectedProcedure
+    .input(z.object({ tunnelId: z.number().int().positive() }))
+    .query(async ({ input, ctx }) => {
+      const tunnel = await db.getTunnelById(input.tunnelId);
+      if (!tunnel || !await canAccessTunnelRecord(tunnel, ctx.user)) return [];
+      return exitTargetSummaryForTunnel(input.tunnelId);
+    }),
+  /**
+   * 负载均衡手动切换：只用某一台出口（hostId=null 交回自动）。
+   * 只能指定这条链路自己的出口；那台离线时下发不理它（agentHeartbeatRoute pinnedExitHostId）。
+   */
+  setExitPin: protectedProcedure
+    .input(z.object({ tunnelId: z.number().int().positive(), hostId: z.number().int().positive().nullable() }))
+    .mutation(async ({ input, ctx }) => {
+      const tunnel = await db.getTunnelById(input.tunnelId) as Record<string, unknown> | null;
+      if (!tunnel) throw new Error("链路不存在");
+      if (ctx.user.role !== "admin" && Number(tunnel.userId) !== Number(ctx.user.id)) throw new Error("无权修改这条链路");
+      const extraExitNodes = await hopRepo.getTunnelExitNodes(input.tunnelId) as Array<{ hostId?: number | null }>;
+      const exitHostIds = [Number(tunnel.exitHostId || 0), ...(extraExitNodes || []).map((node) => Number(node.hostId || 0))]
+        .filter((hostId) => hostId > 0);
+      if (input.hostId != null && !exitHostIds.includes(input.hostId)) throw new Error("这台不是这条链路的出口");
+      await db.updateTunnel(input.tunnelId, { balancePinHostId: input.hostId });
+      const entryHostIds = await getTunnelEntryTestHostIds(tunnel);
+      await refreshTunnelRuntimeHosts(input.tunnelId, [...entryHostIds, ...exitHostIds], input.hostId ? "tunnel-exit-pinned" : "tunnel-exit-unpinned", { urgent: true });
+      appendPanelLog("info", `[Tunnel] exit pin tunnel=${input.tunnelId} host=${input.hostId ?? "auto"} by user=${ctx.user.id}`);
+      return { success: true, hostId: input.hostId };
+    }),
   list: protectedProcedure.query(async ({ ctx }) => {
       const accessScope = await getLinkAccessScope(ctx.user);
       const scope = visibleTunnelQueryScope(ctx.user, accessScope);
@@ -1049,6 +1101,7 @@ export const tunnelsRouter = router({
         blockTls: z.boolean().optional().default(false),
         loadBalanceEnabled: z.boolean().optional().default(false),
         loadBalanceStrategy: tunnelLoadBalanceStrategySchema.optional().default("round_robin"),
+        balanceDetect: balanceDetectSchema.optional(),
         loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).max(MAX_EXTRA_TUNNEL_EXITS).optional(),
         hopHostIds: z.array(z.number()).max(64).optional(),
         hopConnectHosts: z.array(z.string().max(128).nullable()).max(64).optional(),
@@ -1228,6 +1281,7 @@ export const tunnelsRouter = router({
           ...forwardXV3Options,
           loadBalanceEnabled: loadBalanceEnabled && extraExitNodes.length > 0,
           loadBalanceStrategy: loadBalanceEnabled && extraExitNodes.length > 0 ? loadBalanceStrategy : "round_robin",
+          balanceDetect: loadBalanceEnabled && extraExitNodes.length > 0 ? inheritedBalanceDetect(exitGroup, input.balanceDetect) : null,
           listenPort,
           mimicPort,
           // 流量倍率决定按多少计入流量配额，只有管理员能改：普通用户以前能把自己的隧道
@@ -1334,6 +1388,7 @@ export const tunnelsRouter = router({
         blockTls: z.boolean().optional(),
         loadBalanceEnabled: z.boolean().optional(),
         loadBalanceStrategy: tunnelLoadBalanceStrategySchema.optional(),
+        balanceDetect: balanceDetectSchema.optional(),
         loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).max(MAX_EXTRA_TUNNEL_EXITS).optional(),
         isEnabled: z.boolean().optional(),
         hopHostIds: z.array(z.number()).max(64).optional(),
@@ -1654,6 +1709,21 @@ export const tunnelsRouter = router({
         if ((data as any).loadBalanceEnabled && nextExitGroup) {
           (data as any).loadBalanceStrategy = inheritedExitGroupStrategy(nextExitGroup, (data as any).loadBalanceStrategy);
         }
+        // 检测参数：没开负载均衡就清掉；用出口组跟出口组；这次没传就保留原来的。
+        const balanceData = data as { loadBalanceEnabled?: unknown; balanceDetect?: string | null };
+        const balanceGroup = nextExitGroup as { groupMode?: unknown; balanceDetect?: unknown } | null | undefined;
+        const requestedDetect = (input as { balanceDetect?: unknown }).balanceDetect;
+        if (!balanceData.loadBalanceEnabled) {
+          balanceData.balanceDetect = null;
+        } else if (balanceGroup && String(balanceGroup.groupMode || "") === "exit") {
+          balanceData.balanceDetect = inheritedBalanceDetect(balanceGroup, null);
+        } else if (requestedDetect !== undefined) {
+          balanceData.balanceDetect = serializeBalanceDetect(requestedDetect);
+        } else {
+          delete balanceData.balanceDetect;
+        }
+        const balanceDetectChanged = balanceData.balanceDetect !== undefined
+          && String(balanceData.balanceDetect ?? "") !== String((tunnel as { balanceDetect?: string | null }).balanceDetect ?? "");
         if ((data as any).isEnabled !== undefined) (data as any).disabledByGroup = false;
         const hopChanged = (requestedHopHostIds !== undefined || (hopConnectHostsProvided && existingHopHostIds.length >= 3))
           ? (
@@ -1674,6 +1744,7 @@ export const tunnelsRouter = router({
         const loadBalanceChanged = (data as any).loadBalanceEnabled !== undefined
           && dbBool((data as any).loadBalanceEnabled) !== dbBool((tunnel as any).loadBalanceEnabled)
           || (data as any).loadBalanceStrategy !== normalizeTunnelLoadBalanceStrategy((tunnel as any).loadBalanceStrategy)
+          || balanceDetectChanged
           || existingExtraSignature !== nextExtraSignature;
         const mimicActivationChanged = nextMimicEnabled && nextTunnelEnabled && (
           !isTunnelForwardXMode((tunnel as any).mode)

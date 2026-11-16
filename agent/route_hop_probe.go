@@ -1,7 +1,9 @@
 package main
 
 import (
+	"math"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +49,54 @@ type routeHopProbeState struct {
 	known      bool
 	latencyMs  float64
 	lastResult time.Time
+	// 最近 30 次的结果（2.2.259 起）：报中位数、抖动、丢包，面板拿它显示「延迟 · 抖动」、判不稳。
+	samples [routeHopProbeWindow]routeHopSample
+	count   int
+	pos     int
+}
+
+type routeHopSample struct {
+	ms float64
+	ok bool
+}
+
+const routeHopProbeWindow = 30
+
+// stats：中位延迟、抖动（相邻两次成功的差的平均）、丢包率（0～1）。
+func (s *routeHopProbeState) stats() (median, jitter, loss float64) {
+	oks := make([]float64, 0, s.count)
+	failures := 0
+	previous := -1.0
+	diffSum, diffs := 0.0, 0
+	for i := 0; i < s.count; i++ {
+		sample := s.samples[(s.pos-s.count+i+routeHopProbeWindow)%routeHopProbeWindow]
+		if !sample.ok {
+			failures++
+			continue
+		}
+		oks = append(oks, sample.ms)
+		if previous >= 0 {
+			diffSum += math.Abs(sample.ms - previous)
+			diffs++
+		}
+		previous = sample.ms
+	}
+	if s.count > 0 {
+		loss = float64(failures) / float64(s.count)
+	}
+	if len(oks) > 0 {
+		sort.Float64s(oks)
+		middle := len(oks) / 2
+		if len(oks)%2 == 0 {
+			median = (oks[middle-1] + oks[middle]) / 2
+		} else {
+			median = oks[middle]
+		}
+	}
+	if diffs > 0 {
+		jitter = diffSum / float64(diffs)
+	}
+	return median, jitter, loss
 }
 
 type routeHopProbeRunner struct {
@@ -170,6 +220,11 @@ func (r *routeHopProbeRunner) record(state *routeHopProbeState, ok bool, latency
 	defer r.mu.Unlock()
 	state.running = false
 	state.lastResult = r.now()
+	state.samples[state.pos] = routeHopSample{ms: latencyMs, ok: ok}
+	state.pos = (state.pos + 1) % routeHopProbeWindow
+	if state.count < routeHopProbeWindow {
+		state.count++
+	}
 	if ok {
 		state.oks++
 		state.fails = 0
@@ -218,6 +273,13 @@ func (r *routeHopProbeRunner) report() []map[string]any {
 		item := map[string]any{"ruleId": state.ruleID, "down": state.down}
 		if !state.down && state.latencyMs > 0 {
 			item["latencyMs"] = state.latencyMs
+		}
+		// 2.2.259 起多报中位数、抖动、丢包（面板老版本不认这几个字段，照旧只看 down / latencyMs）。
+		if median, jitter, loss := state.stats(); state.count > 0 {
+			item["medianMs"] = math.Round(median*10) / 10
+			item["jitterMs"] = math.Round(jitter*10) / 10
+			item["lossPct"] = math.Round(loss*1000) / 10
+			item["samples"] = state.count
 		}
 		results = append(results, item)
 	}

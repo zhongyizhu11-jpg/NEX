@@ -1571,6 +1571,9 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 		}
 	}
 	for _, probe := range ruleProbes {
+		if probe.FastOnly {
+			continue
+		}
 		if task, ok := buildExplicitRuleLatencyProbeTask(probe); ok {
 			ruleTasks = append(ruleTasks, task)
 		}

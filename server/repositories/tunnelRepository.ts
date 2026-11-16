@@ -33,6 +33,7 @@ import { mapWithConcurrency } from "../asyncPool";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
+import { serializeBalanceDetect } from "../../shared/loadBalance";
 import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { noteTunnelRunningRestored } from "../agentHeartbeatGate";
@@ -2517,6 +2518,7 @@ export async function syncTunnelExitGroupEndpoints(
   tunnelInput: any,
   members: ExitGroupTunnelMember[],
   strategyInput: unknown,
+  balanceDetectInput?: unknown,
 ) {
   assertOutsideDatabaseTransaction("syncTunnelExitGroupEndpoints");
   const tunnelId = Number(tunnelInput?.id || 0);
@@ -2676,9 +2678,15 @@ export async function syncTunnelExitGroupEndpoints(
       // SQLite/JSON-backed legacy rows).  `!!"0"` is true, so normalize the
       // persisted value before deciding whether the runtime state changed.
       const loadBalanceChanged = dbBool(currentTunnel.loadBalanceEnabled) !== (nextNodes.length > 0);
+      // 出口组的「检测与切换」跟着分配方式一起带到链路上（没传就保留链路原来的）。
+      const nextBalanceDetect = balanceDetectInput === undefined
+        ? (currentTunnel.balanceDetect ?? null)
+        : nextNodes.length > 0 ? serializeBalanceDetect(balanceDetectInput) : null;
+      const balanceDetectChanged = String(nextBalanceDetect ?? "") !== String(currentTunnel.balanceDetect ?? "");
       const changed = endpointsChanged
         || String(currentTunnel.loadBalanceStrategy || "") !== strategy
-        || loadBalanceChanged;
+        || loadBalanceChanged
+        || balanceDetectChanged;
 
       await updateTunnel(tunnelId, {
         exitHostId: primary.hostId,
@@ -2688,6 +2696,7 @@ export async function syncTunnelExitGroupEndpoints(
         networkType,
         loadBalanceEnabled: nextNodes.length > 0,
         loadBalanceStrategy: strategy,
+        balanceDetect: nextBalanceDetect,
         ...(changed ? { isRunning: false } : {}),
       } as any);
 
@@ -2716,6 +2725,7 @@ export async function syncTunnelExitGroupEndpoints(
         networkType,
         loadBalanceEnabled: nextNodes.length > 0,
         loadBalanceStrategy: strategy,
+        balanceDetect: nextBalanceDetect,
         ...(changed ? { isRunning: false } : {}),
       };
       if (String(refreshedTunnel.mode || "").toLowerCase() === "forwardx"

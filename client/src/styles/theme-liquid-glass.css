@@ -500,6 +500,21 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
   html.dark[data-ui-theme="liquid-glass"] .workspace-appbar::before {
     background: linear-gradient(to bottom, rgb(0 0 0 / 55%) 0%, rgb(0 0 0 / 30%) 55%, transparent 100%);
   }
+  /*
+    滚起来以后（DashboardLayout 给顶栏打 data-scrolled）：透明顶栏下面会清清楚楚地透出滚过去的内容，看着像
+    「隧道转发」压在「NEX」上（2026-11 用户截图）。滚了就铺一层磨砂玻璃，回到顶上恢复压在壁纸上的样子。
+  */
+  /* 底色自己给足（这个主题的 --fx-glass 只有 15% 白，靠它挡不住底下的字）；有毛玻璃的浏览器再叠一层模糊 */
+  html[data-ui-theme="liquid-glass"] .workspace-appbar[data-scrolled] {
+    background: rgb(255 255 255 / 80%);
+    -webkit-backdrop-filter: saturate(170%) blur(18px);
+    backdrop-filter: saturate(170%) blur(18px);
+    box-shadow: 0 1px 0 var(--fx-stroke-weak);
+    transition: background-color 160ms ease, box-shadow 160ms ease;
+  }
+  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar[data-scrolled] {
+    background: rgb(18 22 30 / 82%);
+  }
   html[data-ui-theme="liquid-glass"] .workspace-appbar-inner { padding-inline: 16px; gap: 8px; }
   html[data-ui-theme="liquid-glass"] .workspace-appbar-brand { padding: 0 8px 0 0; gap: 10px; }
   html[data-ui-theme="liquid-glass"] .workspace-appbar-brand img,

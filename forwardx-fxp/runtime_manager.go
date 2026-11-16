@@ -252,7 +252,7 @@ func buildEntryPlans(entries []config, grouped bool) ([]tcpListenPlan, []udpServ
 		res := &entryResources{
 			cfg:        entry,
 			gate:       newConnGate(entry.MaxConnections, entry.MaxIPs),
-			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant, transport: v3TransportIdentity(entry)}, entry.ExitStrategy),
+			selector:   newExitEndpointSelector(entry.Exits, exitEndpoint{Host: entry.ExitHost, Port: entry.ExitPort, UDPPort: entry.UDPExitPort, Key: entry.Key, lossTolerant: entry.LossTolerant, transport: v3TransportIdentity(entry)}, entry.ExitStrategy, entry.BalanceDetect),
 			inLimiter:  newLimiter(entry.LimitIn),
 			outLimiter: newLimiter(entry.LimitOut),
 		}

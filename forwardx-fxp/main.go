@@ -64,6 +64,13 @@ type helloFrame struct {
 	// MultipathLegStandby（2.2.137 起）：这一路是热备腿（见 multipathLeg.Standby）。回程是出口在
 	// 调度，所以也要跟着 hello 带过去；老出口不认识就当普通腿，只有去程按热备走。
 	MultipathLegStandby bool `json:"multipathLegStandby,omitempty"`
+	// TargetStatus（2.2.142 起）：入口要出口连完目标后先回一帧「连上了没有、用了多久」（见 target_health.go）。
+	// 连不上时入口当场换下一台出口、把已经发出的内容重放过去。老出口不认识这个字段，照旧不回。
+	TargetStatus bool `json:"targetStatus,omitempty"`
+	// TargetProbe（2.2.142 起）：只探「出口连得上目标吗」：出口连一下目标、回一帧结果就关，不转发任何东西。
+	TargetProbe bool `json:"targetProbe,omitempty"`
+	// TargetDialTimeoutMs：入口还有别的出口可换时让出口连目标别等满 10 秒（默认 4 秒），连不上就早点回话。
+	TargetDialTimeoutMs int `json:"targetDialTimeoutMs,omitempty"`
 	// targetLiteral 不上线：出口核对过目标之后记下「配置里写的就是这个 IP」。
 	// 写死的 IP 是面板明确配的（比如出口本机调度器的 127.0.0.1），照拨；写的是
 	// 域名时，解析出来落到环回、链路本地这些地址上就不拨（见 dialExitTarget）。
@@ -235,7 +242,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.141"
+	fxpRuntimeVersion             = "2.2.142"
 	fxpFallbackRetry              = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -350,6 +357,8 @@ type exitEndpointSelector struct {
 	probed atomic.Bool
 	// random 是 random / least_load 策略用的随机数来源；nil 用 crypto/rand。测试里换成固定种子。
 	random func() (uint64, error)
+	// target：每台出口到这条规则目标的健康（target_health.go）。只有几台出口、而且有出口会回报结果时才有。
+	target *targetAwareness
 }
 
 func (s *exitEndpointSelector) randomValue() (uint64, error) {
@@ -440,6 +449,10 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 			if endpoints[at].CapacityMbps == 0 {
 				endpoints[at].CapacityMbps = endpoint.CapacityMbps
 			}
+			// 「会回报连目标的结果」也一样：只写在 exits 里那一份上。
+			if endpoint.TargetStatus {
+				endpoints[at].TargetStatus = true
+			}
 			return
 		}
 		seen[key] = len(endpoints)
@@ -452,8 +465,12 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 	return endpoints
 }
 
-func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strategy string) *exitEndpointSelector {
+func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strategy string, detect ...*balanceDetectConfig) *exitEndpointSelector {
 	endpoints := normalizeExitEndpoints(exits, fallback)
+	var detectConfig *balanceDetectConfig
+	if len(detect) > 0 {
+		detectConfig = detect[0]
+	}
 	states := make([]*fxpEndpointState, len(endpoints))
 	loads := make([]*fxpHostLoad, len(endpoints))
 	for i, endpoint := range endpoints {
@@ -467,6 +484,7 @@ func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strate
 		current:    make([]int, len(endpoints)),
 		loads:      loads,
 		capacities: endpointCapacities(endpoints),
+		target:     newTargetAwareness(endpoints, detectConfig),
 	}
 }
 
@@ -487,7 +505,8 @@ func (s *exitEndpointSelector) activate(cfg config) func() {
 		return func() {}
 	}
 	s.probed.Store(true)
-	releases := make([]func(), 0, len(s.states))
+	releases := make([]func(), 0, len(s.states)+1)
+	releases = append(releases, registerTargetSelector(s, cfg))
 	for i, state := range s.states {
 		dialCfg := cfg
 		if s.endpoints[i].Key != "" {
@@ -580,14 +599,30 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 	// 没有后台探测可言。真把它去掉，一次 DNS 抖动就能把那条规则的出口永久停用。
 	tier := func(index int) int { return tiers[index] }
 	if s.strategy == "fallback" {
+		// 按出口自己的健康分档；同一档里再按「到目标」挑：坏的、不稳的、刚恢复没稳够 5 分钟的先跳过
+		// （后面还有好的时）。都不行就照原来的顺序。
 		for wanted := 1; wanted <= 3; wanted++ {
+			first := -1
 			for i := range s.endpoints {
 				if excluded != nil && excluded[i] {
 					continue
 				}
 				if wanted == 3 || tier(i) == wanted {
-					return s.endpoints[i], i, true
+					if first < 0 {
+						first = i
+					}
+					if s.fallbackUsableLocked(i, now) {
+						return s.endpoints[i], i, true
+					}
 				}
+			}
+			if first >= 0 && (!s.targetAware() || wanted == 3) {
+				return s.endpoints[first], first, true
+			}
+		}
+		for i := range s.endpoints {
+			if excluded == nil || !excluded[i] {
+				return s.endpoints[i], i, true
 			}
 		}
 		return exitEndpoint{}, -1, false
@@ -596,9 +631,9 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 	if len(candidates) == 0 {
 		return exitEndpoint{}, -1, false
 	}
+	factors := s.targetFactorsLocked(candidates, now)
 	if s.strategy == "random" {
-		if value, err := s.randomValue(); err == nil {
-			index := candidates[int(value%uint64(len(candidates)))]
+		if index, ok := s.pickRandomWeighted(candidates, factors); ok {
 			return s.endpoints[index], index, true
 		}
 	}
@@ -608,21 +643,97 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 			selectionKey = strings.TrimSpace(selectionKeys[0])
 		}
 		if selectionKey != "" {
-			index := s.pickRendezvous(candidates, selectionKey, now)
+			// 按访客固定看重「别换」：只躲开坏了的（和「切走」的不稳的），少分的照旧固定。
+			sticky := candidates
+			if factors != nil {
+				sticky = make([]int, 0, len(candidates))
+				for _, index := range candidates {
+					if factors[index] > 0 && !(s.endpointReportsTarget(index) && s.target.health[index].unstable && s.target.detect.action == "switch") {
+						sticky = append(sticky, index)
+					}
+				}
+				if len(sticky) == 0 {
+					sticky = candidates
+				}
+			}
+			index := s.pickRendezvous(sticky, selectionKey, now)
 			return s.endpoints[index], index, true
 		}
 	}
 	if s.strategy == "weighted" {
-		index := s.pickWeighted(candidates, now)
+		index := s.pickWeighted(filterByFactor(candidates, factors), now, factors)
 		return s.endpoints[index], index, true
 	}
 	if s.strategy == "least_load" {
-		index := s.pickLeastLoad(candidates, now)
+		index := s.pickLeastLoad(filterByFactor(candidates, factors), now, factors, false)
 		return s.endpoints[index], index, true
 	}
-	index := candidates[s.next%len(candidates)]
+	if s.strategy == "auto" {
+		index := s.pickLeastLoad(filterByFactor(candidates, factors), now, factors, true)
+		return s.endpoints[index], index, true
+	}
+	if s.strategy == "latency" {
+		index := s.pickLowestLatency(filterByFactor(candidates, factors), now, factors)
+		return s.endpoints[index], index, true
+	}
+	// 轮流：轮到的那台按它的几成收（少分的四次里收一次），没收就看下一台。
+	usable := filterByFactor(candidates, factors)
+	for attempt := 0; attempt < len(usable)*4; attempt++ {
+		index := usable[s.next%len(usable)]
+		s.next = (s.next + 1) % 1000000
+		if factors == nil || factors[index] >= 1 || s.acceptShare(factors[index]) {
+			return s.endpoints[index], index, true
+		}
+	}
+	index := usable[s.next%len(usable)]
 	s.next = (s.next + 1) % 1000000
 	return s.endpoints[index], index, true
+}
+
+// acceptShare：按几成的概率收下。调用方持锁。
+func (s *exitEndpointSelector) acceptShare(share float64) bool {
+	if share >= 1 {
+		return true
+	}
+	if share <= 0 {
+		return false
+	}
+	value, err := s.randomValue()
+	if err != nil {
+		return true
+	}
+	return float64(value%1_000_000)/1_000_000 < share
+}
+
+// pickRandomWeighted：随机挑一台，少分的按它的几成算。调用方持锁。
+func (s *exitEndpointSelector) pickRandomWeighted(candidates []int, factors map[int]float64) (int, bool) {
+	usable := filterByFactor(candidates, factors)
+	total := 0.0
+	for _, index := range usable {
+		total += factorOf(factors, index)
+	}
+	value, err := s.randomValue()
+	if err != nil || total <= 0 {
+		return 0, false
+	}
+	target := float64(value%1_000_000) / 1_000_000 * total
+	for _, index := range usable {
+		target -= factorOf(factors, index)
+		if target < 0 {
+			return index, true
+		}
+	}
+	return usable[len(usable)-1], true
+}
+
+func factorOf(factors map[int]float64, index int) float64 {
+	if factors == nil {
+		return 1
+	}
+	if value, ok := factors[index]; ok {
+		return value
+	}
+	return 1
 }
 
 // candidatesLocked：最好的那一档里没被排除的出口（档位见 pick 里的说明）。调用方持锁。
@@ -680,7 +791,11 @@ func (s *exitEndpointSelector) pickSessionAffinity(excluded map[int]bool, sessio
 // 只在候选里算：坏了的出口这一轮不加计数，恢复后也不会一口气补发欠它的连接。调用方持锁。
 // 刚从挂掉恢复的出口在 60 秒里按比例慢慢加到满份（exit_load.go 的慢启动）：权重统一乘 10 再乘系数，
 // 不在慢启动里的时候序列和不乘一模一样。
-func (s *exitEndpointSelector) pickWeighted(candidates []int, now time.Time) int {
+func (s *exitEndpointSelector) pickWeighted(candidates []int, now time.Time, factors ...map[int]float64) int {
+	var factorMap map[int]float64
+	if len(factors) > 0 {
+		factorMap = factors[0]
+	}
 	if len(s.current) != len(s.endpoints) {
 		s.current = make([]int, len(s.endpoints))
 	}
@@ -691,7 +806,7 @@ func (s *exitEndpointSelector) pickWeighted(candidates []int, now time.Time) int
 			weight = 1
 		}
 		if index < len(s.loads) {
-			weight = int(math.Max(1, math.Round(float64(weight)*10*s.loads[index].snapshot(now).slowStart)))
+			weight = int(math.Max(1, math.Round(float64(weight)*10*s.loads[index].snapshot(now).slowStart*factorOf(factorMap, index))))
 		}
 		total += weight
 		s.current[index] += weight
@@ -1351,6 +1466,13 @@ func handleEntryTCP(client net.Conn, cfg config, selector *exitEndpointSelector,
 		if err := <-connectDone; err != nil {
 			return fmt.Errorf("dial exit: %w", err)
 		}
+		// 有几台会回报的出口时，让出口连完目标先回话（target_health.go）：连不上当场换下一台。
+		if selector.targetAware() {
+			helloValues.TargetStatus = true
+			helloValues.TargetDialTimeoutMs = int(fxpTargetDialTimeoutDefault / time.Millisecond)
+			selected.requestTargetStatus()
+			selector.noteTargetUse(time.Now())
+		}
 		hello, _ := json.Marshal(helloValues)
 		frames := [][]byte{hello}
 		if len(first) > 0 {
@@ -1738,6 +1860,23 @@ func handleExitBusiness(sec *secureConn, cfg config, in *fxpInbound) error {
 	if hello.Network == "probe" {
 		return nil
 	}
+	if hello.TargetProbe {
+		// 「出口连得上目标吗」：一样按目标表核对，连一下就回话、就关。
+		if hello.TargetIP == "" {
+			hello.TargetIP = cfg.TargetIP
+		}
+		if hello.TargetPort <= 0 {
+			hello.TargetPort = cfg.TargetPort
+		}
+		if cfg, err = in.currentConfig(cfg); err != nil {
+			return err
+		}
+		if err := authorizeExitTarget(cfg, &hello); err != nil {
+			_ = writeTargetStatus(sec, false, 0, err)
+			return nil
+		}
+		return handleExitTargetProbe(sec, hello, cfg)
+	}
 	if hello.TargetIP == "" {
 		hello.TargetIP = cfg.TargetIP
 	}
@@ -1783,8 +1922,16 @@ func handleExitTCP(sec *secureConn, hello helloFrame, cfg config) error {
 // session and a multipath session when the entry striped it over several legs.
 func relayExitTCPToTarget(sec frameConn, hello helloFrame, cfg config) error {
 	dialStarted := time.Now()
-	target, err := dialExitTarget(hello, 10*time.Second)
-	recordConnStage(cfg, hello.TunnelID, hello.RuleID, "exit", "target", connStatsEndpoint(hello.TargetIP, hello.TargetPort), time.Since(dialStarted), err)
+	target, err := dialExitTargetFor(cfg, hello, exitTargetDialTimeout(hello))
+	dialElapsed := time.Since(dialStarted)
+	recordConnStage(cfg, hello.TunnelID, hello.RuleID, "exit", "target", connStatsEndpoint(hello.TargetIP, hello.TargetPort), dialElapsed, err)
+	if hello.TargetStatus {
+		// 入口在等这一帧：连上了它就提交这条会话，连不上它当场换下一台出口重放。
+		if statusErr := writeTargetStatus(sec, err == nil, dialElapsed, err); statusErr != nil && err == nil {
+			_ = target.Close()
+			return statusErr
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("dial target: %w", err)
 	}

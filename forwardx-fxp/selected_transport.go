@@ -41,8 +41,14 @@ type selectedTransport struct {
 	endpoint  exitEndpoint
 	index     int
 	attempted map[int]bool
-	// committed：当前连接已经确认过握手（池里的连接天生如此）。
-	committed   bool
+	// committed：这条会话不会再换出口了 —— 握手确认过（池里的连接天生如此），而且要等的「连目标的结果」
+	// 也到了（见 target_health.go）。之前发出去的内容都留在 replay 里，换出口时重放。
+	committed bool
+	// acked：握手确认过了。statusPending：还在等出口回「连上目标没有」（只对会回报的出口等）。
+	acked         bool
+	statusPending bool
+	// wantStatus：这条会话的 hello 带了 targetStatus（入口有几台会回报的出口时）。
+	wantStatus  bool
 	replay      [][]byte
 	replayBytes int
 	overflow    bool
@@ -174,7 +180,10 @@ func (t *selectedTransport) useLocked(conn net.Conn, sec *secureConn, endpoint e
 	t.sec = sec
 	t.endpoint = endpoint
 	t.index = index
-	t.committed = committed
+	t.acked = committed
+	// 这台出口会回「连上目标没有」时，结果到之前都不算提交：内容留着，连不上就换下一台重放。
+	t.statusPending = t.wantStatus && t.selector.endpointReportsTarget(index)
+	t.committed = committed && !t.statusPending
 	// 换了端点（失败重放）就把活动连接从旧主机挪到新主机。
 	t.load.close()
 	t.load = nil
@@ -194,11 +203,57 @@ func (t *selectedTransport) handleAck(sec *secureConn, index int, err error) {
 	t.selector.markHealthy(index)
 	t.mu.Lock()
 	if t.sec == sec {
+		t.acked = true
+		if !t.statusPending {
+			t.committed = true
+			t.replay = nil
+			t.replayBytes = 0
+		}
+	}
+	t.mu.Unlock()
+}
+
+// requestTargetStatus：hello 里带了 targetStatus。在 start 之前调，按当前这台出口会不会回报决定要不要等。
+func (t *selectedTransport) requestTargetStatus() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.wantStatus = true
+	t.statusPending = t.selector.endpointReportsTarget(t.index)
+	if t.statusPending {
+		t.committed = false
+	}
+}
+
+// takeTargetStatusLocked 看刚读到的第一帧是不是出口回的「连目标的结果」。是就从 frames 里拿掉；
+// 连上了就提交这条会话，连不上返回错误（调用方据此换出口重放）。调用方持锁。
+func (t *selectedTransport) takeTargetStatusLocked(frames [][]byte, from int) ([][]byte, error) {
+	if !t.statusPending || len(frames) <= from {
+		return frames, nil
+	}
+	t.statusPending = false
+	status, ok := decodeTargetStatus(frames[from])
+	if !ok {
+		// 标了会回报、却直接来了数据：当它没回，照常走。
+		if t.acked {
+			t.committed = true
+			t.replay = nil
+			t.replayBytes = 0
+		}
+		return frames, nil
+	}
+	frames = append(frames[:from], frames[from+1:]...)
+	elapsed := time.Duration(status.Ms) * time.Millisecond
+	index := t.index
+	t.selector.observeTarget(index, status.OK, elapsed)
+	if !status.OK {
+		return frames, &targetStatusError{message: status.Error}
+	}
+	if t.acked {
 		t.committed = true
 		t.replay = nil
 		t.replayBytes = 0
 	}
-	t.mu.Unlock()
+	return frames, nil
 }
 
 // start 发出 hello（以及可选的首包）。流水线握手的连接上，握手会和它们合成一个段。
@@ -320,18 +375,48 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 		}
 		frames, err := sec.readFrames(dst, max)
 		if err == nil {
+			t.mu.Lock()
+			if t.sec == sec && t.statusPending {
+				var statusErr error
+				frames, statusErr = t.takeTargetStatusLocked(frames, len(dst))
+				if statusErr != nil {
+					// 这台出口连不上目标：换下一台，把发出去的内容重放过去。
+					failoverErr := t.failoverLocked(statusErr)
+					t.mu.Unlock()
+					if failoverErr != nil {
+						return dst, failoverErr
+					}
+					continue
+				}
+				if len(frames) == len(dst) {
+					// 这一批只有那一帧结果：接着读真正的数据。
+					t.mu.Unlock()
+					continue
+				}
+			}
+			load := t.load
+			t.mu.Unlock()
 			size := 0
 			for _, frame := range frames[len(dst):] {
 				size += len(frame)
 			}
-			t.mu.Lock()
-			load := t.load
-			t.mu.Unlock()
 			load.addBytes(size)
 			return frames, nil
 		}
 		var ackErr *fxpAckError
 		if !errors.As(err, &ackErr) {
+			t.mu.Lock()
+			// 等结果的时候出口把连接断了（出口进程没了之类）：还能换就换一台重放。
+			if t.sec == sec && t.statusPending && !isClosedErr(err) {
+				t.statusPending = false
+				failoverErr := t.failoverLocked(err)
+				t.mu.Unlock()
+				if failoverErr == nil {
+					continue
+				}
+				return dst, failoverErr
+			}
+			t.mu.Unlock()
 			return dst, err
 		}
 		t.mu.Lock()

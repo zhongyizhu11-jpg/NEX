@@ -251,29 +251,44 @@ func endpointCapacities(endpoints []exitEndpoint) []float64 {
 // pickLeastLoad：「按负载」。分数 = (最近流量 + 刚开的连接 × 每条连接的估计流量) ÷ (分量 × 慢启动系数) × 延迟系数，
 // 挑分数最小的。候选多于 3 个时用「随机挑两个比一比」（P2C）：好几台入口各自看到的负载有延迟，
 // 全都去抢「看起来最闲」的那一台反而会把它压垮。调用方持锁。
-func (s *exitEndpointSelector) pickLeastLoad(candidates []int, now time.Time) int {
+//
+// factors：到目标的健康折算（target_health.go，少分的按几成算）。endToEnd（「自动」）：延迟按「入口到出口的握手
+// + 出口到目标的中位数 + 抖动」算整条，门槛用面板设的「比最快的慢多少就少分」；「按负载」只看到出口的握手。
+func (s *exitEndpointSelector) pickLeastLoad(candidates []int, now time.Time, factors map[int]float64, endToEnd bool) int {
 	if len(candidates) == 1 {
 		return candidates[0]
 	}
 	snaps := make(map[int]fxpHostLoadSnapshot, len(candidates))
+	latencies := make(map[int]float64, len(candidates))
 	minLatency := 0.0
+	tolerance := fxpLatencyTolerance
+	if endToEnd && s.targetAware() {
+		tolerance = s.target.detect.margin
+	}
 	for _, index := range candidates {
 		snap := s.loads[index].snapshot(now)
 		snaps[index] = snap
-		if snap.latency > 0 && (minLatency == 0 || snap.latency < minLatency) {
-			minLatency = snap.latency
+		latency := snap.latency
+		if endToEnd {
+			if median, jitter := s.targetLatencyLocked(index); median > 0 {
+				latency += median + jitter
+			}
+		}
+		latencies[index] = latency
+		if latency > 0 && (minLatency == 0 || latency < minLatency) {
+			minLatency = latency
 		}
 	}
 	perConn := fxpLoadPerConn()
 	cost := func(index int) float64 {
 		snap := snaps[index]
-		capacity := s.capacities[index] * snap.slowStart
+		capacity := s.capacities[index] * snap.slowStart * factorOf(factors, index)
 		if capacity <= 0 {
 			capacity = fxpSlowStartMin
 		}
 		value := (snap.rate + perConn*(snap.recent+1)) / capacity
-		if minLatency > 0 && snap.latency > 0 && snap.latency-minLatency > fxpLatencyTolerance {
-			value *= math.Sqrt(snap.latency / minLatency)
+		if latency := latencies[index]; minLatency > 0 && latency > 0 && latency-minLatency > tolerance {
+			value *= math.Sqrt(latency / minLatency)
 		}
 		return value
 	}
@@ -296,6 +311,43 @@ func (s *exitEndpointSelector) pickLeastLoad(candidates []int, now time.Time) in
 		return second
 	}
 	return first
+}
+
+// pickLowestLatency：「延迟优先」。整条延迟（入口到出口的握手 + 出口到目标的中位数 + 抖动）最低的那台，
+// 和它差不到门槛的几台一起按负载分（不全压在一台上，也不在几毫秒的差别上来回跳）。调用方持锁。
+func (s *exitEndpointSelector) pickLowestLatency(candidates []int, now time.Time, factors map[int]float64) int {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	margin := fxpLatencyTolerance
+	if s.targetAware() {
+		margin = s.target.detect.margin
+	}
+	scores := make(map[int]float64, len(candidates))
+	best := 0.0
+	for _, index := range candidates {
+		score := s.loads[index].snapshot(now).latency
+		if median, jitter := s.targetLatencyLocked(index); median > 0 {
+			score += median + jitter
+		}
+		scores[index] = score
+		if score > 0 && (best == 0 || score < best) {
+			best = score
+		}
+	}
+	if best == 0 {
+		return s.pickLeastLoad(candidates, now, factors, false)
+	}
+	near := make([]int, 0, len(candidates))
+	for _, index := range candidates {
+		if score := scores[index]; score > 0 && score-best <= margin {
+			near = append(near, index)
+		}
+	}
+	if len(near) == 0 {
+		near = candidates
+	}
+	return s.pickLeastLoad(near, now, factors, false)
 }
 
 // pickByCapacity 按分量随机挑一个（跳过 skip）。

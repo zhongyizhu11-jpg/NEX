@@ -243,11 +243,12 @@ export const nginxUpstreamBlock = (
   const strategy = cleanEndpoints.length > 1 ? String(strategyRaw || "round_robin") : "round_robin";
   const lines = [`  upstream ${name} {`];
   if (strategy === "random") lines.push("    random;");
-  else if (strategy === "least_conn" || strategy === "least_load") lines.push("    least_conn;");
+  // 自动 / 延迟优先：nginx 看不到延迟，和「按负载」一样用 least_conn + 带宽权重
+  else if (strategy === "least_conn" || strategy === "least_load" || strategy === "auto" || strategy === "latency") lines.push("    least_conn;");
   else if (strategy === "ip_hash") lines.push("    hash $remote_addr consistent;");
   cleanEndpoints.forEach((endpoint, index) => {
     const backup = strategy === "fallback" && index > 0 ? " backup" : "";
-    const weight = (strategy === "weighted" || strategy === "least_load") && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
+    const weight = (strategy === "weighted" || strategy === "least_load" || strategy === "auto" || strategy === "latency") && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
     lines.push(`    server ${endpoint.addr}${weight} max_fails=2 fail_timeout=10s${backup};`);
   });
   lines.push("  }");
