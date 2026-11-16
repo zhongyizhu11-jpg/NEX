@@ -1433,7 +1433,7 @@ agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Respon
     const numberOrNull = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : null);
     const results = raw.slice(0, 2048).flatMap((item) => {
       if (!item || typeof item !== "object") return [];
-      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown };
+      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; minMs?: unknown; source?: unknown; conns?: unknown };
       const ruleId = Number(record.ruleId);
       if (!Number.isInteger(ruleId) || ruleId <= 0 || typeof record.down !== "boolean") return [];
       return [{
@@ -1445,6 +1445,10 @@ agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Respon
         jitterMs: numberOrNull(record.jitterMs),
         lossPct: numberOrNull(record.lossPct),
         samples: numberOrNull(record.samples),
+        // Agent 2.2.260 起：最低延迟、来源（traffic = 真实连接的内核 RTT / probe = 主动探测）、活跃连接数
+        minMs: numberOrNull(record.minMs),
+        source: record.source === "traffic" || record.source === "probe" ? record.source : null,
+        conns: numberOrNull(record.conns),
       }];
     });
     const hostName = String((host as { name?: unknown }).name || "");

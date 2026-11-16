@@ -5508,11 +5508,19 @@ function TunnelsContent() {
           const latency = low != null && high != null && high - low >= 5 ? `目标 ${low}–${high}ms`
             : item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
           const jitter = item.jitterMs != null ? ` · 抖动 ${Math.round(item.jitterMs)}ms` : "";
+          // 第二行：跟平时比（2.3.536，按每台出口、每条规则自己的平时值），数据从哪来
+          const sourceText = item.source === "traffic" ? "真实流量" : item.source === "probe" ? "探测" : "";
+          const sub = [
+            item.slowerMs != null ? `比平时慢 ${Math.round(item.slowerMs)}ms`
+              : item.baselineMs == null ? ""
+                : item.baselineRules > 1 ? "跟平时差不多" : `平时 ${Math.round(item.baselineMs)}ms`,
+            sourceText,
+          ].filter(Boolean).join(" · ") || null;
           if (item.unstable > 0) {
             const loss = item.lossPct != null && item.lossPct >= 10 ? ` · 丢包 ${Math.round(item.lossPct)}%` : "";
-            return { tone: "warn" as const, text: `${latency}${jitter}${loss} · 不稳定` };
+            return { tone: "warn" as const, text: `${latency}${jitter}${loss} · 不稳定`, sub };
           }
-          return { tone: "ok" as const, text: `${latency}${jitter}` };
+          return { tone: item.slowerMs != null ? "warn" as const : "ok" as const, text: `${latency}${jitter}`, sub };
         };
         return (
           <Dialog open onOpenChange={(open) => { if (!open) { setExitGroupDialogTunnel(null); setExitOrderOverride(null); } }}>
@@ -5571,6 +5579,9 @@ function TunnelsContent() {
                           <span className={cn("truncate text-meta", target.tone === "down" ? "text-[var(--fx-down-text)]" : target.tone === "warn" ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")}>
                             {target.text}
                           </span>
+                        ) : null}
+                        {target && "sub" in target && target.sub ? (
+                          <span className="truncate text-meta text-muted-foreground">{target.sub}</span>
                         ) : null}
                       </span>
                       {isPinned ? (

@@ -8,6 +8,9 @@ import {
   exitTargetSummaryForTunnel,
   exitTargetUnstable,
   latencyOrderedExitHostIds,
+  exitTargetBaseline,
+  setExitTargetBaselineForTest,
+  updateExitTargetBaseline,
   resetExitTargetStates,
   setExitTargetStateForTest,
   tunnelBalancesExits,
@@ -41,8 +44,8 @@ test("负载均衡链路才算：开了、而且不是「只用第一个」", ()
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: false, loadBalanceStrategy: "auto" }), false);
 });
 
-test("探测规格跟着链路的「检测与切换」：默认 2 秒一次、2 次不通算坏、3 次通算好", () => {
-  assert.deepEqual(exitTargetProbeSpec(DEFAULT_BALANCE_DETECT), { intervalMs: 2000, timeoutMs: 2000, failThreshold: 2, recoverOks: 3 });
+test("探测规格跟着链路的「检测与切换」：默认 2 秒一次、2 次不通算坏、3 次通算好，有真实连接先看真实连接", () => {
+  assert.deepEqual(exitTargetProbeSpec(DEFAULT_BALANCE_DETECT), { intervalMs: 2000, timeoutMs: 2000, failThreshold: 2, recoverOks: 3, passive: true });
 });
 
 test("不稳：抖动或丢包超过门槛（样本太少不判）", () => {
@@ -150,4 +153,48 @@ test("GOST 延迟优先：按延迟排顺序，差不多快时不来回换", () 
   // 2 号慢到比 1 号多 50ms 以上：换
   setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 90, jitterMs: 0, gost: true }));
   assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [1, 2, 3]);
+});
+
+test("平时值：头一小时取平均，之后慢慢跟；偏太多的那次先封顶", () => {
+  resetExitTargetStates();
+  const base = Date.now();
+  for (let i = 0; i < 6; i += 1) {
+    updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 10 + (i % 2), jitterMs: 2 }), base + i * 5 * 60_000);
+  }
+  const ready = exitTargetBaseline(30, 1);
+  assert.ok(ready, "攒够半小时（6 次）才有平时值");
+  assert.equal(Math.round(ready!.medianMs * 10) / 10, 10.5);
+  // 5 分钟内的不算
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 500 }), base + 5 * 5 * 60_000 + 1000);
+  assert.equal(Math.round(exitTargetBaseline(30, 1)!.medianMs * 10) / 10, 10.5);
+  // 突然 500ms：先封顶到 3 倍 + 5，头一小时按平均算，平时值不会一下被带到几百
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, medianMs: 500 }), base + 6 * 5 * 60_000);
+  assert.ok(exitTargetBaseline(30, 1)!.medianMs < 16);
+  // 连不上的不算
+  updateExitTargetBaseline(state({ ruleId: 30, hostId: 1, down: true }), base + 7 * 5 * 60_000);
+  assert.equal(exitTargetBaseline(30, 1)!.samples, 7);
+});
+
+test("不稳：抖动要同时超过门槛和平时的 2 倍 + 5ms", () => {
+  const detect = { ...DEFAULT_BALANCE_DETECT, jitterMs: 30 };
+  const sample = { jitterMs: 40, lossPct: 0, samples: 30 };
+  assert.equal(exitTargetUnstable(sample, detect), true, "没有平时值：只看门槛");
+  assert.equal(exitTargetUnstable(sample, detect, { jitterMs: 20 }), false, "平时就晃 20ms，40ms 不算不稳");
+  assert.equal(exitTargetUnstable(sample, detect, { jitterMs: 2 }), true, "平时 2ms 晃到 40ms 才是真抖");
+  assert.equal(exitTargetUnstable({ jitterMs: 1, lossPct: 12, samples: 30 }, detect, { jitterMs: 2 }), true, "丢包照旧算");
+});
+
+test("链路弹窗：写平时值、比平时慢多少、数据从哪来", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "auto" };
+  const now = Date.now();
+  setExitTargetStateForTest(state({ hostId: 1, medianMs: 9, source: "traffic", conns: 4 }));
+  setExitTargetStateForTest(state({ hostId: 2, medianMs: 120, source: "probe" }));
+  setExitTargetBaselineForTest(7, 1, { medianMs: 8, jitterMs: 2, samples: 20, updatedAt: now });
+  setExitTargetBaselineForTest(7, 2, { medianMs: 10, jitterMs: 2, samples: 20, updatedAt: now });
+  const summary = exitTargetSummaryForTunnel(tunnel, [1, 2]);
+  assert.deepEqual(summary.exits.map((item) => [item.hostId, item.baselineMs, item.slowerMs, item.source]), [
+    [1, 8, null, "traffic"],
+    [2, 10, 110, "probe"],
+  ]);
 });

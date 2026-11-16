@@ -2,6 +2,7 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { pushAgentRefresh } from "./agentEvents";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
 import { getForwardGroupById } from "./repositories/forwardGroupRepository";
+import { getSetting, setSetting } from "./repositories/settingsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
@@ -35,6 +36,10 @@ export type ExitTargetReport = {
   jitterMs?: number | null;
   lossPct?: number | null;
   samples?: number | null;
+  /** Agent 2.2.260 起：这条路的最低延迟、来源（traffic = 真实连接的内核 RTT，probe = 主动探测）、活跃连接数 */
+  minMs?: number | null;
+  source?: string | null;
+  conns?: number | null;
 };
 
 export type ExitTargetState = {
@@ -54,9 +59,107 @@ export type ExitTargetState = {
   unstable: boolean;
   /** GOST 隧道（不能少分，只能摘掉连不上的） */
   gost: boolean;
+  minMs?: number | null;
+  source?: "traffic" | "probe" | null;
+  conns?: number | null;
 };
 
 const states = new Map<string, ExitTargetState>();
+
+/*
+  每台出口到每条规则目标的「平时水平」（2.3.536，用户：「延迟抖动的判断方法不准」）。
+
+  固定门槛判不准：目标近的规则平时 7ms，目标远的平时 200ms，同一个「抖动超过 30ms」对谁都不合适。这里按
+  （规则, 出口）记一个慢慢跟的平时值：每 5 分钟拿当时的中位延迟、抖动更新一次，头一小时取平均，之后按约 6 小时
+  的时间常数平滑（一阵子变差不会马上把平时值带歪；偏离太多的那次先按 3 倍封顶再算）。
+  判断时跟它比：抖动要同时超过「检测与切换」的门槛和「平时的 2 倍 + 5ms」才算不稳；延迟比平时高出「延迟差多少
+  才换」那么多，弹窗写「比平时慢」。
+
+  只记在内存里，每 10 分钟存一份到设置表（面板重启后接着用）。超过 3 天没更新的丢掉。
+*/
+export type ExitTargetBaseline = { medianMs: number; jitterMs: number; samples: number; updatedAt: number };
+const BASELINE_STEP_MS = 5 * 60_000;
+const BASELINE_READY_SAMPLES = 6;
+const BASELINE_WARMUP_SAMPLES = 12;
+const BASELINE_ALPHA = 5 / 360;
+const BASELINE_MAX_AGE_MS = 3 * 24 * 3600_000;
+const BASELINE_SAVE_EVERY_MS = 10 * 60_000;
+const BASELINE_SETTING_KEY = "exitTargetBaselines";
+const BASELINE_MAX_ENTRIES = 6000;
+const baselines = new Map<string, ExitTargetBaseline>();
+let baselinesLoaded = false;
+let baselinesSavedAt = 0;
+let baselinesDirty = false;
+
+async function loadBaselines() {
+  if (baselinesLoaded) return;
+  baselinesLoaded = true;
+  try {
+    const raw = await getSetting(BASELINE_SETTING_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, [number, number, number, number]> : {};
+    const now = Date.now();
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!Array.isArray(value) || value.length < 4) continue;
+      const [medianMs, jitterMs, samples, updatedAt] = value.map(Number);
+      if (![medianMs, jitterMs, samples, updatedAt].every(Number.isFinite) || now - updatedAt > BASELINE_MAX_AGE_MS) continue;
+      if (!baselines.has(key)) baselines.set(key, { medianMs, jitterMs, samples, updatedAt });
+    }
+  } catch {
+    // 读不到 / 坏了：从头记
+  }
+}
+
+async function saveBaselinesIfDue(nowMs: number) {
+  if (!baselinesDirty || nowMs - baselinesSavedAt < BASELINE_SAVE_EVERY_MS) return;
+  baselinesSavedAt = nowMs;
+  baselinesDirty = false;
+  const entries = Array.from(baselines.entries())
+    .filter(([, value]) => nowMs - value.updatedAt <= BASELINE_MAX_AGE_MS)
+    .sort((left, right) => right[1].updatedAt - left[1].updatedAt)
+    .slice(0, BASELINE_MAX_ENTRIES);
+  const payload: Record<string, [number, number, number, number]> = {};
+  for (const [key, value] of entries) {
+    payload[key] = [Math.round(value.medianMs * 10) / 10, Math.round(value.jitterMs * 10) / 10, value.samples, value.updatedAt];
+  }
+  await setSetting(BASELINE_SETTING_KEY, JSON.stringify(payload)).catch(() => { baselinesDirty = true; });
+}
+
+/** 这台出口到这条规则目标的平时水平；还没攒够（半小时）返回 null。 */
+export function exitTargetBaseline(ruleId: number, hostId: number): ExitTargetBaseline | null {
+  const value = baselines.get(stateKey(ruleId, hostId));
+  return value && value.samples >= BASELINE_READY_SAMPLES ? value : null;
+}
+
+/** 拿一次新的结果更新平时值（每 5 分钟最多一次；连不上的、样本太少的不算）。 */
+export function updateExitTargetBaseline(state: ExitTargetState, nowMs: number) {
+  const median = state.medianMs ?? state.latencyMs;
+  if (state.down || median == null || (state.samples || 0) < 5) return;
+  const key = stateKey(state.ruleId, state.hostId);
+  const current = baselines.get(key);
+  if (current && nowMs - current.updatedAt < BASELINE_STEP_MS) return;
+  const jitter = state.jitterMs ?? 0;
+  if (!current || nowMs - current.updatedAt > BASELINE_MAX_AGE_MS) {
+    baselines.set(key, { medianMs: median, jitterMs: jitter, samples: 1, updatedAt: nowMs });
+  } else {
+    const samples = current.samples + 1;
+    const alpha = samples <= BASELINE_WARMUP_SAMPLES ? 1 / samples : BASELINE_ALPHA;
+    const cappedMedian = Math.min(median, current.medianMs * 3 + 5);
+    const cappedJitter = Math.min(jitter, current.jitterMs * 3 + 5);
+    baselines.set(key, {
+      medianMs: current.medianMs + (cappedMedian - current.medianMs) * alpha,
+      jitterMs: current.jitterMs + (cappedJitter - current.jitterMs) * alpha,
+      samples: Math.min(samples, 100000),
+      updatedAt: nowMs,
+    });
+  }
+  baselinesDirty = true;
+}
+
+/** 只给测试用 */
+export function setExitTargetBaselineForTest(ruleId: number, hostId: number, value: ExitTargetBaseline | null) {
+  if (value) baselines.set(stateKey(ruleId, hostId), value);
+  else baselines.delete(stateKey(ruleId, hostId));
+}
 
 function stateKey(ruleId: number, hostId: number) {
   return `${ruleId}:${hostId}`;
@@ -70,6 +173,9 @@ function finiteOrNull(value: unknown) {
 export function resetExitTargetStates() {
   states.clear();
   latencyLeaderByRule.clear();
+  baselines.clear();
+  baselinesLoaded = true;
+  baselinesDirty = false;
 }
 
 /** 只给测试用：直接放一条状态（不走数据库校验） */
@@ -110,13 +216,26 @@ export function exitTargetProbeSpec(detect: BalanceDetect) {
     timeoutMs: Math.min(5000, Math.max(1500, detect.intervalSeconds * 1000)),
     failThreshold: detect.failThreshold,
     recoverOks: detect.recoverThreshold,
+    // Agent 2.2.260 起：有到这个目标的真实连接就读内核记的 RTT，不再新建连接去探（老 Agent 不认这个字段）
+    passive: true,
   };
 }
 
-export function exitTargetUnstable(state: Pick<ExitTargetState, "jitterMs" | "lossPct" | "samples">, detect: BalanceDetect) {
+/**
+ * 不稳：丢包 ≥ 10%，或者抖动同时超过门槛和「平时的 2 倍 + 5ms」（还没有平时值时只看门槛）。
+ * 一条路平时就晃 40ms，门槛 30ms 时它不该一直挂着「不稳」；平时 2ms 突然晃到 40ms 才是真抖。
+ */
+export function exitTargetUnstable(
+  state: Pick<ExitTargetState, "jitterMs" | "lossPct" | "samples">,
+  detect: BalanceDetect,
+  baseline?: Pick<ExitTargetBaseline, "jitterMs"> | null,
+) {
   if (detect.jitterAction === "ignore") return false;
   if ((state.samples || 0) < 5) return false;
-  return (state.jitterMs ?? 0) > detect.jitterMs || (state.lossPct ?? 0) >= UNSTABLE_LOSS_PCT;
+  if ((state.lossPct ?? 0) >= UNSTABLE_LOSS_PCT) return true;
+  const jitter = state.jitterMs ?? 0;
+  if (jitter <= detect.jitterMs) return false;
+  return !baseline || jitter > baseline.jitterMs * 2 + 5;
 }
 
 /**
@@ -133,6 +252,7 @@ export async function ingestExitTargetReports(input: {
   const nowMs = input.nowMs ?? Date.now();
   const reports = (input.results || []).filter((report) => Number(report.ruleId) > 0).slice(0, 2048);
   if (reports.length === 0 || hostId <= 0) return { recorded: 0, flipped: [] as number[] };
+  await loadBaselines();
   const rules = await getForwardRulesByIds(Array.from(new Set(reports.map((report) => Number(report.ruleId))))) as Array<{ id: number; tunnelId?: number | null; pendingDelete?: unknown; routeParentRuleId?: number | null }>;
   const ruleById = new Map(rules.map((rule) => [Number(rule.id), rule]));
   const tunnelIds = Array.from(new Set(rules.map((rule) => Number(rule.tunnelId || 0)).filter((id) => id > 0)));
@@ -173,10 +293,15 @@ export async function ingestExitTargetReports(input: {
       changedAt: previous?.changedAt ?? nowMs,
       unstable: false,
       gost: String(tunnel.mode || "").toLowerCase() !== "forwardx",
+      minMs: finiteOrNull(report.minMs),
+      source: report.source === "traffic" ? "traffic" : report.source === "probe" ? "probe" : null,
+      conns: finiteOrNull(report.conns),
     };
-    next.unstable = exitTargetUnstable(next, detect);
-    const wasBad = !!previous && (previous.down || exitTargetUnstable(previous, detect));
-    const isBad = next.down || exitTargetUnstable(next, detect);
+    const baseline = exitTargetBaseline(Number(rule.id), hostId);
+    next.unstable = exitTargetUnstable(next, detect, baseline);
+    const wasBad = !!previous && (previous.down || previous.unstable);
+    const isBad = next.down || next.unstable;
+    updateExitTargetBaseline(next, nowMs);
     if (!previous || previous.down !== next.down || wasBad !== isBad) next.changedAt = nowMs;
     states.set(key, next);
     recorded += 1;
@@ -207,6 +332,7 @@ export async function ingestExitTargetReports(input: {
     }
   }
   for (const entryHostId of refreshHosts) pushAgentRefresh(entryHostId, "exit-target-flip", { urgent: true });
+  await saveBaselinesIfDue(nowMs);
   return { recorded, flipped };
 }
 
@@ -231,6 +357,14 @@ export type ExitTargetExitSummary = {
   lossPct: number | null;
   /** 按现在的分配方式会分到流量的规则条数（NEX 隧道是面板按同一套规则估的，GOST 是真实的节点顺序） */
   activeRules: number;
+  /** 平时到目标的延迟（各条规则平时值的中位数；还没攒够半小时为 null） */
+  baselineMs: number | null;
+  /** 有平时值的规则条数（几条规则目标远近不同时，弹窗不写数字，写「跟平时差不多」） */
+  baselineRules: number;
+  /** 比平时慢多少（只在超过「延迟差多少才换」时给，取各条规则里最多的） */
+  slowerMs: number | null;
+  /** 数据从哪来：traffic = 真实连接的内核 RTT，probe = 主动探测（多数规则是哪种就写哪种） */
+  source: "traffic" | "probe" | null;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -381,7 +515,10 @@ export function exitTargetSummaryForTunnel(
     map.set(state.hostId, state);
     byRule.set(state.ruleId, map);
   }
-  const perExit = new Map(exitIds.map((hostId) => [hostId, { rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0 }]));
+  const perExit = new Map(exitIds.map((hostId) => [hostId, {
+    rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
+    baselines: [] as number[], slower: 0, traffic: 0, probe: 0,
+  }]));
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
   const hows = new Map<string, number>();
   const names = (ids: number[]) => ids.map((id) => options.hostNames?.get(id) || `主机 ${id}`).join("、");
@@ -399,6 +536,15 @@ export function exitTargetSummaryForTunnel(
       else if (state.unstable && !allDown && !allUnstable) entry.unstable += 1;
       const median = state.medianMs ?? state.latencyMs;
       if (!state.down && median != null) entry.medians.push(median);
+      const baseline = exitTargetBaseline(ruleId, state.hostId);
+      if (baseline) {
+        entry.baselines.push(baseline.medianMs);
+        if (!state.down && median != null && median - baseline.medianMs > detect.latencyMarginMs) {
+          entry.slower = Math.max(entry.slower, median - baseline.medianMs);
+        }
+      }
+      if (state.source === "traffic") entry.traffic += 1;
+      else if (state.source === "probe") entry.probe += 1;
       if (!state.down && state.jitterMs != null) entry.jitters.push(state.jitterMs);
       if (state.lossPct != null) entry.losses.push(state.lossPct);
     }
@@ -437,6 +583,10 @@ export function exitTargetSummaryForTunnel(
         jitterMs: middle(entry.jitters),
         lossPct: middle(entry.losses),
         activeRules: entry.activeRules,
+        baselineMs: middle(entry.baselines),
+        baselineRules: entry.baselines.length,
+        slowerMs: entry.slower > 0 ? entry.slower : null,
+        source: entry.traffic + entry.probe === 0 ? null : entry.traffic >= entry.probe ? "traffic" : "probe",
       };
     }),
     targetIssues,
