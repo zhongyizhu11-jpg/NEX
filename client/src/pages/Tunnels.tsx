@@ -2167,7 +2167,7 @@ function TunnelsContent() {
   ]);
   const setExitPinMutation = trpc.tunnels.setExitPin.useMutation({
     onSuccess: (result) => {
-      toast.success(result.hostId ? "已锁定出口" : "已恢复自动");
+      toast.success(result.hostId ? "已手动指定" : "已交回自动");
       void refreshAfterExitChange();
     },
     onError: (error) => toast.error(error.message),
@@ -5410,7 +5410,7 @@ function TunnelsContent() {
       {(() => {
         /*
           负载均衡出口是哪几台：每台一行（在线状态、到目标的延迟/抖动、权重）。
-          2.3.534：可以锁定出口（「锁定」/「恢复自动」，tunnels.setExitPin）；
+          2.3.534：可以手动指定出口（「切到这条」/「交回自动」，和线路组同一套叫法，tunnels.setExitPin）；
           用出口组的链路可以 ↑↓ 调顺序（就是出口组成员顺序，forwardGroups.reorder，手机上不用拖）。
         */
         const snapshot = exitGroupDialogTunnel;
@@ -5483,16 +5483,16 @@ function TunnelsContent() {
               <DialogHeader>
                 <DialogTitle>负载均衡出口 · {exits.length} 台</DialogTitle>
                 <DialogDescription>
-                  {tunnel.name} · {pinActive ? "已锁定" : strategy} · {online} 台在线
+                  {tunnel.name} · {pinActive ? "手动指定" : strategy} · {online} 台在线
                 </DialogDescription>
               </DialogHeader>
               {pinActive ? (
                 <div className={cn("fx-lb-pin-banner", !pinOnline && "is-warn")}>
                   <span className="min-w-0 flex-1">
-                    {pinOnline ? `已锁定 ${hostName(pinHostId)}` : `${hostName(pinHostId)} 离线 · 已回退自动`}
+                    {pinOnline ? `已指定走 ${hostName(pinHostId)}` : `${hostName(pinHostId)} 离线 · 暂按自动`}
                   </span>
                   {canPin ? (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => setPin(null)}>恢复自动</Button>
+                    <Button size="sm" variant="outline" disabled={busy} onClick={() => setPin(null)}>交回自动</Button>
                   ) : null}
                 </div>
               ) : null}
@@ -5532,10 +5532,10 @@ function TunnelsContent() {
                         ) : null}
                       </span>
                       {isPinned ? (
-                        <span className="fx-lb-badge shrink-0">已锁定</span>
+                        <span className="fx-lb-badge shrink-0">使用中 · 指定</span>
                       ) : canPin ? (
                         <Button size="sm" variant="outline" className="shrink-0" disabled={busy || !host?.isOnline} onClick={() => setPin(exit.hostId)}>
-                          锁定
+                          切到这条
                         </Button>
                       ) : null}
                     </li>
