@@ -60,7 +60,8 @@ func normalizeFXPSpec(spec fxpSpec) fxpSpec {
 	spec.ListenHost = strings.TrimSpace(spec.ListenHost)
 	spec.ExitHost = strings.TrimSpace(spec.ExitHost)
 	switch strings.ToLower(strings.TrimSpace(spec.ExitStrategy)) {
-	case "fallback", "random", "ip_hash", "weighted", "least_load":
+	// auto / latency 是 FXP 2.2.142 起的「自动」「延迟优先」；面板只给装了新 FXP 的机器下发这两个值。
+	case "fallback", "random", "ip_hash", "weighted", "least_load", "auto", "latency":
 		spec.ExitStrategy = strings.ToLower(strings.TrimSpace(spec.ExitStrategy))
 	default:
 		spec.ExitStrategy = "round_robin"
@@ -252,6 +253,13 @@ func fxpServerSignature(spec fxpSpec) string {
 		if exit.CapacityMbps > 0 {
 			parts = append(parts, "c"+strconv.Itoa(exit.CapacityMbps))
 		}
+		// 出口会回报连目标的结果：只在有时进签名，老配置的签名不变，升级不重启 FXP。
+		if exit.TargetStatus {
+			parts = append(parts, "ts")
+		}
+	}
+	if detect := spec.BalanceDetect.signature(); detect != "" {
+		parts = append(parts, detect)
 	}
 	for _, target := range spec.UDPTargets {
 		parts = append(parts, strconv.Itoa(target.RuleID), strings.TrimSpace(target.TargetIP), strconv.Itoa(target.TargetPort))

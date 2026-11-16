@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.258"
+var Version = "2.2.259"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -657,6 +657,9 @@ type ruleLatencyProbe struct {
 	GroupHealth *forwardGroupHealthSpec `json:"forwardGroupHealth,omitempty"`
 	// 线路组「下一跳」的快速探测（2.2.258 起，见 route_hop_probe.go）：带了就由这台机器按它的节奏单独探。
 	RouteHop *routeHopProbeSpec `json:"routeHop,omitempty"`
+	// FastOnly（2.2.259 起）：只要快速探测，不进一分钟一轮的普通延迟探测 —— 负载均衡里「这台出口连得上
+	// 规则的目标吗」那几条（面板给每台出口都下发一条），普通探测的结果面板也不收。
+	FastOnly bool `json:"fastOnly,omitempty"`
 }
 
 type hostProbeServiceProbe struct {
@@ -732,21 +735,23 @@ type selfTest struct {
 }
 
 type fxpSpec struct {
-	Role                     string            `json:"role"`
-	TransportVersion         string            `json:"transportVersion,omitempty"`
-	Entries                  []fxpSpec         `json:"entries,omitempty"`
-	TunnelID                 int               `json:"tunnelId"`
-	RuleID                   int               `json:"ruleId"`
-	ListenPort               int               `json:"listenPort"`
-	UDPListenPort            int               `json:"udpListenPort,omitempty"`
-	ListenHost               string            `json:"listenHost,omitempty"`
-	Protocol                 string            `json:"protocol"`
-	ExitHost                 string            `json:"exitHost"`
-	ExitPort                 int               `json:"exitPort"`
-	UDPExitPort              int               `json:"udpExitPort,omitempty"`
-	ExitPeerID               string            `json:"exitPeerId,omitempty"`
-	Exits                    []fxpExitEndpoint `json:"exits,omitempty"`
-	ExitStrategy             string            `json:"exitStrategy,omitempty"`
+	Role             string            `json:"role"`
+	TransportVersion string            `json:"transportVersion,omitempty"`
+	Entries          []fxpSpec         `json:"entries,omitempty"`
+	TunnelID         int               `json:"tunnelId"`
+	RuleID           int               `json:"ruleId"`
+	ListenPort       int               `json:"listenPort"`
+	UDPListenPort    int               `json:"udpListenPort,omitempty"`
+	ListenHost       string            `json:"listenHost,omitempty"`
+	Protocol         string            `json:"protocol"`
+	ExitHost         string            `json:"exitHost"`
+	ExitPort         int               `json:"exitPort"`
+	UDPExitPort      int               `json:"udpExitPort,omitempty"`
+	ExitPeerID       string            `json:"exitPeerId,omitempty"`
+	Exits            []fxpExitEndpoint `json:"exits,omitempty"`
+	ExitStrategy     string            `json:"exitStrategy,omitempty"`
+	// BalanceDetect：负载均衡的「检测与切换」（面板 shared/loadBalance.ts），原样交给 FXP（2.2.142 起读）。
+	BalanceDetect            *fxpBalanceDetect `json:"balanceDetect,omitempty"`
 	TargetIP                 string            `json:"targetIp"`
 	TargetPort               int               `json:"targetPort"`
 	UDPTargets               []fxpUDPTarget    `json:"udpTargets,omitempty"`
@@ -836,6 +841,38 @@ type fxpExitEndpoint struct {
 	// 按「同出口 IP」取舍用 —— 现在的 FXP 还不读它。不进 fxpServerSignature：它是面板随时会变的提示，
 	// 进了签名的话一变就要重载 FXP（WireGuard 的隧道没有热更新，是整个重启）。
 	ExitIP string `json:"exitIp,omitempty"`
+	// TargetStatus：这台出口的 FXP 会在连完目标后回报结果（2.2.142 起，面板按出口机的 FXP 版本给）。
+	// 入口的 FXP 据此当场换出口、按「出口 + 目标」记健康。
+	TargetStatus bool `json:"targetStatus,omitempty"`
+}
+
+// fxpBalanceDetect：负载均衡的「检测与切换」，字段和 FXP 的 balanceDetectConfig 一样，原样转交。
+type fxpBalanceDetect struct {
+	IntervalSeconds   int    `json:"intervalSeconds,omitempty"`
+	FailThreshold     int    `json:"failThreshold,omitempty"`
+	RecoverThreshold  int    `json:"recoverThreshold,omitempty"`
+	LatencyMarginMs   int    `json:"latencyMarginMs,omitempty"`
+	JitterMs          int    `json:"jitterMs,omitempty"`
+	JitterHoldSeconds int    `json:"jitterHoldSeconds,omitempty"`
+	JitterAction      string `json:"jitterAction,omitempty"`
+	SlowStart         *bool  `json:"slowStart,omitempty"`
+}
+
+// signature：检测参数变了要让 FXP 重读配置（热更新），没设时是空串，签名和旧版一样。
+func (d *fxpBalanceDetect) signature() string {
+	if d == nil {
+		return ""
+	}
+	slowStart := "-"
+	if d.SlowStart != nil {
+		slowStart = strconv.FormatBool(*d.SlowStart)
+	}
+	return strings.Join([]string{
+		"detect",
+		strconv.Itoa(d.IntervalSeconds), strconv.Itoa(d.FailThreshold), strconv.Itoa(d.RecoverThreshold),
+		strconv.Itoa(d.LatencyMarginMs), strconv.Itoa(d.JitterMs), strconv.Itoa(d.JitterHoldSeconds),
+		strings.TrimSpace(d.JitterAction), slowStart,
+	}, ",")
 }
 
 type fxpUDPTarget struct {

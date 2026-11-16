@@ -51,6 +51,13 @@ export function resolveForwardRuleVisualStatus(input: {
    * 出口机没了，入口机照样报自己在运行，探测也没人去做，规则会一直绿着。
    */
   offlineHostNames?: readonly string[];
+  /**
+   * 负载均衡链路（server/exitTargetHealth.ts）：报了到目标情况的出口里连得上的几台、规则卡上那一句。
+   * 端到端探测只从主出口测：主出口连不上、别的出口连得上时，用户的连接已经被换到好的出口上了，
+   * 不该整条规则标红 —— 标成橙色，写清楚是哪台出口的问题。
+   */
+  exitTargetOk?: number | null;
+  exitTargetNote?: string | null;
 }, now = Date.now()): ForwardRuleVisualStatus {
   if (input.resourceAccessAllowed === false) {
     return { state: "error", title: "资源授权失效" };
@@ -68,9 +75,17 @@ export function resolveForwardRuleVisualStatus(input: {
     return { state: "disabled", title: "托管规则已停用" };
   }
   const probeIsRecent = isLinkProbeFresh(input.latestLatencyAt, now);
+  const exitTargetNote = String(input.exitTargetNote || "").trim();
   if (probeIsRecent && input.latestLatencyIsTimeout) {
+    if (Number(input.exitTargetOk || 0) > 0) {
+      return { state: "pending", title: exitTargetNote || `主出口连不上目标，另外 ${Number(input.exitTargetOk)} 台出口正常，已自动切走` };
+    }
     const kind = normalizeProbeFailure(input.latestProbeFailure);
     return { state: "error", title: kind && kind !== "timeout" ? `最近一次端到端探测失败：${PROBE_FAILURE_LABELS[kind]}` : "最近一次端到端探测超时" };
+  }
+  if (exitTargetNote && input.exitTargetOk != null) {
+    // 主出口通，但别的出口有问题（连不上 / 抖 / 丢包）：橙色，写清楚是哪台
+    return { state: "pending", title: exitTargetNote };
   }
   if (input.groupConfigStatus === "error" || input.groupConfigStatus === "unavailable") {
     return { state: "error", title: "转发资源配置不可用" };

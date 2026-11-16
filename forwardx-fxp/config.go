@@ -99,7 +99,7 @@ func normalizeConfig(cfg config) config {
 
 func normalizeExitStrategy(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "fallback", "random", "ip_hash", "weighted", "least_load":
+	case "fallback", "random", "ip_hash", "weighted", "least_load", "auto", "latency":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "round_robin"

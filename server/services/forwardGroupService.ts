@@ -8,6 +8,7 @@ import { ENV } from "../env";
 import { normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../shared/forwardTypes";
 import { normalizeExitGroupStrategy, type ExitGroupStrategy } from "../../shared/exitStrategy";
+import { serializeBalanceDetect } from "../../shared/loadBalance";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
 import { forwardGroupMirrorRecordType, forwardGroupSupportsDualStack } from "../forwardGroupDualStackDdns";
 import { normalizeDdnsLineFallback, serializeDdnsLines, type DdnsLineFallbackMode } from "../../shared/ddnsLines";
@@ -49,6 +50,8 @@ export type ForwardGroupInput = {
   remark?: string | null;
   groupMode?: ForwardGroupMode;
   exitStrategy?: ExitGroupStrategy;
+  /** 出口组的「检测与切换」（shared/loadBalance.ts）。不传 = 不动原来的。 */
+  balanceDetect?: unknown;
   entryGroupId?: number | null;
   groupType: ForwardGroupType;
   protocol?: ForwardRuleProtocol;
@@ -272,6 +275,7 @@ async function normalizeForwardGroupInput(input: ForwardGroupInput, userId?: num
     remark: isCollectionGroup ? null : input.remark?.trim() || null,
     groupMode,
     exitStrategy: groupMode === "exit" ? normalizeExitGroupStrategy(input.exitStrategy) : "round_robin",
+    ...(input.balanceDetect !== undefined ? { balanceDetect: groupMode === "exit" ? serializeBalanceDetect(input.balanceDetect) : null } : {}),
     entryGroupId,
     groupType,
     protocol,
@@ -371,8 +375,13 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
   // 双栈开关 / 主记录类型变了：副记录要重发（或清掉），不能等成员健康变化才同步
   const previousMirrorType = forwardGroupMirrorRecordType(existing);
   const dualStackChanged = previousMirrorType !== forwardGroupMirrorRecordType(normalized.data);
+  // 分配方式或「检测与切换」变了，用这个出口组的链路都要跟着换（syncTunnelExitGroupEndpoints 一起带过去）。
   const exitStrategyChanged = normalized.data.groupMode === "exit"
-    && normalizeExitGroupStrategy(existing?.exitStrategy) !== normalizeExitGroupStrategy(normalized.data.exitStrategy);
+    && (
+      normalizeExitGroupStrategy(existing?.exitStrategy) !== normalizeExitGroupStrategy(normalized.data.exitStrategy)
+      || ((normalized.data as { balanceDetect?: string | null }).balanceDetect !== undefined
+        && String((normalized.data as { balanceDetect?: string | null }).balanceDetect ?? "") !== String(existing?.balanceDetect ?? ""))
+    );
   const shouldResetChinaHealth = !normalized.data.chinaHealthCheckEnabled
     || !!existing?.chinaHealthCheckEnabled !== !!normalized.data.chinaHealthCheckEnabled
     || String(existing?.chinaHealthCheckTarget || "") !== String(normalized.data.chinaHealthCheckTarget || "")

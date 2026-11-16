@@ -107,7 +107,8 @@ export function createForwardXHopSpecBuilder(deps: ForwardXHopSpecDeps) {
             ...(relayExitCapacities ? { capacityMbps: relayExitCapacities[index] } : {}),
             ...(relayExitIps?.[index] ? { exitIp: relayExitIps[index] } : {}),
           }));
-          fxpSpec.exitStrategy = forwardXExitStrategy((tunnel as any).loadBalanceStrategy);
+          // 中转挑出口不做「出口回报连目标的结果」（只在入口做）：自动 / 延迟优先在中转上按「按负载」跑。
+          fxpSpec.exitStrategy = forwardXExitStrategy((tunnel as any).loadBalanceStrategy, false);
         }
       }
       if (op === "apply" && (!fxpSpec.relayExitHost || fxpSpec.relayExitPort <= 0 || !fxpSpec.relayKey)) {

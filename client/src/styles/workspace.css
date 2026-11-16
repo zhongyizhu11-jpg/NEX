@@ -2171,3 +2171,21 @@ html.fx-theme-fading *::after {
   .fx-path-node-button { position: relative; min-height: 0; }
   .fx-path-node-button::after { content: ""; position: absolute; inset: -12px -6px; }
 }
+
+/*
+  统一负载均衡的表单（features/links/LoadBalanceFields.tsx）。
+  「推荐」小标；合上的下拉框里也跟着名字显示（两行项的第二行照旧藏起来）。
+*/
+.fx-lb-badge {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; line-height: 1;
+  color: var(--primary); background: color-mix(in oklab, var(--primary) 12%, transparent);
+}
+/* 加减按钮、恢复默认：视觉 32px / 一行字高，触屏命中区用 ::after 撑回 44（全局那条会把它们撑成 44 高的块） */
+.fx-lb-step-btn { position: relative; min-height: 32px; }
+@media (pointer: coarse) {
+  .fx-lb-step-btn { min-height: 32px; }
+  .fx-lb-step-btn::after { content: ""; position: absolute; inset: -6px 0; }
+  .fx-lb-reset { position: relative; min-height: 0; }
+  .fx-lb-reset::after { content: ""; position: absolute; inset: -12px -8px; }
+}

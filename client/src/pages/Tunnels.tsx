@@ -226,7 +226,7 @@ type TunnelForm = {
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
-  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback" | "weighted" | "least_load";
+  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback" | "weighted" | "least_load" | "auto" | "latency";
   loadBalanceExits: Array<{ hostId: number | null; connectHost: string }>;
   exitGroupId: number | null;
   blockHttp: boolean;
@@ -2152,6 +2152,11 @@ function TunnelsContent() {
   const [editingId, setEditingId] = useState<number | null>(null);
   // 链路卡片上点「负载均衡 ×3」：弹窗列出是哪几台（2026-11 用户要求）
   const [exitGroupDialogTunnel, setExitGroupDialogTunnel] = useState<TunnelListItem | null>(null);
+  // 弹窗开着时每 5 秒刷一次每台出口到目标的情况
+  const exitTargetsQuery = trpc.tunnels.exitTargets.useQuery(
+    { tunnelId: Number(exitGroupDialogTunnel?.id || 0) || 1 },
+    { enabled: !!exitGroupDialogTunnel, refetchInterval: exitGroupDialogTunnel ? 5_000 : false },
+  );
   const [form, setForm] = useState<TunnelForm>(defaultForm);
   const [listenPortExplicit, setListenPortExplicit] = useState(false);
   const nginxCertFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -2803,7 +2808,7 @@ function TunnelsContent() {
       lossTolerant: transportTuningSupported && !!tunnel.lossTolerant,
       kernelPassthrough: transportTuningSupported && !!(tunnel as any).kernelPassthrough,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
-      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"].includes(String(tunnel.loadBalanceStrategy || ""))
+      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load", "auto", "latency"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
         : "round_robin") as TunnelForm["loadBalanceStrategy"],
       loadBalanceExits: exitGroupId ? loadBalanceExits : [],
@@ -5408,6 +5413,20 @@ function TunnelsContent() {
         // 只要策略名（「按权重」），后面那句解释在编辑框里看
         const strategy = String(EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(tunnel.loadBalanceStrategy)] || "").split(" - ")[0];
         const online = exits.filter((exit) => hostLookup.get(exit.hostId)?.isOnline).length;
+        // 每台出口到规则目标的情况（server/exitTargetHealth.ts）：取它在各条规则上最差的那次
+        const targetByHost = new Map((exitTargetsQuery.data || []).map((item) => [Number(item.hostId), item] as const));
+        const targetText = (hostId: number) => {
+          const item = targetByHost.get(hostId);
+          if (!item) return null;
+          if (item.down > 0) return { tone: "down" as const, text: `${item.down} 条规则连不上目标，已切走` };
+          const latency = item.medianMs != null ? `到目标 ${Math.round(item.medianMs)}ms` : "到目标正常";
+          const jitter = item.jitterMs != null ? ` · 抖动 ${Math.round(item.jitterMs)}ms` : "";
+          if (item.unstable > 0) {
+            const loss = item.lossPct != null && item.lossPct >= 10 ? ` · 丢包 ${Math.round(item.lossPct)}%` : "";
+            return { tone: "warn" as const, text: `${latency}${jitter}${loss} · 不稳` };
+          }
+          return { tone: "ok" as const, text: `${latency}${jitter}` };
+        };
         return (
           <Dialog open onOpenChange={(open) => { if (!open) setExitGroupDialogTunnel(null); }}>
             <DialogContent className="sm:max-w-md">
@@ -5419,12 +5438,19 @@ function TunnelsContent() {
                 {exits.map((exit) => {
                   const host = hostLookup.get(exit.hostId);
                   const region = host ? hostRegionText(host) : "";
+                  const target = targetText(exit.hostId);
+                  const dotHealth = !host?.isOnline || target?.tone === "down" ? "down" : target?.tone === "warn" ? "degraded" : "healthy";
                   return (
                     <li key={exit.hostId} className="flex min-w-0 items-center gap-3 px-3 py-2.5">
-                      <StatusDot health={host?.isOnline ? "healthy" : "down"} />
+                      <StatusDot health={dotHealth} />
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-primary-type font-medium">{tunnelHopHostName(tunnel, exit.hostId, hosts) || `主机 ${exit.hostId}`}</span>
                         {region ? <span className="truncate text-meta text-muted-foreground">{region}</span> : null}
+                        {target ? (
+                          <span className={cn("truncate text-meta", target.tone === "down" ? "text-[var(--fx-down-text)]" : target.tone === "warn" ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")}>
+                            {target.text}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="shrink-0 text-meta text-muted-foreground">
                         {host?.isOnline ? "在线" : "离线"}{exit.weight ? ` · 权重 ${exit.weight}` : ""}

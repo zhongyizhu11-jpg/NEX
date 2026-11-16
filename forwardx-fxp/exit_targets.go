@@ -95,6 +95,20 @@ func checkResolvedExitTarget(hello helloFrame, ip net.IP) error {
 	return fmt.Errorf("%w: rule=%d target=%s resolved to restricted address %s", errExitTargetNotAllowed, hello.RuleID, hello.TargetIP, ip)
 }
 
+// exitTargetDialHook 只给测试用：返回错误就当这台出口（按监听端口认）连不上目标，
+// 用来在一台机器上模拟「三台出口里一台到落地不通」。生产里永远是 nil。
+var exitTargetDialHook func(listenPort int, hello helloFrame) error
+
+// dialExitTargetFor 是出口这边拨目标的入口：先过测试钩子，再 dialExitTarget。
+func dialExitTargetFor(cfg config, hello helloFrame, timeout time.Duration) (net.Conn, error) {
+	if hook := exitTargetDialHook; hook != nil {
+		if err := hook(cfg.ListenPort, hello); err != nil {
+			return nil, err
+		}
+	}
+	return dialExitTarget(hello, timeout)
+}
+
 // dialExitTarget 拨一个核对过的 TCP 目标。拨的就是解析出来、查过的那个 IP，
 // 查和拨之间不会再解析一次。
 func dialExitTarget(hello helloFrame, timeout time.Duration) (net.Conn, error) {

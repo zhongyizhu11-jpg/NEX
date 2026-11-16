@@ -1022,7 +1022,7 @@ async function refreshTunnelsUsingForwardGroup(
 
   for (const tunnel of affectedTunnels) {
     if (exitStrategy && group && hasEnabledExitMember) {
-      const synced = await syncTunnelExitGroupEndpoints(tunnel, exitMembers, exitStrategy);
+      const synced = await syncTunnelExitGroupEndpoints(tunnel, exitMembers, exitStrategy, group?.balanceDetect ?? null);
       Object.assign(tunnel, synced.tunnel);
     } else if (exitStrategy && dbBool(group?.isEnabled)) {
       throw new Error("Enabled exit group must contain at least one enabled host");

@@ -5725,11 +5725,20 @@ function RulesContent() {
       latestLatencyIsTimeout: boolean;
       latestLatencyAt: Date | string | null;
       latestProbeFailure: string | null;
+      /** 负载均衡链路：几台出口报了到目标的情况、其中连得上的几台、规则卡上那一句（server/exitTargetHealth.ts） */
+      exitTargetTotal: number | null;
+      exitTargetOk: number | null;
+      exitTargetNote: string | null;
     }>();
     dailyTrafficSummaryRows.forEach((t: any) => {
       const rid = Number(t.ruleId);
       const prev = m.get(rid);
       if (prev) {
+        if (t.exitTargetTotal != null) {
+          prev.exitTargetTotal = Number(t.exitTargetTotal);
+          prev.exitTargetOk = t.exitTargetOk == null ? null : Number(t.exitTargetOk);
+          prev.exitTargetNote = t.exitTargetNote || null;
+        }
         prev.bytesIn += Number(t.bytesIn) || 0;
         prev.bytesOut += Number(t.bytesOut) || 0;
         prev.connections += Number(t.connections) || 0;
@@ -5750,6 +5759,9 @@ function RulesContent() {
           latestLatencyIsTimeout: !!t.latestLatencyIsTimeout,
           latestLatencyAt: t.latestLatencyAt || null,
           latestProbeFailure: t.latestProbeFailure || null,
+          exitTargetTotal: t.exitTargetTotal == null ? null : Number(t.exitTargetTotal),
+          exitTargetOk: t.exitTargetOk == null ? null : Number(t.exitTargetOk),
+          exitTargetNote: t.exitTargetNote || null,
         });
       }
     });
@@ -6203,6 +6215,12 @@ function RulesContent() {
   };
   const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
     const latest = stableProbeByRule.get(Number(rule.id));
+    // 负载均衡链路：各台出口到目标的情况（不进探测缓存，按这一次的汇总）
+    const exitTargets = trafficByRule.get(Number(rule.id));
+    const exitTargetFields = {
+      exitTargetOk: exitTargets?.exitTargetOk ?? null,
+      exitTargetNote: exitTargets?.exitTargetNote ?? null,
+    };
     if (rule.forwardGroupId) {
       const group = forwardGroupById.get(Number(rule.forwardGroupId));
       const runtime = Array.isArray(group?.ruleRuntimeStatuses)
@@ -6228,6 +6246,7 @@ function RulesContent() {
         latestLatencyAt: latest?.latestLatencyAt,
         latestProbeFailure: latest?.latestProbeFailure,
         offlineHostNames: getRuleOfflineHostNames(rule),
+        ...exitTargetFields,
       });
     }
     return resolveForwardRuleVisualStatus({
@@ -6241,9 +6260,10 @@ function RulesContent() {
       latestLatencyAt: latest?.latestLatencyAt,
       latestProbeFailure: latest?.latestProbeFailure,
       offlineHostNames: getRuleOfflineHostNames(rule),
+      ...exitTargetFields,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule, hosts, tunnels]);
+  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule, trafficByRule, hosts, tunnels]);
   const ruleVisualStatuses = useMemo(() => {
     const statuses = new Map<number, {
       current: ReturnType<typeof resolveForwardRuleVisualStatus>;

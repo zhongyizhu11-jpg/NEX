@@ -1090,6 +1090,8 @@ export const forwardGroups = table("forward_groups", {
   groupType: varchar("groupType", { length: 32 }).notNull().default("host"),
   groupMode: varchar("groupMode", { length: 32 }).notNull().default("failover"),
   exitStrategy: varchar("exitStrategy", { length: 32 }).notNull().default("round_robin"),
+  /** 负载均衡的「检测与切换」（shared/loadBalance.ts 的 BalanceDetect，JSON；空 = 默认值） */
+  balanceDetect: text("balanceDetect"),
   entryGroupId: int("entryGroupId"),
   forwardType: varchar("forwardType", { length: 32 }).notNull().default("iptables"),
   // Failover groups created before group-level runtime inheritance was
@@ -1320,6 +1322,8 @@ export const tunnels = table("tunnels", {
   blockTls: boolean("blockTls").notNull().default(false),
   loadBalanceEnabled: boolean("loadBalanceEnabled").notNull().default(false),
   loadBalanceStrategy: varchar("loadBalanceStrategy", { length: 32 }).notNull().default("round_robin"),
+  /** 负载均衡的「检测与切换」（JSON；空 = 跟出口组 / 默认值），保存时从出口组带过来，和 loadBalanceStrategy 一样 */
+  balanceDetect: text("balanceDetect"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   disabledByGroup: boolean("disabledByGroup").notNull().default(false),
   isRunning: boolean("isRunning").notNull().default(false),

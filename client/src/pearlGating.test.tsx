@@ -54,7 +54,8 @@ test("外壳：珍珠顶栏只在珍珠下挂；经典顶栏、底部标签栏�
   assert.match(source, /const pearlAppbar = pearl \? \(/);
   const uses = [...source.matchAll(/\{([^{}]*)\bpearlAppbar\b[^{}]*\}/g)].map((m) => m[0]);
   assert.deepEqual(uses, ["{pearl && isMobile ? pearlAppbar : null}", "{pearl && !isMobile ? pearlAppbar : null}"]);
-  assert.match(source, /\{pearl \? null : \(\s*<header className="workspace-appbar">/);
+  // 经典顶栏带「滚了没有」（液态玻璃手机上滚起来给顶栏一层磨砂，2.3.534）
+  assert.match(source, /\{pearl \? null : \(\s*<header className="workspace-appbar" data-scrolled=\{appbarScrolled \? "" : undefined\}>/);
   assert.match(source, /\{isMobile && !pearl \? \(\s*<IosTabBar/);
   assert.match(source, /isMobile && tabBarPlan\.tabs\.length && !pearl \? "workspace-has-tabbar"/);
   // 侧栏标记：折叠成图标栏、手机抽屉都不挂

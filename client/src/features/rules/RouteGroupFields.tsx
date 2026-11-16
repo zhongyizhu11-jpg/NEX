@@ -37,7 +37,8 @@ import {
 } from "@shared/routeGroup";
 import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type RoutePolicy } from "@shared/routePolicy";
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
-import { LinkSpreadPicker, linkChoiceClass } from "@/features/links/LinkSpreadPicker";
+import { linkChoiceClass } from "@/features/links/LinkSpreadPicker";
+import { BalanceStrategySelect } from "@/features/links/LoadBalanceFields";
 import { RouteLinesEditor, expandForPreview, type RouteLineHost, type RouteLinePool, type RouteLineTunnel } from "./RouteLinesEditor";
 import { LineCard, LineHint, LineSec, LineSegmented } from "@/features/lines/LineUi";
 import { ROUTE_DELIVERY_INFO, normalizeRouteDelivery, type RouteDelivery } from "@shared/routeGroup";
@@ -669,15 +670,15 @@ export function RouteGroupFields({
           {mode === "manual" ? <div className="mt-2" data-state={deciding === "pin" ? "deciding" : "idle"} data-testid="policy-pin">{pinPicker(false)}</div> : null}
           {usesSchedule ? <div className="mt-3" data-state={deciding === "schedule" ? "deciding" : "idle"} data-testid="policy-schedule">{scheduleEditor}</div> : null}
           {weighted ? (
-            <div className="mt-3">
-              <LinkSpreadPicker
+            <div className="mt-3 space-y-1.5">
+              {/* 和出口组同一个下拉框（统一负载均衡）：线路组这里只有能分连接的几种，主备在上面「怎么切」里 */}
+              <BalanceStrategySelect
                 value={routePolicy.spread}
-                options={ROUTE_SPREADS}
-                labels={ROUTE_SPREAD_LABELS}
-                onChange={(spread) => setPolicy({ spread })}
+                allowed={ROUTE_SPREADS}
+                onChange={(spread) => setPolicy({ spread: spread as typeof routePolicy.spread })}
                 ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
-                hint={udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}
               />
+              <p className="text-meta leading-5 text-muted-foreground">{udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}</p>
             </div>
           ) : null}
           {weighted && routePolicy.spread === "weighted" ? (
