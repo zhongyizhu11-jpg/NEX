@@ -5489,13 +5489,24 @@ function TunnelsContent() {
           setExitOrderOverride({ groupId: Number(exitGroup.id), hostIds: nextHostIds });
           reorderExitMutation.mutate({ groupId: Number(exitGroup.id), memberIds: next.map((member) => Number(member.id)) });
         };
-        // 每台出口到规则目标的情况（server/exitTargetHealth.ts）：取它在各条规则上最差的那次
-        const targetByHost = new Map((exitTargetsQuery.data || []).map((item) => [Number(item.hostId), item] as const));
+        /*
+          每台出口到规则目标的情况（server/exitTargetHealth.ts，2.3.535）：延迟取各条规则的中位数；每台都连不上 / 都不稳的
+          规则算目标的问题，单独一行，不标在出口上。上面一句「怎么走」，每台标在用 / 备用。
+        */
+        const targetSummary = exitTargetsQuery.data || null;
+        const targetByHost = new Map((targetSummary?.exits || []).map((item) => [Number(item.hostId), item] as const));
+        const hasTargetData = (targetSummary?.exits || []).some((item) => item.rules > 0);
+        const targetIssueDown = (targetSummary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
+        const targetIssueUnstable = (targetSummary?.targetIssues || []).filter((issue) => issue.kind === "unstable").length;
         const targetText = (hostId: number) => {
           const item = targetByHost.get(hostId);
-          if (!item) return null;
-          if (item.down > 0) return { tone: "down" as const, text: `目标不可达 · ${item.down} 条规则已切换` };
-          const latency = item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
+          if (!item || item.rules === 0) return null;
+          if (item.down > 0) return { tone: "down" as const, text: item.rules > 1 ? `${item.down} 条规则连不上目标` : "连不上目标，已切走" };
+          // 几条规则的目标远近不同：写成范围，不取平均
+          const low = item.minMs != null ? Math.round(item.minMs) : null;
+          const high = item.maxMs != null ? Math.round(item.maxMs) : null;
+          const latency = low != null && high != null && high - low >= 5 ? `目标 ${low}–${high}ms`
+            : item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
           const jitter = item.jitterMs != null ? ` · 抖动 ${Math.round(item.jitterMs)}ms` : "";
           if (item.unstable > 0) {
             const loss = item.lossPct != null && item.lossPct >= 10 ? ` · 丢包 ${Math.round(item.lossPct)}%` : "";
@@ -5512,6 +5523,7 @@ function TunnelsContent() {
                   {tunnel.name} · {pinActive ? "手动指定" : strategy} · {online} 台在线
                 </DialogDescription>
               </DialogHeader>
+              {targetSummary?.how && !pinActive ? <p className="fx-lb-how">{targetSummary.how}</p> : null}
               {pinActive ? (
                 <div className={cn("fx-lb-pin-banner", !pinOnline && "is-warn")}>
                   <span className="min-w-0 flex-1">
@@ -5546,7 +5558,11 @@ function TunnelsContent() {
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-primary-type font-medium">
                           {hostName(exit.hostId)}
-                          {index === 0 && !pinActive ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">主</span> : null}
+                          {pinActive ? null : hasTargetData ? (
+                            host?.isOnline && (targetByHost.get(exit.hostId)?.activeRules || 0) > 0
+                              ? <span className="fx-lb-badge ml-1.5 align-middle">在用</span>
+                              : <span className="ml-1.5 text-meta font-normal text-muted-foreground">备用</span>
+                          ) : index === 0 ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">主</span> : null}
                         </span>
                         <span className="truncate text-meta text-muted-foreground">
                           {[host?.isOnline ? "在线" : "离线", region, exit.weight ? `权重 ${exit.weight}` : ""].filter(Boolean).join(" · ")}
@@ -5568,6 +5584,11 @@ function TunnelsContent() {
                   );
                 })}
               </ul>
+              {targetIssueDown > 0 || targetIssueUnstable > 0 ? (
+                <p className="text-meta text-[var(--fx-warn-text)]">
+                  {targetIssueDown > 0 ? `${targetIssueDown} 条规则的目标从每台出口都连不上` : `${targetIssueUnstable} 条规则的目标从每台出口都不稳`}：问题在目标那边，出口不用换
+                </p>
+              ) : null}
               {canReorder ? (
                 <p className="text-meta text-muted-foreground">排序同步至出口组「{exitGroup?.name}」</p>
               ) : null}

@@ -156,7 +156,7 @@ import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { recordHostRateSample } from "./hostRateBuckets";
 import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrategy";
 import { balanceDetectForRuntime } from "@shared/loadBalance";
-import { exitTargetExcludedHostIds, exitTargetProbeSpec, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
+import { exitTargetExcludedHostIds, exitTargetProbeSpec, latencyOrderedExitHostIds, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
 import {
   getMimicLifecycleRevisionSignature,
   latestConfigRevision,
@@ -3113,8 +3113,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const excluded = pinned
         ? new Set(nodeHostIds.filter((hostId) => Number(hostId) !== pinHostId).map(Number))
         : nodes.length > 1 ? exitTargetExcludedHostIds(Number(rule.id), nodeHostIds) : new Set<number>();
-      const keptNodes = excluded.size > 0 ? nodes.filter((_, index) => !excluded.has(Number(nodeHostIds[index]))) : nodes;
-      const keptHostIds = excluded.size > 0 ? nodeHostIds.filter((hostId) => !excluded.has(Number(hostId))) : nodeHostIds;
+      let keptNodes = excluded.size > 0 ? nodes.filter((_, index) => !excluded.has(Number(nodeHostIds[index]))) : nodes;
+      let keptHostIds = excluded.size > 0 ? nodeHostIds.filter((hostId) => !excluded.has(Number(hostId))) : nodeHostIds;
+      // 延迟优先（2.3.535）：GOST 按顺序用（fifo），按每台到这条规则目标的延迟 + 抖动排，快的在前（带滞后，见 exitTargetHealth）
+      if (!pinned && keptNodes.length > 1 && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) === "latency") {
+        const order = latencyOrderedExitHostIds(Number(rule.id), keptHostIds.map(Number), tunnelBalanceDetect(tunnel));
+        const byHost = new Map(keptHostIds.map((hostId, index) => [Number(hostId), keptNodes[index]] as const));
+        keptNodes = order.map((hostId) => byHost.get(hostId)).filter(Boolean);
+        keptHostIds = order;
+      }
       // 按权重 / 按负载：份数写进节点的 metadata.weight，gost 的 rand 按它加权随机（gostExitSelector）。
       // 以前是把出口按份数重复列，可每一份各记各的失败：权重 5 的出口挂了要失败 5 次才全部跳过。
       const weights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, keptHostIds, tunnel);

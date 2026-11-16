@@ -829,9 +829,22 @@ export const tunnelsRouter = router({
   exitTargets: protectedProcedure
     .input(z.object({ tunnelId: z.number().int().positive() }))
     .query(async ({ input, ctx }) => {
-      const tunnel = await db.getTunnelById(input.tunnelId);
-      if (!tunnel || !await canAccessTunnelRecord(tunnel, ctx.user)) return [];
-      return exitTargetSummaryForTunnel(input.tunnelId);
+      const tunnel = await db.getTunnelById(input.tunnelId) as Parameters<typeof exitTargetSummaryForTunnel>[0] & { userId?: number } | null;
+      if (!tunnel || !await canAccessTunnelRecord(tunnel, ctx.user)) return null;
+      // 出口按真实顺序：主出口在前，其余按 seq（和下发给入口的顺序一样）
+      const extraExitNodes = (await hopRepo.getTunnelExitNodes(input.tunnelId) || []) as Array<{ hostId?: number | null; seq?: number | null; isEnabled?: unknown }>;
+      const exitHostIds = Array.from(new Set([
+        Number(tunnel.exitHostId || 0),
+        ...extraExitNodes
+          .filter((node) => node.isEnabled !== false && node.isEnabled !== 0)
+          .sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0))
+          .map((node) => Number(node.hostId || 0)),
+      ].filter((hostId) => hostId > 0)));
+      const hostRows = await db.getHostsByIds(exitHostIds) as Array<{ id: number; name?: string | null; isOnline?: unknown }>;
+      const hostNames = new Map(hostRows.map((row) => [Number(row.id), String(row.name || `主机 ${row.id}`)]));
+      const pinHostId = Number(tunnel.balancePinHostId || 0);
+      const pinOnline = pinHostId > 0 && hostRows.some((row) => Number(row.id) === pinHostId && (row.isOnline === true || row.isOnline === 1));
+      return exitTargetSummaryForTunnel(tunnel, exitHostIds, { hostNames, pinOnline });
     }),
   /**
    * 负载均衡手动切换：只用某一台出口（hostId=null 交回自动）。

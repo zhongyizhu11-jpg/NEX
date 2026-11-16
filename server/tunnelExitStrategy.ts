@@ -101,10 +101,11 @@ export function shouldUseFastTunnelFailover(exitCandidateCount: number, relayFai
 export function gostExitSelector(value: unknown) {
   const strategy = normalizeExitGroupStrategy(value);
   return {
-    strategy: strategy === "fallback" ? "fifo"
-      : strategy === "random" || strategy === "weighted" || strategy === "least_load" || strategy === "auto" || strategy === "latency" ? "random"
+    // 延迟优先：面板按到目标的延迟把节点排好（快的在前），GOST 按顺序用（2.3.535，以前当随机）
+    strategy: strategy === "fallback" || strategy === "latency" ? "fifo"
+      : strategy === "random" || strategy === "weighted" || strategy === "least_load" || strategy === "auto" ? "random"
         : strategy === "ip_hash" ? "hash" : "round",
     maxFails: 1,
-    failTimeout: strategy === "fallback" ? "5s" : "15s",
+    failTimeout: strategy === "fallback" || strategy === "latency" ? "5s" : "15s",
   };
 }
