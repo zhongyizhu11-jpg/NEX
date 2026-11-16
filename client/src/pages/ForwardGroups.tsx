@@ -114,6 +114,7 @@ import {
 } from "lucide-react";
 import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { BalanceDetectPanel, BalanceStrategySelect, BalanceSummaryLine } from "@/features/links/LoadBalanceFields";
@@ -874,7 +875,8 @@ export function ForwardGroupsContent({
   });
   const pageGroups = (groupPageQuery.data?.items || []) as any[];
   const relatedPageGroups = (groupPageQuery.data?.relatedGroups || []) as any[];
-  const groups = (fullGroupQuery.data || [...pageGroups, ...relatedPageGroups]) as any[];
+  // 全量列表只在它开着（会刷新）时用：关掉后缓存不再刷新，下次点「编辑」会拿旧的成员 / 启用状态填表（2.3.535）
+  const groups = ((needsFullGroupList ? fullGroupQuery.data : undefined) || [...pageGroups, ...relatedPageGroups]) as any[];
   // 2.3.497：组的成员可以跟着节点池（线路 → 节点池页设）；编辑时提示一下，并能就地取消跟随。
   // 2.3.499：组回到分类条上各自一页，卡上也写跟着哪个池（以前只有节点池页上看得见）。
   const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
@@ -1017,12 +1019,15 @@ export function ForwardGroupsContent({
     }, 220);
   };
 
+  // 保存前「关闭整个组？」那个确认框开着时，点它算点在编辑框外面，编辑框会跟着关掉 —— 这段时间不让它关
+  const confirmOpenRef = useRef(false);
   const handleDialogOpenChange = (open: boolean) => {
     if (open) {
       clearCloseResetTimer();
       setShowDialog(true);
       return;
     }
+    if (confirmOpenRef.current) return;
     closeDialog();
   };
 
@@ -1151,12 +1156,14 @@ export function ForwardGroupsContent({
   */
   useEffect(() => {
     if (!editRequest || editRequest.requestKey === lastEditRequestKeyRef.current) return;
+    // 等全量列表这一次刷新完：缓存里可能是旧的，拿它填表再保存会把旧状态写回去
+    if (fullGroupQuery.isFetching) return;
     const group = groups.find((item: any) => Number(item.id) === Number(editRequest.id));
     if (group) {
       lastEditRequestKeyRef.current = editRequest.requestKey;
       openEdit(group);
     }
-  }, [editRequest?.id, editRequest?.requestKey, groups]);
+  }, [editRequest?.id, editRequest?.requestKey, groups, fullGroupQuery.isFetching]);
 
   const createMutation = trpc.forwardGroups.create.useMutation({
     onSuccess: () => {
@@ -1511,6 +1518,7 @@ export function ForwardGroupsContent({
     setForm({ ...form, members: items });
   };
 
+  const confirmDialog = useConfirmDialog();
   const handleSubmit = () => {
     const isPortMode = form.groupMode === "port";
     const isFailoverMode = form.groupMode === "failover";
@@ -1640,8 +1648,38 @@ export function ForwardGroupsContent({
         ddnsLines: isFailoverMode || isEntryGroup ? member.ddnsLines || [] : null,
       })),
     };
-    if (editingId) updateMutation.mutate({ id: editingId, ...payload });
-    else createMutation.mutate(payload);
+    if (!editingId) {
+      createMutation.mutate(payload);
+      return;
+    }
+    /*
+      存的时候顺手把整个入口组 / 出口组关了：用它的链路全部跟着停（2.3.535，用户反馈停用两台出口、保存后
+      出口组被关、链路全断）。原来开着、这次要关，先问一句，写清楚会停几条链路。
+    */
+    type GroupLite = { id?: unknown; isEnabled?: unknown };
+    const editingGroup = (pageGroups as GroupLite[]).find((group) => Number(group.id) === editingId)
+      || (groups as GroupLite[]).find((group) => Number(group.id) === editingId);
+    const wasEnabled = editingGroup ? editingGroup.isEnabled !== false && editingGroup.isEnabled !== 0 && editingGroup.isEnabled !== "0" : false;
+    if ((isEntryGroup || isExitGroup) && wasEnabled && !form.isEnabled) {
+      const linkCount = ((tunnels || []) as Array<{ exitGroupId?: unknown; entryGroupId?: unknown }>)
+        .filter((tunnel) => Number(isExitGroup ? tunnel?.exitGroupId : tunnel?.entryGroupId) === editingId).length;
+      confirmOpenRef.current = true;
+      void confirmDialog({
+        title: `关闭${isExitGroup ? "出口组" : "入口组"}「${form.name.trim()}」？`,
+        description: linkCount > 0
+          ? `顶部「启用」没勾：保存后这个组停用，用它的 ${linkCount} 条链路和上面的规则全部停止。只是想停某台机器，去勾掉那一台的「启用」。`
+          : "顶部「启用」没勾：保存后这个组停用。只是想停某台机器，去勾掉那一台的「启用」。",
+        confirmText: "关闭并保存",
+        cancelText: "返回修改",
+        tone: "destructive",
+      }).then((ok) => {
+        // 确认框关掉的那一下的「点外面」事件过去之后再放开
+        window.setTimeout(() => { confirmOpenRef.current = false; }, 300);
+        if (ok) updateMutation.mutate({ id: editingId, ...payload });
+      });
+      return;
+    }
+    updateMutation.mutate({ id: editingId, ...payload });
   };
 
   const renderGroupEnabledSwitch = (group: any) => {

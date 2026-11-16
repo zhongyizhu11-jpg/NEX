@@ -2172,9 +2172,21 @@ function TunnelsContent() {
     },
     onError: (error) => toast.error(error.message),
   });
+  // ↑↓ 点了马上换位置（排序要重铺链路，接口要等一会儿）；服务端顺序跟上后丢掉
+  const [exitOrderOverride, setExitOrderOverride] = useState<{ groupId: number; hostIds: number[] } | null>(null);
+  const pendingExitReorders = useRef(0);
   const reorderExitMutation = trpc.forwardGroups.reorder.useMutation({
-    onSuccess: () => { void refreshAfterExitChange(); },
-    onError: (error) => toast.error(error.message),
+    onMutate: () => { pendingExitReorders.current += 1; },
+    onSuccess: async () => {
+      await refreshAfterExitChange();
+      // 连点几下时等最后一次回来、列表刷新后再交给服务端的顺序，中间不闪回去
+      if (pendingExitReorders.current <= 1) setExitOrderOverride(null);
+    },
+    onError: (error) => {
+      setExitOrderOverride(null);
+      toast.error(error.message);
+    },
+    onSettled: () => { pendingExitReorders.current = Math.max(0, pendingExitReorders.current - 1); },
   });
   const [form, setForm] = useState<TunnelForm>(defaultForm);
   const [listenPortExplicit, setListenPortExplicit] = useState(false);
@@ -2375,7 +2387,8 @@ function TunnelsContent() {
       : (tunnelPageQuery.data?.relatedGroups || []) as any[];
     return Array.from(new Map(source.map((group: any) => [Number(group.id), group])).values());
   }, [isTunnelGlobeView, tunnelMapQuery.data?.pages, tunnelPageQuery.data?.relatedGroups]);
-  const forwardGroups = (fullForwardGroupQuery.data || relatedTunnelGroups) as any[];
+  // 全量列表只在它开着（会刷新）的时候用：关掉后它的缓存不再刷新，负载均衡弹窗里调完顺序还显示旧的（2.3.535）
+  const forwardGroups = ((needsFullForwardGroupList ? fullForwardGroupQuery.data : undefined) || relatedTunnelGroups) as any[];
   const forwardGroupsLoading = needsFullForwardGroupList
     ? fullForwardGroupQuery.isLoading
     : activeForwardGroupMode !== null
@@ -5429,8 +5442,14 @@ function TunnelsContent() {
           }
         };
         if (groupMembers.length > 0) {
-          // 出口组：按组里的顺序，停用的成员不算
-          for (const member of groupMembers) push(Number(member.hostId), Number(member.aggregationWeight) > 0 ? Number(member.aggregationWeight) : null);
+          // 出口组：按组里的顺序，停用的成员不算；刚点过 ↑↓ 的先按点的顺序显示
+          const override = exitOrderOverride && exitOrderOverride.groupId === Number(exitGroup?.id) ? exitOrderOverride.hostIds : null;
+          const serverOrder = groupMembers.map((member) => Number(member.hostId));
+          const useOverride = !!override && override.length === serverOrder.length && override.every((id) => serverOrder.includes(id));
+          const ordered = useOverride
+            ? override.map((hostId) => groupMembers.find((member) => Number(member.hostId) === hostId)!)
+            : groupMembers;
+          for (const member of ordered) push(Number(member.hostId), Number(member.aggregationWeight) > 0 ? Number(member.aggregationWeight) : null);
         } else {
           push(Number(tunnel.exitHostId || 0), null);
           const lbExits: unknown[] = Array.isArray(tunnel.loadBalanceExits) ? tunnel.loadBalanceExits : [];
@@ -5450,26 +5469,44 @@ function TunnelsContent() {
         const pinOnline = pinActive && !!hostLookup.get(pinHostId)?.isOnline;
         const canPin = exits.length > 1 && (user?.role === "admin" || Number(tunnel.userId) === Number(user?.id));
         const canReorder = exits.length > 1 && groupMembers.length > 1 && user?.role === "admin";
-        const busy = setExitPinMutation.isPending || reorderExitMutation.isPending;
+        const busy = setExitPinMutation.isPending;
         const setPin = (hostId: number | null) => setExitPinMutation.mutate({ tunnelId: Number(tunnel.id), hostId });
         const move = (hostId: number, delta: -1 | 1) => {
           if (!exitGroup) return;
           // 整组成员（含停用的、非主机的）按顺序排，只和相邻的那台启用出口对调
+          // 停用的、非主机的成员留在原位，启用的出口按现在显示的顺序（含刚点过还没回来的）填回去
           const all = [...((exitGroup.members || []) as ExitMemberLite[])].sort((a, b) => Number(a?.priority || 0) - Number(b?.priority || 0));
-          const from = all.findIndex((member) => member?.memberType === "host" && Number(member?.hostId) === hostId);
-          const neighborHostId = exits[exits.findIndex((exit) => exit.hostId === hostId) + delta]?.hostId;
-          const to = all.findIndex((member) => member?.memberType === "host" && Number(member?.hostId) === neighborHostId);
-          if (from < 0 || to < 0) return;
-          [all[from], all[to]] = [all[to], all[from]];
-          reorderExitMutation.mutate({ groupId: Number(exitGroup.id), memberIds: all.map((member) => Number(member.id)) });
+          const index = exits.findIndex((exit) => exit.hostId === hostId);
+          const target = index + delta;
+          if (index < 0 || target < 0 || target >= exits.length) return;
+          const nextHostIds = exits.map((exit) => exit.hostId);
+          [nextHostIds[index], nextHostIds[target]] = [nextHostIds[target], nextHostIds[index]];
+          const slots = all.map((member, slot) => (member?.memberType === "host" && nextHostIds.includes(Number(member?.hostId)) ? slot : -1)).filter((slot) => slot >= 0);
+          const byHost = new Map(all.filter((member) => member?.memberType === "host").map((member) => [Number(member.hostId), member] as const));
+          const next = [...all];
+          slots.forEach((slot, order) => { next[slot] = byHost.get(nextHostIds[order])!; });
+          if (next.some((member) => !member || !(Number(member.id) > 0))) return;
+          setExitOrderOverride({ groupId: Number(exitGroup.id), hostIds: nextHostIds });
+          reorderExitMutation.mutate({ groupId: Number(exitGroup.id), memberIds: next.map((member) => Number(member.id)) });
         };
-        // 每台出口到规则目标的情况（server/exitTargetHealth.ts）：取它在各条规则上最差的那次
-        const targetByHost = new Map((exitTargetsQuery.data || []).map((item) => [Number(item.hostId), item] as const));
+        /*
+          每台出口到规则目标的情况（server/exitTargetHealth.ts，2.3.535）：延迟取各条规则的中位数；每台都连不上 / 都不稳的
+          规则算目标的问题，单独一行，不标在出口上。上面一句「怎么走」，每台标在用 / 备用。
+        */
+        const targetSummary = exitTargetsQuery.data || null;
+        const targetByHost = new Map((targetSummary?.exits || []).map((item) => [Number(item.hostId), item] as const));
+        const hasTargetData = (targetSummary?.exits || []).some((item) => item.rules > 0);
+        const targetIssueDown = (targetSummary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
+        const targetIssueUnstable = (targetSummary?.targetIssues || []).filter((issue) => issue.kind === "unstable").length;
         const targetText = (hostId: number) => {
           const item = targetByHost.get(hostId);
-          if (!item) return null;
-          if (item.down > 0) return { tone: "down" as const, text: `目标不可达 · ${item.down} 条规则已切换` };
-          const latency = item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
+          if (!item || item.rules === 0) return null;
+          if (item.down > 0) return { tone: "down" as const, text: item.rules > 1 ? `${item.down} 条规则连不上目标` : "连不上目标，已切走" };
+          // 几条规则的目标远近不同：写成范围，不取平均
+          const low = item.minMs != null ? Math.round(item.minMs) : null;
+          const high = item.maxMs != null ? Math.round(item.maxMs) : null;
+          const latency = low != null && high != null && high - low >= 5 ? `目标 ${low}–${high}ms`
+            : item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
           const jitter = item.jitterMs != null ? ` · 抖动 ${Math.round(item.jitterMs)}ms` : "";
           if (item.unstable > 0) {
             const loss = item.lossPct != null && item.lossPct >= 10 ? ` · 丢包 ${Math.round(item.lossPct)}%` : "";
@@ -5478,7 +5515,7 @@ function TunnelsContent() {
           return { tone: "ok" as const, text: `${latency}${jitter}` };
         };
         return (
-          <Dialog open onOpenChange={(open) => { if (!open) setExitGroupDialogTunnel(null); }}>
+          <Dialog open onOpenChange={(open) => { if (!open) { setExitGroupDialogTunnel(null); setExitOrderOverride(null); } }}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>负载均衡出口 · {exits.length} 台</DialogTitle>
@@ -5486,6 +5523,7 @@ function TunnelsContent() {
                   {tunnel.name} · {pinActive ? "手动指定" : strategy} · {online} 台在线
                 </DialogDescription>
               </DialogHeader>
+              {targetSummary?.how && !pinActive ? <p className="fx-lb-how">{targetSummary.how}</p> : null}
               {pinActive ? (
                 <div className={cn("fx-lb-pin-banner", !pinOnline && "is-warn")}>
                   <span className="min-w-0 flex-1">
@@ -5520,7 +5558,11 @@ function TunnelsContent() {
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-primary-type font-medium">
                           {hostName(exit.hostId)}
-                          {index === 0 && !pinActive ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">主</span> : null}
+                          {pinActive ? null : hasTargetData ? (
+                            host?.isOnline && (targetByHost.get(exit.hostId)?.activeRules || 0) > 0
+                              ? <span className="fx-lb-badge ml-1.5 align-middle">在用</span>
+                              : <span className="ml-1.5 text-meta font-normal text-muted-foreground">备用</span>
+                          ) : index === 0 ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">主</span> : null}
                         </span>
                         <span className="truncate text-meta text-muted-foreground">
                           {[host?.isOnline ? "在线" : "离线", region, exit.weight ? `权重 ${exit.weight}` : ""].filter(Boolean).join(" · ")}
@@ -5542,6 +5584,11 @@ function TunnelsContent() {
                   );
                 })}
               </ul>
+              {targetIssueDown > 0 || targetIssueUnstable > 0 ? (
+                <p className="text-meta text-[var(--fx-warn-text)]">
+                  {targetIssueDown > 0 ? `${targetIssueDown} 条规则的目标从每台出口都连不上` : `${targetIssueUnstable} 条规则的目标从每台出口都不稳`}：问题在目标那边，出口不用换
+                </p>
+              ) : null}
               {canReorder ? (
                 <p className="text-meta text-muted-foreground">排序同步至出口组「{exitGroup?.name}」</p>
               ) : null}

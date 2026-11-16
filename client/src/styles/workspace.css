@@ -2189,6 +2189,10 @@ html.fx-theme-fading *::after {
   color: var(--primary); background: color-mix(in oklab, var(--primary) 10%, transparent);
 }
 .fx-lb-pin-banner.is-warn { color: var(--fx-warn-text); background: color-mix(in oklab, var(--fx-warn-text) 10%, transparent); }
+.fx-lb-how {
+  padding: 8px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.45;
+  color: var(--foreground); background: var(--fx-l1-surface, color-mix(in oklab, var(--muted) 60%, transparent));
+}
 .fx-lb-move { display: inline-flex; flex-direction: column; flex-shrink: 0; margin-left: -4px; }
 .fx-lb-move > button {
   position: relative; display: inline-flex; align-items: center; justify-content: center;

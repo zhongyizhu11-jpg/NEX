@@ -69,6 +69,7 @@ function finiteOrNull(value: unknown) {
 /** 只给测试用 */
 export function resetExitTargetStates() {
   states.clear();
+  latencyLeaderByRule.clear();
 }
 
 /** 只给测试用：直接放一条状态（不走数据库校验） */
@@ -79,6 +80,7 @@ export function setExitTargetStateForTest(state: ExitTargetState) {
 type TunnelRow = {
   id: number;
   mode?: string | null;
+  balancePinHostId?: number | null;
   entryHostId?: number | null;
   entryGroupId?: number | null;
   exitHostId?: number | null;
@@ -178,11 +180,23 @@ export async function ingestExitTargetReports(input: {
     if (!previous || previous.down !== next.down || wasBad !== isBad) next.changedAt = nowMs;
     states.set(key, next);
     recorded += 1;
-    if (previous && previous.down !== next.down) {
-      flipped.push(Number(rule.id));
-      appendPanelLog(next.down ? "warn" : "info", `[LoadBalance] rule=${rule.id} 出口 ${hostName} ${next.down ? "连不上目标" : "到目标恢复"}（tunnel=${tunnel.id}）`);
+    const isGost = String(tunnel.mode || "").toLowerCase() !== "forwardx";
+    // GOST「延迟优先」：最快的那台换了（过了滞后门槛），入口要重新拿配置才会按新顺序走
+    let leaderChanged = false;
+    if (isGost && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) === "latency") {
+      const exitIds = Array.from(exitHostsByTunnel.get(Number(tunnel.id)) || []);
+      const leader = latencyLeaderByRule.get(Number(rule.id));
+      const nextLeader = exitIds.length > 1 ? latencyOrderedExitHostIds(Number(rule.id), exitIds, detect, { nowMs, remember: false })[0] : undefined;
+      leaderChanged = leader != null && nextLeader != null && nextLeader !== leader;
+      if (leaderChanged) appendPanelLog("info", `[LoadBalance] rule=${rule.id} 延迟优先换到出口 ${nextLeader}（tunnel=${tunnel.id}）`);
+    }
+    if ((previous && previous.down !== next.down) || leaderChanged) {
+      if (previous && previous.down !== next.down) {
+        flipped.push(Number(rule.id));
+        appendPanelLog(next.down ? "warn" : "info", `[LoadBalance] rule=${rule.id} 出口 ${hostName} ${next.down ? "连不上目标" : "到目标恢复"}（tunnel=${tunnel.id}）`);
+      }
       // GOST 隧道要入口重新拿配置才会摘掉 / 加回这台出口；NEX 隧道入口自己会换，不用推。
-      if (String(tunnel.mode || "").toLowerCase() !== "forwardx") {
+      if (isGost) {
         if (Number(tunnel.entryHostId || 0) > 0) refreshHosts.add(Number(tunnel.entryHostId));
         // 入口是入口组：组里每台都替这条链路监听，都要推
         if (Number(tunnel.entryGroupId || 0) > 0) {
@@ -200,21 +214,234 @@ export async function ingestExitTargetReports(input: {
  * 一条链路每台出口到目标的情况（链路卡上点「负载均衡 ×N」的弹窗用）：每台出口取它在各条规则上最差的那次，
  * 再数一数几条规则连不上 / 不稳。
  */
-export function exitTargetSummaryForTunnel(tunnelId: number, nowMs = Date.now()) {
-  const byHost = new Map<number, { hostId: number; rules: number; down: number; unstable: number; medianMs: number | null; jitterMs: number | null; lossPct: number | null }>();
-  for (const state of states.values()) {
-    if (state.tunnelId !== Number(tunnelId) || nowMs - state.at > EXIT_TARGET_STALE_MS) continue;
-    const entry = byHost.get(state.hostId) || { hostId: state.hostId, rules: 0, down: 0, unstable: 0, medianMs: null, jitterMs: null, lossPct: null };
-    entry.rules += 1;
-    if (state.down) entry.down += 1;
-    else if (state.unstable) entry.unstable += 1;
-    const median = state.medianMs ?? state.latencyMs;
-    if (median != null) entry.medianMs = Math.max(entry.medianMs ?? 0, median);
-    if (state.jitterMs != null) entry.jitterMs = Math.max(entry.jitterMs ?? 0, state.jitterMs);
-    if (state.lossPct != null) entry.lossPct = Math.max(entry.lossPct ?? 0, state.lossPct);
-    byHost.set(state.hostId, entry);
+export type ExitTargetExitSummary = {
+  hostId: number;
+  /** 有数据的规则条数 */
+  rules: number;
+  /** 只有这台连不上的规则条数（每台都连不上的算目标的问题，不记在这里） */
+  down: number;
+  /** 只有这台不稳的规则条数 */
+  unstable: number;
+  /** 各条规则到目标延迟的中位数（不取最差：目标远的那条规则每台都慢，不是出口的问题） */
+  medianMs: number | null;
+  /** 各条规则到目标延迟的最小 / 最大（规则的目标远近不同，弹窗写成 10–212ms） */
+  minMs: number | null;
+  maxMs: number | null;
+  jitterMs: number | null;
+  lossPct: number | null;
+  /** 按现在的分配方式会分到流量的规则条数（NEX 隧道是面板按同一套规则估的，GOST 是真实的节点顺序） */
+  activeRules: number;
+};
+
+export type ExitTargetTunnelSummary = {
+  exits: ExitTargetExitSummary[];
+  /** 每台出口都连不上 / 都不稳的规则：问题在目标那边 */
+  targetIssues: Array<{ ruleId: number; kind: "down" | "unstable" }>;
+  /** 一句话：现在怎么走 */
+  how: string | null;
+};
+
+const middle = (values: number[]) => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/** 打分：到目标延迟 + 抖动（和 FXP 的「延迟优先」一样）；没数据返回 null。 */
+function exitTargetScore(state: ExitTargetState | undefined) {
+  if (!state || state.down) return null;
+  const median = state.medianMs ?? state.latencyMs;
+  return median == null ? null : median + (state.jitterMs ?? 0);
+}
+
+/*
+  GOST「延迟优先」：GOST 只会按顺序用（fifo，前面的连不上换下一台），面板按每台出口到这条规则目标的
+  延迟 + 抖动排好顺序给它。带一点滞后：新的最快那台要比现在排第一的快过「延迟差多少才换」（默认 50ms）
+  才换到前面 —— 不然两台差不多快时每次探测都在换顺序，GOST 跟着热更新。
+*/
+const latencyLeaderByRule = new Map<number, number>();
+
+export function latencyOrderedExitHostIds(
+  ruleId: number,
+  hostIds: readonly number[],
+  detect: BalanceDetect,
+  options: { nowMs?: number; remember?: boolean } = {},
+): number[] {
+  const fresh = new Map(exitTargetStatesForRule(ruleId, options.nowMs).map((state) => [state.hostId, state]));
+  const penalized = (hostId: number) => detect.jitterAction !== "ignore" && fresh.get(hostId)?.unstable === true;
+  const scored = hostIds.map((hostId, index) => ({ hostId, index, score: exitTargetScore(fresh.get(hostId)), bad: penalized(hostId) }));
+  const rank = (item: (typeof scored)[number]) => [item.score == null ? 2 : item.bad ? 1 : 0, item.score ?? 0, item.index];
+  const ordered = [...scored].sort((left, right) => {
+    const a = rank(left);
+    const b = rank(right);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  });
+  const leader = latencyLeaderByRule.get(Number(ruleId));
+  const current = leader != null ? ordered.find((item) => item.hostId === leader) : undefined;
+  const best = ordered[0];
+  if (current && best && current !== best && current.score != null && best.score != null && !current.bad
+    && best.score > current.score - detect.latencyMarginMs) {
+    ordered.splice(ordered.indexOf(current), 1);
+    ordered.unshift(current);
   }
-  return Array.from(byHost.values()).sort((left, right) => left.hostId - right.hostId);
+  if (options.remember !== false && ordered[0]?.score != null) latencyLeaderByRule.set(Number(ruleId), ordered[0].hostId);
+  return ordered.map((item) => item.hostId);
+}
+
+/**
+ * 一条规则按现在的分配方式会走哪几台（链路弹窗「怎么走」用）。
+ * NEX 隧道：入口的 FXP 自己挑，面板拿不到它每次挑了谁，这里按同一套规则估（不含入口到出口那一段）。
+ * GOST：主备 / 延迟优先是真实的节点顺序；其余是随机 / 轮流，摘掉连不上的。
+ */
+function activeExitsForRule(input: {
+  strategy: string;
+  gost: boolean;
+  ordered: readonly number[];
+  fresh: Map<number, ExitTargetState>;
+  detect: BalanceDetect;
+  allDown: boolean;
+  pinHostId: number;
+  ruleId: number;
+}): number[] {
+  const { strategy, gost, ordered, fresh, detect } = input;
+  if (input.pinHostId > 0 && ordered.includes(input.pinHostId)) return [input.pinHostId];
+  const usable = input.allDown ? [...ordered] : ordered.filter((hostId) => fresh.get(hostId)?.down !== true);
+  if (usable.length === 0) return [];
+  const dropUnstable = (list: number[]) => {
+    if (gost || detect.jitterAction !== "switch") return list;
+    const stable = list.filter((hostId) => fresh.get(hostId)?.unstable !== true);
+    return stable.length > 0 ? stable : list;
+  };
+  if (strategy === "fallback") return [usable[0]];
+  if (strategy === "latency") {
+    if (gost) return [latencyOrderedExitHostIds(input.ruleId, usable, detect, { remember: false })[0]];
+    const candidates = dropUnstable(usable);
+    const scores = candidates.map((hostId) => exitTargetScore(fresh.get(hostId)));
+    const known = scores.filter((score): score is number => score != null);
+    if (known.length === 0) return candidates;
+    const best = Math.min(...known);
+    return candidates.filter((_, index) => scores[index] != null && (scores[index] as number) - best <= detect.latencyMarginMs);
+  }
+  return gost ? usable : dropUnstable(usable);
+}
+
+function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; active: number[]; total: number; names: (ids: number[]) => string; marginMs: number }) {
+  const { strategy, gost, active, names } = input;
+  if (active.length === 0) return null;
+  if (input.pinned) return `手动指定：只走 ${names(active)}`;
+  const rest = input.total - active.length;
+  const restText = rest > 0 ? `，${rest} 台备用` : "";
+  switch (strategy) {
+    case "fallback":
+      return `主备：走 ${names(active)}${restText}`;
+    case "latency":
+      if (gost) return `延迟优先：走 ${names(active)}（到目标最快），连不上自动换下一台`;
+      return active.length === 1
+        ? `延迟优先：走 ${names(active)}（到目标最快）${restText}`
+        : `延迟优先：${names(active)}（差不到 ${input.marginMs}ms，按负载分）${restText}`;
+    case "auto":
+      return gost ? `自动：在 ${names(active)} 之间随机分${restText}` : `自动：分给 ${names(active)}，按延迟、抖动和负载挑${restText}`;
+    case "least_load":
+      return gost ? `按负载：在 ${names(active)} 之间随机分${restText}` : `按负载：分给 ${names(active)}，谁闲给谁${restText}`;
+    case "weighted":
+      return `按权重：分给 ${names(active)}${restText}`;
+    case "round_robin":
+      return `轮流：${names(active)} 一台一个连接${restText}`;
+    case "random":
+      return `随机：在 ${names(active)} 之间随机分${restText}`;
+    case "ip_hash":
+      return `按访客固定：同一个访客一直走同一台（${names(active)}）${restText}`;
+    default:
+      return `分给 ${names(active)}${restText}`;
+  }
+}
+
+/**
+ * 链路弹窗：每台出口到目标的情况 + 现在怎么走。
+ * 每台出口都连不上（或都不稳）的规则单独列出来，不算到哪台出口头上 —— 那是目标的问题；延迟取各条规则的中位数，
+ * 不取最差（以前一条规则的目标在国外，三台出口都显示 200ms、全标「不稳定」）。
+ */
+export function exitTargetSummaryForTunnel(
+  tunnel: TunnelRow | null | undefined,
+  orderedExitHostIds: readonly number[],
+  options: { nowMs?: number; pinOnline?: boolean; hostNames?: Map<number, string> } = {},
+): ExitTargetTunnelSummary {
+  const nowMs = options.nowMs ?? Date.now();
+  const tunnelId = Number(tunnel?.id || 0);
+  const exitIds = orderedExitHostIds.map(Number).filter((id) => id > 0);
+  const detect = tunnelBalanceDetect(tunnel);
+  const strategy = normalizeExitGroupStrategy(tunnel?.loadBalanceStrategy);
+  const gost = String(tunnel?.mode || "").toLowerCase() !== "forwardx";
+  const pinHostId = options.pinOnline === false ? 0 : Number(tunnel?.balancePinHostId || 0);
+  const byRule = new Map<number, Map<number, ExitTargetState>>();
+  for (const state of states.values()) {
+    if (state.tunnelId !== tunnelId || nowMs - state.at > EXIT_TARGET_STALE_MS || !exitIds.includes(state.hostId)) continue;
+    const map = byRule.get(state.ruleId) || new Map<number, ExitTargetState>();
+    map.set(state.hostId, state);
+    byRule.set(state.ruleId, map);
+  }
+  const perExit = new Map(exitIds.map((hostId) => [hostId, { rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0 }]));
+  const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
+  const hows = new Map<string, number>();
+  const names = (ids: number[]) => ids.map((id) => options.hostNames?.get(id) || `主机 ${id}`).join("、");
+  for (const [ruleId, fresh] of byRule) {
+    const reporting = Array.from(fresh.values());
+    const allDown = reporting.length >= 2 && reporting.length === exitIds.length && reporting.every((state) => state.down);
+    const allUnstable = !allDown && reporting.length >= 2 && reporting.length === exitIds.length && reporting.every((state) => state.down || state.unstable);
+    if (allDown) targetIssues.push({ ruleId, kind: "down" });
+    else if (allUnstable) targetIssues.push({ ruleId, kind: "unstable" });
+    for (const state of reporting) {
+      const entry = perExit.get(state.hostId);
+      if (!entry) continue;
+      entry.rules += 1;
+      if (state.down && !allDown) entry.down += 1;
+      else if (state.unstable && !allDown && !allUnstable) entry.unstable += 1;
+      const median = state.medianMs ?? state.latencyMs;
+      if (!state.down && median != null) entry.medians.push(median);
+      if (!state.down && state.jitterMs != null) entry.jitters.push(state.jitterMs);
+      if (state.lossPct != null) entry.losses.push(state.lossPct);
+    }
+    // 每台都连不上的规则：入口怎么挑都一样，不算「怎么走」
+    if (allDown) continue;
+    const active = activeExitsForRule({ strategy, gost, ordered: exitIds, fresh, detect, allDown, pinHostId, ruleId });
+    for (const hostId of active) {
+      const entry = perExit.get(hostId);
+      if (entry) entry.activeRules += 1;
+    }
+    const how = describeHow({ strategy, gost, pinned: pinHostId > 0 && exitIds.includes(pinHostId), active, total: exitIds.length, names, marginMs: detect.latencyMarginMs });
+    if (how) hows.set(how, (hows.get(how) || 0) + 1);
+  }
+  let how: string | null = null;
+  if (hows.size > 0) {
+    const sorted = Array.from(hows.entries()).sort((left, right) => right[1] - left[1]);
+    const counted = sorted.reduce((sum, [, count]) => sum + count, 0);
+    how = sorted[0][0] + (sorted.length > 1 ? `（${counted} 条规则里 ${sorted[0][1]} 条）` : "");
+  } else if (exitIds.length > 0) {
+    // 还没有探测数据：按配置说
+    const active = pinHostId > 0 && exitIds.includes(pinHostId) ? [pinHostId] : strategy === "fallback" ? [exitIds[0]] : [...exitIds];
+    how = describeHow({ strategy: strategy === "latency" ? "auto" : strategy, gost, pinned: pinHostId > 0 && exitIds.includes(pinHostId), active, total: exitIds.length, names, marginMs: detect.latencyMarginMs });
+    if (strategy === "latency") how = `延迟优先：还在测每台到目标的延迟，测出来之前分给 ${names(active)}`;
+  }
+  return {
+    exits: exitIds.map((hostId) => {
+      const entry = perExit.get(hostId)!;
+      return {
+        hostId,
+        rules: entry.rules,
+        down: entry.down,
+        unstable: entry.unstable,
+        medianMs: middle(entry.medians),
+        minMs: entry.medians.length > 0 ? Math.min(...entry.medians) : null,
+        maxMs: entry.medians.length > 0 ? Math.max(...entry.medians) : null,
+        jitterMs: middle(entry.jitters),
+        lossPct: middle(entry.losses),
+        activeRules: entry.activeRules,
+      };
+    }),
+    targetIssues,
+    how,
+  };
 }
 
 /** 一条规则各台出口到目标的情况（只要新鲜的）。 */

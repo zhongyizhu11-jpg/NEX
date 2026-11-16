@@ -7,6 +7,7 @@ import {
   exitTargetProbeSpec,
   exitTargetSummaryForTunnel,
   exitTargetUnstable,
+  latencyOrderedExitHostIds,
   resetExitTargetStates,
   setExitTargetStateForTest,
   tunnelBalancesExits,
@@ -96,14 +97,57 @@ test("GOST 隧道上的抖动只写出来，不说「已少分」", () => {
   assert.equal(withRuleExitTargets([{ ruleId: 7 }])[0].exitTargetNote, "2 台出口里 A 到目标丢包 12%");
 });
 
-test("链路弹窗：每台出口取各条规则里最差的那次", () => {
+test("链路弹窗：延迟取各条规则的中位数，每台都连不上的规则算目标的问题", () => {
   resetExitTargetStates();
-  setExitTargetStateForTest(state({ hostId: 1, ruleId: 7, jitterMs: 5 }));
-  setExitTargetStateForTest(state({ hostId: 1, ruleId: 8, jitterMs: 70, unstable: true }));
-  setExitTargetStateForTest(state({ hostId: 2, ruleId: 7, down: true }));
-  const summary = exitTargetSummaryForTunnel(3);
-  assert.deepEqual(summary.map((item) => [item.hostId, item.rules, item.down, item.unstable, item.jitterMs]), [
-    [1, 2, 0, 1, 70],
-    [2, 1, 1, 0, 3],
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "least_load" };
+  // 规则 7：两台都正常；规则 8：目标在国外，两台都慢；规则 9：两台都连不上（目标挂了）
+  setExitTargetStateForTest(state({ hostId: 1, ruleId: 7, medianMs: 10 }));
+  setExitTargetStateForTest(state({ hostId: 2, ruleId: 7, medianMs: 12 }));
+  setExitTargetStateForTest(state({ hostId: 1, ruleId: 8, medianMs: 210 }));
+  setExitTargetStateForTest(state({ hostId: 2, ruleId: 8, medianMs: 220 }));
+  setExitTargetStateForTest(state({ hostId: 1, ruleId: 9, down: true }));
+  setExitTargetStateForTest(state({ hostId: 2, ruleId: 9, down: true }));
+  const summary = exitTargetSummaryForTunnel(tunnel, [1, 2]);
+  assert.deepEqual(summary.exits.map((item) => [item.hostId, item.rules, item.down, item.medianMs]), [
+    [1, 3, 0, 110],
+    [2, 3, 0, 116],
   ]);
+  assert.deepEqual(summary.targetIssues, [{ ruleId: 9, kind: "down" }]);
+});
+
+test("链路弹窗：只有一台连不上才记在那台头上", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "fallback" };
+  setExitTargetStateForTest(state({ hostId: 1, down: true }));
+  setExitTargetStateForTest(state({ hostId: 2 }));
+  const summary = exitTargetSummaryForTunnel(tunnel, [1, 2], { hostNames: new Map([[1, "A"], [2, "B"]]) });
+  assert.deepEqual(summary.exits.map((item) => [item.hostId, item.down, item.activeRules]), [[1, 1, 0], [2, 0, 1]]);
+  assert.deepEqual(summary.targetIssues, []);
+  assert.equal(summary.how, "主备：走 B，1 台备用");
+});
+
+test("链路弹窗「怎么走」：NEX 延迟优先，差不到门槛的一起分，慢的备用", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "latency" };
+  setExitTargetStateForTest(state({ hostId: 1, medianMs: 10, jitterMs: 2 }));
+  setExitTargetStateForTest(state({ hostId: 2, medianMs: 9, jitterMs: 26 }));
+  setExitTargetStateForTest(state({ hostId: 3, medianMs: 180, jitterMs: 5 }));
+  const summary = exitTargetSummaryForTunnel(tunnel, [1, 2, 3], { hostNames: new Map([[1, "A"], [2, "B"], [3, "C"]]) });
+  assert.deepEqual(summary.exits.map((item) => item.activeRules), [1, 1, 0]);
+  assert.equal(summary.how, "延迟优先：A、B（差不到 50ms，按负载分），1 台备用");
+});
+
+test("GOST 延迟优先：按延迟排顺序，差不多快时不来回换", () => {
+  resetExitTargetStates();
+  const detect = { ...DEFAULT_BALANCE_DETECT };
+  setExitTargetStateForTest(state({ hostId: 1, ruleId: 20, medianMs: 40, jitterMs: 0, gost: true }));
+  setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 10, jitterMs: 0, gost: true }));
+  setExitTargetStateForTest(state({ hostId: 3, ruleId: 20, down: true, gost: true }));
+  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [2, 1, 3]);
+  // 1 号变快了一点，但没快过 50ms：还是 2 号在前
+  setExitTargetStateForTest(state({ hostId: 1, ruleId: 20, medianMs: 5, jitterMs: 0, gost: true }));
+  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [2, 1, 3]);
+  // 2 号慢到比 1 号多 50ms 以上：换
+  setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 90, jitterMs: 0, gost: true }));
+  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [1, 2, 3]);
 });
