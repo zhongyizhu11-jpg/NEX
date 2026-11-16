@@ -874,7 +874,8 @@ export function ForwardGroupsContent({
   });
   const pageGroups = (groupPageQuery.data?.items || []) as any[];
   const relatedPageGroups = (groupPageQuery.data?.relatedGroups || []) as any[];
-  const groups = (fullGroupQuery.data || [...pageGroups, ...relatedPageGroups]) as any[];
+  // 全量列表只在它开着（会刷新）时用：关掉后缓存不再刷新，下次点「编辑」会拿旧的成员 / 启用状态填表（2.3.535）
+  const groups = ((needsFullGroupList ? fullGroupQuery.data : undefined) || [...pageGroups, ...relatedPageGroups]) as any[];
   // 2.3.497：组的成员可以跟着节点池（线路 → 节点池页设）；编辑时提示一下，并能就地取消跟随。
   // 2.3.499：组回到分类条上各自一页，卡上也写跟着哪个池（以前只有节点池页上看得见）。
   const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
@@ -1151,12 +1152,14 @@ export function ForwardGroupsContent({
   */
   useEffect(() => {
     if (!editRequest || editRequest.requestKey === lastEditRequestKeyRef.current) return;
+    // 等全量列表这一次刷新完：缓存里可能是旧的，拿它填表再保存会把旧状态写回去
+    if (fullGroupQuery.isFetching) return;
     const group = groups.find((item: any) => Number(item.id) === Number(editRequest.id));
     if (group) {
       lastEditRequestKeyRef.current = editRequest.requestKey;
       openEdit(group);
     }
-  }, [editRequest?.id, editRequest?.requestKey, groups]);
+  }, [editRequest?.id, editRequest?.requestKey, groups, fullGroupQuery.isFetching]);
 
   const createMutation = trpc.forwardGroups.create.useMutation({
     onSuccess: () => {
