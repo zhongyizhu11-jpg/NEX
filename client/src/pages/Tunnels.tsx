@@ -2167,7 +2167,7 @@ function TunnelsContent() {
   ]);
   const setExitPinMutation = trpc.tunnels.setExitPin.useMutation({
     onSuccess: (result) => {
-      toast.success(result.hostId ? "已切到这台，只用它" : "已交回自动");
+      toast.success(result.hostId ? "已锁定出口" : "已恢复自动");
       void refreshAfterExitChange();
     },
     onError: (error) => toast.error(error.message),
@@ -5410,7 +5410,7 @@ function TunnelsContent() {
       {(() => {
         /*
           负载均衡出口是哪几台：每台一行（在线状态、到目标的延迟/抖动、权重）。
-          2.3.534：可以手动切换（「只用这台」/「交回自动」，tunnels.setExitPin）；
+          2.3.534：可以锁定出口（「锁定」/「恢复自动」，tunnels.setExitPin）；
           用出口组的链路可以 ↑↓ 调顺序（就是出口组成员顺序，forwardGroups.reorder，手机上不用拖）。
         */
         const snapshot = exitGroupDialogTunnel;
@@ -5468,12 +5468,12 @@ function TunnelsContent() {
         const targetText = (hostId: number) => {
           const item = targetByHost.get(hostId);
           if (!item) return null;
-          if (item.down > 0) return { tone: "down" as const, text: `${item.down} 条规则连不上目标，已切走` };
-          const latency = item.medianMs != null ? `到目标 ${Math.round(item.medianMs)}ms` : "到目标正常";
+          if (item.down > 0) return { tone: "down" as const, text: `目标不可达 · ${item.down} 条规则已切换` };
+          const latency = item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
           const jitter = item.jitterMs != null ? ` · 抖动 ${Math.round(item.jitterMs)}ms` : "";
           if (item.unstable > 0) {
             const loss = item.lossPct != null && item.lossPct >= 10 ? ` · 丢包 ${Math.round(item.lossPct)}%` : "";
-            return { tone: "warn" as const, text: `${latency}${jitter}${loss} · 不稳` };
+            return { tone: "warn" as const, text: `${latency}${jitter}${loss} · 不稳定` };
           }
           return { tone: "ok" as const, text: `${latency}${jitter}` };
         };
@@ -5483,16 +5483,16 @@ function TunnelsContent() {
               <DialogHeader>
                 <DialogTitle>负载均衡出口 · {exits.length} 台</DialogTitle>
                 <DialogDescription>
-                  {tunnel.name} · {pinActive ? "手动指定" : strategy} · {online} 台在线
+                  {tunnel.name} · {pinActive ? "已锁定" : strategy} · {online} 台在线
                 </DialogDescription>
               </DialogHeader>
               {pinActive ? (
                 <div className={cn("fx-lb-pin-banner", !pinOnline && "is-warn")}>
                   <span className="min-w-0 flex-1">
-                    {pinOnline ? `只用 ${hostName(pinHostId)}，不自动切换` : `${hostName(pinHostId)} 离线，已临时按自动分配`}
+                    {pinOnline ? `已锁定 ${hostName(pinHostId)}` : `${hostName(pinHostId)} 离线 · 已回退自动`}
                   </span>
                   {canPin ? (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => setPin(null)}>交回自动</Button>
+                    <Button size="sm" variant="outline" disabled={busy} onClick={() => setPin(null)}>恢复自动</Button>
                   ) : null}
                 </div>
               ) : null}
@@ -5532,10 +5532,10 @@ function TunnelsContent() {
                         ) : null}
                       </span>
                       {isPinned ? (
-                        <span className="fx-lb-badge shrink-0">正在用</span>
+                        <span className="fx-lb-badge shrink-0">已锁定</span>
                       ) : canPin ? (
                         <Button size="sm" variant="outline" className="shrink-0" disabled={busy || !host?.isOnline} onClick={() => setPin(exit.hostId)}>
-                          只用这台
+                          锁定
                         </Button>
                       ) : null}
                     </li>
@@ -5543,7 +5543,7 @@ function TunnelsContent() {
                 })}
               </ul>
               {canReorder ? (
-                <p className="text-meta text-muted-foreground">↑↓ 调的是出口组「{exitGroup?.name}」的顺序，用这个组的链路都跟着变。</p>
+                <p className="text-meta text-muted-foreground">排序同步至出口组「{exitGroup?.name}」</p>
               ) : null}
             </DialogContent>
           </Dialog>
