@@ -155,7 +155,8 @@ import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "@shared/hostIp
 import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { recordHostRateSample } from "./hostRateBuckets";
 import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrategy";
-import { balanceDetectForRuntime } from "@shared/loadBalance";
+import { balanceDetectForRuntime, FXP_BALANCE_REPORT_VERSION } from "@shared/loadBalance";
+import { isAgentVersionAtLeast } from "@shared/version";
 import { exitTargetExcludedHostIds, exitTargetProbeSpec, latencyOrderedExitHostIds, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
 import {
   getMimicLifecycleRevisionSignature,
@@ -4211,6 +4212,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 ...(entryExitCapacities ? { capacityMbps: entryExitCapacities[index] } : {}),
                 ...(entryExitIps?.[index] ? { exitIp: entryExitIps[index] } : {}),
                 ...(entryExitTargetStatus?.[index] ? { targetStatus: true } : {}),
+                // 主机号：FXP 2.2.145 起上报负载均衡真实状态时用它说「是哪台」（老 FXP 不认，忽略）
+                ...(Number((route as any).hostId || 0) > 0 ? { hostId: Number((route as any).hostId) } : {}),
               })),
               targetIp: fxpTarget.targetIp,
               targetPort: fxpTarget.targetPort,
@@ -4657,12 +4660,38 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const probeByRule = new Map(exitProbes.map((probe) => [Number(probe.ruleId), probe]));
       let added = false;
       type BalanceRule = { id: number; tunnelId?: number | null; pendingDelete?: unknown; isEnabled?: unknown; isRunning?: unknown; routeParentRuleId?: number | null; protocol?: string | null; targetPort?: number | null };
-      type BalanceTunnel = { id: number; isEnabled?: unknown; exitHostId?: number | null; loadBalanceEnabled?: unknown; loadBalanceStrategy?: string | null; balanceDetect?: string | null };
+      type BalanceTunnel = { id: number; isEnabled?: unknown; exitHostId?: number | null; entryHostId?: number | null; entryGroupId?: number | null; mode?: string | null; loadBalanceEnabled?: unknown; loadBalanceStrategy?: string | null; balanceDetect?: string | null };
+      /*
+        2.3.539：入口自己报真实状态的链路（NEX 隧道、入口机 FXP ≥ 2.2.145）不用出口再另外测目标 —— 入口的 FXP
+        本来就经每台出口测着（出口回报连目标的结果 + 主动探），面板直接用它报的。少一套探测，高防目标也少被当扫描。
+      */
+      const balanceTunnelIds = new Set<number>();
+      for (const rule of agentAllRules as unknown as BalanceRule[]) {
+        const tunnel = tunnelById.get(Number(rule?.tunnelId || 0)) as BalanceTunnel | undefined;
+        if (tunnel && tunnelBalancesExits(tunnel)) balanceTunnelIds.add(Number(tunnel.id));
+      }
+      const entryReportsLive = new Set<number>();
+      if (balanceTunnelIds.size > 0) {
+        const entryIds = Array.from(balanceTunnelIds)
+          .map((id) => tunnelById.get(id) as BalanceTunnel | undefined)
+          .filter((tunnel): tunnel is BalanceTunnel => !!tunnel && String(tunnel.mode || "").toLowerCase() === "forwardx" && !(Number(tunnel.entryGroupId || 0) > 0))
+          .map((tunnel) => Number(tunnel.entryHostId || 0))
+          .filter((id) => id > 0);
+        const entryRows = entryIds.length > 0 ? await db.getHostsByIds(Array.from(new Set(entryIds))).catch(() => []) as Array<{ id: number; fxpVersion?: string | null }> : [];
+        const fxpNew = new Set(entryRows.filter((row) => isAgentVersionAtLeast(String(row.fxpVersion || ""), FXP_BALANCE_REPORT_VERSION)).map((row) => Number(row.id)));
+        for (const id of balanceTunnelIds) {
+          const tunnel = tunnelById.get(id) as BalanceTunnel | undefined;
+          if (tunnel && String(tunnel.mode || "").toLowerCase() === "forwardx" && !(Number(tunnel.entryGroupId || 0) > 0) && fxpNew.has(Number(tunnel.entryHostId || 0))) {
+            entryReportsLive.add(id);
+          }
+        }
+      }
       for (const rule of agentAllRules as unknown as BalanceRule[]) {
         if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !runtimeBool(rule.isRunning)) continue;
         if (Number(rule.routeParentRuleId || 0) > 0 || String(rule.protocol || "").toLowerCase() === "udp") continue;
         const tunnel = tunnelById.get(Number(rule.tunnelId || 0)) as BalanceTunnel | undefined;
         if (!tunnel || !runtimeBool(tunnel.isEnabled) || !tunnelBalancesExits(tunnel)) continue;
+        if (entryReportsLive.has(Number(tunnel.id))) continue;
         const extraExitNodes = (tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []) as Array<{ hostId?: number | null; isEnabled?: unknown }>;
         const exitHostIds = [
           Number(tunnel.exitHostId || 0),

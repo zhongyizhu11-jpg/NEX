@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.261"
+var Version = "2.2.262"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -844,6 +844,9 @@ type fxpExitEndpoint struct {
 	// TargetStatus：这台出口的 FXP 会在连完目标后回报结果（2.2.142 起，面板按出口机的 FXP 版本给）。
 	// 入口的 FXP 据此当场换出口、按「出口 + 目标」记健康。
 	TargetStatus bool `json:"targetStatus,omitempty"`
+	// HostID：面板里这台出口的主机号（面板 2.3.539 / FXP 2.2.145 起），FXP 上报负载均衡真实状态时说「是哪台」。
+	// 不进 fxpServerSignature：只是标注，不影响转发，不该为它重载 FXP。
+	HostID int `json:"hostId,omitempty"`
 }
 
 // fxpBalanceDetect：负载均衡的「检测与切换」，字段和 FXP 的 balanceDetectConfig 一样，原样转交。

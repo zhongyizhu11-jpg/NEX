@@ -217,6 +217,9 @@ export function describeBalanceEffect(input: {
 /** FXP 从这一版起：出口回报连目标的结果、入口当场换出口、按出口 + 目标打分，认 auto / latency。 */
 export const FXP_TARGET_AWARE_VERSION = "2.2.142";
 
+/** FXP 从这一版起：入口把每条规则每台出口的真实状态报给面板（forwardx-fxp/balance_report.go）。 */
+export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
+
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */
 export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect = DEFAULT_BALANCE_DETECT) {
   const detect = normalizeBalanceDetect(value, defaults);

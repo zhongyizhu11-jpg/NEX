@@ -42,7 +42,8 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopFastReports, ingestRouteHopProbeReports } from "./routeGroups";
-import { ingestExitTargetReports } from "./exitTargetHealth";
+import { ingestExitTargetReports, noteLiveBaselines } from "./exitTargetHealth";
+import { ingestBalanceLiveReport } from "./balanceLive";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { recordRuleProbeFailure } from "./ruleProbeFailure";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
@@ -896,6 +897,35 @@ agentRouter.post("/api/agent/fxp-link-shaping", async (req: Request, res: Respon
   } catch (error) {
     appendPanelLog("error", `[LinkShaping] report failed: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: "failed to record link shaping status" });
+  }
+});
+
+// 负载均衡的真实状态（2.3.539）：入口的 FXP / Agent 报每条规则每台出口在用 / 备用 / 连不上、分了多少（server/balanceLive.ts）。
+agentRouter.post("/api/agent/fxp-balance", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const rules = Array.isArray(req.body?.rules) ? req.body.rules : [];
+    if (rules.length > 2000) {
+      res.status(400).json({ error: "too many rules" });
+      return;
+    }
+    const source = req.body?.source === "agent" ? "agent" : "fxp";
+    const outcome = await ingestBalanceLiveReport({
+      hostId: Number((host as { id?: unknown }).id),
+      hostName: String((host as { name?: unknown }).name || ""),
+      source,
+      rules,
+    });
+    // 「平时延迟」照旧攒（链路弹窗写「比平时慢多少」用），数据换成入口真实测的
+    await noteLiveBaselines(outcome.reports).catch(() => undefined);
+    res.json({ ok: true, recorded: outcome.recorded });
+  } catch (error) {
+    appendPanelLog("error", `[BalanceLive] report failed: ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: "failed to record balance status" });
   }
 });
 
