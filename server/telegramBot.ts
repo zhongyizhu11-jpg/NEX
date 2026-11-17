@@ -10,6 +10,18 @@ import { refreshUserForwardEndpoints } from "./routers/helpers";
 import { addMonthsClamped } from "./repositories/repositoryUtils";
 import { clearMobileTelegramLoginChallenge, hasMobileTelegramLoginChallenge } from "./telegramMobileLogin";
 import { createTelegramWebAppLoginChallenge } from "./telegramWebAppLogin";
+import {
+  handleTelegramMoreCallback,
+  handleTelegramMoreCommand,
+  handleTelegramMoreReply,
+  telegramHostExtraRows,
+  telegramHostsExtraRows,
+  telegramKeywordCommand,
+  telegramMenuExtraRow,
+  telegramRuleExtraRows,
+  telegramUserExtraRows,
+  type TelegramMoreIO,
+} from "./telegramBotMore";
 import { withTelegramApiTimeout } from "./telegramApiTimeout";
 import {
   isTelegramUnauthorizedError,
@@ -274,6 +286,8 @@ const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "rules", description: "查看和管理转发规则" },
   { command: "hosts", description: "主机状态和负载" },
   { command: "routes", description: "线路组状态和切换" },
+  { command: "links", description: "链路：出口在用 / 备用、手动切换" },
+  { command: "buy", description: "用余额续费 / 买套餐" },
   { command: "notify", description: "通知开关" },
   { command: "digest", description: "查看今日简报" },
   { command: "ask", description: "自然语言查询面板信息" },
@@ -285,6 +299,7 @@ const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "users", description: "管理员用户管理" },
   { command: "reset", description: "管理员重置用户流量" },
   { command: "renew", description: "管理员续期用户套餐" },
+  { command: "system", description: "管理员系统开关（注册、商店、维护）" },
   { command: "updatepanel", description: "管理员更新面板（需确认）" },
   { command: "updateagent", description: "管理员更新 Agent（需确认）" },
   { command: "help", description: "查看帮助" },
@@ -799,7 +814,9 @@ function helpText(bound: boolean, isAdmin = false) {
       ? "可用命令："
       : "请先在面板个人菜单点击 Telegram 绑定按钮生成绑定码，然后在这里完成绑定。",
     "/usage - 查询我的用量",
-    "/rules - 查看我的转发规则（详情里可测延迟）",
+    "/rules - 查看我的转发规则（详情里可测延迟、改目标、改名、重启、删除）",
+    "/links - 链路：出口在用 / 备用，手动切换（自己的链路）",
+    "/buy - 用余额续费 / 买套餐",
     "/hosts - 主机状态和负载",
     "/routes - 线路组状态，临时改走别的路径",
     "/notify - 通知开关、每日简报",
@@ -811,12 +828,15 @@ function helpText(bound: boolean, isAdmin = false) {
     "/enable 规则ID - 启用规则",
     "/disable 规则ID - 停用规则",
     "/unbind - 解除当前 Telegram 绑定（需要确认）",
+    "",
+    "也可以直接打「菜单」「流量」「规则」「链路」「续费」这些词。",
   ];
   if (isAdmin) {
     base.push(
       "",
       "管理员命令：",
-      "/users - 查看用户管理",
+      "/users - 用户管理（加流量、调余额、换套餐、封禁）",
+      "/system - 系统开关：开放注册、商店、维护模式、今天收入",
       "/reset 用户ID - 重置用户流量",
       "/renew 用户ID - 续期用户一个月",
       "/updatepanel - 检查并更新面板（60 秒限流）",
@@ -999,6 +1019,8 @@ export function mainMenuKeyboard(user: any, webAppUrl?: string): InlineKeyboardM
       { text: "🔔 通知", callback_data: "fx:notify" },
     ],
   ];
+  // 2.3.538：链路（所有人）+ 系统（管理员）/ 续费（普通用户），见 telegramBotMore.ts
+  rows.push(telegramMenuExtraRow(user));
   const secondaryRow: InlineKeyboardButton[] = [];
   if (user?.role === "admin") {
     secondaryRow.push({ text: "👥 用户", callback_data: "fx:users:0" });
@@ -1320,6 +1342,7 @@ async function adminUserKeyboard(userId: number, page = 0): Promise<InlineKeyboa
         { text: accessEnabled ? "⛔ 停用转发" : "✅ 启用转发", callback_data: `fx:admin:access:${userId}:${accessEnabled ? "0" : "1"}:${page}` },
       ],
       [{ text: "📆 续期 1 个月", callback_data: `fx:admin:renew:${userId}:${page}` }],
+      ...telegramUserExtraRows(target, page),
       [{ text: "🔄 刷新详情", callback_data: `fx:admin:user:${userId}:${page}` }],
       [{ text: "👥 返回用户列表", callback_data: `fx:users:${page}` }],
       [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
@@ -1563,6 +1586,7 @@ async function hostsView(user: any, page = 0) {
       { text: "➡️ 下一页", callback_data: `fx:hosts:${Math.min(totalPages - 1, safePage + 1)}` },
     ]);
   }
+  rows.push(...telegramHostsExtraRows(user));
   rows.push([{ text: "🔄 刷新", callback_data: `fx:hosts:${safePage}` }, { text: "🏠 返回菜单", callback_data: "fx:menu" }]);
   return { text, keyboard: { inline_keyboard: rows } as InlineKeyboardMarkup };
 }
@@ -1618,6 +1642,7 @@ async function hostDetailView(user: any, hostId: number, page = 0) {
   }
   const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
   if (upgradable) rows.push([{ text: "⬆️ 升级这台的 Agent", callback_data: `fx:host:upgrade:${host.id}:${page}` }]);
+  rows.push(...telegramHostExtraRows(user, host, page));
   rows.push([{ text: "🔄 刷新", callback_data: `fx:host:${host.id}:${page}` }, { text: "🖥 返回列表", callback_data: `fx:hosts:${page}` }]);
   rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
   return { text: lines.filter((line) => line !== "").join("\n").replace(/\n(?=<code>CPU)/, "\n\n").replace(/\n(?=Agent：)/, "\n\n"), keyboard: { inline_keyboard: rows } };
@@ -1653,6 +1678,7 @@ function ruleDetailKeyboard(rule: any, page = 0): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       first,
+      ...telegramRuleExtraRows(rule, page),
       [{ text: "⚙️ 返回规则列表", callback_data: `fx:rules:${page}` }],
       [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
     ],
@@ -5679,7 +5705,9 @@ async function executePendingUpdateAction(pending: PendingUpdateAction) {
 async function handleMessage(message: TelegramMessage) {
   const text = message.text?.trim();
   if (!text) return;
-  const { command, args } = parseCommand(text);
+  const parsedCommand = parseCommand(text);
+  let command = parsedCommand.command;
+  const args = parsedCommand.args;
   const identity = await ensureTelegramIdentity(message);
   if (!identity) return;
   const waitingForBindCode = hasValidBindSession(message.chat.id, identity.telegramId);
@@ -5743,6 +5771,19 @@ async function handleMessage(message: TelegramMessage) {
     await handleRedeem(message, user, text);
     return;
   }
+
+  // 2.3.538（telegramBotMore.ts）：在等回复的（改目标 / 改名 / 调余额）、直接打「菜单」「链路」这类词、/links /buy /system
+  const moreIO: TelegramMoreIO = {
+    edit: (body, keyboard) => sendMessage(message.chat.id, body, keyboard),
+    send: (body, keyboard) => sendMessage(message.chat.id, body, keyboard),
+  };
+  if (!text.startsWith("/") && await handleTelegramMoreReply({ chatId: message.chat.id, telegramId: identity.telegramId, user, text, io: moreIO })) return;
+  if (!text.startsWith("/")) command = telegramKeywordCommand(text) || command;
+  if (command === "/help") {
+    await sendMessage(message.chat.id, helpText(true, user.role === "admin"));
+    return;
+  }
+  if (await handleTelegramMoreCommand(command, user, moreIO)) return;
 
   if (command === "/menu") return sendMainMenu(message.chat.id, user);
   if (command === "/usage") return handleUsage(message, user);
@@ -5825,6 +5866,20 @@ async function handleCallback(query: TelegramCallbackQuery) {
   if ((user as any).accountEnabled === false) {
     await editMessage(chatId, messageId, ACCOUNT_DISABLED_ERR_MSG);
     return;
+  }
+
+  if (data.startsWith("fx:x:")) {
+    const handled = await handleTelegramMoreCallback({
+      data,
+      chatId,
+      telegramId: identity.telegramId,
+      user,
+      io: {
+        edit: (body, keyboard) => editMessage(chatId, messageId, body, keyboard),
+        send: (body, keyboard) => sendMessage(chatId, body, keyboard),
+      },
+    });
+    if (handled) return;
   }
 
   if (data.startsWith("fx:app-login:")) {
