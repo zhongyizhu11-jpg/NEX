@@ -103,6 +103,7 @@ test("gost 运行时：直连规则一条 service，重载命令写 gost.json �
     dnsRuntimeRefreshCmd: unused("dnsRuntimeRefreshCmd"),
     failoverTargetAddr: (r: any) => `${r.targetIp}:${r.targetPort}`,
     getHopDialAddress: unused("getHopDialAddress") as any,
+    gostBalancePlans: new Map(),
     gostRateLimiters: [],
     gostRelayFailoverHopMetadata: { strategy: "fifo", maxFails: 1, failTimeout: "10s" },
     gostRules: [rule],
@@ -139,6 +140,72 @@ test("gost 运行时：直连规则一条 service，重载命令写 gost.json �
   const written = JSON.parse(Buffer.from(plan.gostManagedConfigs[0].contentBase64, "base64").toString("utf8"));
   assert.deepEqual(written.services.map((item: any) => item.name), ["fwx-3-tcp"]);
   assert.ok(Array.isArray(await plan.buildTunnelReloadCmds()));
+});
+
+test("gost 链路负载均衡（2.3.539）：端口交给本机代理，每台出口一个本机 gost 端口，原来那条几台出口的链不再生成", async () => {
+  const { createGostRuntimePlan } = await import("./agentHeartbeatGostPlan");
+  const tunnel = { id: 9, mode: "tls", isEnabled: true, entryHostId: 5, exitHostId: 2, loadBalanceEnabled: true, loadBalanceStrategy: "auto" };
+  const rule = { id: 501, forwardType: "gost", isEnabled: true, tunnelId: 9, sourcePort: 37326, targetIp: "hkboil.ddos.top", targetPort: 24895, protocol: "tcp" };
+  const exits = [
+    { hostId: 2, localPort: 47100, node: { name: "exit-501-0", addr: "198.51.100.2:40001" } },
+    { hostId: 3, localPort: 47101, node: { name: "exit-501-1", addr: "198.51.100.3:40002" } },
+  ];
+  const plan = await createGostRuntimePlan(ctxFor({
+    agentAllRules: [rule],
+    tunnelById: new Map([[9, tunnel]]),
+    tunnelExitEndpointById: new Map([[9, { host: "198.51.100.2" }]]),
+  }), {
+    VERBOSE_AGENT_ACTIONS: false,
+    anyTunnelDnsRefresh: () => false,
+    applyGostLimiter: (service: any) => ({ ...service, limiter: "rule-501" }),
+    buildLoadBalancedExitNodes: unused("buildLoadBalancedExitNodes") as any,
+    buildProxyRuleDebugCmd: unused("buildProxyRuleDebugCmd"),
+    currentHostTunnelExitPortsForRule: () => [],
+    dnsRuntimeRefreshCmd: unused("dnsRuntimeRefreshCmd"),
+    failoverTargetAddr: unused("failoverTargetAddr") as any,
+    getHopDialAddress: unused("getHopDialAddress") as any,
+    gostBalancePlans: new Map([[501, { failoverPort: 41501, exits, udp: false }]]),
+    gostRateLimiters: [],
+    gostRelayFailoverHopMetadata: { strategy: "fifo", maxFails: 1, failTimeout: "10s" },
+    gostRules: [rule],
+    gostRuntimeApiSection: () => ({}),
+    gostRuntimeExecStart: (service: string, configPath: string) => `run ${service} ${configPath}`,
+    gostRuntimeSyncCmd: (service: string, configPath: string) => `sync ${service} ${configPath}`,
+    gostServiceName: "forwardx-runtime",
+    gostServiceUnit: "[Unit]",
+    gostTunnelExitTargetAddr: unused("gostTunnelExitTargetAddr") as any,
+    guardBackendPort: unused("guardBackendPort"),
+    isCurrentHostTunnelEntry: () => true,
+    isForwardXTunnel: () => false,
+    maybeProxyProtocolMetadata: () => undefined,
+    proxyProtocolEnabled: () => false,
+    proxyProtocolVersion: () => 1,
+    routeHeaderStripRuleIds: new Set<number>(),
+    shouldUseRuleGuard: async () => false,
+    tunnelEgressHelpers: new Map(),
+    tunnelExitEndpointsForRule: () => [
+      { exitNodeId: 0, exitSeq: 0, exitHostId: 2, listenPort: 40001, rulePort: 0, primary: true },
+      { exitNodeId: 11, exitSeq: 1, exitHostId: 3, listenPort: 40002, rulePort: 0, primary: false },
+    ],
+    tunnelExitRules: [],
+    tunnelForwardProtos: () => ["tcp"],
+    tunnelProxyProtocolPlan: () => ({}) as any,
+  });
+  const services = plan.gostServiceConfig as any[];
+  assert.deepEqual(services.map((item) => item.name), ["fwx-501-tcp", "fwx-501-tcp-x2", "fwx-501-tcp-x3"]);
+  const front = services[0];
+  assert.equal(front.addr, ":37326", "端口照旧由 gost 听（计数、限速在这里）");
+  assert.equal(front.limiter, "rule-501");
+  assert.equal(front.handler.chain, undefined, "不再挂几台出口的链");
+  assert.equal(front.forwarder.nodes[0].addr, "127.0.0.1:41501", "交给本机代理");
+  assert.equal(services[1].addr, "127.0.0.1:47100");
+  assert.equal(services[1].handler.chain, "chain-tunnel-501-x2");
+  assert.equal(services[1].limiter, undefined, "限速只算一次（在前面那个端口上）");
+  const cmds = plan.buildGostReloadCmds();
+  assert.ok(cmds.length > 0);
+  const written = JSON.parse(Buffer.from(plan.gostManagedConfigs[0].contentBase64, "base64").toString("utf8"));
+  assert.deepEqual(written.chains.map((chain: any) => chain.name), ["chain-tunnel-501-x2", "chain-tunnel-501-x3"]);
+  assert.deepEqual(written.chains[1].hops[0].nodes[0].addr, "198.51.100.3:40002");
 });
 
 test("停用规则的 remove：iptables 规则带上计数链和连接数限制的清理", async () => {

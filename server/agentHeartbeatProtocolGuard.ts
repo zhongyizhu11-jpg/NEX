@@ -15,6 +15,8 @@ export type ProtocolGuardPortPlan = {
   guardListenPort: number;
   failoverProxyPort: number;
   guardBackendPort: number;
+  /** GOST 链路负载均衡（2.3.539）：入口机上每台出口一个本机 gost 端口，只给要的规则分 */
+  balanceExitPorts?: number[];
 };
 
 export const PROTOCOL_GUARD_PORT_MIN = 20000;
@@ -29,6 +31,7 @@ export function shouldReconcileProtocolGuardBackend(useRuleGuard: boolean, forwa
 export function allocateProtocolGuardPorts(
   rules: Array<{ id?: unknown; sourcePort?: unknown; targetPort?: unknown }>,
   reservedPorts: Iterable<unknown> = [],
+  balanceExitCounts: ReadonlyMap<number, number> = new Map(),
 ): Map<number, ProtocolGuardPortPlan> {
   const used = new Set<number>();
   const reserve = (value: unknown) => {
@@ -68,6 +71,17 @@ export function allocateProtocolGuardPorts(
       failoverProxyPort: allocate(41000 + legacyOffset),
       guardBackendPort: allocate(43000 + legacyOffset),
     });
+  }
+  /*
+    GOST 链路负载均衡的本机端口放在最后另分一轮：已有规则的守卫 / 调度器端口不因为多了这些而挪动。
+  */
+  for (const ruleId of ruleIds) {
+    const count = Math.max(0, Math.min(16, Math.floor(Number(balanceExitCounts.get(ruleId) || 0))));
+    if (count < 2) continue;
+    const plan = plans.get(ruleId);
+    if (!plan) continue;
+    const base = 47000 + (ruleId % PROTOCOL_GUARD_LEGACY_SPAN) * 4;
+    plan.balanceExitPorts = Array.from({ length: count }, (_, index) => allocate(base + index));
   }
   return plans;
 }

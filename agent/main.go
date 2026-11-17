@@ -630,6 +630,14 @@ type failoverSpec struct {
 	// 投递方式：""（老行为）/ cold（冷备，同 ""）/ hot（热备：主备策略也竞速拨备线）/
 	// aggregate（聚合，面板配 least_load 下发）/ replicate（多发，Agent 侧只用到分层）。
 	Delivery string `json:"delivery,omitempty"`
+	// GOST 链路的负载均衡（2.2.262 起，面板 2.3.539）：这个代理替隧道入口在几台出口之间挑，每个目标是本机一个只走
+	// 某台出口的 gost 端口。带着它就把每台出口的真实状态报给面板（balance_report.go），HostIDs 和 Targets 一一对应。
+	BalanceReport *failoverBalanceReport `json:"balanceReport,omitempty"`
+}
+
+type failoverBalanceReport struct {
+	TunnelID int   `json:"tunnelId"`
+	HostIDs  []int `json:"hostIds"`
 }
 
 type tunnelProbe struct {
@@ -997,6 +1005,7 @@ func main() {
 	startFlowOffloadLoop()
 	go agentMetricsScheduler(cfg)
 	go routeHopProbeLoop(cfg)
+	go balanceReportLoop(cfg)
 	go agentDNSWatchScheduler()
 	go agentExtLoop(cfg)
 	// 端口接入限制快照失败后面板不会重发（期望状态没变），由 Agent 自己重试 / 定期核对。

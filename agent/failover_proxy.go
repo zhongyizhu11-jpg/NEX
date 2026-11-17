@@ -126,6 +126,14 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolReceive),
 		strconv.FormatBool(spec.ProxyProtocolStrip),
 	}
+	// 不带时签名和加这个字段之前逐字相同
+	if spec.BalanceReport != nil {
+		ids := make([]string, len(spec.BalanceReport.HostIDs))
+		for i, id := range spec.BalanceReport.HostIDs {
+			ids[i] = strconv.Itoa(id)
+		}
+		parts = append(parts, "balance:"+strconv.Itoa(spec.BalanceReport.TunnelID)+":"+strings.Join(ids, ","))
+	}
 	for _, target := range spec.Targets {
 		// 运行时提示（failoverTargetHints：中转异常、下游延迟、沿途负载、出口 IP）面板随时会变，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。

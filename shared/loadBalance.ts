@@ -220,6 +220,9 @@ export const FXP_TARGET_AWARE_VERSION = "2.2.142";
 /** FXP 从这一版起：入口把每条规则每台出口的真实状态报给面板（forwardx-fxp/balance_report.go）。 */
 export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
 
+/** Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切，并报真实状态（agent/balance_report.go）。 */
+export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.262";
+
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */
 export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect = DEFAULT_BALANCE_DETECT) {
   const detect = normalizeBalanceDetect(value, defaults);
