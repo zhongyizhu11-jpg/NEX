@@ -119,7 +119,7 @@ func TestTargetHealthMarksJitteryExitUnstableOnlyAfterTheHoldTime(t *testing.T) 
 	for i := 0; i < 10; i++ {
 		ms := 40.0
 		if i%2 == 1 {
-			ms = 1040
+			ms = 140
 		}
 		h.observe(true, ms, start.Add(time.Duration(i)*2*time.Second), d)
 	}
@@ -129,7 +129,7 @@ func TestTargetHealthMarksJitteryExitUnstableOnlyAfterTheHoldTime(t *testing.T) 
 	for i := 10; i < 20; i++ {
 		ms := 40.0
 		if i%2 == 1 {
-			ms = 1040
+			ms = 140
 		}
 		h.observe(true, ms, start.Add(time.Duration(i)*2*time.Second), d)
 	}
@@ -138,6 +138,29 @@ func TestTargetHealthMarksJitteryExitUnstableOnlyAfterTheHoldTime(t *testing.T) 
 	}
 	if h.down {
 		t.Fatal("一直连得上，只是抖：不该判坏")
+	}
+}
+
+func TestTargetHealthRetransmittedDialIsLossNotLatency(t *testing.T) {
+	d := resolveBalanceDetect(nil)
+	h := &targetHealth{}
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		ms := 10.0
+		if i == 10 {
+			ms = 1010 // 握手包丢了，系统 1 秒后重发才连上
+		}
+		h.observe(true, ms, start.Add(time.Duration(i)*2*time.Second), d)
+	}
+	stats := h.stats()
+	if stats.median != 10 || stats.jitter != 0 {
+		t.Fatalf("一次重发不再变成 1 秒延迟、把抖动拉高：%+v", stats)
+	}
+	if stats.loss != 0.05 {
+		t.Fatalf("它记成一次丢包：%+v", stats)
+	}
+	if h.down {
+		t.Fatal("毕竟连上了：不算连不上目标")
 	}
 }
 

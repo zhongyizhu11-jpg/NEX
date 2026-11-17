@@ -28,6 +28,9 @@ type routeHopProbeSpec struct {
 	TimeoutMs     int `json:"timeoutMs"`
 	FailThreshold int `json:"failThreshold"`
 	RecoverOks    int `json:"recoverOks"`
+	// Passive（2.2.260 起，负载均衡「这台出口到规则目标」那几条）：先看这台机器上到这个目标的真实连接（内核记的 RTT，
+	// 见 passive_rtt.go），有活跃连接就用它，不再新建连接去探；没有才主动探。
+	Passive bool `json:"passive,omitempty"`
 }
 
 const (
@@ -53,21 +56,42 @@ type routeHopProbeState struct {
 	samples [routeHopProbeWindow]routeHopSample
 	count   int
 	pos     int
+	// 真实流量那边：重传比例（平滑过的）、最近一次看到几条活跃连接
+	passiveLoss  float64
+	passiveConns int
+	passiveMinMs float64
 }
 
 type routeHopSample struct {
 	ms float64
 	ok bool
+	// passive：这一次来自真实连接（内核 RTT），varMs 是内核算的 RTT 波动
+	passive bool
+	varMs   float64
 }
 
 const routeHopProbeWindow = 30
 
-// stats：中位延迟、抖动（相邻两次成功的差的平均）、丢包率（0～1）。
-func (s *routeHopProbeState) stats() (median, jitter, loss float64) {
-	oks := make([]float64, 0, s.count)
+// routeHopStats：中位延迟、抖动、丢包率（0～1）、这条路的最低延迟、这次的来源。
+type routeHopStats struct {
+	median  float64
+	jitter  float64
+	loss    float64
+	minMs   float64
+	passive bool
+}
+
+/*
+stats（2.2.260 起换了算法）：
+
+	· 抖动：以前是「相邻两次成功的差的平均」—— 一次 1000ms 的重发就拉高几十毫秒。现在真实流量为主时用内核算的 RTT
+	  波动（各次的中位数）；主动探测为主时用「比这条路最低延迟高出多少」的 90 分位（排队造成的那部分，偶尔一个尖峰
+	  不影响）。
+	· 丢包：主动探测整轮不通的比例，和真实连接的重传比例，取大的。
+*/
+func (s *routeHopProbeState) stats() routeHopStats {
+	var oks, passiveVars, activeOks []float64
 	failures := 0
-	previous := -1.0
-	diffSum, diffs := 0.0, 0
 	for i := 0; i < s.count; i++ {
 		sample := s.samples[(s.pos-s.count+i+routeHopProbeWindow)%routeHopProbeWindow]
 		if !sample.ok {
@@ -75,28 +99,56 @@ func (s *routeHopProbeState) stats() (median, jitter, loss float64) {
 			continue
 		}
 		oks = append(oks, sample.ms)
-		if previous >= 0 {
-			diffSum += math.Abs(sample.ms - previous)
-			diffs++
-		}
-		previous = sample.ms
-	}
-	if s.count > 0 {
-		loss = float64(failures) / float64(s.count)
-	}
-	if len(oks) > 0 {
-		sort.Float64s(oks)
-		middle := len(oks) / 2
-		if len(oks)%2 == 0 {
-			median = (oks[middle-1] + oks[middle]) / 2
+		if sample.passive {
+			passiveVars = append(passiveVars, sample.varMs)
 		} else {
-			median = oks[middle]
+			activeOks = append(activeOks, sample.ms)
 		}
 	}
-	if diffs > 0 {
-		jitter = diffSum / float64(diffs)
+	out := routeHopStats{}
+	if s.count > 0 {
+		out.loss = float64(failures) / float64(s.count)
 	}
-	return median, jitter, loss
+	if s.passiveLoss > out.loss {
+		out.loss = s.passiveLoss
+	}
+	if len(oks) == 0 {
+		return out
+	}
+	out.median = medianFloat(oks)
+	out.minMs = oks[0]
+	for _, ms := range oks {
+		if ms < out.minMs {
+			out.minMs = ms
+		}
+	}
+	if s.passiveMinMs > 0 && len(passiveVars) > 0 && s.passiveMinMs < out.minMs {
+		out.minMs = s.passiveMinMs
+	}
+	if len(passiveVars) > 0 && len(passiveVars)*2 >= len(oks) {
+		out.passive = true
+		out.jitter = medianFloat(passiveVars)
+		return out
+	}
+	if len(activeOks) >= 3 {
+		floor := activeOks[0]
+		for _, ms := range activeOks {
+			if ms < floor {
+				floor = ms
+			}
+		}
+		queue := make([]float64, 0, len(activeOks))
+		for _, ms := range activeOks {
+			queue = append(queue, ms-floor)
+		}
+		sort.Float64s(queue)
+		index := int(math.Ceil(float64(len(queue))*0.9)) - 1
+		if index < 0 {
+			index = 0
+		}
+		out.jitter = queue[index]
+	}
+	return out
 }
 
 type routeHopProbeRunner struct {
@@ -107,6 +159,9 @@ type routeHopProbeRunner struct {
 	sem          chan struct{}
 	dial         func(network, address string, timeout time.Duration) (net.Conn, error)
 	now          func() time.Time
+	scanner      *passiveRTTScanner
+	lastScan     time.Time
+	passive      map[string]passiveTargetStats
 }
 
 func newRouteHopProbeRunner() *routeHopProbeRunner {
@@ -116,7 +171,62 @@ func newRouteHopProbeRunner() *routeHopProbeRunner {
 		sem:     make(chan struct{}, routeHopProbeMaxParallel),
 		dial:    net.DialTimeout,
 		now:     time.Now,
+		scanner: newPassiveRTTScanner(),
+		passive: map[string]passiveTargetStats{},
 	}
+}
+
+// scanPassive 每 2 秒读一次到「要看真实流量」的那些目标的连接（一次 ss，不管有几个目标）。
+func (r *routeHopProbeRunner) scanPassive() {
+	r.mu.Lock()
+	now := r.now()
+	if r.scanner == nil || now.Sub(r.lastScan) < passiveRTTScanEvery {
+		r.mu.Unlock()
+		return
+	}
+	r.lastScan = now
+	targets := []string{}
+	for _, state := range r.states {
+		if state.spec.Passive {
+			targets = append(targets, state.target)
+		}
+	}
+	r.mu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
+	stats := r.scanner.scan(targets, now)
+	r.mu.Lock()
+	r.passive = map[string]passiveTargetStats{}
+	for key, value := range stats {
+		r.passive[key] = value
+	}
+	r.mu.Unlock()
+}
+
+// usePassive：这条要看真实流量、而且刚读到到这个目标的活跃连接 —— 直接记一次（不建连接），返回 true。
+func (r *routeHopProbeRunner) usePassive(state *routeHopProbeState) bool {
+	r.mu.Lock()
+	if !state.spec.Passive {
+		r.mu.Unlock()
+		return false
+	}
+	stats, ok := r.passive[normalizePassiveTarget(state.target)]
+	fresh := ok && r.now().Sub(stats.at) <= passiveRTTFresh
+	if fresh && stats.segsDelta >= 20 {
+		// 重传比例平滑一下：一次扫描几十个包，单次比例跳得厉害
+		ratio := float64(stats.retransDelta) / float64(stats.segsDelta)
+		state.passiveLoss = state.passiveLoss*0.7 + ratio*0.3
+	}
+	if !fresh || stats.conns == 0 {
+		r.mu.Unlock()
+		return false
+	}
+	state.passiveConns = stats.conns
+	state.passiveMinMs = stats.minMs
+	r.mu.Unlock()
+	r.recordSample(state, routeHopSample{ms: stats.srttMs, ok: true, passive: true, varMs: stats.varMs})
+	return true
 }
 
 func normalizeRouteHopProbeSpec(spec routeHopProbeSpec) routeHopProbeSpec {
@@ -200,27 +310,81 @@ func (r *routeHopProbeRunner) due() []*routeHopProbeState {
 	return out
 }
 
+/*
+主动探一轮（2.2.260 起）：连 2 次成功为止（最多 3 次），延迟取成功里最小的 —— 最小值滤掉偶发的排队、本机忙。
+一次连接拖到「握手包丢了、系统 1 秒后重发」才连上（≥ 900ms，或者比这条路最低延迟慢 3 倍以上）算这次丢了，
+不算成 1000ms 延迟：以前一个丢包就把抖动拉高几十上百毫秒。三次都不行这一轮才算不通。
+*/
+const routeHopRetransmitCutoff = 900 * time.Millisecond
+
 func (r *routeHopProbeRunner) probe(state *routeHopProbeState) {
 	r.mu.Lock()
 	target := state.target
 	timeout := time.Duration(state.spec.TimeoutMs) * time.Millisecond
+	floor := windowMinLocked(state)
 	r.mu.Unlock()
-	started := r.now()
-	conn, err := r.dial("tcp", target, timeout)
-	elapsed := r.now().Sub(started)
-	if conn != nil {
-		_ = conn.Close()
+	cutoff := timeout
+	if floor > 0 {
+		// 已经知道这条路多快：超过 max(900ms, 3 倍最低延迟) 的就当丢了
+		cutoff = routeHopRetransmitCutoff
+		if limit := time.Duration(floor*3*1000) * time.Microsecond; limit > cutoff {
+			cutoff = limit
+		}
+		if cutoff > timeout {
+			cutoff = timeout
+		}
 	}
-	r.record(state, err == nil, float64(elapsed.Microseconds())/1000)
+	best := -1.0
+	successes := 0
+	for attempt := 0; attempt < 3 && successes < 2; attempt++ {
+		started := r.now()
+		conn, err := r.dial("tcp", target, cutoff)
+		elapsed := r.now().Sub(started)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if err != nil || elapsed >= cutoff {
+			continue
+		}
+		successes++
+		ms := float64(elapsed.Microseconds()) / 1000
+		if best < 0 || ms < best {
+			best = ms
+		}
+	}
+	if successes == 0 {
+		r.recordSample(state, routeHopSample{ok: false})
+		return
+	}
+	r.recordSample(state, routeHopSample{ms: best, ok: true})
 }
 
-// record 记一次结果；翻转了记进 changed，下一次 flush 立刻报。
+// windowMinLocked：最近窗口里成功的那几次的最小延迟（没有返回 0）。调用方持锁。
+func windowMinLocked(state *routeHopProbeState) float64 {
+	min := 0.0
+	for i := 0; i < state.count; i++ {
+		sample := state.samples[(state.pos-state.count+i+routeHopProbeWindow)%routeHopProbeWindow]
+		if sample.ok && sample.ms > 0 && (min == 0 || sample.ms < min) {
+			min = sample.ms
+		}
+	}
+	return min
+}
+
+// record 兼容老的调用（测试里用）：一次普通的主动结果。
 func (r *routeHopProbeRunner) record(state *routeHopProbeState, ok bool, latencyMs float64) {
+	r.recordSample(state, routeHopSample{ms: latencyMs, ok: ok})
+}
+
+// recordSample 记一次结果；翻转了记进 changed，下一次 flush 立刻报。
+func (r *routeHopProbeRunner) recordSample(state *routeHopProbeState, sample routeHopSample) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	ok := sample.ok
+	latencyMs := sample.ms
 	state.running = false
 	state.lastResult = r.now()
-	state.samples[state.pos] = routeHopSample{ms: latencyMs, ok: ok}
+	state.samples[state.pos] = sample
 	state.pos = (state.pos + 1) % routeHopProbeWindow
 	if state.count < routeHopProbeWindow {
 		state.count++
@@ -274,12 +438,23 @@ func (r *routeHopProbeRunner) report() []map[string]any {
 		if !state.down && state.latencyMs > 0 {
 			item["latencyMs"] = state.latencyMs
 		}
-		// 2.2.259 起多报中位数、抖动、丢包（面板老版本不认这几个字段，照旧只看 down / latencyMs）。
-		if median, jitter, loss := state.stats(); state.count > 0 {
-			item["medianMs"] = math.Round(median*10) / 10
-			item["jitterMs"] = math.Round(jitter*10) / 10
-			item["lossPct"] = math.Round(loss*1000) / 10
+		// 2.2.259 起多报中位数、抖动、丢包；2.2.260 起多报最低延迟、来源（traffic = 真实连接，probe = 主动探测）、
+		// 活跃连接数（面板老版本不认这几个字段，照旧只看 down / latencyMs）。
+		if state.count > 0 {
+			stats := state.stats()
+			item["medianMs"] = math.Round(stats.median*10) / 10
+			item["jitterMs"] = math.Round(stats.jitter*10) / 10
+			item["lossPct"] = math.Round(stats.loss*1000) / 10
 			item["samples"] = state.count
+			if stats.minMs > 0 {
+				item["minMs"] = math.Round(stats.minMs*10) / 10
+			}
+			if stats.passive {
+				item["source"] = "traffic"
+				item["conns"] = state.passiveConns
+			} else {
+				item["source"] = "probe"
+			}
 		}
 		results = append(results, item)
 	}
@@ -323,8 +498,12 @@ func routeHopProbeLoop(cfg Config) {
 		if agentRouteHopProbes.idle() {
 			continue
 		}
+		agentRouteHopProbes.scanPassive()
 		for _, state := range agentRouteHopProbes.due() {
 			state := state
+			if agentRouteHopProbes.usePassive(state) {
+				continue
+			}
 			wg.Add(1)
 			agentRouteHopProbes.sem <- struct{}{}
 			go func() {

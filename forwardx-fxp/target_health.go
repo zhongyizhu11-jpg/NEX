@@ -224,19 +224,12 @@ func (h *targetHealth) stats() targetStats {
 		index := (h.pos - h.count + i + fxpTargetWindow) % fxpTargetWindow
 		order = append(order, h.samples[index])
 	}
-	diffSum, diffCount := 0.0, 0
-	previous := -1.0
 	for _, sample := range order {
 		if !sample.ok {
 			failures++
 			continue
 		}
 		oks = append(oks, sample.ms)
-		if previous >= 0 {
-			diffSum += math.Abs(sample.ms - previous)
-			diffCount++
-		}
-		previous = sample.ms
 	}
 	stats := targetStats{samples: h.count}
 	if h.count > 0 {
@@ -252,11 +245,45 @@ func (h *targetHealth) stats() targetStats {
 			stats.median = sorted[middle]
 		}
 	}
-	if diffCount > 0 {
-		stats.jitter = diffSum / float64(diffCount)
+	/*
+		抖动（2.2.143 起）：以前是「相邻两次的差的平均」，一次 1 秒的重发就把它拉高几十毫秒。现在是「比这条路最低延迟
+		高出多少」的 90 分位 —— 排队造成的那部分，偶尔一个尖峰不影响。
+	*/
+	if len(oks) >= 3 {
+		floor := oks[0]
+		for _, ms := range oks {
+			if ms < floor {
+				floor = ms
+			}
+		}
+		queue := make([]float64, 0, len(oks))
+		for _, ms := range oks {
+			queue = append(queue, ms-floor)
+		}
+		sort.Float64s(queue)
+		index := int(math.Ceil(float64(len(queue))*0.9)) - 1
+		if index < 0 {
+			index = 0
+		}
+		stats.jitter = queue[index]
 	}
 	return stats
 }
+
+// windowFloor：窗口里成功的那几次的最低延迟（没有返回 0）。
+func (h *targetHealth) windowFloor() float64 {
+	floor := 0.0
+	for i := 0; i < h.count; i++ {
+		sample := h.samples[(h.pos-h.count+i+fxpTargetWindow)%fxpTargetWindow]
+		if sample.ok && sample.ms > 0 && (floor == 0 || sample.ms < floor) {
+			floor = sample.ms
+		}
+	}
+	return floor
+}
+
+// fxpTargetRetransmitMs：连目标拖到这么久才连上，多半是握手包丢了、系统 1 秒后重发的那一次。
+const fxpTargetRetransmitMs = 900.0
 
 func (h *targetHealth) flip(now time.Time) {
 	h.flips = append(h.flips, now)
@@ -275,7 +302,17 @@ func (h *targetHealth) flapping() bool {
 
 // observe 记一次结果，返回状态有没有变（变了要打日志）。
 func (h *targetHealth) observe(ok bool, ms float64, now time.Time, d balanceDetect) string {
-	h.samples[h.pos] = targetSample{ms: ms, ok: ok}
+	/*
+		连上了、但拖到「握手包丢了、系统 1 秒后重发」那么久（≥ 900ms，并且超过这条路最低延迟的 3 倍）：记成一次丢包，
+		不记成 1000ms 的延迟（2.2.143 起）。它毕竟连上了，不算「连不上目标」，不推着往坏里翻。
+	*/
+	sampleOK := ok
+	if ok && ms >= fxpTargetRetransmitMs {
+		if floor := h.windowFloor(); floor > 0 && ms >= floor*3 {
+			sampleOK = false
+		}
+	}
+	h.samples[h.pos] = targetSample{ms: ms, ok: sampleOK}
 	h.pos = (h.pos + 1) % fxpTargetWindow
 	if h.count < fxpTargetWindow {
 		h.count++
