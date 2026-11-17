@@ -293,6 +293,32 @@ func (r *routeHopProbeRunner) sync(probes []ruleLatencyProbe) {
 	}
 }
 
+/*
+routeHopProbeInterval（2.2.261 起）：负载均衡「出口到目标」那几条（Passive）判成连不上以后，间隔每多失败一次
+翻一倍，最长 60 秒，每次只连 1 次。用户：「这么久了不会一直没恢复吧，机器是正常的」—— 目标是高防时，一直每
+2 秒连三次、连上就断，像扫描，会让对方一直拦着这台出口的 IP，永远恢复不了；慢下来让拦截有机会过期。恢复最多
+晚一分钟发现。线路组的下一跳（自己的中转机）照旧按原节奏探，切回要快。
+*/
+const routeHopProbeBackoffMax = 60 * time.Second
+
+func routeHopProbeInterval(state *routeHopProbeState) time.Duration {
+	interval := time.Duration(state.spec.IntervalMs) * time.Millisecond
+	if !state.spec.Passive || !state.down {
+		return interval
+	}
+	extra := state.fails - state.spec.FailThreshold
+	if extra < 0 {
+		extra = 0
+	}
+	for step := 0; step <= extra && interval < routeHopProbeBackoffMax; step++ {
+		interval *= 2
+	}
+	if interval > routeHopProbeBackoffMax {
+		interval = routeHopProbeBackoffMax
+	}
+	return interval
+}
+
 // due 挑出这一刻该探的（不重复探同一个）。
 func (r *routeHopProbeRunner) due() []*routeHopProbeState {
 	r.mu.Lock()
@@ -304,7 +330,7 @@ func (r *routeHopProbeRunner) due() []*routeHopProbeState {
 			continue
 		}
 		state.running = true
-		state.nextDue = now.Add(time.Duration(state.spec.IntervalMs) * time.Millisecond)
+		state.nextDue = now.Add(routeHopProbeInterval(state))
 		out = append(out, state)
 	}
 	return out
@@ -322,6 +348,11 @@ func (r *routeHopProbeRunner) probe(state *routeHopProbeState) {
 	target := state.target
 	timeout := time.Duration(state.spec.TimeoutMs) * time.Millisecond
 	floor := windowMinLocked(state)
+	// 判成连不上的出口（Passive）：每轮只连 1 次，别像扫描
+	attempts := 3
+	if state.spec.Passive && state.down {
+		attempts = 1
+	}
 	r.mu.Unlock()
 	cutoff := timeout
 	if floor > 0 {
@@ -336,7 +367,7 @@ func (r *routeHopProbeRunner) probe(state *routeHopProbeState) {
 	}
 	best := -1.0
 	successes := 0
-	for attempt := 0; attempt < 3 && successes < 2; attempt++ {
+	for attempt := 0; attempt < attempts && successes < 2; attempt++ {
 		started := r.now()
 		conn, err := r.dial("tcp", target, cutoff)
 		elapsed := r.now().Sub(started)

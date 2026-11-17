@@ -323,3 +323,28 @@ func TestTargetStatusFrameRoundTrip(t *testing.T) {
 		t.Fatal("普通数据不该被当成结果帧")
 	}
 }
+
+func TestTargetProbeBacksOffForADownExit(t *testing.T) {
+	d := resolveBalanceDetect(nil) // 2 秒一次、2 次不通算坏
+	h := &targetHealth{}
+	if got := targetProbeInterval(h, d); got != 2*time.Second {
+		t.Fatalf("healthy exit keeps the configured pace: %v", got)
+	}
+	start := time.Now()
+	got := []time.Duration{}
+	for i := 0; i < 8; i++ {
+		h.observe(false, 0, start.Add(time.Duration(i)*time.Second), d)
+		got = append(got, targetProbeInterval(h, d))
+	}
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 60 * time.Second, 60 * time.Second, 60 * time.Second}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("一直连不上，探测越来越慢，最长 60 秒：got %v want %v", got, want)
+		}
+	}
+	// 通了一次：加快确认（要连续 3 次通才算恢复），不再等 60 秒
+	h.observe(true, 10, start.Add(10*time.Second), d)
+	if !h.down || targetProbeInterval(h, d) != 4*time.Second {
+		t.Fatalf("通了一次就快一点确认恢复：down=%v interval=%v", h.down, targetProbeInterval(h, d))
+	}
+}

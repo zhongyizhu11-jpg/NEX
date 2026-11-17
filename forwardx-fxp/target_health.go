@@ -635,7 +635,7 @@ func (s *exitEndpointSelector) dispatchTargetProbes(now time.Time) {
 		if !s.target.supported[i] || health.probing {
 			continue
 		}
-		if !health.lastSampleAt.IsZero() && now.Sub(health.lastSampleAt) < s.target.detect.interval {
+		if !health.lastSampleAt.IsZero() && now.Sub(health.lastSampleAt) < targetProbeInterval(health, s.target.detect) {
 			continue
 		}
 		health.probing = true
@@ -646,6 +646,31 @@ func (s *exitEndpointSelector) dispatchTargetProbes(now time.Time) {
 	for _, item := range jobs {
 		go s.runTargetProbe(item.index, item.endpoint, cfg)
 	}
+}
+
+/*
+targetProbeInterval（2.2.144 起）：判成连不上的出口，探测间隔每多失败一次翻一倍，最长 60 秒。目标是高防时，
+一直每几秒连一次、连上就断，像扫描，会让对方一直拦着这台出口的 IP，永远恢复不了；慢下来让拦截有机会过期。
+恢复最多晚一分钟发现。
+*/
+const fxpTargetProbeBackoffMax = 60 * time.Second
+
+func targetProbeInterval(health *targetHealth, detect balanceDetect) time.Duration {
+	interval := detect.interval
+	if !health.down {
+		return interval
+	}
+	extra := health.consecFail - detect.fail
+	if extra < 0 {
+		extra = 0
+	}
+	for step := 0; step <= extra && interval < fxpTargetProbeBackoffMax; step++ {
+		interval *= 2
+	}
+	if interval > fxpTargetProbeBackoffMax {
+		interval = fxpTargetProbeBackoffMax
+	}
+	return interval
 }
 
 func (s *exitEndpointSelector) runTargetProbe(index int, endpoint exitEndpoint, cfg config) {

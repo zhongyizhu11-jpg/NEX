@@ -166,3 +166,56 @@ func TestRouteHopJitterIsQueueingDelayNotNeighbourDiffs(t *testing.T) {
 		t.Fatalf("path floor reported: %#v", stats)
 	}
 }
+
+func TestRouteHopDownExitProbesBackOffAndUseOneConnection(t *testing.T) {
+	clock := time.Unix(1_800_000_000, 0)
+	reachable := false
+	runner := routeHopTestRunner(&clock, &reachable)
+	dials := 0
+	runner.dial = func(network, address string, timeout time.Duration) (net.Conn, error) {
+		dials++
+		if reachable {
+			client, server := net.Pipe()
+			_ = server.Close()
+			return client, nil
+		}
+		return nil, errors.New("timeout")
+	}
+	runner.scanner = nil
+	spec := &routeHopProbeSpec{IntervalMs: 2000, FailThreshold: 2, RecoverOks: 3, Passive: true}
+	runner.sync([]ruleLatencyProbe{{RuleID: 8, TargetIP: "203.0.113.8", TargetPort: 443, RouteHop: spec}})
+	var state *routeHopProbeState
+	for _, s := range runner.states {
+		state = s
+	}
+	gaps := []time.Duration{}
+	for round := 0; round < 7; round++ {
+		before := dials
+		for _, due := range runner.due() {
+			runner.probe(due)
+		}
+		if round >= 2 && dials-before > 1 {
+			t.Fatalf("a down exit gets one connection per round, got %d", dials-before)
+		}
+		gaps = append(gaps, state.nextDue.Sub(clock))
+		clock = state.nextDue
+	}
+	if !state.down {
+		t.Fatalf("exit should be down")
+	}
+	// 2s 2s 之后判坏：4s 8s 16s 32s 60s
+	want := []time.Duration{2 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 60 * time.Second}
+	for i := range want {
+		if gaps[i] != want[i] {
+			t.Fatalf("backoff after going down: got %v want %v", gaps, want)
+		}
+	}
+	// 线路组的下一跳（不是 Passive）不放慢
+	runner.sync([]ruleLatencyProbe{{RuleID: 9, TargetIP: "203.0.113.9", TargetPort: 443, RouteHop: &routeHopProbeSpec{IntervalMs: 1500, FailThreshold: 2}}})
+	for _, s := range runner.states {
+		s.down, s.fails = true, 10
+		if routeHopProbeInterval(s) != 1500*time.Millisecond {
+			t.Fatalf("route group hops keep their pace")
+		}
+	}
+}
