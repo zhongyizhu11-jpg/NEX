@@ -5570,7 +5570,9 @@ function TunnelsContent() {
                           {pinActive ? null : hasTargetData ? (
                             host?.isOnline && (targetByHost.get(exit.hostId)?.activeRules || 0) > 0
                               ? <span className="fx-lb-badge ml-1.5 align-middle">在用</span>
-                              : <span className="ml-1.5 text-meta font-normal text-muted-foreground">备用</span>
+                              // 连不上的不写「备用」：下面一行已经写了连不上
+                              : target?.tone === "down" || !host?.isOnline ? null
+                                : <span className="ml-1.5 text-meta font-normal text-muted-foreground">备用</span>
                           ) : index === 0 ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">主</span> : null}
                         </span>
                         <span className="truncate text-meta text-muted-foreground">

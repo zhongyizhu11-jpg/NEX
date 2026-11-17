@@ -739,7 +739,8 @@ function exitTargetSummaryFromLive(
     if (allDown) continue;
     const active = exits.filter((exit) => exit.state === "active");
     if (active.length === 0) continue;
-    const rest = exits.length - active.length;
+    // 只数能用、在待命的；连不上的那台下面一行已经写了，不算「备用」
+    const rest = exits.filter((exit) => exit.state === "standby").length;
     const restText = rest > 0 ? `，${rest} 台备用` : "";
     const totalPicks = active.reduce((sum, exit) => sum + exit.picks, 0);
     const label = describeHow({ strategy: options.strategy, gost: options.gost, pinned, active: active.map((exit) => exit.hostId), total: exits.length, names, marginMs: options.detect.latencyMarginMs })?.split("：")[0] || "分配";

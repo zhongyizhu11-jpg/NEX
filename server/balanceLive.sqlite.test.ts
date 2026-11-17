@@ -64,7 +64,7 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     });
     assert.equal(summary.live, true);
     assert.deepEqual(summary.exits.map((exit) => [exit.hostId, exit.down, exit.activeRules]), [[2, 1, 0], [3, 0, 1], [4, 0, 1]]);
-    assert.equal(summary.how, "自动：hep ix 60%、Jinx(29.9y) 40%，1 台备用");
+    assert.equal(summary.how, "自动：hep ix 60%、Jinx(29.9y) 40%", "连不上的那台不算备用");
     assert.equal(summary.events?.[0]?.text, "jinx(39.9y) 连不上（到目标），已切走");
 
     // 主出口在用：照旧按主出口，不写「经」
