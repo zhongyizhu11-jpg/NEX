@@ -181,8 +181,13 @@ func TestV3ParallelLegsAggregatePerConnectionThrottledBandwidth(t *testing.T) {
 			single := measure(9700+100*i, 1)
 			parallel := measure(9710+100*i, 4)
 			t.Logf("3 MiB echo over a 1 MiB/s-per-connection link on V3: single=%v, 4 parallel legs=%v", single, parallel)
-			if parallel*2 > single {
-				t.Fatalf("4 parallel V3 legs should be well over twice as fast as one: single=%v parallel=%v", single, parallel)
+			/*
+				腿被并进同一个复用会话时 4 条腿和 1 条一样快（比值约 1）；各自一条物理连接时叠起来。门槛取 1.5 倍：
+				CI 的 2 核机器上 4 条腿 + 中转一起抢 CPU，实测常在 1.8–1.9 倍（本机 2.4–3 倍），原来要求「2 倍以上」
+				在没改任何 Go 代码的提交上也会红（PR #225 的 3ac2d63），判不出并腿与否以外的东西。
+			*/
+			if parallel*3 > single*2 {
+				t.Fatalf("4 parallel V3 legs should be clearly faster than one (≥1.5x): single=%v parallel=%v", single, parallel)
 			}
 		})
 	}
