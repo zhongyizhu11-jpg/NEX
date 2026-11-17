@@ -5509,7 +5509,8 @@ function TunnelsContent() {
             : item.medianMs != null ? `目标 ${Math.round(item.medianMs)}ms` : "目标可达";
           const jitter = item.jitterMs != null ? ` · 抖动 ${Math.round(item.jitterMs)}ms` : "";
           // 第二行：跟平时比（2.3.536，按每台出口、每条规则自己的平时值），数据从哪来
-          const sourceText = item.source === "traffic" ? "真实流量" : item.source === "probe" ? "探测" : "";
+          // 入口真实上报的（2.3.539）：在用 / 备用、延迟都是入口实际看到的
+          const sourceText = targetSummary?.live ? "入口实测" : item.source === "traffic" ? "真实流量" : item.source === "probe" ? "探测" : "";
           const sub = [
             item.slowerMs != null ? `比平时慢 ${Math.round(item.slowerMs)}ms`
               : item.baselineMs == null ? ""
@@ -5599,6 +5600,19 @@ function TunnelsContent() {
                 <p className="text-meta text-[var(--fx-warn-text)]">
                   {targetIssueDown > 0 ? `${targetIssueDown} 条规则的目标从每台出口都连不上` : `${targetIssueUnstable} 条规则的目标从每台出口都不稳`}：问题在目标那边，出口不用换
                 </p>
+              ) : null}
+              {(targetSummary?.events || []).length > 0 ? (
+                <div className="fx-lb-events">
+                  <p className="fx-lb-events-title">最近切换</p>
+                  <ul>
+                    {(targetSummary?.events || []).slice(0, 3).map((event) => (
+                      <li key={`${event.at}-${event.ruleId}-${event.hostId}-${event.to}`}>
+                        <span className="fx-lb-events-time">{new Date(event.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>
+                        <span className="min-w-0 truncate">{event.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ) : null}
               {canReorder ? (
                 <p className="text-meta text-muted-foreground">排序同步至出口组「{exitGroup?.name}」</p>
