@@ -11,8 +11,11 @@ import type { TrpcContext } from "./_core/context";
     ⚙️ 规则       详情里多「改目标 / 改名 / 重启 / 删除」
     🖥 主机       维护模式开关、停用 / 启用这台上的全部规则，管理员一键升级所有过期 Agent
     👥 用户       加流量、调余额、换套餐、封禁 / 解封
-    🛠 系统       开放注册、维护模式、商店开关、今天的收入和订单
+    🛠 系统       开放注册、维护模式、商店开关、今天的收入和订单；生成兑换码 / 折扣码、发公告、重启全部 Agent
+    ➕ 加主机     回复「名字 IP」就加好，直接给安装命令（普通用户按面板的自助上限）
     💳 续费       普通用户用余额续费 / 买套餐
+
+  会断转发、动钱、影响所有人的操作（删除、封禁、停用全部、重启全部、开维护）都要再点一次确认。
 
   每个操作都通过面板自己的接口（appRouter.createCaller，身份是绑定的那个账户）去做：权限、校验、审计和在
   面板上点按钮完全一样 —— 普通用户能做的就是面板上他能做的，管理员才有的照旧只有管理员能做。
@@ -100,7 +103,13 @@ const yuan = (cents: unknown) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
 type PendingInput =
   | { kind: "rule_target"; ruleId: number; page: number }
   | { kind: "rule_name"; ruleId: number; page: number }
-  | { kind: "user_balance"; userId: number; page: number };
+  | { kind: "user_balance"; userId: number; page: number }
+  | { kind: "code_balance" }
+  | { kind: "announce" }
+  | { kind: "host_add" };
+
+// 公告先存草稿，确认后再发（发出去所有人都能看到）
+const announceDrafts = new Map<string, { title: string; content: string; expiresAt: number }>();
 
 const pendingInputs = new Map<string, { input: PendingInput; expiresAt: number }>();
 const pendingKey = (chatId: number | string, telegramId: number | string) => `${chatId}:${telegramId}`;
@@ -167,6 +176,40 @@ export async function handleTelegramMoreReply(input: {
       await input.io.send(`用户 #${item.userId} 的余额：${yuan(current)} → <b>${yuan(next)}</b>`, userBackKeyboard(item.userId, item.page));
       return true;
     }
+    if (item.kind === "code_balance") {
+      const parsed = parseCodeRequest(text);
+      if (!parsed) {
+        await input.io.send("格式不对：发 <code>50</code> 生成 1 个 50 元的码，<code>50 10</code> 生成 10 个。", SYSTEM_BACK_KEYBOARD);
+        return true;
+      }
+      const result = await call(input.user, (caller) => caller.billing.createRedemptionCodes({ type: "balance", amountCents: parsed.cents, count: parsed.count }));
+      await input.io.send(codesText(`${yuan(parsed.cents)} 余额兑换码`, result.codes), CODES_KEYBOARD);
+      return true;
+    }
+    if (item.kind === "announce") {
+      const lines = text.split(/\r?\n/).map((line) => line.trim());
+      const title = (lines.length > 1 ? lines[0] : text).slice(0, 60);
+      const content = (lines.length > 1 ? lines.slice(1).join("\n").trim() : text) || title;
+      announceDrafts.set(key, { title, content, expiresAt: Date.now() + PENDING_TTL_MS });
+      await input.io.send(`<b>公告预览</b>\n\n<b>${escapeHtml(title)}</b>\n${escapeHtml(content)}\n\n发出去所有用户都能在面板看到。`, {
+        inline_keyboard: [
+          [{ text: "📢 发布", callback_data: "fx:x:any:0" }, { text: "📢 发布并推送 TG", callback_data: "fx:x:any:1" }],
+          [{ text: "❌ 取消", callback_data: "fx:x:sys" }],
+        ],
+      });
+      return true;
+    }
+    if (item.kind === "host_add") {
+      const parsed = parseHostAdd(text);
+      if (!parsed) {
+        await input.io.send("格式不对：发 <code>名字 IP</code>，比如 <code>香港1 1.2.3.4</code>。", HOSTS_BACK_KEYBOARD);
+        return true;
+      }
+      const created = await call(input.user, (caller) => caller.hosts.create({ name: parsed.name, ip: parsed.ip }));
+      const view = await installCommandView(input.user, Number(created.id), 0, `✅ 已添加主机「${escapeHtml(parsed.name)}」（#${Number(created.id)}）。`);
+      await input.io.send(view.text, view.keyboard);
+      return true;
+    }
   } catch (error) {
     await input.io.send(errorText(error), MENU_KEYBOARD);
     return true;
@@ -185,7 +228,35 @@ export function parseTarget(text: string): { host: string; port: number } | null
   return { host: match[1], port };
 }
 
+/** 「50」→ 1 个 50 元；「50 10」「50x10」「50*10」→ 10 个。 */
+export function parseCodeRequest(text: string): { cents: number; count: number } | null {
+  const match = text.trim().replace(/元/g, "").match(/^(\d+(?:\.\d{1,2})?)(?:\s*[x×*\s]\s*(\d+)\s*个?)?$/i);
+  if (!match) return null;
+  const cents = Math.round(Number(match[1]) * 100);
+  const count = match[2] ? Number(match[2]) : 1;
+  if (!(cents > 0) || !(count >= 1 && count <= 100)) return null;
+  return { cents, count };
+}
+
+/** 「名字 IP」：最后一段是 IP / 域名，前面都是名字。 */
+export function parseHostAdd(text: string): { name: string; ip: string } | null {
+  const parts = text.trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const ip = parts.pop() as string;
+  const name = parts.join(" ").slice(0, 64);
+  if (!/^[0-9a-zA-Z.:\-\[\]]+$/.test(ip) || !name) return null;
+  return { name, ip: ip.replace(/^\[|\]$/g, "") };
+}
+
+function codesText(title: string, codes: string[]) {
+  const list = codes.map((code) => `<code>${escapeHtml(code)}</code>`).join("\n");
+  return `<b>✅ 生成了 ${codes.length} 个${escapeHtml(title)}</b>\n\n${list}\n\n点一下码就能复制。`;
+}
+
 const MENU_KEYBOARD: Keyboard = { inline_keyboard: [MENU_ROW] };
+const SYSTEM_BACK_KEYBOARD: Keyboard = { inline_keyboard: [[{ text: "🛠 返回系统", callback_data: "fx:x:sys" }], MENU_ROW] };
+const CODES_KEYBOARD: Keyboard = { inline_keyboard: [[{ text: "🎟 再生成", callback_data: "fx:x:gc" }, { text: "🛠 返回系统", callback_data: "fx:x:sys" }], MENU_ROW] };
+const HOSTS_BACK_KEYBOARD: Keyboard = { inline_keyboard: [[{ text: "🖥 返回主机", callback_data: "fx:hosts:0" }], MENU_ROW] };
 
 function ruleBackKeyboard(ruleId: number, page: number): Keyboard {
   return { inline_keyboard: [[{ text: "📄 返回规则详情", callback_data: `fx:rule:view:${ruleId}:${page}` }], MENU_ROW] };
@@ -224,12 +295,15 @@ export function telegramHostExtraRows(user: BotUser, host: HostRow | null | unde
       { text: "⏸ 停用全部规则", callback_data: `fx:x:hr:${id}:0:${page}` },
       { text: "▶️ 启用全部规则", callback_data: `fx:x:hr:${id}:1:${page}` },
     ],
+    [{ text: "📋 安装命令", callback_data: `fx:x:hi:${id}:${page}` }],
   ];
 }
 
 /** 主机列表底下（管理员）：一键升级所有过期 Agent。 */
 export function telegramHostsExtraRows(user: BotUser): Button[][] {
-  return isAdmin(user) ? [[{ text: "⬆️ 升级全部过期 Agent", callback_data: "fx:x:upall" }]] : [];
+  const rows: Button[][] = [[{ text: "➕ 加主机", callback_data: "fx:x:ah" }]];
+  if (isAdmin(user)) rows.push([{ text: "⬆️ 升级全部过期 Agent", callback_data: "fx:x:upall" }]);
+  return rows;
 }
 
 /** 管理员看用户详情多一组按钮。 */
@@ -387,11 +461,62 @@ async function systemView(user: BotUser, notice = ""): Promise<{ text: string; k
         [{ text: registration ? "🔒 关闭开放注册" : "🔓 开启开放注册", callback_data: `fx:x:reg:${registration ? 0 : 1}` }],
         [{ text: store ? "🛒 关闭商店" : "🛒 开启商店", callback_data: `fx:x:store:${store ? 0 : 1}` }],
         [{ text: maintenance.enabled ? "✅ 关闭维护模式" : "🛠 开启维护模式", callback_data: `fx:x:mt:${maintenance.enabled ? 0 : 1}` }],
-        [{ text: "⬆️ 升级全部过期 Agent", callback_data: "fx:x:upall" }],
+        [{ text: "🎟 生成兑换码", callback_data: "fx:x:gc" }, { text: "🏷 生成折扣码", callback_data: "fx:x:dc" }],
+        [{ text: "📢 发公告", callback_data: "fx:x:an" }, { text: "➕ 加主机", callback_data: "fx:x:ah" }],
+        [{ text: "⬆️ 升级过期 Agent", callback_data: "fx:x:upall" }, { text: "🔄 重启全部 Agent", callback_data: "fx:x:ra" }],
         [{ text: "🔄 刷新", callback_data: "fx:x:sys" }],
         MENU_ROW,
       ],
     },
+  };
+}
+
+const REDEEM_DAYS = [30, 90, 180, 365] as const;
+
+async function codeMenuView(user: BotUser): Promise<{ text: string; keyboard: Keyboard }> {
+  const plans = ((await call(user, (caller) => caller.plans.list()).catch(() => [])) as unknown as PlanRow[])
+    .filter((plan) => plan.isActive !== false && plan.isActive !== 0);
+  const rows: Button[][] = [
+    [10, 30, 50, 100].map((amount) => ({ text: `¥${amount}`, callback_data: `fx:x:gcb:${amount * 100}` })),
+    [{ text: "✏️ 其他金额 / 一次多个", callback_data: "fx:x:gcc" }],
+  ];
+  for (const plan of plans.slice(0, 6)) {
+    const days = REDEEM_DAYS.find((value) => value === Number(plan.durationDays)) || 30;
+    rows.push([{ text: `📦 ${short(plan.name, 14)} · ${days} 天`, callback_data: `fx:x:gcp:${plan.id}:${days}` }]);
+  }
+  rows.push([{ text: "🛠 返回系统", callback_data: "fx:x:sys" }]);
+  return {
+    text: "<b>生成兑换码</b>\n\n点金额生成 1 个余额码；点套餐生成 1 个套餐码。\n要一次生成多个，点「其他金额」。",
+    keyboard: { inline_keyboard: rows },
+  };
+}
+
+const DISCOUNTS: Array<{ label: string; data: string }> = [
+  { label: "九五折", data: "p:5" }, { label: "九折", data: "p:10" }, { label: "八五折", data: "p:15" },
+  { label: "八折", data: "p:20" }, { label: "减 ¥5", data: "a:500" }, { label: "减 ¥10", data: "a:1000" },
+];
+
+function discountMenuView(): { text: string; keyboard: Keyboard } {
+  const rows: Button[][] = [];
+  for (let i = 0; i < DISCOUNTS.length; i += 3) {
+    rows.push(DISCOUNTS.slice(i, i + 3).map((item) => ({ text: item.label, callback_data: `fx:x:dcy:${item.data}` })));
+  }
+  rows.push([{ text: "🛠 返回系统", callback_data: "fx:x:sys" }]);
+  return { text: "<b>生成折扣码</b>\n\n买所有套餐都能用，每个码只能用 1 次。", keyboard: { inline_keyboard: rows } };
+}
+
+async function installCommandView(user: BotUser, hostId: number, page: number, notice = ""): Promise<{ text: string; keyboard: Keyboard }> {
+  const result = await call(user, (caller) => caller.hosts.agentInstallCommand({ hostId }));
+  const lines = notice ? [notice, ""] : [];
+  lines.push("<b>安装命令</b>（在这台机器上用 root 运行）");
+  if (result.command) {
+    lines.push("", `<code>${escapeHtml(result.command)}</code>`, "", "点一下命令就能复制。装好后主机会自动上线。");
+  } else {
+    lines.push("", "面板公开地址还没配，生成不了安装命令。去面板「系统设置」填上面板地址。");
+  }
+  return {
+    text: lines.join("\n"),
+    keyboard: { inline_keyboard: [[{ text: "🖥 主机详情", callback_data: `fx:host:${hostId}:${page}` }], MENU_ROW] },
   };
 }
 
@@ -496,7 +621,8 @@ export async function handleTelegramMoreCallback(input: {
       }
       case "cancel": {
         clearTelegramMorePending(input.chatId, input.telegramId);
-        await io.edit("已取消。", ruleBackKeyboard(num(1), num(2)));
+        const back = parts[1] === "gc" || parts[1] === "sys" ? SYSTEM_BACK_KEYBOARD : parts[1] === "hosts" ? HOSTS_BACK_KEYBOARD : ruleBackKeyboard(num(1), num(2));
+        await io.edit("已取消。", back);
         return true;
       }
       case "rr": {
@@ -686,6 +812,108 @@ export async function handleTelegramMoreCallback(input: {
         }
         await call(user, (caller) => caller.ops.maintenance.set({ enabled: enable }));
         const view = await systemView(user, enable ? "✅ 维护模式已开启。" : "✅ 维护模式已关闭。");
+        await io.edit(view.text, view.keyboard);
+        return true;
+      }
+
+      case "gc": {
+        if (!(await adminOnly())) return true;
+        const view = await codeMenuView(user);
+        await io.edit(view.text, view.keyboard);
+        return true;
+      }
+      case "gcb": {
+        if (!(await adminOnly())) return true;
+        const result = await call(user, (caller) => caller.billing.createRedemptionCodes({ type: "balance", amountCents: num(1), count: 1 }));
+        await io.edit(codesText(`${yuan(num(1))} 余额兑换码`, result.codes), CODES_KEYBOARD);
+        return true;
+      }
+      case "gcc": {
+        if (!(await adminOnly())) return true;
+        startPending(input.chatId, input.telegramId, { kind: "code_balance" });
+        await io.edit("回复金额（元），要多个就在后面加个数：\n\n<code>50</code> → 1 个 50 元\n<code>50 10</code> → 10 个 50 元", {
+          inline_keyboard: [[{ text: "❌ 取消", callback_data: "fx:x:cancel:gc" }]],
+        });
+        return true;
+      }
+      case "gcp": {
+        if (!(await adminOnly())) return true;
+        const days = REDEEM_DAYS.find((value) => value === num(2)) || 30;
+        const result = await call(user, (caller) => caller.billing.createRedemptionCodes({ type: "plan", planId: num(1), durationDays: days, count: 1 }));
+        const plans = (await call(user, (caller) => caller.plans.list()).catch(() => [])) as unknown as PlanRow[];
+        const plan = plans.find((item) => Number(item.id) === num(1));
+        await io.edit(codesText(`「${plan?.name || `套餐 #${num(1)}`}」${days} 天兑换码`, result.codes), CODES_KEYBOARD);
+        return true;
+      }
+      case "dc": {
+        if (!(await adminOnly())) return true;
+        const view = discountMenuView();
+        await io.edit(view.text, view.keyboard);
+        return true;
+      }
+      case "dcy": {
+        if (!(await adminOnly())) return true;
+        const percent = parts[1] === "p";
+        const value = num(2);
+        const created = await call(user, (caller) => caller.billing.createDiscountCode({ discountType: percent ? "percent" : "amount", discountValue: value, maxUses: 1 }));
+        const code = String((created as { code?: string } | undefined)?.code || "");
+        const label = DISCOUNTS.find((item) => item.data === `${parts[1]}:${value}`)?.label || (percent ? `减 ${value}%` : `减 ${yuan(value)}`);
+        await io.edit(`<b>✅ 生成了 1 个折扣码（${escapeHtml(label)}，用 1 次）</b>\n\n<code>${escapeHtml(code)}</code>\n\n点一下码就能复制。`, {
+          inline_keyboard: [[{ text: "🏷 再生成", callback_data: "fx:x:dc" }, { text: "🛠 返回系统", callback_data: "fx:x:sys" }], MENU_ROW],
+        });
+        return true;
+      }
+      case "an": {
+        if (!(await adminOnly())) return true;
+        startPending(input.chatId, input.telegramId, { kind: "announce" });
+        await io.edit("回复公告内容：第一行是标题，下面是正文（只发一行就标题正文都用它）。发之前会先给你看一遍。", {
+          inline_keyboard: [[{ text: "❌ 取消", callback_data: "fx:x:cancel:sys" }]],
+        });
+        return true;
+      }
+      case "any": {
+        if (!(await adminOnly())) return true;
+        const key = pendingKey(input.chatId, input.telegramId);
+        const draft = announceDrafts.get(key);
+        announceDrafts.delete(key);
+        if (!draft || draft.expiresAt < Date.now()) {
+          await io.edit("这条公告草稿过期了，再点一次「发公告」。", SYSTEM_BACK_KEYBOARD);
+          return true;
+        }
+        await call(user, (caller) => caller.announcements.create({ title: draft.title, content: draft.content, type: "normal", telegramPush: parts[1] === "1" }));
+        await io.edit(`✅ 公告「${escapeHtml(draft.title)}」已发布${parts[1] === "1" ? "，并推送到了 Telegram" : ""}。`, SYSTEM_BACK_KEYBOARD);
+        return true;
+      }
+      case "ra": {
+        if (!(await adminOnly())) return true;
+        const preview = await call(user, (caller) => caller.ops.hostOps.restartAllPreview());
+        const skipped = Array.isArray(preview.skipped) ? preview.skipped.length : 0;
+        if (preview.targets.length === 0) {
+          await io.edit("没有在线的主机可以重启。", SYSTEM_BACK_KEYBOARD);
+          return true;
+        }
+        const names = preview.targets.slice(0, 10).map((host) => escapeHtml(short(host.name, 20))).join("、");
+        await io.edit(
+          `<b>重启全部 Agent？</b>\n\n${preview.targets.length} 台：${names}${preview.targets.length > 10 ? " 等" : ""}${skipped ? `\n跳过 ${skipped} 台（不在线或版本太旧）` : ""}\n\n重启时这些机器上的转发会断几秒。`,
+          { inline_keyboard: [[{ text: "🔄 确认重启", callback_data: "fx:x:ray" }, { text: "❌ 取消", callback_data: "fx:x:sys" }]] },
+        );
+        return true;
+      }
+      case "ray": {
+        if (!(await adminOnly())) return true;
+        const result = await call(user, (caller) => caller.ops.hostOps.restartAll());
+        await io.edit(`✅ 已发起重启：${result.targetCount} 台主机，几分钟内陆续回来。面板「运维」里能看进度。`, SYSTEM_BACK_KEYBOARD);
+        return true;
+      }
+      case "ah": {
+        startPending(input.chatId, input.telegramId, { kind: "host_add" });
+        await io.edit("回复 <code>名字 IP</code>，比如 <code>香港1 1.2.3.4</code>。加好后直接给你安装命令。", {
+          inline_keyboard: [[{ text: "❌ 取消", callback_data: "fx:x:cancel:hosts" }]],
+        });
+        return true;
+      }
+      case "hi": {
+        const view = await installCommandView(user, num(1), num(2));
         await io.edit(view.text, view.keyboard);
         return true;
       }

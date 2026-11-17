@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseTarget, telegramKeywordCommand } from "./telegramBotMore";
+
+// 先定数据库类型再加载模块（./db 一加载就按环境变量定方言）
+process.env.DATABASE_TYPE = "sqlite";
+const { parseCodeRequest, parseHostAdd, parseTarget, telegramKeywordCommand } = await import("./telegramBotMore");
 
 test("回复的目标地址：IP:端口、域名:端口、[IPv6]:端口", () => {
   assert.deepEqual(parseTarget("1.2.3.4:443"), { host: "1.2.3.4", port: 443 });
@@ -11,6 +14,17 @@ test("回复的目标地址：IP:端口、域名:端口、[IPv6]:端口", () => 
   assert.deepEqual(parseTarget("[2001:db8::1]:53"), { host: "2001:db8::1", port: 53 });
   assert.equal(parseTarget("1.2.3.4"), null);
   assert.equal(parseTarget("1.2.3.4:70000"), null);
+});
+
+test("兑换码回复「50」「50 10」；加主机回复「名字 IP」", () => {
+  assert.deepEqual(parseCodeRequest("50"), { cents: 5000, count: 1 });
+  assert.deepEqual(parseCodeRequest("12.5元 10"), { cents: 1250, count: 10 });
+  assert.deepEqual(parseCodeRequest("20x3"), { cents: 2000, count: 3 });
+  assert.equal(parseCodeRequest("0"), null);
+  assert.equal(parseCodeRequest("50 1000"), null);
+  assert.deepEqual(parseHostAdd("香港 1 1.2.3.4"), { name: "香港 1", ip: "1.2.3.4" });
+  assert.deepEqual(parseHostAdd("v6 [2001:db8::1]"), { name: "v6", ip: "2001:db8::1" });
+  assert.equal(parseHostAdd("1.2.3.4"), null);
 });
 
 test("直接打「菜单」「链路」这类词也能打开功能，别的照旧交给智能查询", () => {
@@ -68,6 +82,28 @@ test("机器人新按钮走面板接口：看链路、手动切出口、改规�
     assert.deepEqual([rule.targetIp, rule.targetPort], ["203.0.113.99", 8443]);
     assert.equal(await more.handleTelegramMoreReply({ chatId: 1, telegramId: 9, user: admin as never, text: "随便说点什么", io }), false, "回复一次就结束，下一条照常处理");
 
+    // 管理员：兑换码、折扣码、公告（先预览再发）、重启全部要确认、加主机给安装命令
+    await run("fx:x:gcb:5000", admin);
+    assert.match(outputs.at(-1)!, /生成了 1 个¥50\.00 余额兑换码/);
+    await run("fx:x:gcc", admin);
+    assert.equal(await more.handleTelegramMoreReply({ chatId: 1, telegramId: 9, user: admin as never, text: "10 3", io }), true);
+    assert.match(outputs.at(-1)!, /生成了 3 个¥10\.00/);
+    await run("fx:x:dcy:p:10", admin);
+    assert.match(outputs.at(-1)!, /折扣码（九折，用 1 次）/);
+    await run("fx:x:an", admin);
+    await more.handleTelegramMoreReply({ chatId: 1, telegramId: 9, user: admin as never, text: "今晚维护\n22 点到 23 点", io });
+    assert.match(outputs.at(-1)!, /公告预览/);
+    await run("fx:x:any:0", admin);
+    assert.match(outputs.at(-1)!, /公告「今晚维护」已发布/);
+    await run("fx:x:ra", admin);
+    assert.match(outputs.at(-1)!, /重启全部 Agent？/);
+    await run("fx:x:ah", admin);
+    await more.handleTelegramMoreReply({ chatId: 1, telegramId: 9, user: admin as never, text: "新加坡 198.51.100.50", io });
+    assert.match(outputs.at(-1)!, /已添加主机「新加坡」/);
+    assert.match(outputs.at(-1)!, /安装命令/);
+
+    await run("fx:x:gcb:5000", bob);
+    assert.match(outputs.at(-1)!, /只有管理员/);
     await run("fx:x:sys", bob);
     assert.match(outputs.at(-1)!, /只有管理员/);
     await run("fx:x:pin:1:3:0", bob);
