@@ -8,6 +8,8 @@ import {
   exitTargetSummaryForTunnel,
   exitTargetUnstable,
   latencyOrderedExitHostIds,
+  ruleActiveExit,
+  setExitTargetTunnelMetaForTest,
   exitTargetBaseline,
   setExitTargetBaselineForTest,
   peekExitTargetBaselineForTest,
@@ -213,4 +215,34 @@ test("链路弹窗：写平时值、比平时慢多少、数据从哪来", () =>
     [1, 8, null, "traffic"],
     [2, 10, 110, "probe"],
   ]);
+});
+
+test("主出口连不上目标、已切走：规则卡和诊断改用在用的那台", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "latency" };
+  setExitTargetTunnelMetaForTest(tunnel, [1, 2, 3]);
+  setExitTargetStateForTest(state({ hostId: 1, hostName: "jinx", down: true }));
+  setExitTargetStateForTest(state({ hostId: 2, hostName: "hep ix", medianMs: 7, jitterMs: 1 }));
+  setExitTargetStateForTest(state({ hostId: 3, hostName: "Jinx", medianMs: 3, jitterMs: 1 }));
+  const active = ruleActiveExit(7, 3);
+  assert.deepEqual(active && [active.primaryHostId, active.hostIds, active.names, active.latencyMs], [1, [2, 3], ["hep ix", "Jinx"], 3]);
+  const [row] = withRuleExitTargets([{ ruleId: 7, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+  assert.equal(row.latestLatencyIsTimeout, false, "主出口那条探测超时，但流量在走：延迟换成在用那台的");
+  assert.equal(row.latestLatencyMs, 3);
+  assert.deepEqual(row.exitTargetVia, ["hep ix", "Jinx"]);
+});
+
+test("主出口正常、或者每台都连不上：照旧按主出口", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "fallback" };
+  setExitTargetTunnelMetaForTest(tunnel, [1, 2]);
+  setExitTargetStateForTest(state({ hostId: 1 }));
+  setExitTargetStateForTest(state({ hostId: 2 }));
+  assert.equal(ruleActiveExit(7, 3), null);
+  setExitTargetStateForTest(state({ hostId: 1, down: true }));
+  setExitTargetStateForTest(state({ hostId: 2, down: true }));
+  assert.equal(ruleActiveExit(7, 3), null, "都连不上是目标的问题，不换");
+  const [row] = withRuleExitTargets([{ ruleId: 7, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+  assert.equal(row.latestLatencyIsTimeout, true);
+  assert.equal(row.exitTargetVia, null);
 });

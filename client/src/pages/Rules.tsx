@@ -5729,6 +5729,9 @@ function RulesContent() {
       exitTargetTotal: number | null;
       exitTargetOk: number | null;
       exitTargetNote: string | null;
+      /** 主出口连不上目标、已切走时，现在实际走的出口（2.3.537） */
+      exitTargetVia: string[] | null;
+      exitTargetViaHostIds: number[] | null;
     }>();
     dailyTrafficSummaryRows.forEach((t: any) => {
       const rid = Number(t.ruleId);
@@ -5738,6 +5741,8 @@ function RulesContent() {
           prev.exitTargetTotal = Number(t.exitTargetTotal);
           prev.exitTargetOk = t.exitTargetOk == null ? null : Number(t.exitTargetOk);
           prev.exitTargetNote = t.exitTargetNote || null;
+          prev.exitTargetVia = Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null;
+          prev.exitTargetViaHostIds = Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null;
         }
         prev.bytesIn += Number(t.bytesIn) || 0;
         prev.bytesOut += Number(t.bytesOut) || 0;
@@ -5762,6 +5767,8 @@ function RulesContent() {
           exitTargetTotal: t.exitTargetTotal == null ? null : Number(t.exitTargetTotal),
           exitTargetOk: t.exitTargetOk == null ? null : Number(t.exitTargetOk),
           exitTargetNote: t.exitTargetNote || null,
+          exitTargetVia: Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null,
+          exitTargetViaHostIds: Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null,
         });
       }
     });
@@ -6446,7 +6453,12 @@ function RulesContent() {
         || (tunnel ? tunnelHopHostName(tunnel, hostId, hosts) : "")
         || `主机 #${hostId}`;
     };
-    const routeHostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
+    const configuredRouteHostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
+    // 主出口连不上目标、已切走（2.3.537）：诊断的路径画现在实际走的那台出口，诊断也是从它测的（rules.selfTest）
+    const viaExitHostId = tunnel ? Number(trafficByRule.get(Number(rule.id))?.exitTargetViaHostIds?.[0] || 0) : 0;
+    const routeHostIds = viaExitHostId > 0 && configuredRouteHostIds.length >= 2
+      ? [...configuredRouteHostIds.slice(0, -1), viaExitHostId]
+      : configuredRouteHostIds;
     routeHostIds.forEach((hostId: number, index: number) => {
       const host = hostForRouteId(Number(hostId));
       addHostNodeMeta(meta, host, [
@@ -6607,7 +6619,8 @@ function RulesContent() {
       }
     } else {
       for (let index = 0; index < routeHostIds.length - 1; index += 1) {
-        const singleTunnelSegment = routeHostIds.length - 1 === 1;
+        // 换成在用的出口时，链路自己的延迟（入口到主出口量的）不能拿来填这一段
+        const singleTunnelSegment = routeHostIds.length - 1 === 1 && !(viaExitHostId > 0);
         plannedSegments.push(createTunnelPlannedSegment(
           Number(routeHostIds[index]),
           Number(routeHostIds[index + 1]),
@@ -7640,10 +7653,14 @@ function RulesContent() {
       const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
       if (!tunnel) return [];
       // 第一跳是入口机，卡片上已经是入口地址那一行了，「经」只列它后面经过的（中转和出口）。
-      return getTunnelHopIds(tunnel)
+      const names = getTunnelHopIds(tunnel)
         .slice(1)
         .map((hostId: number) => String(tunnelHopHostName(tunnel, hostId, hosts) || "").trim())
         .filter(Boolean);
+      // 主出口连不上目标、流量已经切走（2.3.537）：出口那一段写现在实际走的那台
+      const via = trafficByRule.get(Number(rule?.id))?.exitTargetVia;
+      if (via && via.length > 0 && names.length > 0) return [...names.slice(0, -1), via.join(" / ")];
+      return names;
     }
     const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
     if (!group) return [];

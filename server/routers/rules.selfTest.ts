@@ -11,6 +11,7 @@ import { enqueueRuleConnectionsTask, getRuleConnectionsTaskStatus } from "../rul
 import { isUserspaceForwardType, normalizeForwardRuleProtocol } from "@shared/forwardTypes";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
+import { ruleActiveExit } from "../exitTargetHealth";
 import * as hopRepo from "../repositories/tunnelRepository";
 import { dbBool } from "../repositories/repositoryUtils";
 import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
@@ -200,7 +201,13 @@ export const selfTestRulesRouter = router({
           appendPanelLog("warn", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} FXP runtime incompatible: ${fxpIssueMessage}`);
           return { id };
         }
-        hostId = tunnel.exitHostId;
+        /*
+          负载均衡链路的主出口连不上目标、流量已经切到别的出口（2.3.537）：从在用的那台测目标。
+          以前总是主出口测，诊断里一直显示「主出口 → 超时」，可转发早就切走、照常在走。
+        */
+        const activeExit = ruleActiveExit(Number(runtimeRule.id), Number(tunnel.id));
+        const testExitHostId = activeExit ? activeExit.hostIds[0] : Number(tunnel.exitHostId);
+        hostId = testExitHostId;
         const targetIp = runtimeRule.targetIp;
         if (!targetIp) throw new Error("目标地址不可用，请检查规则目标地址");
         const tunnelLatencyBaseline = await db.getLatestTunnelLatency(Number(tunnel.id));
@@ -214,14 +221,15 @@ export const selfTestRulesRouter = router({
           kind: "forward-via-tunnel",
           tunnelId: tunnel.id,
           entryHostId: tunnel.entryHostId,
-          exitHostId: tunnel.exitHostId,
+          exitHostId: testExitHostId,
+          ...(activeExit ? { primaryExitHostId: Number(tunnel.exitHostId), viaActiveExit: true } : {}),
           targetIp,
           targetPort: runtimeRule.targetPort,
           method: linkProbeMethodForRule(runtimeRule),
           tunnelLatencyBaselineId: Number((tunnelLatencyBaseline as any)?.id || 0),
           refreshPushed: pushed,
         });
-        appendPanelLog("info", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} queued tunnel+target test from exitHost=${tunnel.exitHostId} to target=${targetIp}:${runtimeRule.targetPort}`);
+        appendPanelLog("info", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} queued tunnel+target test from exitHost=${testExitHostId}${activeExit ? ` (主出口 ${tunnel.exitHostId} 连不上目标，测在用的出口)` : ""} to target=${targetIp}:${runtimeRule.targetPort}`);
       }
       const id = await db.createForwardTest({
         ruleId: rule.id,
