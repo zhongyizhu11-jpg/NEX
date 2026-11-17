@@ -664,10 +664,16 @@ export function exitTargetStatesForRule(ruleId: number, nowMs = Date.now()): Exi
 
 /**
  * 这条规则现在实际走哪台出口（2.3.537，用户：「切走了，ping 延迟显示的节点路径可以实时吗」）。
- * 只在主出口连不上目标、流量已经切到别的出口时给：规则卡的「经 xxx」、延迟、诊断的路径都换成在用的那台。
- * 主出口正常时返回 null（照旧按主出口显示）。
+ * 流量没走主出口时给：规则卡的「经 xxx」、延迟、诊断的路径都换成在用的那台。主出口在用时返回 null（照旧按主出口显示）。
+ *
+ * 2.3.539（用户：「这个没生效吧」）：以前只认「主出口的快速探测报连不上」这一种，下面几种都漏了，卡上照旧
+ * 「经 主出口 · 超时」：
+ *   - 主出口被目标的高防时通时不通：快速探测只到「不稳」（丢包），没到「连不上」，可入口已经把它摘了；
+ *   - 主出口的 Agent 太老、没报快速探测：只有它那条一分钟一次的普通探测在超时（primaryTimeout）；
+ *   - 手动指定了别的出口、延迟优先挑了别的出口。
+ * 现在按入口实际的挑法（activeExitsForRule）算：挑出来的里面没有主出口，就写在用的那几台。
  */
-export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.now()): {
+export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.now(), options: { primaryTimeout?: boolean } = {}): {
   primaryHostId: number;
   hostIds: number[];
   names: string[];
@@ -678,28 +684,39 @@ export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.no
   if (!meta || meta.order.length < 2 || !tunnelBalancesExits(meta.tunnel)) return null;
   const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
   const primaryHostId = meta.order[0];
-  if (fresh.get(primaryHostId)?.down !== true) return null;
+  // 主出口没报快速探测（Agent 老），它的普通探测又在超时：当它连不上
+  if (!fresh.has(primaryHostId) && options.primaryTimeout) {
+    const others = Array.from(fresh.values());
+    const template = others[0];
+    if (template) fresh.set(primaryHostId, { ...template, hostId: primaryHostId, hostName: `主机 ${primaryHostId}`, down: true, unstable: false, latencyMs: null, medianMs: null });
+  }
   const reporting = meta.order.filter((hostId) => fresh.has(hostId));
   if (reporting.length > 0 && reporting.every((hostId) => fresh.get(hostId)?.down === true)) return null;
+  const strategy = normalizeExitGroupStrategy(meta.tunnel.loadBalanceStrategy);
+  const gost = String(meta.tunnel.mode || "").toLowerCase() !== "forwardx";
+  const pinHostId = Number(meta.tunnel.balancePinHostId || 0);
   const active = activeExitsForRule({
-    strategy: normalizeExitGroupStrategy(meta.tunnel.loadBalanceStrategy),
-    gost: String(meta.tunnel.mode || "").toLowerCase() !== "forwardx",
+    strategy,
+    gost,
     ordered: meta.order,
     fresh,
     detect: tunnelBalanceDetect(meta.tunnel),
     allDown: false,
-    pinHostId: Number(meta.tunnel.balancePinHostId || 0),
+    pinHostId,
     ruleId,
-  }).filter((hostId) => hostId !== primaryHostId && fresh.get(hostId)?.down !== true);
-  if (active.length === 0) return null;
-  const states = active.map((hostId) => fresh.get(hostId)).filter((state): state is ExitTargetState => !!state);
+  });
+  if (active.length === 0 || active.includes(primaryHostId)) return null;
+  // 只写有数据、连得上的（手动指定的那台没数据也写：那是用户自己选的）
+  const shown = active.filter((hostId) => (fresh.has(hostId) && fresh.get(hostId)?.down !== true) || hostId === pinHostId);
+  if (shown.length === 0) return null;
+  const states = shown.map((hostId) => fresh.get(hostId)).filter((state): state is ExitTargetState => !!state);
   const latencies = states.map((state) => state.medianMs ?? state.latencyMs).filter((value): value is number => value != null);
   return {
     primaryHostId,
-    hostIds: active,
-    names: active.map((hostId) => fresh.get(hostId)?.hostName || `主机 ${hostId}`),
+    hostIds: shown,
+    names: shown.map((hostId) => fresh.get(hostId)?.hostName || `主机 ${hostId}`),
     latencyMs: latencies.length > 0 ? Math.min(...latencies) : null,
-    at: Math.max(...states.map((state) => state.at), 0),
+    at: states.length > 0 ? Math.max(...states.map((state) => state.at)) : nowMs,
   };
 }
 
@@ -757,12 +774,13 @@ type RuleExitTargetFields = {
 export function withRuleExitTargets<T extends { ruleId: number | string }>(rows: T[], nowMs = Date.now()): Array<T & RuleExitTargetFields> {
   return rows.map((row) => {
     const fresh = exitTargetStatesForRule(Number(row.ruleId), nowMs);
-    if (fresh.length < 2) return { ...row, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null, exitTargetVia: null, exitTargetViaHostIds: null };
+    if (fresh.length === 0) return { ...row, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null, exitTargetVia: null, exitTargetViaHostIds: null };
     /*
-      主出口连不上目标、流量已经切到别的出口：规则的「最新延迟」换成在用那台到目标的延迟（主出口那条探测还是超时，
-      拿它显示等于说转发断了，可流量照走）。
+      流量没走主出口（连不上、不稳被摘、手动指定、延迟优先挑了别的）：规则的「最新延迟」换成在用那台到目标的延迟
+      （规则的普通探测是主出口测的，它连不上时一直超时，拿它显示等于说转发断了，可流量照走）。
     */
-    const via = ruleActiveExit(Number(row.ruleId), fresh[0].tunnelId, nowMs);
+    const primaryTimeout = (row as { latestLatencyIsTimeout?: unknown }).latestLatencyIsTimeout === true;
+    const via = ruleActiveExit(Number(row.ruleId), fresh[0].tunnelId, nowMs, { primaryTimeout });
     const viaFields: Partial<Record<string, unknown>> = via
       ? {
         exitTargetVia: via.names,
@@ -775,6 +793,8 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
         } : {}),
       }
       : { exitTargetVia: null, exitTargetViaHostIds: null };
+    // 只有一台出口报了：没法说「几台里几台有问题」，只给在用的出口
+    if (fresh.length < 2) return { ...row, ...viaFields, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null } as T & RuleExitTargetFields;
     const bad = fresh.filter((state) => state.down || state.unstable).map((state) => ({
       hostId: state.hostId,
       hostName: state.hostName,
