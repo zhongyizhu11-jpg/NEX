@@ -1961,14 +1961,16 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     */
     const gostBalanceAgentReady = isAgentVersionAtLeast(effectiveAgentVersion, GOST_BALANCE_PROXY_AGENT_VERSION);
     const gostBalanceExitCounts = new Map<number, number>();
+    type BalanceRuleLite = { id: number; tunnelId?: number | null; forwardType?: string | null; failoverEnabled?: unknown; protocol?: string | null; pendingDelete?: unknown; isEnabled?: unknown };
+    type BalanceTunnelLite = { id: number; mode?: string | null; isEnabled?: unknown; entryHostId?: number | null; entryGroupId?: number | null; loadBalanceEnabled?: unknown; loadBalanceStrategy?: string | null; balanceDetect?: string | null; exitHostId?: number | null };
     if (gostBalanceAgentReady) {
-      for (const rule of agentAllRules as any[]) {
-        const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) as any : null;
+      for (const rule of agentAllRules as unknown as BalanceRuleLite[]) {
+        const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) as BalanceTunnelLite | undefined : null;
         if (!tunnel || !isGostTunnelMode(tunnel) || !tunnelBalancesExits(tunnel)) continue;
         if (rule.forwardType !== "gost" || rule.failoverEnabled || !isForwardRuleProtocolTcpEnabled(rule.protocol)) continue;
         if (Number(tunnel.entryHostId || 0) !== Number(host.id) || Number(tunnel.entryGroupId || 0) > 0) continue;
         if ((tunnelHopsByTunnelId.get(Number(tunnel.id)) || []).length >= 3) continue;
-        const extra = (tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []).filter((node: any) => runtimeBool(node?.isEnabled, true) && Number(node?.hostId || 0) > 0);
+        const extra = ((tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []) as Array<{ isEnabled?: unknown; hostId?: number | null }>).filter((node) => runtimeBool(node?.isEnabled, true) && Number(node?.hostId || 0) > 0);
         const count = 1 + extra.length;
         if (count >= 2) gostBalanceExitCounts.set(Number(rule.id), count);
       }
@@ -3158,13 +3160,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       交给 Agent 的代理规格。用不了的（老 Agent、入口组、多跳、开了 PROXY 头、协议守卫、共享 TLS 入站、端口没分到）
       返回 null，照旧走 gost 自己的节点选择。
     */
-    type GostBalanceExit = { hostId: number; localPort: number; dialHost: string; listenPort: number; node: any };
-    const gostBalancePlans = new Map<number, { failoverPort: number; exits: GostBalanceExit[]; udp: boolean; spec: any }>();
-    for (const rule of agentAllRules as any[]) {
+    type GostBalanceExit = { hostId: number; localPort: number; dialHost: string; listenPort: number; node: ReturnType<typeof gostTunnelNode> };
+    const gostBalancePlans = new Map<number, { failoverPort: number; exits: GostBalanceExit[]; udp: boolean; spec: Record<string, unknown> }>();
+    for (const rule of agentAllRules as unknown as BalanceRuleLite[]) {
       const count = gostBalanceExitCounts.get(Number(rule?.id || 0));
       if (!count || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
-      const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-      if (!tunnel || !runtimeBool(tunnel.isEnabled) || isSniRuntimeRule(rule)) continue;
+      const tunnel = tunnelById.get(Number(rule.tunnelId)) as (BalanceTunnelLite & Parameters<typeof tunnelSecretSeed>[0]) | undefined;
+      if (!tunnel || !runtimeBool(tunnel.isEnabled) || isSniRuntimeRule(rule as unknown as Parameters<typeof isSniRuntimeRule>[0])) continue;
       if (proxyProtocolEnabled(rule, "entryReceive") || proxyProtocolEnabled(rule, "entrySend")) continue;
       const protocolPlan = planGostTunnelRuleProtocol({ protocol: rule.protocol, tunnelId: Number(tunnel.id), ruleId: Number(rule.id), secretSeed: tunnelSecretSeed(tunnel) });
       if (protocolPlan.entryNeedsTarget) continue;
@@ -4313,7 +4315,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 ...(entryExitIps?.[index] ? { exitIp: entryExitIps[index] } : {}),
                 ...(entryExitTargetStatus?.[index] ? { targetStatus: true } : {}),
                 // 主机号：FXP 2.2.145 起上报负载均衡真实状态时用它说「是哪台」（老 FXP 不认，忽略）
-                ...(Number((route as any).hostId || 0) > 0 ? { hostId: Number((route as any).hostId) } : {}),
+                ...(Number(entryExitHostIds[index] || 0) > 0 ? { hostId: entryExitHostIds[index] } : {}),
               })),
               targetIp: fxpTarget.targetIp,
               targetPort: fxpTarget.targetPort,

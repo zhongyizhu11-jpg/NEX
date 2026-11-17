@@ -12,9 +12,12 @@ import {
   BALANCE_INTERVAL_CHOICES,
   BALANCE_JITTER_ACTION_LABELS,
   BALANCE_JITTER_ACTIONS,
+  BALANCE_SENSITIVITIES,
+  BALANCE_SENSITIVITY_PRESETS,
   BALANCE_STRATEGY_LABELS,
   DEFAULT_BALANCE_DETECT,
   balanceDetectEquals,
+  balanceSensitivityOf,
   balanceSwitchWithinSeconds,
   describeBalanceDetectShort,
   describeBalanceEffect,
@@ -74,14 +77,14 @@ export function BalanceStrategySelect({
       <SelectContent className="max-w-[min(26rem,calc(100vw-2rem))]">
         {common.length > 0 ? (
           <SelectGroup>
-            {custom.length > 0 ? <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">常用</SelectPrimitive.Label> : null}
+            {custom.length > 0 ? <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">综合</SelectPrimitive.Label> : null}
             {common.map(renderItem)}
           </SelectGroup>
         ) : null}
         {common.length > 0 && custom.length > 0 ? <SelectPrimitive.Separator className="mx-2 my-1 h-px bg-border/70" /> : null}
         {custom.length > 0 ? (
           <SelectGroup>
-            <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">自定义</SelectPrimitive.Label>
+            <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">其他方式</SelectPrimitive.Label>
             {custom.map(renderItem)}
           </SelectGroup>
         ) : null}
@@ -179,8 +182,31 @@ export function BalanceDetectPanel({
   const patch = (next: Partial<BalanceDetect>) => onChange({ ...value, ...next });
   const isDefault = balanceDetectEquals(value, defaults);
   const intervalChoices = Array.from(new Set<number>([...BALANCE_INTERVAL_CHOICES, defaults.intervalSeconds])).sort((a, b) => a - b);
+  // 灵敏度三档（2.3.539）：大多数人选一档就够；转发组 / 入口组靠改解析，默认值不一样，不给三档
+  const sensitivity = dns ? null : balanceSensitivityOf(value);
   return (
     <div className="rounded-xl border border-border/60 bg-background/60">
+      {!dns ? (
+        <div className="space-y-1.5 px-3 pt-2.5">
+          <div className="text-[14.5px] font-semibold leading-5">检测灵敏度</div>
+          <SegmentedControl<string>
+            ariaLabel="检测灵敏度"
+            value={sensitivity ?? "custom"}
+            options={[
+              ...BALANCE_SENSITIVITIES.map((key) => ({ value: key, label: BALANCE_SENSITIVITY_PRESETS[key].label })),
+              ...(sensitivity ? [] : [{ value: "custom", label: "自定义" }]),
+            ]}
+            onChange={(key) => {
+              const preset = BALANCE_SENSITIVITY_PRESETS[key as keyof typeof BALANCE_SENSITIVITY_PRESETS];
+              if (preset) onChange({ ...preset.detect });
+            }}
+            listClassName="grid grid-flow-col auto-cols-fr gap-1"
+          />
+          <p className="text-meta leading-5 text-muted-foreground">
+            {sensitivity ? `${BALANCE_SENSITIVITY_PRESETS[sensitivity].hint}；` : "已按下面的高级设置；"}坏了约 {balanceSwitchWithinSeconds(value)} 秒内切走
+          </p>
+        </div>
+      ) : null}
       <button
         type="button"
         className="fx-lb-detect-toggle flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
@@ -189,8 +215,8 @@ export function BalanceDetectPanel({
         onClick={() => setOpen((current) => !current)}
       >
         <span className="min-w-0">
-          <span className="block text-[14.5px] font-semibold leading-5">检测与切换</span>
-          {!open ? <span className="block truncate text-meta leading-5 text-muted-foreground">{describeBalanceDetectShort(value)}</span> : null}
+          <span className={cn("block leading-5", dns ? "text-[14.5px] font-semibold" : "text-[13.5px] font-medium text-muted-foreground")}>{dns ? "检测与切换" : "高级设置"}</span>
+          {!open && dns ? <span className="block truncate text-meta leading-5 text-muted-foreground">{describeBalanceDetectShort(value)}</span> : null}
         </span>
         <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open ? "rotate-180" : "-rotate-90")} />
       </button>

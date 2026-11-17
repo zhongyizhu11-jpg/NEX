@@ -269,8 +269,8 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     }
   }
   // GOST 链路负载均衡：每台出口一个本机 gost 端口（只听 127.0.0.1），各挂一条只走那台出口的链；本机代理拨它们。
-  const balanceGostChains: any[] = [];
-  for (const r of gostRules as any[]) {
+  const balanceGostChains: Array<Record<string, unknown>> = [];
+  for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown }>) {
     const balance = gostBalancePlans.get(Number(r?.id || 0));
     if (!balance || !runtimeBool(r.isEnabled)) continue;
     for (const exit of balance.exits) {
