@@ -1,6 +1,10 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -139,5 +143,105 @@ func TestBalanceReportIsDueOnChangeOrEveryTenSeconds(t *testing.T) {
 	}
 	if _, due := collectBalanceReports(now.Add(14*time.Second), false); !due {
 		t.Fatalf("every ten seconds anyway")
+	}
+}
+
+// 仿真：真的跑一个入口、两台出口，其中一台到目标不通（高防挡了）。用户连 8 次全部无感换到好的那台；入口报给面板的
+// 状态里，不通的那台是「连不上（到目标）」，好的那台「在用」。
+func TestBalanceReportSimulationEntryWithOneExitBlockedByTarget(t *testing.T) {
+	resetFXPEndpointRegistry()
+	resetBalanceReporterForTest()
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	go func() {
+		for {
+			c, e := target.Accept()
+			if e != nil {
+				return
+			}
+			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
+		}
+	}()
+	targetPort := target.Addr().(*net.TCPAddr).Port
+	key := "balance-sim-key"
+	blockedPort := freeTCPUDPPort(t)
+	goodPort := freeTCPUDPPort(t)
+	entryPort := freeTCPUDPPort(t)
+	exitTargetDialHook = func(listenPort int, _ helloFrame) error {
+		if listenPort == blockedPort {
+			return errors.New("simulated: target firewall drops this exit")
+		}
+		return nil
+	}
+	defer func() { exitTargetDialHook = nil }()
+	done := make(chan struct{})
+	defer close(done)
+	for _, port := range []int{blockedPort, goodPort} {
+		port := port
+		go func() {
+			_ = runExit(done, config{Role: "exit", TunnelID: 93, ListenPort: port, Protocol: "tcp", Key: key, StreamTargets: loopbackStreamTargets(94, targetPort)})
+		}()
+		waitForTCP(t, port)
+	}
+	go func() {
+		_ = runEntry(done, config{
+			Role: "entry", TunnelID: 93, RuleID: 94,
+			ListenPort: entryPort, Protocol: "tcp",
+			ExitHost: "127.0.0.1", ExitPort: blockedPort,
+			ExitStrategy: "fallback",
+			Exits: []exitEndpoint{
+				{Host: "127.0.0.1", Port: blockedPort, Key: key, TargetStatus: true, HostID: 2},
+				{Host: "127.0.0.1", Port: goodPort, Key: key, TargetStatus: true, HostID: 3},
+			},
+			TargetIP: "127.0.0.1", TargetPort: targetPort,
+			Key: key,
+			// 面板地址随便给一个连不上的：后台上报失败只记日志，这里直接读要报的内容
+			PanelURL: "http://127.0.0.1:1", Token: "sim-token",
+		})
+	}()
+	waitForTCP(t, entryPort)
+	for i := 0; i < 8; i++ {
+		c, dialErr := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(entryPort)), 10*time.Second)
+		if dialErr != nil {
+			t.Fatalf("connection %d: %v", i+1, dialErr)
+		}
+		_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+		payload := []byte("sim-" + strconv.Itoa(i))
+		if _, e := c.Write(payload); e != nil {
+			t.Fatalf("write %d: %v", i+1, e)
+		}
+		reply := make([]byte, len(payload))
+		if _, e := io.ReadFull(c, reply); e != nil || string(reply) != string(payload) {
+			t.Fatalf("connection %d should be replayed onto the good exit: %v %q", i+1, e, reply)
+		}
+		_ = c.Close()
+	}
+	var report balanceRuleReport
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		groups, _ := collectBalanceReports(time.Now(), true)
+		for _, rules := range groups {
+			for _, rule := range rules {
+				if rule.RuleID == 94 {
+					report = rule
+				}
+			}
+		}
+		if report.RuleID == 94 && len(report.Exits) == 2 && report.Exits[0].State == "down" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("entry never reported the blocked exit as down: %#v", report)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if report.Exits[0].HostID != 2 || report.Exits[0].Reason != "target" {
+		t.Fatalf("blocked exit: %#v", report.Exits[0])
+	}
+	if report.Exits[1].HostID != 3 || report.Exits[1].State != "active" {
+		t.Fatalf("good exit carries the traffic: %#v", report.Exits[1])
 	}
 }
