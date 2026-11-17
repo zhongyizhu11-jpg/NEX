@@ -8,6 +8,7 @@ import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
 import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
+import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
 
 /*
   负载均衡链路：每台出口「连得上规则的目标吗」（2026-11，用户：「规则都这样了，链路负载均衡还是没切机器」）。
@@ -156,6 +157,23 @@ async function seedBaselinesFromRuleRecords(hostId: number, ruleIds: number[], n
 }
 
 /** 这台出口到这条规则目标的平时水平；还没攒够（半小时）返回 null。 */
+/** 入口上报的真实延迟也拿来攒「平时延迟」（2.3.539：出口不再另外测目标之后，平时值从这里来）。 */
+export async function noteLiveBaselines(reports: LiveRuleReport[], nowMs = Date.now()) {
+  if (reports.length === 0) return;
+  await loadBaselines();
+  for (const report of reports) {
+    for (const exit of report.exits) {
+      if (exit.hostId <= 0 || exit.state === "down" || exit.medianMs == null) continue;
+      updateExitTargetBaseline({
+        ruleId: report.ruleId, tunnelId: report.tunnelId, hostId: exit.hostId, hostName: exit.hostName,
+        down: false, latencyMs: exit.medianMs, medianMs: exit.medianMs, jitterMs: exit.jitterMs, lossPct: exit.lossPct,
+        samples: exit.samples, at: nowMs, changedAt: nowMs, unstable: exit.state === "unstable", gost: report.source === "agent",
+      }, nowMs);
+    }
+  }
+  await saveBaselinesIfDue(nowMs);
+}
+
 export function exitTargetBaseline(ruleId: number, hostId: number): ExitTargetBaseline | null {
   const value = baselines.get(stateKey(ruleId, hostId));
   return value && value.samples >= BASELINE_READY_SAMPLES ? value : null;
@@ -432,6 +450,10 @@ export type ExitTargetTunnelSummary = {
   targetIssues: Array<{ ruleId: number; kind: "down" | "unstable" }>;
   /** 一句话：现在怎么走 */
   how: string | null;
+  /** 数据是入口真实上报的（true），还是面板按出口的探测估的（false / 没有） */
+  live?: boolean;
+  /** 最近的切换记录（新的在前，最多 10 条；只有真实上报时有） */
+  events?: Array<{ at: number; ruleId: number; hostId: number; hostName: string; from: string; to: string; reason: "target" | "exit" | null; text: string }>;
 };
 
 const middle = (values: number[]) => {
@@ -567,6 +589,11 @@ export function exitTargetSummaryForTunnel(
   const strategy = normalizeExitGroupStrategy(tunnel?.loadBalanceStrategy);
   const gost = String(tunnel?.mode || "").toLowerCase() !== "forwardx";
   const pinHostId = options.pinOnline === false ? 0 : Number(tunnel?.balancePinHostId || 0);
+  // 入口报了真实状态：直接用
+  const lives = liveBalanceForTunnel(tunnelId, nowMs);
+  if (lives.length > 0) {
+    return exitTargetSummaryFromLive(lives, exitIds, { strategy, gost, detect, pinHostId, hostNames: options.hostNames });
+  }
   const byRule = new Map<number, Map<number, ExitTargetState>>();
   for (const state of states.values()) {
     if (state.tunnelId !== tunnelId || nowMs - state.at > EXIT_TARGET_STALE_MS || !exitIds.includes(state.hostId)) continue;
@@ -653,6 +680,116 @@ export function exitTargetSummaryForTunnel(
   };
 }
 
+const LIVE_STATE_TEXT: Record<string, string> = { active: "在用", standby: "备用", down: "连不上", unstable: "不稳" };
+
+function liveEventText(event: { hostName: string; from: string; to: string; reason: "target" | "exit" | null }) {
+  const why = event.reason === "exit" ? "（出口机连不上）" : event.reason === "target" ? "（到目标）" : "";
+  if (event.to === "down") return `${event.hostName} 连不上${why}，已切走`;
+  if (event.to === "unstable") return `${event.hostName} 不稳${why}`;
+  if (event.from === "down" || event.from === "unstable") return `${event.hostName} 恢复${event.to === "active" ? "，开始分流量" : ""}`;
+  if (event.to === "active") return `开始走 ${event.hostName}`;
+  if (event.to === "standby") return `${event.hostName} 转为备用`;
+  return `${event.hostName}：${LIVE_STATE_TEXT[event.from] || event.from} → ${LIVE_STATE_TEXT[event.to] || event.to}`;
+}
+
+/** 链路弹窗：用入口上报的真实状态算每台出口、怎么走、最近的切换。 */
+function exitTargetSummaryFromLive(
+  lives: LiveRuleReport[],
+  exitIds: number[],
+  options: { strategy: string; gost: boolean; detect: BalanceDetect; pinHostId: number; hostNames?: Map<number, string> },
+): ExitTargetTunnelSummary {
+  const ids = [...exitIds];
+  for (const live of lives) for (const exit of live.exits) if (exit.hostId > 0 && !ids.includes(exit.hostId)) ids.push(exit.hostId);
+  const nameOf = (hostId: number) => options.hostNames?.get(hostId)
+    || lives.flatMap((live) => live.exits).find((exit) => exit.hostId === hostId)?.hostName
+    || `主机 ${hostId}`;
+  const names = (hostIds: number[]) => hostIds.map(nameOf).join("、");
+  const perExit = new Map(ids.map((hostId) => [hostId, {
+    rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
+    baselines: [] as number[], slower: 0, picks: 0,
+  }]));
+  const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
+  const hows = new Map<string, number>();
+  const pinned = options.pinHostId > 0 && ids.includes(options.pinHostId);
+  for (const live of lives) {
+    const exits = live.exits.filter((exit) => exit.hostId > 0);
+    const allDown = exits.length >= 2 && exits.every((exit) => exit.state === "down" && exit.reason === "target");
+    const allBad = !allDown && exits.length >= 2 && exits.every((exit) => (exit.state === "down" || exit.state === "unstable") && exit.reason === "target");
+    if (allDown) targetIssues.push({ ruleId: live.ruleId, kind: "down" });
+    else if (allBad) targetIssues.push({ ruleId: live.ruleId, kind: "unstable" });
+    for (const exit of exits) {
+      const entry = perExit.get(exit.hostId);
+      if (!entry) continue;
+      entry.rules += 1;
+      if (exit.state === "down" && !allDown) entry.down += 1;
+      else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
+      if (exit.state === "active") entry.activeRules += 1;
+      entry.picks += exit.picks;
+      if (exit.state !== "down" && exit.medianMs != null) entry.medians.push(exit.medianMs);
+      if (exit.state !== "down" && exit.jitterMs != null) entry.jitters.push(exit.jitterMs);
+      if (exit.lossPct != null) entry.losses.push(exit.lossPct);
+      const baseline = exitTargetBaseline(live.ruleId, exit.hostId);
+      if (baseline) {
+        entry.baselines.push(baseline.normalMs);
+        if (exit.state !== "down" && exit.medianMs != null && exit.medianMs - baseline.normalMs > options.detect.latencyMarginMs) {
+          entry.slower = Math.max(entry.slower, exit.medianMs - baseline.normalMs);
+        }
+      }
+    }
+    if (allDown) continue;
+    const active = exits.filter((exit) => exit.state === "active");
+    if (active.length === 0) continue;
+    // 只数能用、在待命的；连不上的那台下面一行已经写了，不算「备用」
+    const rest = exits.filter((exit) => exit.state === "standby").length;
+    const restText = rest > 0 ? `，${rest} 台备用` : "";
+    const totalPicks = active.reduce((sum, exit) => sum + exit.picks, 0);
+    const label = describeHow({ strategy: options.strategy, gost: options.gost, pinned, active: active.map((exit) => exit.hostId), total: exits.length, names, marginMs: options.detect.latencyMarginMs })?.split("：")[0] || "分配";
+    let how: string;
+    if (pinned) how = `手动指定：只走 ${names(active.map((exit) => exit.hostId))}`;
+    else if (active.length === 1) how = `${label}：走 ${active[0].hostName}${restText}`;
+    else if (totalPicks >= 10) {
+      how = `${label}：${active.map((exit) => `${exit.hostName} ${Math.round((exit.picks / totalPicks) * 100)}%`).join("、")}${restText}`;
+    } else how = `${label}：分给 ${names(active.map((exit) => exit.hostId))}${restText}`;
+    hows.set(how, (hows.get(how) || 0) + 1);
+  }
+  let how: string | null = null;
+  if (hows.size > 0) {
+    const sorted = Array.from(hows.entries()).sort((left, right) => right[1] - left[1]);
+    const counted = sorted.reduce((sum, [, count]) => sum + count, 0);
+    how = sorted[0][0] + (sorted.length > 1 ? `（${counted} 条规则里 ${sorted[0][1]} 条）` : "");
+  }
+  const events = lives
+    .flatMap((live) => live.events.map((event) => ({ ...event, ruleId: live.ruleId })))
+    .sort((left, right) => right.at - left.at)
+    .slice(0, 10)
+    .map((event) => ({ ...event, hostName: event.hostId > 0 ? nameOf(event.hostId) : event.hostName, text: liveEventText({ ...event, hostName: event.hostId > 0 ? nameOf(event.hostId) : event.hostName }) }));
+  return {
+    exits: ids.map((hostId) => {
+      const entry = perExit.get(hostId)!;
+      return {
+        hostId,
+        rules: entry.rules,
+        down: entry.down,
+        unstable: entry.unstable,
+        medianMs: middle(entry.medians),
+        minMs: entry.medians.length > 0 ? Math.min(...entry.medians) : null,
+        maxMs: entry.medians.length > 0 ? Math.max(...entry.medians) : null,
+        jitterMs: middle(entry.jitters),
+        lossPct: middle(entry.losses),
+        activeRules: entry.activeRules,
+        baselineMs: middle(entry.baselines),
+        baselineRules: entry.baselines.length,
+        slowerMs: entry.slower > 0 ? entry.slower : null,
+        source: entry.rules === 0 ? null : entry.picks > 0 ? "traffic" : "probe",
+      };
+    }),
+    targetIssues,
+    how,
+    live: true,
+    events,
+  };
+}
+
 /** 一条规则各台出口到目标的情况（只要新鲜的）。 */
 export function exitTargetStatesForRule(ruleId: number, nowMs = Date.now()): ExitTargetState[] {
   const out: ExitTargetState[] = [];
@@ -664,42 +801,78 @@ export function exitTargetStatesForRule(ruleId: number, nowMs = Date.now()): Exi
 
 /**
  * 这条规则现在实际走哪台出口（2.3.537，用户：「切走了，ping 延迟显示的节点路径可以实时吗」）。
- * 只在主出口连不上目标、流量已经切到别的出口时给：规则卡的「经 xxx」、延迟、诊断的路径都换成在用的那台。
- * 主出口正常时返回 null（照旧按主出口显示）。
+ * 流量没走主出口时给：规则卡的「经 xxx」、延迟、诊断的路径都换成在用的那台。主出口在用时返回 null（照旧按主出口显示）。
+ *
+ * 2.3.539（用户：「这个没生效吧」）：以前只认「主出口的快速探测报连不上」这一种，下面几种都漏了，卡上照旧
+ * 「经 主出口 · 超时」：
+ *   - 主出口被目标的高防时通时不通：快速探测只到「不稳」（丢包），没到「连不上」，可入口已经把它摘了；
+ *   - 主出口的 Agent 太老、没报快速探测：只有它那条一分钟一次的普通探测在超时（primaryTimeout）；
+ *   - 手动指定了别的出口、延迟优先挑了别的出口。
+ * 现在按入口实际的挑法（activeExitsForRule）算：挑出来的里面没有主出口，就写在用的那几台。
  */
-export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.now()): {
+export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.now(), options: { primaryTimeout?: boolean } = {}): {
   primaryHostId: number;
   hostIds: number[];
   names: string[];
   latencyMs: number | null;
   at: number;
 } | null {
+  // 入口报了真实状态（FXP 2.2.145 / Agent 2.2.262 起）：直接用，不再按下面的办法估
+  const live = liveBalanceForRule(ruleId, nowMs);
+  if (live && live.tunnelId === Number(tunnelId)) return activeExitFromLive(live);
   const meta = tunnelMetaById.get(Number(tunnelId));
   if (!meta || meta.order.length < 2 || !tunnelBalancesExits(meta.tunnel)) return null;
   const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
   const primaryHostId = meta.order[0];
-  if (fresh.get(primaryHostId)?.down !== true) return null;
+  // 主出口没报快速探测（Agent 老），它的普通探测又在超时：当它连不上
+  if (!fresh.has(primaryHostId) && options.primaryTimeout) {
+    const others = Array.from(fresh.values());
+    const template = others[0];
+    if (template) fresh.set(primaryHostId, { ...template, hostId: primaryHostId, hostName: `主机 ${primaryHostId}`, down: true, unstable: false, latencyMs: null, medianMs: null });
+  }
   const reporting = meta.order.filter((hostId) => fresh.has(hostId));
   if (reporting.length > 0 && reporting.every((hostId) => fresh.get(hostId)?.down === true)) return null;
+  const strategy = normalizeExitGroupStrategy(meta.tunnel.loadBalanceStrategy);
+  const gost = String(meta.tunnel.mode || "").toLowerCase() !== "forwardx";
+  const pinHostId = Number(meta.tunnel.balancePinHostId || 0);
   const active = activeExitsForRule({
-    strategy: normalizeExitGroupStrategy(meta.tunnel.loadBalanceStrategy),
-    gost: String(meta.tunnel.mode || "").toLowerCase() !== "forwardx",
+    strategy,
+    gost,
     ordered: meta.order,
     fresh,
     detect: tunnelBalanceDetect(meta.tunnel),
     allDown: false,
-    pinHostId: Number(meta.tunnel.balancePinHostId || 0),
+    pinHostId,
     ruleId,
-  }).filter((hostId) => hostId !== primaryHostId && fresh.get(hostId)?.down !== true);
-  if (active.length === 0) return null;
-  const states = active.map((hostId) => fresh.get(hostId)).filter((state): state is ExitTargetState => !!state);
+  });
+  if (active.length === 0 || active.includes(primaryHostId)) return null;
+  // 只写有数据、连得上的（手动指定的那台没数据也写：那是用户自己选的）
+  const shown = active.filter((hostId) => (fresh.has(hostId) && fresh.get(hostId)?.down !== true) || hostId === pinHostId);
+  if (shown.length === 0) return null;
+  const states = shown.map((hostId) => fresh.get(hostId)).filter((state): state is ExitTargetState => !!state);
   const latencies = states.map((state) => state.medianMs ?? state.latencyMs).filter((value): value is number => value != null);
   return {
     primaryHostId,
-    hostIds: active,
-    names: active.map((hostId) => fresh.get(hostId)?.hostName || `主机 ${hostId}`),
+    hostIds: shown,
+    names: shown.map((hostId) => fresh.get(hostId)?.hostName || `主机 ${hostId}`),
     latencyMs: latencies.length > 0 ? Math.min(...latencies) : null,
-    at: Math.max(...states.map((state) => state.at), 0),
+    at: states.length > 0 ? Math.max(...states.map((state) => state.at)) : nowMs,
+  };
+}
+
+/** 入口上报的真实状态 → 「流量没走主出口时，在用的是哪几台」。主出口在用（或都不能用）时 null。 */
+export function activeExitFromLive(live: LiveRuleReport) {
+  const primary = live.exits[0];
+  if (!primary) return null;
+  const active = live.exits.filter((exit) => exit.state === "active" && exit.hostId > 0);
+  if (active.length === 0 || active.some((exit) => exit.hostId === primary.hostId)) return null;
+  const latencies = active.map((exit) => exit.medianMs).filter((value): value is number => value != null && value > 0);
+  return {
+    primaryHostId: primary.hostId,
+    hostIds: active.map((exit) => exit.hostId),
+    names: active.map((exit) => exit.hostName),
+    latencyMs: latencies.length > 0 ? Math.min(...latencies) : null,
+    at: live.at,
   };
 }
 
@@ -754,15 +927,50 @@ type RuleExitTargetFields = {
   exitTargetViaHostIds: number[] | null;
 };
 
+/** 规则卡那几项（经哪台、延迟、几台里几台有问题），用入口上报的真实状态算。 */
+function ruleExitTargetFieldsFromLive(live: LiveRuleReport): RuleExitTargetFields & Record<string, unknown> {
+  const via = activeExitFromLive(live);
+  const bad = live.exits
+    .filter((exit) => exit.state === "down" || exit.state === "unstable")
+    .map((exit) => ({
+      hostId: exit.hostId,
+      hostName: exit.hostName,
+      reason: (exit.state === "down" ? "down" : "unstable") as "down" | "unstable",
+      medianMs: exit.medianMs,
+      jitterMs: exit.jitterMs,
+      lossPct: exit.lossPct,
+    }));
+  const total = live.exits.length;
+  // 出口机本身连不上（不是到目标的问题）也算坏；全坏了才说「目标的问题」—— 要都是到目标不行才这么说
+  const allTargetBad = bad.length >= total && live.exits.every((exit) => exit.reason !== "exit");
+  const summary: RuleExitTargetSummary = { total, reporting: total, bad, allBad: allTargetBad };
+  return {
+    exitTargetTotal: total,
+    exitTargetOk: live.exits.filter((exit) => exit.state !== "down").length,
+    exitTargetNote: describeRuleExitTargetSummary(summary, live.source === "agent"),
+    exitTargetVia: via ? via.names : null,
+    exitTargetViaHostIds: via ? via.hostIds : null,
+    ...(via && via.latencyMs != null ? {
+      latestLatencyMs: Math.round(via.latencyMs),
+      latestLatencyIsTimeout: false,
+      latestLatencyAt: new Date(via.at),
+      latestProbeFailure: null,
+    } : {}),
+  };
+}
+
 export function withRuleExitTargets<T extends { ruleId: number | string }>(rows: T[], nowMs = Date.now()): Array<T & RuleExitTargetFields> {
   return rows.map((row) => {
+    const live = liveBalanceForRule(Number(row.ruleId), nowMs);
+    if (live) return { ...row, ...ruleExitTargetFieldsFromLive(live) } as T & RuleExitTargetFields;
     const fresh = exitTargetStatesForRule(Number(row.ruleId), nowMs);
-    if (fresh.length < 2) return { ...row, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null, exitTargetVia: null, exitTargetViaHostIds: null };
+    if (fresh.length === 0) return { ...row, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null, exitTargetVia: null, exitTargetViaHostIds: null };
     /*
-      主出口连不上目标、流量已经切到别的出口：规则的「最新延迟」换成在用那台到目标的延迟（主出口那条探测还是超时，
-      拿它显示等于说转发断了，可流量照走）。
+      流量没走主出口（连不上、不稳被摘、手动指定、延迟优先挑了别的）：规则的「最新延迟」换成在用那台到目标的延迟
+      （规则的普通探测是主出口测的，它连不上时一直超时，拿它显示等于说转发断了，可流量照走）。
     */
-    const via = ruleActiveExit(Number(row.ruleId), fresh[0].tunnelId, nowMs);
+    const primaryTimeout = (row as { latestLatencyIsTimeout?: unknown }).latestLatencyIsTimeout === true;
+    const via = ruleActiveExit(Number(row.ruleId), fresh[0].tunnelId, nowMs, { primaryTimeout });
     const viaFields: Partial<Record<string, unknown>> = via
       ? {
         exitTargetVia: via.names,
@@ -775,6 +983,8 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
         } : {}),
       }
       : { exitTargetVia: null, exitTargetViaHostIds: null };
+    // 只有一台出口报了：没法说「几台里几台有问题」，只给在用的出口
+    if (fresh.length < 2) return { ...row, ...viaFields, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null } as T & RuleExitTargetFields;
     const bad = fresh.filter((state) => state.down || state.unstable).map((state) => ({
       hostId: state.hostId,
       hostName: state.hostName,

@@ -5741,7 +5741,10 @@ function RulesContent() {
           prev.exitTargetTotal = Number(t.exitTargetTotal);
           prev.exitTargetOk = t.exitTargetOk == null ? null : Number(t.exitTargetOk);
           prev.exitTargetNote = t.exitTargetNote || null;
-          prev.exitTargetVia = Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null;
+        }
+        // 在用的出口：只有一台出口报了数据时 exitTargetTotal 是空的，照样要带上（2.3.539）
+        if (Array.isArray(t.exitTargetVia)) {
+          prev.exitTargetVia = t.exitTargetVia.map(String);
           prev.exitTargetViaHostIds = Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null;
         }
         prev.bytesIn += Number(t.bytesIn) || 0;

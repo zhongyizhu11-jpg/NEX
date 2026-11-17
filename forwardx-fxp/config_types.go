@@ -12,6 +12,8 @@ type exitEndpoint struct {
 	// TargetStatus（面板按出口机的 FXP 版本给）：这台出口会在连完目标后回一帧结果（2.2.142 起）。
 	// 入口只对这样的出口等结果、按「出口 + 目标」记健康和延迟；老出口照旧只看它本身通不通。
 	TargetStatus bool `json:"targetStatus,omitempty"`
+	// HostID：面板里这台出口的主机号（2.2.145 起），只用来上报负载均衡状态时说「是哪台」，选路不看它。
+	HostID int `json:"hostId,omitempty"`
 	// lossTolerant 不上线：拨这个端点用不用抗丢包传输（跟着规则 / 中转的 LossTolerant）。
 	lossTolerant bool
 	// transport 不上线：V3 的外层选项（v3TransportIdentity），V1 / V2 为空。选项不同的

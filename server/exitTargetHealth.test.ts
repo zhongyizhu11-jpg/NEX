@@ -232,6 +232,33 @@ test("主出口连不上目标、已切走：规则卡和诊断改用在用的�
   assert.deepEqual(row.exitTargetVia, ["hep ix", "Jinx"]);
 });
 
+test("2.3.539：主出口老 Agent 没报快速探测、只有普通探测超时，也算切走了", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "fallback" };
+  setExitTargetTunnelMetaForTest(tunnel, [1, 2]);
+  setExitTargetStateForTest(state({ hostId: 2, hostName: "hep ix", medianMs: 7 }));
+  assert.equal(ruleActiveExit(7, 3), null, "没有超时的证据：照旧按主出口");
+  const [row] = withRuleExitTargets([{ ruleId: 7, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+  assert.deepEqual(row.exitTargetVia, ["hep ix"], "只有一台出口报了数据也给在用的出口");
+  assert.equal(row.latestLatencyIsTimeout, false);
+  assert.equal(row.latestLatencyMs, 7);
+  assert.equal(row.exitTargetTotal, null);
+});
+
+test("2.3.539：手动指定了别的出口、延迟优先挑了别的出口，「经」也写在用的那台", () => {
+  resetExitTargetStates();
+  setExitTargetTunnelMetaForTest({ id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "auto", balancePinHostId: 2 }, [1, 2]);
+  setExitTargetStateForTest(state({ hostId: 1, hostName: "jinx", medianMs: 5 }));
+  setExitTargetStateForTest(state({ hostId: 2, hostName: "hep ix", medianMs: 9 }));
+  assert.deepEqual(ruleActiveExit(7, 3)?.names, ["hep ix"]);
+  setExitTargetTunnelMetaForTest({ id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "latency" }, [1, 2]);
+  setExitTargetStateForTest(state({ hostId: 1, hostName: "jinx", medianMs: 180 }));
+  setExitTargetStateForTest(state({ hostId: 2, hostName: "hep ix", medianMs: 9 }));
+  assert.deepEqual(ruleActiveExit(7, 3)?.names, ["hep ix"], "主出口慢得多，入口挑的是 hep ix");
+  setExitTargetStateForTest(state({ hostId: 1, hostName: "jinx", medianMs: 10 }));
+  assert.equal(ruleActiveExit(7, 3), null, "差不多快时主出口也在用：照旧");
+});
+
 test("主出口正常、或者每台都连不上：照旧按主出口", () => {
   resetExitTargetStates();
   const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "fallback" };

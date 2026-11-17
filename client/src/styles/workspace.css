@@ -2193,6 +2193,12 @@ html.fx-theme-fading *::after {
   padding: 8px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.45;
   color: var(--foreground); background: var(--fx-l1-surface, color-mix(in oklab, var(--muted) 60%, transparent));
 }
+/* 最近切换（2.3.539，入口真实上报）：最多三行，时间 + 一句话 */
+.fx-lb-events { display: flex; flex-direction: column; gap: 4px; }
+.fx-lb-events-title { font-size: 12.5px; font-weight: 600; color: var(--muted-foreground); }
+.fx-lb-events ul { display: flex; flex-direction: column; gap: 2px; }
+.fx-lb-events li { display: flex; min-width: 0; gap: 8px; font-size: 13.5px; line-height: 1.45; color: var(--foreground); }
+.fx-lb-events-time { flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
 .fx-lb-move { display: inline-flex; flex-direction: column; flex-shrink: 0; margin-left: -4px; }
 .fx-lb-move > button {
   position: relative; display: inline-flex; align-items: center; justify-content: center;

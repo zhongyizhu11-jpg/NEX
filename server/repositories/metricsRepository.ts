@@ -3493,6 +3493,22 @@ export async function getRuleLatencyFloors(hostId: number, ruleIds: readonly num
   return out;
 }
 
+/** 某台机器最近一次测这条规则是不是超时（诊断判断主出口是不是已经连不上目标用；since 之前的不算）。null = 没测过。 */
+export async function isLatestRuleProbeTimeout(ruleId: number, hostId: number, since: Date): Promise<boolean | null> {
+  if (!(ruleId > 0) || !(hostId > 0)) return null;
+  const q = quoteIdentifier;
+  const rows = await queryRaw<{ isTimeout: unknown }>(
+    `SELECT ${q("isTimeout")} AS ${q("isTimeout")}
+       FROM ${q("tcping_stats")}
+      WHERE ${q("ruleId")} = ? AND ${q("hostId")} = ? AND ${q("recordedAt")} >= ?
+      ORDER BY ${q("recordedAt")} DESC LIMIT 1`,
+    [ruleId, hostId, epochSeconds(since)],
+  );
+  if (rows.length === 0) return null;
+  const value = rows[0].isTimeout;
+  return value === true || value === 1 || value === "1" || value === "t" || value === "true";
+}
+
 /**
  * 端到端探测一直不通的转发（订阅「自动隐藏不通的节点」用）。
  *

@@ -15,8 +15,8 @@ import {
 } from "./loadBalance";
 
 test("统一的分配方式：常用 3 个 + 自定义 5 个，一个不漏也不重复", () => {
-  assert.deepEqual([...BALANCE_COMMON_STRATEGIES], ["auto", "fallback", "ip_hash"]);
-  assert.deepEqual([...BALANCE_CUSTOM_STRATEGIES], ["latency", "least_load", "weighted", "round_robin", "random"]);
+  assert.deepEqual([...BALANCE_COMMON_STRATEGIES], ["auto"]);
+  assert.deepEqual([...BALANCE_CUSTOM_STRATEGIES], ["latency", "fallback", "ip_hash", "least_load", "weighted", "round_robin", "random"]);
   assert.deepEqual(new Set([...BALANCE_COMMON_STRATEGIES, ...BALANCE_CUSTOM_STRATEGIES]), new Set(BALANCE_STRATEGIES));
 });
 

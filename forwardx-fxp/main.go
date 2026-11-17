@@ -242,7 +242,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.144"
+	fxpRuntimeVersion             = "2.2.145"
 	fxpFallbackRetry              = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -359,6 +359,8 @@ type exitEndpointSelector struct {
 	random func() (uint64, error)
 	// target：每台出口到这条规则目标的健康（target_health.go）。只有几台出口、而且有出口会回报结果时才有。
 	target *targetAwareness
+	// picks：每台出口被挑中的次数（上报「流量分给了谁」用，balance_report.go）。
+	picks []uint64
 }
 
 func (s *exitEndpointSelector) randomValue() (uint64, error) {
@@ -453,6 +455,9 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 			if endpoint.TargetStatus {
 				endpoints[at].TargetStatus = true
 			}
+			if endpoints[at].HostID == 0 {
+				endpoints[at].HostID = endpoint.HostID
+			}
 			return
 		}
 		seen[key] = len(endpoints)
@@ -507,6 +512,10 @@ func (s *exitEndpointSelector) activate(cfg config) func() {
 	s.probed.Store(true)
 	releases := make([]func(), 0, len(s.states)+1)
 	releases = append(releases, registerTargetSelector(s, cfg))
+	// 入口把这条规则每台出口的真实状态报给面板（balance_report.go）；中转、出口不挑出口，不报。
+	if strings.EqualFold(strings.TrimSpace(cfg.Role), "entry") {
+		releases = append(releases, registerBalanceReport(s, cfg))
+	}
 	for i, state := range s.states {
 		dialCfg := cfg
 		if s.endpoints[i].Key != "" {
@@ -570,12 +579,17 @@ func (s *exitEndpointSelector) count() int {
 	return len(s.endpoints)
 }
 
-func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...string) (exitEndpoint, int, bool) {
+func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...string) (picked exitEndpoint, pickedIndex int, pickedOK bool) {
 	if s == nil {
 		return exitEndpoint{}, -1, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if pickedOK {
+			s.countPickLocked(pickedIndex)
+		}
+	}()
 	if len(s.endpoints) == 0 {
 		return exitEndpoint{}, -1, false
 	}
@@ -597,33 +611,9 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 	//
 	// 但第 2 档不能干脆去掉：像 UDP 直连那条路根本不拨号，只做一次地址解析，
 	// 没有后台探测可言。真把它去掉，一次 DNS 抖动就能把那条规则的出口永久停用。
-	tier := func(index int) int { return tiers[index] }
 	if s.strategy == "fallback" {
-		// 按出口自己的健康分档；同一档里再按「到目标」挑：坏的、不稳的、刚恢复没稳够 5 分钟的先跳过
-		// （后面还有好的时）。都不行就照原来的顺序。
-		for wanted := 1; wanted <= 3; wanted++ {
-			first := -1
-			for i := range s.endpoints {
-				if excluded != nil && excluded[i] {
-					continue
-				}
-				if wanted == 3 || tier(i) == wanted {
-					if first < 0 {
-						first = i
-					}
-					if s.fallbackUsableLocked(i, now) {
-						return s.endpoints[i], i, true
-					}
-				}
-			}
-			if first >= 0 && (!s.targetAware() || wanted == 3) {
-				return s.endpoints[first], first, true
-			}
-		}
-		for i := range s.endpoints {
-			if excluded == nil || !excluded[i] {
-				return s.endpoints[i], i, true
-			}
+		if index, ok := s.fallbackChoiceLocked(excluded, tiers, now); ok {
+			return s.endpoints[index], index, true
 		}
 		return exitEndpoint{}, -1, false
 	}
@@ -688,6 +678,38 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 	index := usable[s.next%len(usable)]
 	s.next = (s.next + 1) % 1000000
 	return s.endpoints[index], index, true
+}
+
+// fallbackChoiceLocked：主备现在该走哪台（pick 和上报「在用的是谁」共用，不计数）。调用方持锁。
+//
+// 按出口自己的健康分档；同一档里再按「到目标」挑：坏的、不稳的、刚恢复没稳够 5 分钟的先跳过
+// （后面还有好的时）。都不行就照原来的顺序。
+func (s *exitEndpointSelector) fallbackChoiceLocked(excluded map[int]bool, tiers []int, now time.Time) (int, bool) {
+	for wanted := 1; wanted <= 3; wanted++ {
+		first := -1
+		for i := range s.endpoints {
+			if excluded != nil && excluded[i] {
+				continue
+			}
+			if wanted == 3 || tiers[i] == wanted {
+				if first < 0 {
+					first = i
+				}
+				if s.fallbackUsableLocked(i, now) {
+					return i, true
+				}
+			}
+		}
+		if first >= 0 && (!s.targetAware() || wanted == 3) {
+			return first, true
+		}
+	}
+	for i := range s.endpoints {
+		if excluded == nil || !excluded[i] {
+			return i, true
+		}
+	}
+	return -1, false
 }
 
 // acceptShare：按几成的概率收下。调用方持锁。
@@ -784,6 +806,7 @@ func (s *exitEndpointSelector) pickSessionAffinity(excluded map[int]bool, sessio
 			best, bestScore = index, score
 		}
 	}
+	s.countPickLocked(best)
 	return s.endpoints[best], best, true
 }
 

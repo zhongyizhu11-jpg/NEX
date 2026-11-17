@@ -50,7 +50,7 @@ type TunnelRow = {
 };
 type HostRow = { id: number; name?: string | null; ip?: string | null; isOnline?: unknown; agentVersion?: string | null; userId?: number | null; maintenanceMode?: unknown };
 type ExitStat = { hostId: number; rules: number; down: number; unstable: number; medianMs: number | null; jitterMs: number | null; slowerMs?: number | null; activeRules: number };
-type ExitSummary = { how?: string | null; exits?: ExitStat[]; targetIssues?: unknown[] } | null;
+type ExitSummary = { how?: string | null; exits?: ExitStat[]; targetIssues?: unknown[]; events?: Array<{ at: number; text: string }> } | null;
 type RuleRow = { id: number; name?: string | null; targetIp?: string | null; targetPort?: number | null; hostId?: number | null; isEnabled?: unknown; isForwardGroupTemplate?: unknown };
 type PlanRow = { id: number; name: string; priceCents?: number | null; durationDays?: number | null; isActive?: unknown };
 type SubRow = { id: number; planId: number; status?: string | null; expiresAt?: string | Date | null };
@@ -389,6 +389,12 @@ async function linkView(user: BotUser, tunnelId: number, page: number, notice = 
   });
   const issueCount = summary?.targetIssues?.length ?? 0;
   if (issueCount > 0) lines.push("", `⚠️ ${issueCount} 条规则的目标从每台出口都不通：问题在目标那边`);
+  // 最近一次切换（入口真实上报的，2.3.539）
+  const lastEvent = summary?.events?.[0];
+  if (lastEvent) {
+    const at = new Date(lastEvent.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" });
+    lines.push("", `最近切换：${at} ${escapeHtml(lastEvent.text)}`);
+  }
   const rows: Button[][] = [];
   if (canPin) {
     const pinRow: Button[] = [];

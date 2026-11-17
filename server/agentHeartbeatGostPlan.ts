@@ -49,6 +49,8 @@ export type GostRuntimePlanDeps = {
   dnsRuntimeRefreshCmd: (label: string) => string;
   failoverTargetAddr: (rule: HeartbeatRow, proxyDirection?: "send" | "exitSend") => string;
   getHopDialAddress: (hop: HeartbeatRow, tunnel?: HeartbeatRow) => Promise<string>;
+  /** GOST 链路负载均衡由入口本机代理挑的规则（2.3.539，见 agentHeartbeatRoute 的 gostBalancePlans） */
+  gostBalancePlans: Map<number, { failoverPort: number; exits: Array<{ hostId: number; localPort: number; node: HeartbeatRow }>; udp: boolean }>;
   gostRateLimiters: HeartbeatRow[];
   gostRelayFailoverHopMetadata: { strategy: string; maxFails: number; failTimeout: string; };
   gostRules: HeartbeatRow[];
@@ -93,6 +95,7 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     dnsRuntimeRefreshCmd,
     failoverTargetAddr,
     getHopDialAddress,
+    gostBalancePlans,
     gostRateLimiters,
     gostRelayFailoverHopMetadata,
     gostRules,
@@ -206,6 +209,22 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
           }
         } else if (!useMultiHopEntry && (!tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0)) {
           return null;
+        } else if (proto === "tcp" && gostBalancePlans.has(Number(r.id))) {
+          /*
+            GOST 链路负载均衡（2.3.539）：端口照旧由 gost 听（计数、限速、连接数限制都在这里），收下的连接交给本机
+            代理（Agent 的 failoverProxy），它在「每台出口一个本机 gost 端口」之间挑。出口切换只改代理的提示，不改
+            这里的配置，正在走的连接不断。
+          */
+          const balance = gostBalancePlans.get(Number(r.id))!;
+          service.handler = { type: proto, ...(handlerProxyMetadata ? { metadata: handlerProxyMetadata } : {}) };
+          service.forwarder = {
+            nodes: [{
+              name: `balance-${r.id}`,
+              addr: endpointHostPort("127.0.0.1", balance.failoverPort),
+              connector: { type: proto },
+              dialer: { type: proto },
+            }],
+          };
         } else if (useMultiHopEntry || protocolPlan?.entryNeedsTarget) {
           service.forwarder = {
             nodes: [{
@@ -249,11 +268,31 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
       egressGostChains.push(buildGostEgressChain(helper.ruleId, proto, helper.runtime));
     }
   }
+  // GOST 链路负载均衡：每台出口一个本机 gost 端口（只听 127.0.0.1），各挂一条只走那台出口的链；本机代理拨它们。
+  const balanceGostChains: Array<Record<string, unknown>> = [];
+  for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown }>) {
+    const balance = gostBalancePlans.get(Number(r?.id || 0));
+    if (!balance || !runtimeBool(r.isEnabled)) continue;
+    for (const exit of balance.exits) {
+      const chainName = `chain-tunnel-${r.id}-x${exit.hostId}`;
+      gostServiceConfig.push({
+        name: `fwx-${r.id}-tcp-x${exit.hostId}`,
+        addr: endpointHostPort("127.0.0.1", exit.localPort),
+        handler: { type: "tcp", chain: chainName },
+        listener: buildGostRuleListener("tcp"),
+        metadata: { dialTimeout: "3s" },
+      });
+      balanceGostChains.push({ name: chainName, hops: [{ name: `hop-tunnel-${r.id}-x${exit.hostId}`, nodes: [exit.node] }] });
+    }
+  }
   const tunnelGostChains = (await Promise.all(gostRules
     .filter((r: any) => runtimeBool(r.isEnabled) && r.forwardType === "gost" && r.tunnelId)
     .map(async (r: any) => {
       const tunnel = tunnelById.get((r as any).tunnelId) as any;
       if (!isGostTunnelMode(tunnel)) return null;
+      // 负载均衡由本机代理挑、又没有 UDP 的规则：原来那条几台出口的链没人用了，不生成（免得出口一翻转它跟着变）
+      const balancePlan = gostBalancePlans.get(Number(r.id));
+      if (balancePlan && !balancePlan.udp) return null;
       const tunnelExitHost = tunnel ? tunnelExitEndpointById.get(tunnel.id)?.host : "";
       if (!tunnel || !tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0) return null;
       const tunnelHops = tunnelHopsByTunnelId.get(Number(tunnel.id));
@@ -350,7 +389,7 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
         }],
       };
     }))).filter(Boolean);
-  const gostChains = [...tunnelGostChains, ...egressGostChains];
+  const gostChains = [...tunnelGostChains, ...balanceGostChains, ...egressGostChains];
   const gostManagedConfigs: any[] = [];
   const buildGostReloadCmds = () => {
     const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters, ...gostRuntimeApiSection(gostServiceName) }, null, 2), "utf8").toString("base64");

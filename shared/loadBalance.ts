@@ -25,13 +25,18 @@ export const BALANCE_STRATEGIES = [
 
 export type BalanceStrategy = (typeof BALANCE_STRATEGIES)[number];
 
-export const BALANCE_COMMON_STRATEGIES: readonly BalanceStrategy[] = ["auto", "fallback", "ip_hash"];
-export const BALANCE_CUSTOM_STRATEGIES: readonly BalanceStrategy[] = ["latency", "least_load", "weighted", "round_robin", "random"];
+/*
+  2.3.539（用户：「自动包含综合，其他方式单选，各自独立」）：最上面一个「自动」（综合看延迟、抖动、负载和带宽），
+  其余各自独立，放在「其他方式」里单选。每种方式在 NEX 隧道（入口 FXP）和 GOST 链路（入口本机代理）上都是真的那样分，
+  坏了的出口所有方式都会自动避开。
+*/
+export const BALANCE_COMMON_STRATEGIES: readonly BalanceStrategy[] = ["auto"];
+export const BALANCE_CUSTOM_STRATEGIES: readonly BalanceStrategy[] = ["latency", "fallback", "ip_hash", "least_load", "weighted", "round_robin", "random"];
 /** 转发组靠 DNS 切换：DNS 只能指向「当前这一台」，分不了连接。 */
 export const BALANCE_DNS_STRATEGIES: readonly BalanceStrategy[] = ["fallback"];
 
 export const BALANCE_STRATEGY_LABELS: Record<BalanceStrategy, { label: string; hint: string }> = {
-  auto: { label: "自动", hint: "看延迟、抖动、负载和带宽，新连接给最好的那台" },
+  auto: { label: "自动", hint: "综合延迟、抖动、负载和带宽，新连接给最好的那台" },
   fallback: { label: "主备", hint: "按顺序用第一台，坏了或一直抖才换下一台" },
   ip_hash: { label: "按访客固定", hint: "同一个 IP 一直走同一台，适合要保持登录的服务" },
   latency: { label: "延迟优先", hint: "只看延迟和抖动，最快最稳的那台多分" },
@@ -113,6 +118,29 @@ export const DEFAULT_DNS_BALANCE_DETECT: BalanceDetect = {
   intervalSeconds: 30,
 };
 
+/*
+  检测灵敏度三档（2.3.539）：大多数人只需要选一档，不用逐项调。「均衡」就是默认值；改过任何一项就显示「自定义」。
+*/
+export type BalanceSensitivity = "sensitive" | "balanced" | "stable";
+export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: string; hint: string; detect: BalanceDetect }> = {
+  sensitive: {
+    label: "灵敏",
+    hint: "适合游戏、实时通话",
+    detect: { intervalSeconds: 1, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true },
+  },
+  balanced: {
+    label: "均衡",
+    hint: "大多数情况选它",
+    detect: { ...DEFAULT_BALANCE_DETECT },
+  },
+  stable: {
+    label: "稳定",
+    hint: "偶尔波动不动，适合下载、长连接",
+    detect: { intervalSeconds: 5, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true },
+  },
+};
+export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
+
 /** 抖动「少分」最多降到几分之一。 */
 export const BALANCE_JITTER_REDUCED_SHARE = 0.25;
 /** 切过去至少用多久、原来那台稳定多久才回满份、一小时切几次以上放慢 —— 内置，不给调。 */
@@ -160,6 +188,11 @@ export function serializeBalanceDetect(value: unknown, defaults: BalanceDetect =
 
 export function balanceDetectEquals(left: BalanceDetect, right: BalanceDetect) {
   return (Object.keys(DEFAULT_BALANCE_DETECT) as (keyof BalanceDetect)[]).every((key) => left[key] === right[key]);
+}
+
+/** 这组检测参数是哪一档；逐项改过（哪档都不是）返回 null。 */
+export function balanceSensitivityOf(detect: BalanceDetect): BalanceSensitivity | null {
+  return BALANCE_SENSITIVITIES.find((key) => balanceDetectEquals(detect, BALANCE_SENSITIVITY_PRESETS[key].detect)) ?? null;
 }
 
 /** 坏了最多多少秒切走：最坏是刚探完就坏，等够「几次不通」轮探测。 */
@@ -216,6 +249,12 @@ export function describeBalanceEffect(input: {
 
 /** FXP 从这一版起：出口回报连目标的结果、入口当场换出口、按出口 + 目标打分，认 auto / latency。 */
 export const FXP_TARGET_AWARE_VERSION = "2.2.142";
+
+/** FXP 从这一版起：入口把每条规则每台出口的真实状态报给面板（forwardx-fxp/balance_report.go）。 */
+export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
+
+/** Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切，并报真实状态（agent/balance_report.go）。 */
+export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.262";
 
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */
 export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect = DEFAULT_BALANCE_DETECT) {
