@@ -3,6 +3,7 @@ import { isValidTlsServerName } from "./nginxTlsInput";
 import { killByPatternCmd, removeManagedServiceCmd, shQuote, startManagedServiceCmd } from "./agentActionCommands";
 import { cleanEndpointHost, isIpv6Literal } from "./forwardRuntimeConfigs";
 import { forwardRuleProtocols } from "@shared/forwardTypes";
+import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 
 /*
   nginx stream 运行时：配置文件的拼装（server / upstream 块、证书）、配置哈希与重载命令、
@@ -25,6 +26,11 @@ export type NginxStreamServerOptions = {
   listenPort: number;
   proto: "tcp" | "udp";
   upstream: string;
+  /**
+   * upstream 里有几台服务器（nginxUpstreamBlock 实际写出的 server 行数）。不传 / 1：和以前一样。
+   * 2 台以上的 TCP：连接超时 3 秒（和 FXP 多出口的拨号超时一致），连不上就换下一台，每台最多试一次。
+   */
+  upstreamServers?: number;
   loopbackOnly?: boolean;
   /**
    * 这台机器能不能开 IPv6 监听（shared/hostIpv6Listen.ts）。不传 / true：`listen [::]:端口 … ipv6only=off`，
@@ -59,17 +65,35 @@ const nginxListenLine = (port: number, proto: "tcp" | "udp", loopbackOnly = fals
   return `${parts.join(" ")};`;
 };
 
+/** 多出口 upstream 的 TCP 连接超时（秒）。和 FXP 多出口的拨号超时、gost 多出口的 dialTimeout 一致。 */
+export const NGINX_MULTI_EXIT_CONNECT_TIMEOUT_SECONDS = 3;
+
 export function buildNginxStreamServerBlock(options: NginxStreamServerOptions) {
   const target = nginxListenTarget(options.loopbackOnly, options.ipv6Listen);
+  const upstreamServers = Math.max(0, Math.floor(Number(options.upstreamServers) || 0));
+  const multiExitTcp = options.proto === "tcp" && upstreamServers > 1;
   const lines = [
     "  server {",
     `    # ${nginxConfigQuote(options.name)}`,
     options.sslServer && options.proto === "tcp"
       ? `    listen ${target.host}:${options.listenPort} ssl so_keepalive=60s:15s:4${target.dualStack ? " ipv6only=off" : ""};`
       : `    ${nginxListenLine(options.listenPort, options.proto, options.loopbackOnly, options.ipv6Listen)}`,
-    "    proxy_connect_timeout 10s;",
+    multiExitTcp ? `    proxy_connect_timeout ${NGINX_MULTI_EXIT_CONNECT_TIMEOUT_SECONDS}s;` : "    proxy_connect_timeout 10s;",
     options.proto === "udp" ? "    proxy_timeout 2m;" : "    proxy_timeout 24h;",
   ];
+  if (multiExitTcp) {
+    /*
+      多出口：一台连不上（拒绝、超时）就换下一台，每台最多试一次。单出口时 10 秒的连接超时照旧；多出口还等 10 秒的话，
+      一台被黑洞的出口会让每条新连接都先卡 10 秒才轮到下一台。总时限 10 秒：最多跳过 3 台被黑洞的出口，
+      再多就让这条连接失败（接着连续失败的那几台会被 max_fails 摘掉）。
+      UDP 不动：nginx 对 UDP 只有被动判断（ICMP 不可达算失败），加 proxy_responses 会掐断单向 / 流式的 UDP。
+    */
+    lines.push(
+      "    proxy_next_upstream on;",
+      `    proxy_next_upstream_tries ${upstreamServers};`,
+      "    proxy_next_upstream_timeout 10s;",
+    );
+  }
   if (options.proto === "tcp") {
     lines.push("    proxy_socket_keepalive on;");
   }
@@ -233,6 +257,38 @@ export const nginxEndpoint = (hostValue: unknown, portValue: unknown) => {
 export const nginxProtocolsForRule = (rule: any): Array<"tcp" | "udp"> => {
   return forwardRuleProtocols(rule?.protocol);
 };
+/**
+ * 「主备」时第 2 台起的备用各写多大的权重（下标 0 是第一台备用）。
+ *
+ * nginx 开源版的 backup 没有先后：主服务器全不可用时，在所有 backup 之间按权重轮流。想要「按顺序」只能靠权重
+ * 把流量压到靠前的备用上：相邻两台差 100 倍 —— 主的挂了以后，第 2 台拿约 99%，第 3 台约 1%；第 2 台也挂了
+ * 第 3 台顶上。最多分三档（10000 / 100 / 1），第 4 台备用起都是 1（它们之间轮流）。
+ * 权重不再往上加：nginx 的平滑加权轮询里，一台失败过的服务器恢复后有效权重是慢慢涨回去的，权重越大回到
+ * 原来份额越慢（实测 10000 的那台恢复后头 3000 条连接拿回约 89%，之后稳定在约 98%；期间只是多分给后面几台，不会不通）。
+ * 拿真的 nginx 1.24 验过，结果见 server/agentHeartbeatNginx.test.ts 开头的说明。
+ */
+export function nginxFallbackBackupWeights(backupCount: number): number[] {
+  const count = Math.max(0, Math.floor(Number(backupCount) || 0));
+  if (count <= 1) return Array.from({ length: count }, () => 1);
+  return Array.from({ length: count }, (_, index) => {
+    const steps = Math.max(0, Math.min(count - 1, 2) - index);
+    return 100 ** steps;
+  });
+}
+
+/**
+ * nginx 上的「主备」是不是严格按顺序：两台以内是（一主一备）；三台以上不是 —— 备用之间是「靠前的拿绝大部分」，
+ * 不是「前一台挂了才用后一台」。界面可以拿它决定要不要加一句说明。
+ */
+export function nginxFallbackIsStrictlyOrdered(serverCount: number) {
+  return Math.floor(Number(serverCount) || 0) <= 2;
+}
+
+/** nginx 的 upstream 里实际会写几台服务器（地址为空的不写）。交给 buildNginxStreamServerBlock 的 upstreamServers。 */
+export const nginxUpstreamServerCount = (endpoints: Array<{ addr: string }>) => (
+  endpoints.filter((endpoint) => endpoint.addr).length
+);
+
 export const nginxUpstreamBlock = (
   name: string,
   endpoints: Array<{ addr: string; primary?: boolean; weight?: number }>,
@@ -240,15 +296,29 @@ export const nginxUpstreamBlock = (
 ) => {
   const cleanEndpoints = endpoints.filter((endpoint) => endpoint.addr);
   if (cleanEndpoints.length === 0) return "";
-  const strategy = cleanEndpoints.length > 1 ? String(strategyRaw || "round_robin") : "round_robin";
+  // 先归一：库里老的 least_conn 就是「按负载」（shared/exitStrategy.ts），以前在这里直接比字符串，权重被丢掉了。
+  const strategy = cleanEndpoints.length > 1 ? normalizeExitGroupStrategy(strategyRaw || "round_robin") : "round_robin";
   const lines = [`  upstream ${name} {`];
+  /*
+    多台服务器时开共享内存区：nginx 是 worker_processes auto，没有 zone 的话每个 worker 各记各的 ——
+    轮流的位置、least_conn 的连接数、max_fails 的失败次数都只是「这个 worker 看到的」，几个 worker 加起来既不匀，
+    一台出口挂了每个 worker 还都要自己撞满 max_fails 才摘。有了 zone 这些状态全体 worker 共用。
+    名字就用 upstream 的名字（本来就唯一，只有字母数字下划线）。64k 放得下几十台服务器。
+    单台服务器的 upstream 不加：没有可共享的东西，配置和以前一个字节不差（不会因为升级面板就整台重载、也不占内存）。
+  */
+  if (cleanEndpoints.length > 1) lines.push(`    zone ${name} 64k;`);
   if (strategy === "random") lines.push("    random;");
   // 自动 / 延迟优先：nginx 看不到延迟，和「按负载」一样用 least_conn + 带宽权重
-  else if (strategy === "least_conn" || strategy === "least_load" || strategy === "auto" || strategy === "latency") lines.push("    least_conn;");
+  else if (strategy === "least_load" || strategy === "auto" || strategy === "latency") lines.push("    least_conn;");
   else if (strategy === "ip_hash") lines.push("    hash $remote_addr consistent;");
+  const usesWeights = strategy === "weighted" || strategy === "least_load" || strategy === "auto" || strategy === "latency";
+  const backupWeights = strategy === "fallback" ? nginxFallbackBackupWeights(cleanEndpoints.length - 1) : [];
   cleanEndpoints.forEach((endpoint, index) => {
     const backup = strategy === "fallback" && index > 0 ? " backup" : "";
-    const weight = (strategy === "weighted" || strategy === "least_load" || strategy === "auto" || strategy === "latency") && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
+    const weightValue = backup
+      ? backupWeights[index - 1]
+      : usesWeights ? Math.floor(Number(endpoint.weight) || 0) : 0;
+    const weight = weightValue > 1 ? ` weight=${weightValue}` : "";
     lines.push(`    server ${endpoint.addr}${weight} max_fails=2 fail_timeout=10s${backup};`);
   });
   lines.push("  }");

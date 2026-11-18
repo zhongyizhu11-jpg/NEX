@@ -29,6 +29,7 @@ import {
   nginxProtocolsForRule,
   type NginxStreamServerOptions,
   nginxUpstreamBlock,
+  nginxUpstreamServerCount,
   reloadNginxIfConfigChangedCmd,
 } from "./agentHeartbeatNginx";
 import type { HeartbeatRequestContext, HeartbeatRow, HeartbeatRuleRow } from "./agentHeartbeatContext";
@@ -202,6 +203,8 @@ export function createNginxRuntimeSyncPlanBuilder(ctx: HeartbeatRequestContext, 
           listenPort,
           proto,
           upstream,
+          // 多出口：连接超时 3 秒、连不上换下一台（buildNginxStreamServerBlock）
+          upstreamServers: nginxUpstreamServerCount(endpoints),
           // 共享 TLS 入站上经隧道的规则：入口只听回环，客户端连的是入站端口（SNI 分流器交过来）。
           loopbackOnly: useRuleGuard || isSniRuntimeRule(rule),
           sslClient: proto === "tcp" ? tlsClient : null,
