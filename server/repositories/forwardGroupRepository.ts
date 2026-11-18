@@ -90,7 +90,7 @@ import {
 } from "./tunnelRepository";
 import { findTrafficBillingResourceForRule, settleTrafficBillingRuleOnDelete, trafficBillingResourceCandidatesForRule } from "./trafficBillingRepository";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
-import { clearTunnelRuntimeStatus } from "../tunnelRuntimeStatus";
+import { clearTunnelRuntimeStatus, clearTunnelRuntimeStatusForHosts } from "../tunnelRuntimeStatus";
 import { linkProbeMethodForProtocol, type LinkProbeMethod } from "@shared/latencyProbe";
 import {
   ForwardGroupEvaluationBatchError,
@@ -1002,6 +1002,40 @@ async function refreshControlledTunnelRuntime(
   for (const hostId of hostIds) pushAgentRefresh(hostId, `${reason}-tunnel-${tunnelId}`, { urgent: true });
 }
 
+/*
+  链路的配置变了、但不用重新铺（P9）：出口组只改了分配方式、检测与切换参数，或只调了后面几台出口的
+  先后。入口换一份配置就行 —— GOST / Nginx 的配置是按内容比对同步的，FXP 入口（和多跳里挑出口的中转）
+  看到自己「没就绪」会带着新规格再下发一次，都不停转发。所以这里不动 tunnels.isRunning、不重置规则，
+  只把入口和中转的就绪状态清掉并通知各台来拉配置。出口机的就绪状态留着，免得被连带重装。
+*/
+async function pushControlledTunnelConfig(tunnel: any, reason: string, extraHostIds: number[] = []) {
+  const tunnelId = Number(tunnel?.id || 0);
+  if (!Number.isFinite(tunnelId) || tunnelId <= 0) return;
+  const entryHostIds = new Set<number>();
+  const entryHostId = Number(tunnel?.entryHostId || 0);
+  if (entryHostId > 0) entryHostIds.add(entryHostId);
+  for (const hostId of await groupHostIds(tunnel?.entryGroupId)) entryHostIds.add(hostId);
+  const exitHostIds = new Set<number>();
+  const primaryExitHostId = Number(tunnel?.exitHostId || 0);
+  if (primaryExitHostId > 0) exitHostIds.add(primaryExitHostId);
+  for (const node of await getTunnelExitNodes(tunnelId).catch(() => []) as any[]) {
+    const hostId = Number(node?.hostId || 0);
+    if (hostId > 0) exitHostIds.add(hostId);
+  }
+  // 中转（多跳里除了出口的那几跳）和入口一样要重新拿规格。
+  const relayHostIds = new Set<number>();
+  for (const hop of await getTunnelHops(tunnelId).catch(() => []) as any[]) {
+    const hostId = Number(hop?.hostId || 0);
+    if (hostId > 0 && !exitHostIds.has(hostId)) relayHostIds.add(hostId);
+  }
+  const dispatchHostIds = new Set<number>([...entryHostIds, ...relayHostIds]);
+  clearTunnelRuntimeStatusForHosts(tunnelId, Array.from(dispatchHostIds));
+  for (const hostId of dispatchHostIds) pushAgentRefresh(hostId, `${reason}-tunnel-${tunnelId}`, { urgent: true });
+  for (const hostId of new Set<number>([...exitHostIds, ...extraHostIds])) {
+    if (hostId > 0 && !dispatchHostIds.has(hostId)) pushAgentRefresh(hostId, `${reason}-tunnel-${tunnelId}`);
+  }
+}
+
 async function refreshTunnelsUsingForwardGroup(
   groupId: number,
   groupMode: "entry" | "exit",
@@ -1026,13 +1060,17 @@ async function refreshTunnelsUsingForwardGroup(
   const hasEnabledExitMember = exitMembers.some((member: any) => member?.memberType === "host" && dbBool(member?.isEnabled));
 
   for (const tunnel of affectedTunnels) {
+    // 入口组的成员变化、出口组加减出口 / 换主出口：要重新铺，照旧标未运行。只是配置变了的走配置下发。
+    let reprovision = true;
     if (exitStrategy && group && hasEnabledExitMember) {
       const synced = await syncTunnelExitGroupEndpoints(tunnel, exitMembers, exitStrategy, group?.balanceDetect ?? null);
       Object.assign(tunnel, synced.tunnel);
+      reprovision = synced.reprovision;
     } else if (exitStrategy && dbBool(group?.isEnabled)) {
       throw new Error("Enabled exit group must contain at least one enabled host");
     }
-    await refreshControlledTunnelRuntime(tunnel, reason, { resetRules: true, extraHostIds: referencedHostIds });
+    if (reprovision) await refreshControlledTunnelRuntime(tunnel, reason, { resetRules: true, extraHostIds: referencedHostIds });
+    else await pushControlledTunnelConfig(tunnel, reason, referencedHostIds);
   }
 }
 

@@ -218,7 +218,8 @@ async function notifyHostStatusChanges(hosts: any[], status: HostStatus) {
 async function clearRuntimeStateForOfflineHost(hostId: number) {
   clearTunnelRuntimeStatusForHost(hostId);
   try {
-    await db.resetAgentRuntimeStateForHost(hostId);
+    // offline：这台只是多出口链路里的一个出口、别的出口还在线时，那条链路不跟着清（见 resetAgentRuntimeStateForHost）。
+    await db.resetAgentRuntimeStateForHost(hostId, { offline: true });
   } catch (error) {
     console.warn(`[HostStatus] 掉线后清理运行状态失败 host=${hostId}: ${error instanceof Error ? error.message : String(error)}`);
   }
