@@ -1,6 +1,7 @@
 package main
 
 import (
+	mathrand "math/rand"
 	"time"
 )
 
@@ -19,6 +20,14 @@ func failoverHealthInterval(failoverSeconds int) time.Duration {
 	return interval
 }
 
+// jitterDuration 给一个间隔加 ±10% 的随机抖动。
+func jitterDuration(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return interval
+	}
+	return time.Duration(float64(interval) * (0.9 + 0.2*mathrand.Float64()))
+}
+
 func (p *failoverProxy) healthInterval() time.Duration {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -26,7 +35,8 @@ func (p *failoverProxy) healthInterval() time.Duration {
 }
 
 func (p *failoverProxy) healthLoop() {
-	timer := time.NewTimer(p.healthInterval())
+	// 间隔带 ±10% 的抖动（A13）：一台机器上几十条规则同一刻起来，不抖的话每一轮都在同一毫秒一起探。
+	timer := time.NewTimer(jitterDuration(p.healthInterval()))
 	defer timer.Stop()
 	for {
 		select {
@@ -35,7 +45,7 @@ func (p *failoverProxy) healthLoop() {
 		case <-timer.C:
 			p.checkHealthShared()
 			// 面板改了「异常多久切」（热更新，代理不重建）：下一轮就按新的间隔
-			timer.Reset(p.healthInterval())
+			timer.Reset(jitterDuration(p.healthInterval()))
 		}
 	}
 }
@@ -125,6 +135,8 @@ func (p *failoverProxy) checkHealth() {
 					p.targetHealth[i] = true
 					p.recoveredSince[i] = time.Time{}
 					p.markSlowStartLocked(i, now)
+					// 恢复了：拨号那本账也从头来，不然恢复前攒的失败会让它再拨坏一次就又被判坏。
+					p.statsLocked(i).dialFailures = 0
 					logf("failover target recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
 					p.recordTargetEventLocked(i, "recovered", "health check")
 				}
@@ -138,13 +150,14 @@ func (p *failoverProxy) checkHealth() {
 			if p.failureSince[i].IsZero() {
 				p.failureSince[i] = now
 			}
-			// 两道门槛都要过：连续失败够 FailureThreshold 次，而且持续异常够 FailoverSeconds 秒。
-			// 只按次数，一次探测超时 + 一次拨号失败就切；只按时间，老规格（阈值 1）的行为不变。
-			if p.statsLocked(i).consecutiveFailures >= failureThreshold && now.Sub(p.failureSince[i]) >= time.Duration(failoverSeconds)*time.Second {
+			// 两道门槛都要过：探测连续失败够 FailureThreshold 次，而且持续异常够 FailoverSeconds 秒。
+			// 只看探测这本账（A2）：真实连接拨通了不清它 —— 拨得通第一跳不等于探测目标还活着。
+			if p.statsLocked(i).probeFailures >= failureThreshold && now.Sub(p.failureSince[i]) >= time.Duration(failoverSeconds)*time.Second {
 				p.targetHealth[i] = false
 				p.failureSince[i] = time.Time{}
 				logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=health check", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
 				p.recordTargetEventLocked(i, "unhealthy", "health check")
+				p.onTargetDownLocked(i, true, false)
 			}
 		}
 	}

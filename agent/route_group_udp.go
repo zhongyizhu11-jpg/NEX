@@ -63,6 +63,11 @@ type failoverUDPSession struct {
 	listener *udpBatchConn
 	// 最近一次有包（两个方向都算）的时刻，UnixNano。
 	last atomic.Int64
+	// 上一次收到回包以来客户端发了几个包、从什么时候开始、上一次去看路径健康的时刻（黑洞流重挑，
+	// route_group_path_down.go）。
+	unanswered       atomic.Int32
+	unansweredSince  atomic.Int64
+	blackholeChecked atomic.Int64
 }
 
 func (s *failoverUDPSession) touch(now time.Time) {
@@ -235,7 +240,11 @@ func (p *failoverProxy) forwardUDPRun(key netip.AddrPort, batch *udpBatch, from 
 		if session == nil {
 			return
 		}
-		session.touch(time.Now())
+		now := time.Now()
+		if attempt == 0 && p.repickBlackholedUDP(session, to-from-probes, now) {
+			continue
+		}
+		session.touch(now)
 		var err error
 		if probes == 0 && to-from > 1 && session.batch != nil {
 			err = session.batch.send(batch, from, to)
@@ -273,7 +282,11 @@ func (p *failoverProxy) forwardUDPPacket(key netip.AddrPort, packet []byte) {
 		if session == nil {
 			return
 		}
-		session.touch(time.Now())
+		now := time.Now()
+		if attempt == 0 && p.repickBlackholedUDP(session, 1, now) {
+			continue
+		}
+		session.touch(now)
 		_, err := session.upstream.Write(packet)
 		if err == nil || !errors.Is(err, net.ErrClosed) {
 			// 别的写错误（对端回过 ICMP 不可达之类）只丢这一个包：UDP 本来就不保证送达。
@@ -387,6 +400,7 @@ func (p *failoverProxy) dialUDPPath(key string) (net.Conn, int) {
 			}
 			return nil, -1
 		}
+		started := time.Now()
 		addr, pending, resolveErr := failoverUDPResolve(target.TargetIP, target.TargetPort)
 		if pending {
 			// 域名还在后台解析：这条先跳过但不记失败，解析完成后下一个包就能走它。
@@ -402,7 +416,8 @@ func (p *failoverProxy) dialUDPPath(key string) (net.Conn, int) {
 			return upstream, index
 		}
 		attempted[index] = true
-		p.markTargetFailure(index, "dial failed")
+		// 拨 UDP 套接字失败多半是本机的事（fd、端口用完），markDialFailure 里会分出来不算线路的账。
+		p.markDialFailure(index, "dial failed", started, err)
 		if shouldLogAgentReport(fmt.Sprintf("failover-udp-dial:%d:%d:%d", p.ruleID, p.sourcePort, index), agentReportLogInterval) {
 			logf("failover udp dial failed rule=%d source=%d target=%s:%d: %v", p.ruleID, p.sourcePort, target.TargetIP, target.TargetPort, err)
 		}
@@ -440,6 +455,7 @@ func (p *failoverProxy) copyUDPToClient(session *failoverUDPSession) {
 			batch, n, err = session.batch.recv()
 			if n > 0 {
 				failures = 0
+				session.noteReply()
 				session.touch(time.Now())
 				werr = session.listener.sendTo(batch, n, session.key)
 				putUDPBatch(batch)
@@ -448,6 +464,7 @@ func (p *failoverProxy) copyUDPToClient(session *failoverUDPSession) {
 			n, err = session.upstream.Read(buf)
 			if n > 0 {
 				failures = 0
+				session.noteReply()
 				session.touch(time.Now())
 				if udpConn != nil {
 					_, werr = udpConn.WriteToUDPAddrPort(buf[:n], session.key)
@@ -588,12 +605,14 @@ RemoteAddr 全是本机 —— 拿它哈希，所有访客都会被分到同一�
 */
 func (p *failoverProxy) readVisitor(client net.Conn) (string, []byte) {
 	p.mu.RLock()
-	strategy := p.spec.Strategy
 	receive := p.spec.ProxyProtocolReceive
 	strip := p.spec.ProxyProtocolStrip
 	p.mu.RUnlock()
 	visitor := failoverRemoteIP(client)
-	if !strip && !(receive && strategy == "ip_hash") {
+	// 规则带 PROXY 头（receive）时不管什么策略都读：除了「按访客固定」，线路里几个落地按访客分、
+	// 「回之前就关」要凑两个不同访客才判坏（failover_early_close.go）也要知道访客是谁。头是前面的转发工具
+	// 一连上就发的，读它不用等客户端的数据。
+	if !strip && !receive {
 		return visitor, nil
 	}
 	raw, headerLen, source := readFailoverProxyHeader(client, failoverProxyHeaderTimeout)
@@ -655,12 +674,24 @@ const (
 	failoverUDPResolveFailureTTL = 5 * time.Second
 	failoverUDPResolveTimeout    = 5 * time.Second
 	failoverUDPResolveCacheLimit = 256
+	// 解析结果过了 TTL 以后还能再用多久（后台刷新期间、或者刷新失败时）。
+	failoverUDPResolveMaxStale = 5 * time.Minute
 )
 
+/*
+解析缓存的一项。addr 是最近一次**成功**解析出来的地址，resolvedAt 是那一次的时刻；err 是最近一次解析的错误
+（成功了就是 nil）；expires 是这一项什么时候该刷新。
+
+过期不等于不能用（A7）：以前 TTL 一到，这条路径在后台重新解析的那几十毫秒到几秒里被当成「解析中」跳过 ——
+每 30 秒一次，恰好这时候来的新会话就被钉到别的路径上（按访客固定的访客被挪走，主备的 UDP 落到备线）。
+现在先拿旧地址用着、后台去刷新（stale-while-revalidate），旧地址最多用 failoverUDPResolveMaxStale；
+刷新失败也不丢旧地址（DNS 抖一下不该让一条在用的路径掉线）。只有**从来没解析出来过**的才算「解析中」。
+*/
 type failoverUDPResolveEntry struct {
-	addr    *net.UDPAddr
-	err     error
-	expires time.Time
+	addr       *net.UDPAddr
+	resolvedAt time.Time
+	err        error
+	expires    time.Time
 }
 
 var (
@@ -671,24 +702,35 @@ var (
 	failoverUDPLookup = func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		return net.DefaultResolver.LookupIPAddr(ctx, host)
 	}
+	// 测试里拨快时钟用。
+	failoverUDPResolveNow = time.Now
 )
 
-// failoverUDPResolve 返回可直接拨号的地址；pending 为 true 表示正在后台解析。
+// failoverUDPResolve 返回可直接拨号的地址；pending 为 true 表示从没解析出来过、正在后台解析。
 func failoverUDPResolve(host string, port int) (*net.UDPAddr, bool, error) {
 	clean := strings.Trim(strings.TrimSpace(host), "[]")
 	if ip := net.ParseIP(clean); ip != nil {
 		return &net.UDPAddr{IP: ip, Port: port}, false, nil
 	}
 	key := net.JoinHostPort(clean, strconv.Itoa(port))
-	now := time.Now()
 	failoverUDPResolveMu.Lock()
 	defer failoverUDPResolveMu.Unlock()
-	if entry, ok := failoverUDPResolveCache[key]; ok && now.Before(entry.expires) {
-		return entry.addr, false, entry.err
+	now := failoverUDPResolveNow()
+	entry, ok := failoverUDPResolveCache[key]
+	usable := ok && entry.addr != nil && now.Sub(entry.resolvedAt) < failoverUDPResolveMaxStale
+	if ok && now.Before(entry.expires) {
+		if usable {
+			return entry.addr, false, nil
+		}
+		return nil, false, entry.err
 	}
 	if !failoverUDPResolveInflight[key] {
 		failoverUDPResolveInflight[key] = true
 		go failoverUDPResolveInBackground(key, clean, port)
+	}
+	// 过期了但以前解析出来过、还没旧到不能用：先用着。
+	if usable {
+		return entry.addr, false, nil
 	}
 	return nil, true, nil
 }
@@ -697,7 +739,10 @@ func failoverUDPResolveInBackground(key string, host string, port int) {
 	ctx, cancel := context.WithTimeout(context.Background(), failoverUDPResolveTimeout)
 	addrs, err := failoverUDPLookup(ctx, host)
 	cancel()
-	entry := failoverUDPResolveEntry{err: err, expires: time.Now().Add(failoverUDPResolveFailureTTL)}
+	failoverUDPResolveMu.Lock()
+	defer failoverUDPResolveMu.Unlock()
+	now := failoverUDPResolveNow()
+	entry := failoverUDPResolveEntry{err: err, expires: now.Add(failoverUDPResolveFailureTTL)}
 	if err == nil {
 		// 和 net.Dial("udp", ...) 一样优先 IPv4。
 		var chosen net.IP
@@ -714,17 +759,22 @@ func failoverUDPResolveInBackground(key string, host string, port int) {
 			entry.err = fmt.Errorf("no address for %s", host)
 		} else {
 			entry.addr = &net.UDPAddr{IP: chosen, Port: port}
+			entry.resolvedAt = now
 			entry.err = nil
-			entry.expires = time.Now().Add(failoverUDPResolveTTL)
+			entry.expires = now.Add(failoverUDPResolveTTL)
 		}
 	}
-	failoverUDPResolveMu.Lock()
-	defer failoverUDPResolveMu.Unlock()
 	delete(failoverUDPResolveInflight, key)
+	if entry.addr == nil {
+		// 这次没解析出来：上一次成功的地址留着（还在可用期内的话接着用），过 failoverUDPResolveFailureTTL 再试。
+		if previous, ok := failoverUDPResolveCache[key]; ok && previous.addr != nil && now.Sub(previous.resolvedAt) < failoverUDPResolveMaxStale {
+			entry.addr, entry.resolvedAt = previous.addr, previous.resolvedAt
+		}
+	}
 	if len(failoverUDPResolveCache) >= failoverUDPResolveCacheLimit {
-		now := time.Now()
 		for cachedKey, cached := range failoverUDPResolveCache {
-			if !now.Before(cached.expires) {
+			// 过期而且旧地址也不能用了的才清。
+			if !now.Before(cached.expires) && (cached.addr == nil || now.Sub(cached.resolvedAt) >= failoverUDPResolveMaxStale) {
 				delete(failoverUDPResolveCache, cachedKey)
 			}
 		}

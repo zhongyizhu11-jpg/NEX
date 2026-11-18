@@ -2,11 +2,24 @@ package main
 
 // 选路第 1 段：候选（见 failover_pick.go）。
 
-// pickCandidatesLocked：先只要能用的；一条都没有时退回全部（不分层），让连接去碰碰运气。
+/*
+pickCandidatesLocked：先只要能用的；一条都没有时退回「不健康但没被管理上排除」的（不分层），让连接去碰碰运气。
+
+兜底不含被面板按暂停 / 维护 / 流量停机标掉的路径（adminExcludedLocked，A5）：以前退回的是**全部**，
+别的路径一挂，流量就走到用户明明暂停了的那条、正在维护的那台机器上。探着不通、中转断了、主机离线这些
+健康类的照旧留在兜底里 —— 判断可能是错的，试一下比直接拒绝强。全都被排除时返回空：TCP 连接直接关，
+UDP 包丢掉。
+*/
 func (p *failoverProxy) pickCandidatesLocked(exclude map[int]bool, udp bool) []int {
 	candidates := p.candidateIndicesForLocked(exclude, true, udp)
 	if len(candidates) == 0 {
-		candidates = p.candidateIndicesForLocked(exclude, false, udp)
+		all := p.candidateIndicesForLocked(exclude, false, udp)
+		candidates = all[:0]
+		for _, index := range all {
+			if !p.adminExcludedLocked(index) {
+				candidates = append(candidates, index)
+			}
+		}
 	}
 	return candidates
 }

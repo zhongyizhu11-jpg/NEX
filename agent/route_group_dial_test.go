@@ -256,7 +256,7 @@ func TestFailoverRaceDialUsesFasterHealthyPath(t *testing.T) {
 		t.Fatal("losing dial was not canceled")
 	}
 	proxy.mu.Lock()
-	failures := proxy.statsLocked(0).consecutiveFailures
+	failures := proxy.statsLocked(0).consecutiveFailures()
 	proxy.mu.Unlock()
 	if failures != 0 {
 		t.Fatalf("canceled losing dial was recorded as %d failure(s)", failures)

@@ -109,11 +109,11 @@ func TestRouteStatsSummaryUsesMedianAndCountsLoss(t *testing.T) {
 	if summary.jitterMs <= 0 {
 		t.Fatal("有尖峰就该有抖动")
 	}
-	if stats.consecutiveFailures != 1 {
-		t.Fatalf("连续失败应当是 1，拿到 %d", stats.consecutiveFailures)
+	if stats.consecutiveFailures() != 1 {
+		t.Fatalf("连续失败应当是 1，拿到 %d", stats.consecutiveFailures())
 	}
 	stats.recordProbe(true, 50, at.Add(35*time.Second))
-	if stats.consecutiveFailures != 0 {
+	if stats.consecutiveFailures() != 0 {
 		t.Fatal("探通一次就该清零")
 	}
 }

@@ -6,8 +6,9 @@ import "net"
 新连接 / 新 UDP 会话走哪条路径：三段。
 
  1. 候选（failover_pick_candidates.go）：能用的路径 —— TCP 看 TCP 健康，TCP+UDP 规格的 UDP 会话看 UDP 那一侧；
-    去掉这条连接拨失败过的（exclude）；分层规格只留还有能用路径的最优一层。一条能用的都没有时退回全部
-    （照样去掉 exclude、不分层），让连接去碰碰运气，而不是直接拒绝。
+    去掉这条连接拨失败过的（exclude）；分层规格只留还有能用路径的最优一层。一条能用的都没有时退回
+    「不健康但没被暂停 / 维护 / 停机」的那些（照样去掉 exclude、不分层），让连接去碰碰运气，而不是直接拒绝；
+    连这样的都没有才拒绝。
  2. 按策略挑（failover_pick_strategies.go）：每种「新连接怎么分」一个函数 —— 按权重、按负载、自动、轮流、
     随机、按访客固定，以及主备（fallback：在走的那条能用就走它，不能用就换，换的时候平手优先同出口 IP）。
     认不出的策略按主备。
@@ -42,9 +43,29 @@ func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bo
 	}
 	request := failoverPickRequest{candidates: candidates, hashKey: hashKey, exclude: exclude, udp: udp}
 	strategy := failoverStrategyFor(p.spec.Strategy)
+	// 这一次是给 UDP 会话挑：慢启动看 UDP 那一侧的恢复时刻（slowStartLocked）。整个挑选都在 p.mu 里。
+	p.pickingUDP = udp
 	index := strategy.pick(p, request)
 	index = p.refinePickLocked(strategy, index, request)
+	p.pickingUDP = false
 	return p.spec.Targets[index], index
+}
+
+/*
+pickReserved 挑一条路径并当场记一笔「在途」（A8）。
+
+「按负载」「自动」看的是每条路径上挂着多少连接，而连接是拨通以后才记到路径名下的（trackConn）。一下子进来
+50 条连接时，它们挑路径的那一刻谁都还没拨通，看到的连接数全是旧的 —— 50 条全压到同一条上。所以挑中就先
+算一笔在途，拨通后转成连接（trackConnReserved），拨失败、竞速输了就退掉（releaseReservation）。
+
+只给真要去拨的调用方用；pickTarget / pickTargetForKey 不记在途（测试、探查用，没有人替它们退）。
+*/
+func (p *failoverProxy) pickReserved(hashKey string, exclude map[int]bool, udp bool) (failoverTarget, int, failoverReservation) {
+	target, index := p.pickTargetForKeyProto(hashKey, exclude, udp)
+	if index < 0 {
+		return target, index, failoverReservation{}
+	}
+	return target, index, p.reserve(index)
 }
 
 // 一次挑选的输入：第 1 段给出的候选（非空），和调用方带来的访客、排除、协议。

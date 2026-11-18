@@ -15,7 +15,7 @@ func TestDialSuccessClearsConsecutiveFailures(t *testing.T) {
 	proxy.markDialSuccess(0, 12*time.Millisecond)
 	proxy.markTargetFailure(0, "dial failed")
 	proxy.mu.RLock()
-	healthy, failures := proxy.targetHealth[0], proxy.statsLocked(0).consecutiveFailures
+	healthy, failures := proxy.targetHealth[0], proxy.statsLocked(0).consecutiveFailures()
 	proxy.mu.RUnlock()
 	if !healthy || failures != 1 {
 		t.Fatalf("拨通一次应当清零连续失败：healthy=%v failures=%d", healthy, failures)
@@ -53,8 +53,8 @@ func TestSlowDialStreakAsksForProbeWithoutFailing(t *testing.T) {
 	if !stats.recordDial(true, 700, now, 40) {
 		t.Fatal("连续第三次慢拨应当触发")
 	}
-	if stats.consecutiveFailures != 0 || stats.consecutiveSlow != 0 {
-		t.Fatalf("触发后只要求探测、不记失败，并清慢拨计数：failures=%d slow=%d", stats.consecutiveFailures, stats.consecutiveSlow)
+	if stats.consecutiveFailures() != 0 || stats.consecutiveSlow != 0 {
+		t.Fatalf("触发后只要求探测、不记失败，并清慢拨计数：failures=%d slow=%d", stats.consecutiveFailures(), stats.consecutiveSlow)
 	}
 	summary := stats.dialSummary(now)
 	if summary.ok != 6 || summary.slow != 5 || summary.failed != 0 {
@@ -64,8 +64,8 @@ func TestSlowDialStreakAsksForProbeWithoutFailing(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		stats.recordDial(true, 900, now, 40)
 	}
-	if stats.consecutiveFailures != 0 {
-		t.Fatalf("只是慢不该攒失败：%d", stats.consecutiveFailures)
+	if stats.consecutiveFailures() != 0 {
+		t.Fatalf("只是慢不该攒失败：%d", stats.consecutiveFailures())
 	}
 	// 探测延迟很高时门槛跟着抬：探测 300ms，拨 700ms 不算慢（门槛 900ms）。
 	if routeDialIsSlow(700, 300) {

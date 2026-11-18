@@ -98,6 +98,40 @@ func failoverSpecSignatureJSON(spec *failoverSpec) (string, bool) {
 提示不进签名（见 failoverSignature），所以同一份规格反复下发只会走到这里。变化才记事件：
 面板每次心跳都会重发同样的提示。
 */
+/*
+面板提示的两类原因（A5）。
+
+Down 提示有两种来历（server/routeGroupStats.ts 的 routeNodeHints / routeHopDownHints）：
+  - 管理上不让走：这条路径被暂停（paused）、沿途主机在维护（maintenance: 名字）、流量用完停机（quota: 名字）。
+    这是人或者套餐定的，不是「探着不通」—— 一条流量都不能给，哪怕别的路径全挂了。
+  - 健康类：中转断了（relay down: …）、主机离线（node offline: …）、熔断（breaker: …）、演练（drill）、
+    出口连不上目标、路径解析不出来。这些是「大概走不通」的判断，可能判错；别的路径全挂时仍然可以拿它碰碰运气。
+
+按原因的开头认：面板以后在后面加说明（「maintenance: HK2」）不影响。认不出的一律当健康类（更宽松的那边）。
+*/
+var failoverAdminDownReasons = []string{"paused", "maintenance", "quota", "disabled"}
+
+func failoverAdminDownReason(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	for _, prefix := range failoverAdminDownReasons {
+		if reason == prefix || strings.HasPrefix(reason, prefix+":") || strings.HasPrefix(reason, prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// adminExcludedLocked 这条路径此刻是不是被面板按「管理上不让走」标掉的：全挂兜底也不给它流量。
+func (p *failoverProxy) adminExcludedLocked(index int) bool {
+	if index < 0 || index >= len(p.spec.Targets) {
+		return false
+	}
+	if index < len(p.relayDown) && index < len(p.relayDownReason) {
+		return p.relayDown[index] && failoverAdminDownReason(p.relayDownReason[index])
+	}
+	return p.spec.Targets[index].Down && failoverAdminDownReason(p.spec.Targets[index].DownReason)
+}
+
 // 面板「切换演练」下发的提示原因（server/routeDrill.ts 的 ROUTE_DRILL_HINT_REASON）。
 const failoverDrillReason = "drill"
 
@@ -169,12 +203,19 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 			}
 			logf("failover target relay down rule=%d source=%d index=%d target=%s reason=%s", p.ruleID, p.sourcePort, i, failoverTargetLabel(p.spec.Targets[i]), downReason)
 			p.recordTargetEventLocked(i, "unhealthy", text)
+			// 面板说这条走不通了：两侧都算（A6）。
+			p.onTargetDownLocked(i, true, true)
 			if i == p.activeIndex || reason == "" {
 				reason = text
 			}
 		} else {
 			logf("failover target relay recovered rule=%d source=%d index=%d target=%s", p.ruleID, p.sourcePort, i, failoverTargetLabel(p.spec.Targets[i]))
 			p.recordTargetEventLocked(i, "recovered", "relay recovered")
+			// 面板提示撤掉也是「刚恢复」（A11）：中转后面的落地刚起来，新连接一下子全涌过去和本机探测恢复时一样伤。
+			// TCP+UDP 规格的 UDP 那一侧一起慢启动。
+			now := time.Now()
+			p.markSlowStartLocked(i, now)
+			p.udpSide.markSlowStart(i, now)
 			if reason == "" {
 				reason = "relay recovered"
 			}

@@ -137,11 +137,25 @@ type failoverDialResult struct {
 	index   int
 	err     error
 	elapsed time.Duration
+	// 这次拨号发起的时刻（并发失败去重用）和它的在途。
+	started     time.Time
+	reservation failoverReservation
 }
 
 // dialFailoverPath 拨已经挑好的路径；允许竞速时按上面的规则再拨一条备选。拨失败的路径记一次
 // 失败并加进 attempted（和原来一样）；被取消的输家不算失败。返回实际连上的那条。
 func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, index int, attempted map[int]bool, timeout time.Duration) (net.Conn, failoverTarget, int, error) {
+	conn, target, index, reservation, err := p.dialFailoverPathReserved(visitor, target, index, failoverReservation{}, attempted, timeout)
+	p.releaseReservation(reservation)
+	return conn, target, index, err
+}
+
+/*
+dialFailoverPathReserved 同 dialFailoverPath，带着在途（A8）：reservation 是调用方挑 index 时记的那一笔
+（pickReserved；零值 = 没记）。拨失败的、竞速输掉的在这里退掉；返回的是连上那条的在途，调用方把它转成连接
+（trackConnReserved）或者退掉。竞速时另拨的那条自己记一笔。
+*/
+func (p *failoverProxy) dialFailoverPathReserved(visitor string, target failoverTarget, index int, reservation failoverReservation, attempted map[int]bool, timeout time.Duration) (net.Conn, failoverTarget, int, failoverReservation, error) {
 	p.mu.RLock()
 	race := p.raceAllowedLocked()
 	delay := p.raceDelayLocked(index)
@@ -151,21 +165,22 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 		conn, err := failoverDialTCP(context.Background(), target, timeout)
 		if err != nil {
 			attempted[index] = true
-			p.markTargetFailure(index, "dial failed")
-		} else {
-			p.markDialSuccess(index, time.Since(started))
+			p.releaseReservation(reservation)
+			p.markDialFailure(index, "dial failed", started, err)
+			return conn, target, index, failoverReservation{}, err
 		}
-		return conn, target, index, err
+		p.markDialSuccess(index, time.Since(started))
+		return conn, target, index, reservation, nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	results := make(chan failoverDialResult, 2)
-	dial := func(target failoverTarget, index int) {
+	dial := func(target failoverTarget, index int, reservation failoverReservation) {
 		started := time.Now()
 		conn, err := failoverDialTCP(ctx, target, timeout)
-		results <- failoverDialResult{conn: conn, target: target, index: index, err: err, elapsed: time.Since(started)}
+		results <- failoverDialResult{conn: conn, target: target, index: index, err: err, elapsed: time.Since(started), started: started, reservation: reservation}
 	}
-	go dial(target, index)
+	go dial(target, index, reservation)
 	pending := 1
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -181,34 +196,40 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 				exclude[i] = true
 			}
 			exclude[index] = true
-			second, secondIndex := p.pickTargetForKey(visitor, exclude)
+			second, secondIndex, secondReservation := p.pickReserved(visitor, exclude, false)
 			p.mu.RLock()
 			healthy := secondIndex >= 0 && p.healthyLocked(secondIndex)
 			p.mu.RUnlock()
 			if healthy {
-				go dial(second, secondIndex)
+				go dial(second, secondIndex, secondReservation)
 				pending++
+			} else {
+				p.releaseReservation(secondReservation)
 			}
 		case result := <-results:
 			pending--
 			if result.err == nil {
 				p.markDialSuccess(result.index, result.elapsed)
 				cancel()
-				// 输家可能在取消前刚好连上：收下来关掉，别漏连接。
+				// 输家可能在取消前刚好连上：收下来关掉，别漏连接；它那笔在途也退掉。
 				for ; pending > 0; pending-- {
 					go func() {
-						if loser := <-results; loser.conn != nil {
+						loser := <-results
+						if loser.conn != nil {
 							_ = loser.conn.Close()
 						}
+						p.releaseReservation(loser.reservation)
 					}()
 				}
-				return result.conn, result.target, result.index, nil
+				return result.conn, result.target, result.index, result.reservation, nil
 			}
 			attempted[result.index] = true
-			p.markTargetFailure(result.index, "dial failed")
+			p.releaseReservation(result.reservation)
+			// 被我们自己取消的输家不走到这里（赢家出来就返回了）；万一是，markDialFailure 也按本机错误不计。
+			p.markDialFailure(result.index, "dial failed", result.started, result.err)
 			last = result
 		}
 	}
 	cancel()
-	return nil, last.target, last.index, last.err
+	return nil, last.target, last.index, failoverReservation{}, last.err
 }
