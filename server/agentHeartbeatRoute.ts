@@ -3150,10 +3150,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         keptHostIds = order;
       }
       // 按权重 / 按负载：份数写进节点的 metadata.weight，gost 的 rand 按它加权随机（gostExitSelector）。
+      // 份数要写成字符串：gost 的 GetInt 只认 int 和 string，JSON 数字解出来是 float64，写成数字时权重一律当 1（实测 9:1 分成 128:172）。
       // 以前是把出口按份数重复列，可每一份各记各的失败：权重 5 的出口挂了要失败 5 次才全部跳过。
       const weights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, keptHostIds, tunnel);
       if (!weights) return keptNodes;
-      return keptNodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: weights[index] } }));
+      return keptNodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: String(weights[index]) } }));
     };
     /*
       GOST 链路负载均衡由入口本机代理挑（2.3.539）：这条规则在这台入口机上用不用、每台出口的本机端口和 gost 节点、
