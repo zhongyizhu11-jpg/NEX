@@ -3,6 +3,7 @@ package main
 import (
 	"hash/fnv"
 	"math"
+	"net"
 	"strconv"
 	"time"
 )
@@ -39,11 +40,17 @@ func (p *failoverProxy) markSlowStartLocked(index int, now time.Time) {
 	}
 }
 
+// 慢启动系数。给 UDP 会话挑（pickingUDP）而且规格两侧分开判时，看 UDP 那一侧的恢复时刻（A11）；
+// 面板提示撤掉时两侧一起记，所以不用再取两者里晚的那个。
 func (p *failoverProxy) slowStartLocked(index int, now time.Time) float64 {
-	if index < 0 || index >= len(p.slowStartAt) || p.slowStartAt[index].IsZero() {
+	marks := p.slowStartAt
+	if p.pickingUDP && p.udpSeparateLocked() {
+		marks = p.udpSide.slowStartAt
+	}
+	if index < 0 || index >= len(marks) || marks[index].IsZero() {
 		return 1
 	}
-	since := now.Sub(p.slowStartAt[index])
+	since := now.Sub(marks[index])
 	if since >= routeSlowStartWindow {
 		return 1
 	}
@@ -117,7 +124,7 @@ func (p *failoverProxy) leastLoadPickLocked(candidates []int) int {
 		if weights[i] <= 0 {
 			continue
 		}
-		cost := float64(p.connectionsLocked(candidates[i])+1) / weights[i]
+		cost := float64(p.loadLocked(candidates[i])+1) / weights[i]
 		if best < 0 || cost < bestCost {
 			best, bestCost = candidates[i], cost
 		}
@@ -275,5 +282,69 @@ func (p *failoverProxy) autoPickLocked(candidates []int) int {
 	if len(candidates) == 0 {
 		return -1
 	}
-	return p.powerOfTwoPickLocked(candidates, p.autoWeightsLocked(candidates, time.Now()), p.connectionsLocked)
+	return p.powerOfTwoPickLocked(candidates, p.autoWeightsLocked(candidates, time.Now()), p.loadLocked)
+}
+
+// ---- 在途计数（A8，见 failover_pick.go 的 pickReserved） ----
+
+// failoverReservation 一笔在途：记在哪条路径上、是哪一代的下标（换规格以后旧下标作废，不退）。
+type failoverReservation struct {
+	index int
+	gen   uint64
+	held  bool
+}
+
+// loadLocked 这条路径此刻的负载：挂着的连接 + 已经挑中、还在拨的。「按负载」「自动」按它分；
+// 报给面板的连接数仍然只是挂着的（connectionsLocked）。
+func (p *failoverProxy) loadLocked(index int) int {
+	load := p.connectionsLocked(index)
+	if index >= 0 && index < len(p.inflight) {
+		load += p.inflight[index]
+	}
+	return load
+}
+
+// 调用方持有 p.mu（写锁）。
+func (p *failoverProxy) reserveLocked(index int) failoverReservation {
+	if len(p.inflight) != len(p.spec.Targets) {
+		p.inflight = make([]int, len(p.spec.Targets))
+	}
+	if index < 0 || index >= len(p.inflight) {
+		return failoverReservation{}
+	}
+	p.inflight[index]++
+	return failoverReservation{index: index, gen: p.inflightGen, held: true}
+}
+
+func (p *failoverProxy) reserve(index int) failoverReservation {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reserveLocked(index)
+}
+
+func (p *failoverProxy) releaseReservationLocked(reservation failoverReservation) {
+	if !reservation.held || reservation.gen != p.inflightGen {
+		return
+	}
+	if reservation.index >= 0 && reservation.index < len(p.inflight) && p.inflight[reservation.index] > 0 {
+		p.inflight[reservation.index]--
+	}
+}
+
+// releaseReservation 退掉一笔在途：拨失败、竞速输了、或者已经转成连接。零值可以随便退。
+func (p *failoverProxy) releaseReservation(reservation failoverReservation) {
+	if !reservation.held {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.releaseReservationLocked(reservation)
+}
+
+// trackConnReserved 拨通了：在途转成连接，一把锁里做完（中间不会被别的挑选看到少算或多算一条）。
+func (p *failoverProxy) trackConnReserved(index int, conn net.Conn, reservation failoverReservation) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.releaseReservationLocked(reservation)
+	p.trackConnLocked(index, conn)
 }

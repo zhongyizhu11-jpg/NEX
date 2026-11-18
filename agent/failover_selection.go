@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -279,6 +283,11 @@ func (p *failoverProxy) updateFallbackActiveAtLocked(now time.Time, reason strin
 		if switchReason == "failback" && !p.spec.AutoFailback {
 			return
 		}
+		// 开了择优：同一层的两条健康线路之间不按数组顺序切回（见 orderFailbackYieldsToScoreLocked）。
+		if switchReason == "failback" && p.orderFailbackYieldsToScoreLocked(candidate, source) {
+			p.precheckFailedIndex = -1
+			return
+		}
 		// 按优先级往回切是可以等的：刚切过来就被拽回去，线路会来回抖。
 		// 人工指定不等：人说了算，等上 10 分钟只会让人以为没生效。
 		if switchReason != "pin" && p.holdingLocked(now) {
@@ -314,6 +323,30 @@ func (p *failoverProxy) updateFallbackActiveAtLocked(now time.Time, reason strin
 }
 
 /*
+择优和「恢复后切回」打架（A1）。
+
+两条都健康、B 比 A 快得多时：择优把流量切到 B；下一轮 B 已经在走了，择优没有更好的候选可提，首选回到
+「数组顺序」，A 排在 B 前面又健康 —— 按「首选恢复，切回」把流量拽回 A；过了驻留择优又切到 B……
+一小时能来回几十次，直到抖动抑制把它钉在慢的那条上。
+
+开了择优（PreferFastest）而这一刻的首选不是人定的（人工指定 / 时段表）时，同一层的两条健康线路之间
+谁该走由评分说了算，数组顺序不再插手。按顺序切回只留给：没开择优；分层规格里当前这条在更差的一层
+（回主线路组，择优只在一层里比）；人工指定到期（原因是 pin expired，不走到这里）。
+*/
+func (p *failoverProxy) orderFailbackYieldsToScoreLocked(candidate int, source string) bool {
+	if !p.spec.PreferFastest || source == "pin" || source == "schedule" {
+		return false
+	}
+	if candidate < 0 || candidate >= len(p.spec.Targets) || p.activeIndex < 0 || p.activeIndex >= len(p.spec.Targets) {
+		return false
+	}
+	if failoverSpecTiered(p.spec) && *p.spec.Targets[candidate].Tier < *p.spec.Targets[p.activeIndex].Tier {
+		return false
+	}
+	return true
+}
+
+/*
 真实连接拨不通。
 
 上一版拨不通一次就把这条出站标成坏的。一次拨号失败在公网上太常见了（对端偶尔 RST、
@@ -321,27 +354,63 @@ func (p *failoverProxy) updateFallbackActiveAtLocked(now time.Time, reason strin
 FailureThreshold 才标记 —— 那条连接本身照样换下一条出站去拨，客户端不会因此失败。
 */
 func (p *failoverProxy) markTargetFailure(index int, reason string) {
+	p.markDialFailure(index, reason, time.Now(), nil)
+}
+
+/*
+markDialFailure 记一次真实拨号失败（A4）。startedAt 是这次拨号发起的时刻，err 是拨号的错误（没有就是 nil）。
+
+  - 本机的错误不是线路的错：fd 用完（EMFILE / ENFILE）、临时端口用完（EADDRNOTAVAIL）、内核没内存
+    （ENOBUFS / ENOMEM）、我们自己取消的拨号 —— 这时每条线路都拨不出去，记到线路头上只会把所有线路
+    一起判坏。不计数、不进拨号记录，一分钟写一条日志（failoverLocalDialError）。
+  - 并发的一串失败算一次（routeTargetStats.countDialFailure）。
+  - 连着 FailureThreshold 次**各自独立**的失败，当场判坏，不等探测 —— 真断了的线路照样几条连接就切走。
+    中间只要有一次正常拨通就清零；探测攒的失败在另一本账上，互不清零（A2）。
+*/
+func (p *failoverProxy) markDialFailure(index int, reason string, startedAt time.Time, err error) {
+	if failoverLocalDialError(err) {
+		if shouldLogAgentReport(fmt.Sprintf("failover-local-dial-error:%d:%d", p.ruleID, p.sourcePort), time.Minute) {
+			logf("failover dial failed locally (not counted against the path) rule=%d source=%d index=%d: %v", p.ruleID, p.sourcePort, index, err)
+		}
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.ensureHealthStateLocked()
 	if index < 0 || index >= len(p.spec.Targets) {
 		return
 	}
+	now := time.Now()
 	stats := p.statsLocked(index)
-	stats.recordDialFailure()
+	stats.recordDial(false, 0, now, 0)
+	counted := stats.countDialFailure(startedAt, now)
 	if p.targetHealth[index] {
 		target := p.spec.Targets[index]
-		if stats.consecutiveFailures < p.spec.FailureThreshold {
-			logVerbosef("failover target dial failed rule=%d source=%d index=%d target=%s:%d failures=%d/%d", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, stats.consecutiveFailures, p.spec.FailureThreshold)
+		if !counted || stats.dialFailures < p.spec.FailureThreshold {
+			logVerbosef("failover target dial failed rule=%d source=%d index=%d target=%s:%d failures=%d/%d counted=%v", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, stats.dialFailures, p.spec.FailureThreshold, counted)
 			return
 		}
 		p.targetHealth[index] = false
-		p.failureSince[index] = time.Now()
+		p.failureSince[index] = now
 		p.recoveredSince[index] = time.Time{}
 		logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason)
 		p.recordTargetEventLocked(index, "unhealthy", reason)
+		p.onTargetDownLocked(index, true, false)
 	}
 	p.updateFallbackActiveLocked(reason)
+}
+
+// failoverLocalDialError 这个拨号错误是不是本机的问题（和线路无关）。
+func failoverLocalDialError(err error) bool {
+	if err == nil {
+		return false
+	}
+	for _, local := range []error{syscall.EMFILE, syscall.ENFILE, syscall.EADDRNOTAVAIL, syscall.ENOBUFS, syscall.ENOMEM, context.Canceled} {
+		if errors.Is(err, local) {
+			return true
+		}
+	}
+	return false
 }
 
 /*

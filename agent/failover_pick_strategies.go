@@ -41,9 +41,10 @@ func (p *failoverProxy) strategyFallbackLocked(request failoverPickRequest) int 
 	if request.udp && p.udpSeparateLocked() {
 		return p.udpFallbackIndexLocked(request.candidates, request.exclude)
 	}
+	// 在走的那条被管理上排除了（暂停 / 维护）而候选是兜底：它不在候选里，也按「用不了」处理。
 	if !p.healthyLocked(p.activeIndex) || (request.exclude != nil && request.exclude[p.activeIndex]) {
 		// 当前这条用不了（挂了、或这条连接刚在它上面拨失败）：在候选里优先挑出口 IP 一样的（2.2.251），
-		// 没有就还是第一条，和以前一样。全都不健康时候选是兜底的全部，挑不出健康的，照旧第一条。
+		// 没有就还是第一条，和以前一样。全都不健康时候选是兜底的那些（不含管理上排除的），挑不出健康的，照旧第一条。
 		index := request.candidates[0]
 		if pick, _ := p.escapePickLocked(request.candidates, p.activeIndex, -1, request.udp); pick >= 0 {
 			index = pick

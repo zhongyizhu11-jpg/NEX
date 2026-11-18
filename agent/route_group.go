@@ -94,11 +94,23 @@ type routeTargetStats struct {
 	earlyClose   failoverEarlyCloseState
 	samples      []routeProbeSample
 	availability []bool
-	// 连续失败次数：探测不通和真实连接拨不通都算一次，一次探测成功或一次正常的真实拨号清零。
-	// 「失败 1 次不切、连续失败 N 次才标记异常」看的就是它。
-	consecutiveFailures int
-	lastProbeOK         bool
-	lastProbeAt         time.Time
+	/*
+		连续失败分两本账（A2）：探测不通记 probeFailures，真实连接拨不通记 dialFailures。
+		以前是一个数，探测成功和拨号成功都清零 —— 探测目标（落地上的某个端口）已经死了、而拨号地址
+		（第一跳中转）照样接得住连接时，每一条业务连接都把探测攒的失败清掉，这条线路永远判不坏。
+		现在各清各的：一次探测成功只清 probeFailures，一次正常的真实拨号只清 dialFailures；
+		任何一本过了自己的门槛就判坏（探测：次数 + 持续异常够久，见 checkHealth；拨号：见 markDialFailure）。
+	*/
+	probeFailures int
+	dialFailures  int
+	// 上一次**计了数**的拨号失败是什么时候记下的：在它之前就发起的拨号再失败，算同一次（见 countDialFailure）。
+	lastDialFailureAt time.Time
+	// summary() 的缓存：探测样本没变就不重算（每条连接拨通都要看一眼探测延迟，以前每次都在写锁里排一遍序）。
+	summaryCache      routeStatsSummary
+	summaryCacheValid bool
+	summaryCacheLen   int
+	lastProbeOK       bool
+	lastProbeAt       time.Time
 	// 探测延迟的指数平均（α = routeLatencyEwmaAlpha，第一次探通的那个数起头）：「自动」分法算权重用它 ——
 	// 比样本窗口的中位数跟得紧，又不像最近一次那样一跳就变。0 = 还没探通过。
 	latencyEwmaMs float64
@@ -115,8 +127,8 @@ type routeTargetStats struct {
 真实连接也算票（honk 的思路）：探测 5 秒一次、探的是一个固定端点，而真实连接每时每刻都在
 拨，拨的就是业务要走的地址。拨不通本来就记一次失败；这里再补上「拨得慢」—— 连续
 routeSlowDialStreak 次比探测延迟慢 routeSlowDialFactor 倍（且不低于 routeSlowDialMinMs），
-立刻探一轮，而不是等下一个 5 秒；慢本身不记失败（2.2.240 起），坏没坏由探测说。一次正常的拨号成功则把连续失败清零：
-业务连接都通了，比探测更有说服力。
+立刻探一轮，而不是等下一个 5 秒；慢本身不记失败（2.2.240 起），坏没坏由探测说。一次正常的拨号成功把**拨号那本账**
+的连续失败清零；探测那本不清 —— 拨得通第一跳说明不了探测目标还活着（见 routeTargetStats.probeFailures）。
 
 拨号记录不进探测样本窗口：它不是按固定间隔来的，混进去丢包率和抖动就不准了。
 */
@@ -159,7 +171,6 @@ func (s *routeTargetStats) recordDial(ok bool, durationMs int, at time.Time, pro
 	s.lastDialAt = at
 	streak := false
 	if !ok {
-		s.consecutiveFailures++
 		s.consecutiveSlow = 0
 	} else {
 		if s.dialAvgMs <= 0 {
@@ -179,26 +190,41 @@ func (s *routeTargetStats) recordDial(ok bool, durationMs int, at time.Time, pro
 			}
 		} else {
 			s.consecutiveSlow = 0
-			s.consecutiveFailures = 0
+			s.dialFailures = 0
 		}
 	}
 	s.dials = append(s.dials, sample)
-	s.pruneDials(at)
+	// 每条连接都走到这里：只在攒到两倍上限时收一次（均摊 O(1)），不再每次按时间裁、整段复制。
+	// 过期的样本留在里面不碍事，dialSummary 读的时候按时间滤掉。
+	if len(s.dials) >= 2*routeDialMaxSamples {
+		s.dials = append(s.dials[:0], s.dials[len(s.dials)-routeDialMaxSamples:]...)
+	}
 	return streak
 }
 
-func (s *routeTargetStats) pruneDials(now time.Time) {
-	cutoff := now.Add(-routeDialWindow)
-	start := 0
-	for start < len(s.dials) && s.dials[start].at.Before(cutoff) {
-		start++
+/*
+countDialFailure 一次真实拨号失败算不算「又一次」（A4）。
+
+一条线路断的那一刻，正在拨的几十条连接会在同一瞬间一起失败 —— 以前各算一次，「连续失败 3 次才判坏」
+一下就过了，等于没有门槛；对端只是抖了一下（那一瞬间的连接全失败）也被当成连着坏了很多次。
+所以：在上一次计了数的失败**记下来之前**就已经发起的拨号，失败了算同一次。一串并发失败 = 1 次。
+真断了的线路照样快：下一条在那之后发起的连接再失败就是第 2 次，凑够门槛当场判坏。
+*/
+func (s *routeTargetStats) countDialFailure(startedAt time.Time, now time.Time) bool {
+	if s.dialFailures > 0 && !s.lastDialFailureAt.IsZero() && startedAt.Before(s.lastDialFailureAt) {
+		return false
 	}
-	if start > 0 {
-		s.dials = append([]routeDialSample(nil), s.dials[start:]...)
+	s.dialFailures++
+	s.lastDialFailureAt = now
+	return true
+}
+
+// 报给面板、写日志用的「连续失败」：两本账里大的那个。
+func (s *routeTargetStats) consecutiveFailures() int {
+	if s.dialFailures > s.probeFailures {
+		return s.dialFailures
 	}
-	if len(s.dials) > routeDialMaxSamples {
-		s.dials = s.dials[len(s.dials)-routeDialMaxSamples:]
-	}
+	return s.probeFailures
 }
 
 func (s *routeTargetStats) dialSummary(now time.Time) routeDialSummary {
@@ -206,8 +232,15 @@ func (s *routeTargetStats) dialSummary(now time.Time) routeDialSummary {
 	if s == nil {
 		return out
 	}
-	s.pruneDials(now)
-	for _, sample := range s.dials {
+	cutoff := now.Add(-routeDialWindow)
+	recent := s.dials
+	if len(recent) > routeDialMaxSamples {
+		recent = recent[len(recent)-routeDialMaxSamples:]
+	}
+	for _, sample := range recent {
+		if sample.at.Before(cutoff) {
+			continue
+		}
 		switch {
 		case !sample.ok:
 			out.failed++
@@ -246,8 +279,9 @@ func (s *routeTargetStats) recordProbe(ok bool, latencyMs int, at time.Time) {
 	}
 	s.lastProbeOK = ok
 	s.lastProbeAt = at
+	s.summaryCacheValid = false
 	if ok {
-		s.consecutiveFailures = 0
+		s.probeFailures = 0
 		// 不到 1 毫秒按 1 算：0 留给「还没探通过」，同机房那种 0ms 的路径照样有个数可比。
 		sample := math.Max(1, float64(latencyMs))
 		if s.latencyEwmaMs <= 0 {
@@ -256,23 +290,29 @@ func (s *routeTargetStats) recordProbe(ok bool, latencyMs int, at time.Time) {
 			s.latencyEwmaMs = s.latencyEwmaMs*(1-routeLatencyEwmaAlpha) + sample*routeLatencyEwmaAlpha
 		}
 	} else {
-		s.consecutiveFailures++
+		s.probeFailures++
 	}
 }
 
 // 探测延迟指数平均的权重：新样本占三成。
 const routeLatencyEwmaAlpha = 0.3
 
-// 真实连接拨不通：算一次失败，但不进样本窗口（见 recordDial）。
-func (s *routeTargetStats) recordDialFailure() {
-	s.recordDial(false, 0, time.Now(), 0)
+// summary 样本窗口的汇总。探测样本没变就用上一次算好的（recordProbe 会作废缓存；长度也对一下，
+// 测试里直接改 samples 的写法照样对）。
+func (s *routeTargetStats) summary() routeStatsSummary {
+	if s == nil {
+		return routeStatsSummary{availabilityPct: 100}
+	}
+	if s.summaryCacheValid && s.summaryCacheLen == len(s.samples)+len(s.availability) {
+		return s.summaryCache
+	}
+	out := s.computeSummary()
+	s.summaryCache, s.summaryCacheValid, s.summaryCacheLen = out, true, len(s.samples)+len(s.availability)
+	return out
 }
 
-func (s *routeTargetStats) summary() routeStatsSummary {
+func (s *routeTargetStats) computeSummary() routeStatsSummary {
 	out := routeStatsSummary{availabilityPct: 100}
-	if s == nil {
-		return out
-	}
 	out.samples = len(s.samples)
 	latencies := make([]int, 0, len(s.samples))
 	failed := 0
@@ -331,22 +371,36 @@ func (p *failoverProxy) healthyLocked(index int) bool {
 	if index < 0 || index >= len(p.spec.Targets) {
 		return false
 	}
-	p.ensureHealthStateLocked()
+	/*
+		这里不能调 ensureHealthStateLocked（A12）：竞速拨号这些只拿读锁的地方也会走到这儿，而它在切片长度
+		对不上时会重新分配 —— 读锁下写共享状态，出站条数变了以后的并发拨号能撞出数据竞争。
+		切片的长度由拿写锁的地方保证（起代理、rebuildForSpecLocked、各个写路径开头的 ensure）；
+		万一还没配齐（测试里手搭的代理），按「还没探过」算：健康，面板提示看规格里带的。
+	*/
+	if index >= len(p.targetHealth) || index >= len(p.relayDown) {
+		return !p.spec.Targets[index].Down
+	}
 	return p.targetHealth[index] && !p.relayDown[index]
 }
 
+// statsLocked 调用方持有写锁；只拿读锁的地方用 statsReadLocked。
 func (p *failoverProxy) statsLocked(index int) *routeTargetStats {
 	p.ensureHealthStateLocked()
 	if index < 0 || index >= len(p.stats) {
 		return &routeTargetStats{}
 	}
-	if p.stats[index] == nil {
-		p.stats[index] = &routeTargetStats{}
+	return p.stats[index]
+}
+
+// statsReadLocked 读锁下用：不分配、不改代理的状态；没有就是 nil（summary / dialSummary 认 nil）。
+func (p *failoverProxy) statsReadLocked(index int) *routeTargetStats {
+	if index < 0 || index >= len(p.stats) {
+		return nil
 	}
 	return p.stats[index]
 }
 
-// markDialSuccess 记一次真实连接拨通了：清连续失败；连续几次拨得慢就当一次失败、报事件、立刻探一轮。
+// markDialSuccess 记一次真实连接拨通了：清拨号那本账的连续失败；连续几次拨得慢就报事件、立刻探一轮（不记失败）。
 func (p *failoverProxy) markDialSuccess(index int, duration time.Duration) {
 	p.mu.Lock()
 	p.ensureHealthStateLocked()
@@ -365,7 +419,7 @@ func (p *failoverProxy) markDialSuccess(index int, duration time.Duration) {
 	if streak {
 		target := p.spec.Targets[index]
 		reason := fmt.Sprintf("slow dial: %dms x%d, probe %dms", stats.dialAvgMs, routeSlowDialStreak, probeMs)
-		logf("failover target slow dials rule=%d source=%d index=%d target=%s:%d %s failures=%d/%d", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, stats.consecutiveFailures, p.spec.FailureThreshold)
+		logf("failover target slow dials rule=%d source=%d index=%d target=%s:%d %s failures=%d/%d", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, stats.consecutiveFailures(), p.spec.FailureThreshold)
 		p.recordTargetEventLocked(index, "slow_dial", reason)
 	}
 	p.mu.Unlock()
@@ -524,6 +578,38 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 		j, ok := oldIndex[targetStateKey(spec.Targets[i])]
 		return j, ok
 	})
+	/*
+		慢启动的恢复时刻、平滑加权轮询的计数、演练撤掉的时刻也按同一张对照表搬（A11）。以前不搬：
+		这三个切片长度对不上时在别处被整个清零重建，出站前面插一条，刚恢复那条的慢启动就没了、
+		按权重的序列从头来；长度没变而顺序变了时更糟 —— 状态留在旧下标上，算到了别的路径头上。
+		在途计数不搬：旧下标发出去的那几笔按旧的一代作废（见 failoverReservation.gen），从 0 起。
+	*/
+	slowStartAt := make([]time.Time, n)
+	wrrCurrent := make([]int, n)
+	drillEndedAt := make([]time.Time, n)
+	for i, target := range spec.Targets {
+		j, ok := oldIndex[targetStateKey(target)]
+		if !ok {
+			continue
+		}
+		if j < len(p.slowStartAt) {
+			slowStartAt[i] = p.slowStartAt[j]
+		}
+		if j < len(p.wrrCurrent) {
+			wrrCurrent[i] = p.wrrCurrent[j]
+		}
+		if j < len(p.drillEndedAt) {
+			drillEndedAt[i] = p.drillEndedAt[j]
+		}
+	}
+	p.slowStartAt = slowStartAt
+	// 按权重的计数还没用过（nil）就保持没用过：只在 weightedPickLocked（写锁下）第一次用时才开。
+	if p.wrrCurrent != nil {
+		p.wrrCurrent = wrrCurrent
+	}
+	p.drillEndedAt = drillEndedAt
+	p.inflight = make([]int, n)
+	p.inflightGen++
 	p.spec = spec
 	p.targetHealth = health
 	p.failureSince = failureSince
@@ -545,6 +631,8 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 	p.prewarmIndex = -1
 	p.precheckFailedIndex = -1
 	p.pinnedLast = -1
+	// 所有按出站条数开的切片在这里（写锁下）一次配齐：之后只拿读锁的路径不会再碰到长度对不上（A12）。
+	p.ensureHealthStateLocked()
 	return targetsChanged
 }
 
@@ -553,6 +641,10 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 func (p *failoverProxy) trackConn(index int, conn net.Conn) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.trackConnLocked(index, conn)
+}
+
+func (p *failoverProxy) trackConnLocked(index int, conn net.Conn) {
 	p.ensureHealthStateLocked()
 	if index < 0 || index >= len(p.conns) {
 		return
@@ -813,7 +905,7 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 			LossPct:             roundTenth(summary.lossPct),
 			JitterMs:            roundTenth(summary.jitterMs),
 			AvailabilityPct:     roundTenth(summary.availabilityPct),
-			ConsecutiveFailures: stats.consecutiveFailures,
+			ConsecutiveFailures: stats.consecutiveFailures(),
 			Connections:         p.connectionsLocked(index),
 			Samples:             summary.samples,
 			ExtraLatencyMs:      target.ExtraLatencyMs,

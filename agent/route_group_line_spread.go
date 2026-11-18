@@ -95,7 +95,7 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 			conns := 0
 			for i := range p.spec.Targets {
 				if p.sameLineLocked(i, line) && p.lineLandingLocked(i) == landing {
-					conns += p.connectionsLocked(i)
+					conns += p.loadLocked(i)
 				}
 			}
 			// 刚恢复的落地 60 秒内慢慢加量，和整组「按负载」一样。
@@ -114,7 +114,7 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 			conns := 0
 			for i := range p.spec.Targets {
 				if p.sameLineLocked(i, line) && p.lineLandingLocked(i) == landing {
-					conns += p.connectionsLocked(i)
+					conns += p.loadLocked(i)
 				}
 			}
 			return conns

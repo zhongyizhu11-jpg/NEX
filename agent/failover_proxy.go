@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	mathrand "math/rand"
 	"net"
 	"net/netip"
@@ -20,8 +21,14 @@ type failoverProxy struct {
 	roundRobinNext int
 	// wrrCurrent 是「按权重」的平滑加权轮询计数；slowStartAt 是每条路径从挂掉恢复的时刻，
 	// 之后 routeSlowStartWindow 内按比例慢慢加量（route_group_balance.go）。
-	wrrCurrent     []int
-	slowStartAt    []time.Time
+	wrrCurrent  []int
+	slowStartAt []time.Time
+	// 在途：已经挑中、还在拨的连接数（A8，route_group_balance.go）。inflightGen 每换一次规格加一，
+	// 旧下标发出去的在途不再退到新下标上。
+	inflight    []int
+	inflightGen uint64
+	// 正在给 UDP 会话挑路径（pickTargetForKeyProto 里置位、挑完清掉，全程持有 p.mu）：慢启动看 UDP 那一侧。
+	pickingUDP     bool
 	targetHealth   []bool
 	failureSince   []time.Time
 	recoveredSince []time.Time
@@ -481,6 +488,12 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 			p.conns[i] = map[net.Conn]struct{}{}
 		}
 	}
+	if len(p.slowStartAt) != n {
+		p.slowStartAt = make([]time.Time, n)
+	}
+	if len(p.inflight) != n {
+		p.inflight = make([]int, n)
+	}
 	p.udpSide.ensure(n)
 	if p.activeIndex < 0 || p.activeIndex >= n {
 		p.activeIndex = 0
@@ -675,16 +688,20 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 	var target failoverTarget
 	var index int
 	var err error
+	// 挑中就记一笔在途，拨通后转成连接（A8）：一下子进来的一批连接才不会全压到同一条上。
+	var reservation failoverReservation
 	attempted := map[int]bool{}
 	for {
-		target, index = p.pickTargetForKey(visitor, attempted)
+		target, index, reservation = p.pickReserved(visitor, attempted, false)
 		if index < 0 {
-			logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
+			if shouldLogAgentReport(fmt.Sprintf("failover-no-target:%d:%d", p.ruleID, p.sourcePort), agentReportLogInterval) {
+				logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
+			}
 			p.inbound.record(false, time.Now())
 			return
 		}
 		// 拨失败的路径在里面记失败、加进 attempted；允许竞速的策略可能实际连上的是另一条。
-		upstream, target, index, err = p.dialFailoverPath(visitor, target, index, attempted, failoverProxyDialTimeout)
+		upstream, target, index, reservation, err = p.dialFailoverPathReserved(visitor, target, index, reservation, attempted, failoverProxyDialTimeout)
 		if err == nil {
 			break
 		}
@@ -699,12 +716,14 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		// 每条都拨失败了：重新探一遍再挑一次。这里不能再带 attempted —— 里面已经是全部路径，
 		// 带着它永远挑不出来，这一步等于没有（以前就是这样）。
 		p.checkHealthShared()
-		target, index = p.pickTargetForKey(visitor, nil)
+		target, index, reservation = p.pickReserved(visitor, nil, false)
 		if index >= 0 {
 			started := time.Now()
 			upstream, err = failoverDialTCP(context.Background(), target, failoverProxyDialTimeout)
 			if err == nil {
 				p.markDialSuccess(index, time.Since(started))
+			} else {
+				p.releaseReservation(reservation)
 			}
 		} else {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
@@ -720,12 +739,13 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 	// 读 PROXY 头时多读到的字节（以及透传模式下的头本身）要先补给路径，再接着原样拷 —— 由保护期接着写：
 	// 上游回第一个字节之前就关了，这条连接当场换下一条路径、把这些字节重发过去（failover_early_close.go）。
 	// 连接从拨通这一刻就记在这条路径名下（按负载分、强制切换都靠它），保护期里换了路再挪过去。
-	p.trackConn(index, client)
+	p.trackConnReserved(index, client, reservation)
 	trackedIndex := index
-	upstream, index, ok := p.guardedStart(client, upstream, index, visitor, attempted, prefix)
-	if !ok {
+	upstream, index, outcome := p.guardedStart(client, upstream, index, visitor, attempted, prefix)
+	if outcome != failoverGuardRelay {
 		p.untrackConn(trackedIndex, client)
-		p.inbound.record(false, time.Now())
+		// 上游回了东西、已经原样交给客户端并收尾（failoverGuardDelivered）算成功：这条连接没丢。
+		p.inbound.record(outcome == failoverGuardDelivered, time.Now())
 		return
 	}
 	if index != trackedIndex {
