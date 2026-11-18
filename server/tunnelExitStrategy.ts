@@ -97,6 +97,8 @@ export function shouldUseFastTunnelFailover(exitCandidateCount: number, relayFai
  * 按权重：gost 用 random，份数写在节点的 metadata.weight（gost 3 的 random 按它加权随机）；nginx 写 weight=N。
  * 份数见 shared/exitStrategy.ts 的 exitGroupWeights。
  * 「按负载」gost 看不到实时负载，退成按带宽加权随机；nginx 用 least_conn + 权重。
+ * 注意 metadata.weight 要写成字符串：gost 读 JSON 配置时数字是 float64，它取整数的函数只认 int / 字符串，
+ * 写成数字会被当成 1（实测：权重 9 / 1 写成数字时两台各分一半，写成 "9" / "1" 才是九比一）。
  */
 export function gostExitSelector(value: unknown) {
   const strategy = normalizeExitGroupStrategy(value);
@@ -108,4 +110,52 @@ export function gostExitSelector(value: unknown) {
     maxFails: 1,
     failTimeout: strategy === "fallback" || strategy === "latency" ? "5s" : "15s",
   };
+}
+
+/**
+ * 从这个 NEX 构建号起，运行时自己不会再「出口全挂时绕过隧道」（gost-runtime/nex-selector-noempty.patch）。
+ */
+export const GOST_NO_BYPASS_MIN_NEX_BUILD = 6;
+
+/** 主机上报的运行时版本（"3.2.6-nex6"）是不是已经带上面那个补丁。官方 gost、问不出版本的都算没有。 */
+export function gostRuntimeHasNoBypassFix(runtimeVersion: unknown) {
+  const match = /-nex(\d+)\b/i.exec(String(runtimeVersion || ""));
+  return !!match && Number(match[1]) >= GOST_NO_BYPASS_MIN_NEX_BUILD;
+}
+
+/**
+ * 给还没换上 nex6 的运行时（nex5 以前、官方 gost）用的兜底节点：挂在多节点那一跳的最后。
+ *
+ * 毛病（见 gost-runtime/nex-selector-noempty.patch）：一跳里的节点全在 failTimeout 里时，失败过滤器筛完是空的，
+ * gost 就不走链、由入口机（多跳时是中转机）直连目标。这个节点让过滤器永远筛不空：
+ *   - metadata.maxFails 极大 → 它自己永远不会被当成失败节点摘掉；
+ *   - metadata.backup → 只要还有一台真出口没被摘，备用过滤器就把它排除，平时一条连接都不会分给它；
+ *   - 地址 127.0.0.1:0 → 端口 0 上不可能有监听，拨它立刻失败。
+ * 所以真出口全挂时选中的是它，连接马上失败（该失败的），而不是绕过隧道。
+ * 拿真的 3.2.6-nex5 验过（BYPASS_GUARD=1 gost-runtime/test/bypass-check/run.sh）：单跳 / 多跳、TCP / UDP 都不再绕过；
+ * 出口回来后要等 failTimeout 过去才恢复（和没打补丁的 gost 原来一样）。
+ *
+ * 两个必须：
+ *   1. maxFails 一定写成字符串。gost 读 JSON 配置时数字是 float64，而它取整数的函数只认 int / 字符串，
+ *      写成数字等于没写（按 1 算），这个节点就白挂了。节点的 metadata.weight 同理。
+ *   2. 只给没带补丁的运行时挂（gostRuntimeHasNoBypassFix 为假）。nex6 上挂了它，「全挂时照样在全部出口里试」
+ *      就退回成「等 failTimeout」，没有必要。
+ */
+export function gostNoBypassGuardNode(name: string) {
+  return {
+    name,
+    addr: "127.0.0.1:0",
+    connector: { type: "relay" },
+    dialer: { type: "tcp" },
+    metadata: { backup: true, maxFails: "1000000000" },
+  };
+}
+
+/**
+ * 一跳的节点列表：不止一个节点、而且这台机器的运行时还没带补丁时，在最后补上兜底节点；其余情况原样返回。
+ * 单节点的跳没有选择器，不会筛空，不用挂。
+ */
+export function withGostNoBypassGuard<T>(nodes: T[], guardName: string, runtimeVersion: unknown): Array<T | ReturnType<typeof gostNoBypassGuardNode>> {
+  if (nodes.length < 2 || gostRuntimeHasNoBypassFix(runtimeVersion)) return nodes;
+  return [...nodes, gostNoBypassGuardNode(guardName)];
 }

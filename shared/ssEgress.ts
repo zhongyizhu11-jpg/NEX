@@ -107,9 +107,10 @@ export const SS_EGRESS_RUNTIME_MIN_VERSION_LABEL = `3.2.6-nex${SS_EGRESS_RUNTIME
 /**
  * 这一版面板带的自编运行时构建号（gost-runtime/build.sh 的 NEX_GOST_BUILD，scripts/check-versions.mjs 会查）。
  * 装机脚本把比它旧的 NEX 自编版换成它；能力门槛仍是上面的 nex3（nex4 只加固了 SS2022 UDP 回包校验；
- * nex5 让关服务时连它的连接一起关，见 shared/gostRuntimeApi.ts GOST_API_CONN_CLOSE_MIN_NEX_BUILD）。
+ * nex5 让关服务时连它的连接一起关，见 shared/gostRuntimeApi.ts GOST_API_CONN_CLOSE_MIN_NEX_BUILD；
+ * nex6 堵住「出口全挂时入口机 / 中转机直连目标、绕过隧道」，见 gost-runtime/nex-selector-noempty.patch）。
  */
-export const NEX_GOST_RUNTIME_BUILD = 5;
+export const NEX_GOST_RUNTIME_BUILD = 6;
 /** Agent 心跳里 agentCapabilities 的两项（和 agent/gost_runtime_version.go 一致）。 */
 export const AGENT_CAPABILITY_SS_EGRESS_UDP = "ssEgressUdp";
 export const AGENT_CAPABILITY_SS_EGRESS_2022 = "ssEgress2022";
