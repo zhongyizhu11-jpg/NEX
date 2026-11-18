@@ -26,7 +26,8 @@ import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues, type DdnsRec
 import { forwardGroupMirrorRecordType, mirrorForwardGroupDdnsValues } from "../forwardGroupDualStackDdns";
 import { prepareForwardGroupDdnsLines, syncForwardGroupDdnsLines, type ForwardGroupLineContext } from "../forwardGroupDdnsLines";
 import type { LineMemberStatus, LinePlannerMember } from "../ddnsLinePlanner";
-import { serializeDdnsLines } from "../../shared/ddnsLines";
+import { parseDdnsLineState, serializeDdnsLines } from "../../shared/ddnsLines";
+import { ddnsLineProviderLabel, ddnsLineSupport, deleteDdnsLineRecords } from "../ddnsLineRecords";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { withForwardTestDates } from "./forwardTestRepository";
@@ -4470,6 +4471,8 @@ export async function getForwardGroupEndpointReferences(groupId: number) {
 
 export async function deleteForwardGroup(id: number) {
   const db = await getDb();
+  // 删之前留一份（带成员）：删完要按它发布过的值把解析记录清掉（clearForwardGroupPublishedDdns）。
+  const groupBeforeDelete = await getForwardGroupById(id).catch(() => null);
   const childRules = await getForwardGroupChildRules(id);
   for (const rule of childRules as any[]) await removeManagedRule(Number(rule.id));
   const templates = await getForwardGroupTemplateRules(id);
@@ -4500,6 +4503,16 @@ export async function deleteForwardGroup(id: number) {
    */
   await db.delete(subscriptionPlanForwardGroups).where(eq(subscriptionPlanForwardGroups.forwardGroupId, id));
   await db.delete(forwardGroups).where(eq(forwardGroups.id, id));
+  forwardGroupHealthRechecks.replace(id, null);
+  exactDdnsReconciledGroups.delete(id);
+  /*
+    组行删掉之后再清解析，并且拿评估用的那把锁：正在跑的一轮评估（可能还要写一次服务商）先跑完，
+    之后的评估读不到组就直接返回，不会在清完之后又把记录写回去。清理失败不影响删除（里面自己记日志）。
+  */
+  if (groupBeforeDelete) {
+    await withKeyedTaskLock(`forward-group-failover:${id}`, () => clearForwardGroupPublishedDdns(groupBeforeDelete))
+      .catch((error) => appendPanelLog("warn", `[DDNS] 转发组 ${id} 已删除，清理解析记录时出错：${error instanceof Error ? error.message : String(error)}`));
+  }
 }
 
 /**
@@ -4937,11 +4950,8 @@ async function evaluateMemberHealth(member: any, group: any) {
  */
 type ForwardGroupDdnsTarget = { id?: unknown; domain?: unknown; recordType?: unknown; ddnsDualStack?: unknown; ddnsAutoResolveEnabled?: unknown };
 
-async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput) {
-  await updateDdnsRecordValues(input);
-  const mirrorType = forwardGroupMirrorRecordType(group);
-  if (!mirrorType) return;
-  const primaryType = normalizeForwardGroupRecordType(input.recordType);
+/** 主记录发了 primaryValues 时，双栈副记录上该是哪些值（按成员一一对应）。 */
+async function forwardGroupMirrorValues(group: ForwardGroupDdnsTarget, primaryType: ForwardGroupRecordType, mirrorType: "A" | "AAAA", primaryValues: string[]) {
   const pairs: Array<{ primary: string; mirror: string }> = [];
   const members: unknown[] = sortedMembers(group);
   for (const member of members) {
@@ -4949,7 +4959,84 @@ async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, inpu
     const mirror = primary ? await memberDdnsValue(member, mirrorType).catch(() => "") : "";
     if (primary && mirror) pairs.push({ primary, mirror });
   }
-  await updateDdnsRecordValues({ ...input, recordType: mirrorType, values: mirrorForwardGroupDdnsValues(input.values, pairs) });
+  return mirrorForwardGroupDdnsValues(primaryValues, pairs);
+}
+
+async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput) {
+  await updateDdnsRecordValues(input);
+  const mirrorType = forwardGroupMirrorRecordType(group);
+  if (!mirrorType) return;
+  const primaryType = normalizeForwardGroupRecordType(input.recordType);
+  await updateDdnsRecordValues({ ...input, recordType: mirrorType, values: await forwardGroupMirrorValues(group, primaryType, mirrorType, input.values) });
+}
+
+/*
+  删主备组 / 入口组时把面板发过的解析记录清掉（P6）。以前组删了记录还留在服务商那边：域名继续解析到
+  那几台机器，而面板里已经没有任何东西管它，机器换了 IP、下线了也不会再跟着改。
+
+  只删面板自己写的，用的就是发布时记的那几样：
+    · 主记录：组的 lastDdnsValue（真的写过服务商才算，看 lastDdnsAt）里的那几个值，按值删；
+    · 双栈副记录：同一批成员对应的另一族地址；
+    · 分线路记录：ddnsLineState 里记的记录 ID（deleteDdnsLineRecords 只删这些 ID）。
+  这个名字上别人手动加的记录、别的服务商上的记录一律不动；自动解析关着的组面板从没替它写过，也不动。
+  清不掉不拦删除：记面板日志，让人去服务商那边手动清。停用组不清（恢复时还要用）。
+*/
+export async function clearForwardGroupPublishedDdns(group: any) {
+  const groupId = Number(group?.id || 0);
+  const mode = forwardGroupModeOf(group);
+  const domain = String(group?.domain || "").trim();
+  if ((mode !== "failover" && mode !== "entry") || !domain || group?.ddnsAutoResolveEnabled === false) return;
+  const publishedValues = toDate(group?.lastDdnsAt)
+    ? String(group?.lastDdnsValue || "").split(",").map((value) => value.trim()).filter(Boolean)
+    : [];
+  const lineState = parseDdnsLineState(group?.ddnsLineState);
+  const lineEntries = lineState ? Object.values(lineState.lines).filter((entry) => entry.recordIds.length > 0) : [];
+  if (publishedValues.length === 0 && lineEntries.length === 0) return;
+  const label = `group=${groupId} domain=${domain}`;
+  const failed = (what: string, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[ForwardGroup] delete: clearing ${what} failed ${label}: ${message}`);
+    appendPanelLog("warn", `[DDNS] 转发组已删除，但${what}没清掉，请到 DNS 服务商手动删除；${label} ${message}`);
+  };
+  const ddnsSettings = await getDdnsSettings();
+  if (!ddnsSettings.enabled || ddnsSettings.provider === "disabled") {
+    appendPanelLog("warn", `[DDNS] 转发组已删除，系统 DDNS 未启用，之前发布的解析记录没有清理，请到 DNS 服务商手动删除；${label} values=${publishedValues.join(",")}`);
+    return;
+  }
+  const recordType = normalizeForwardGroupRecordType(group.recordType);
+  const ttl = Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL);
+  if (publishedValues.length > 0) {
+    try {
+      await updateDdnsRecordValues({ groupId, domain, recordType, values: [], removeOnlyValues: publishedValues, ttl });
+      appendPanelLog("info", `[DDNS] 转发组已删除，面板发布的解析记录已清理；${label} type=${recordType} values=${publishedValues.join(",")}`);
+    } catch (error) {
+      failed(`${recordType} 记录（${publishedValues.join(",")}）`, error);
+    }
+    const mirrorType = forwardGroupMirrorRecordType(group);
+    if (mirrorType) {
+      try {
+        const mirrorValues = await forwardGroupMirrorValues(group, recordType, mirrorType, publishedValues);
+        if (mirrorValues.length > 0) await updateDdnsRecordValues({ groupId, domain, recordType: mirrorType, values: [], removeOnlyValues: mirrorValues, ttl });
+      } catch (error) {
+        failed(`双栈 ${mirrorType} 记录`, error);
+      }
+    }
+  }
+  if (lineState && lineEntries.length > 0) {
+    const support = ddnsLineSupport(ddnsSettings);
+    if (!support.supported || support.provider !== lineState.provider) {
+      // 记录 ID 是原来那家服务商的，绝不拿去现在这家删。
+      appendPanelLog("warn", `[DDNS] 转发组已删除，分线路记录写在另一家服务商（${ddnsLineProviderLabel(lineState.provider)}），面板没有清理，请手动删除；${label}`);
+      return;
+    }
+    for (const entry of lineEntries) {
+      try {
+        await deleteDdnsLineRecords(ddnsSettings, { domain: lineState.domain || domain, recordType: lineState.recordType || recordType, line: entry, recordIds: entry.recordIds });
+      } catch (error) {
+        failed(`线路 ${entry.name} 的记录`, error);
+      }
+    }
+  }
 }
 
 /** 关掉双栈时把面板发过的副记录清掉：留着它，双栈客户端会一直连那条不再跟着切换的记录。 */
