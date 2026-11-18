@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# NEX 自编 gost 运行时：官方 go-gost/gost 源码 + go-gost/x 打上 nex-splice.patch、nex-ssu.patch、nex-service-close.patch，
+# NEX 自编 gost 运行时：官方 go-gost/gost 源码 + go-gost/x 打上 nex-splice.patch、nex-ssu.patch、nex-service-close.patch、
+# nex-selector-noempty.patch，
 # go-gost/go-shadowsocks2 打上 nex-shadowsocks2.patch。
 #
 # 官方 gost 在两条连接外面各包了几层（metrics、统计），io.Copy 认不出底下是
@@ -31,10 +32,18 @@
 #   把 TCP 规则的修改、删除也交给 API，不再重启整个进程（agent/gost_api_sync.go）。
 #   回归：gost-runtime/test/hitless-sync/run.sh <二进制>。
 #
+# nex6：出口全挂时不再绕过隧道（nex-selector-noempty.patch）。上游一跳里有两个以上节点时，失败过滤器把还在
+#   failTimeout 里的失败节点全筛掉，筛完是空的 → 选择器什么都不选 → 路由里没有节点 → gost 当成「不走链」，
+#   由入口机直接去拨转发目标（多跳时是上一跳的中转机去拨）。多出口 / 并联中转的隧道，出口全挂后的 5–15 秒里
+#   新连接（TCP、UDP 都是）就这样不经出口出去了。现在：全都失败时照样在全部节点里挑（连不上就是连不上，
+#   出口一回来马上能用，不用等 failTimeout）；再加一层兜底——跳里有可用节点却一个都没选出来时，这条连接
+#   直接失败，绝不直连。跳 / 节点上配的 bypass 命中时照旧直连。
+#   回归：gost-runtime/test/bypass-check/run.sh <二进制>（BYPASS_EXPECT=bug 可以在旧运行时上把毛病演出来）。
+#
 # 用法：gost-runtime/build.sh <输出目录>
 # 产出：<输出目录>/forwardx-runtime-linux-amd64、forwardx-runtime-linux-arm64
 #
-# 版本号写成 ${GOST_VERSION}-${NEX_GOST_BUILD}（例如 3.2.6-nex5），装机脚本据此
+# 版本号写成 ${GOST_VERSION}-${NEX_GOST_BUILD}（例如 3.2.6-nex6），装机脚本据此
 # 区分 NEX 自编版和官方版，Agent 据此判断运行时能力（nex3 起才有 Shadowsocks UDP / SS2022 出口）。
 # 改了补丁就把 NEX_GOST_BUILD 加一，shared/ssEgress.ts 的 NEX_GOST_RUNTIME_BUILD 跟着改。
 # GOARCHES 可以只编一部分架构（例如 GOARCHES=amd64），默认 amd64 arm64。
@@ -46,7 +55,7 @@ GOST_X_VERSION="${GOST_X_VERSION:-0.8.1}"
 GOST_X_VERSION="${GOST_X_VERSION#v}"
 GOST_SS2_VERSION="${GOST_SS2_VERSION:-0.1.1}"
 GOST_SS2_VERSION="${GOST_SS2_VERSION#v}"
-NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex5}"
+NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex6}"
 GOARCHES="${GOARCHES:-amd64 arm64}"
 # gost 3.2.6 的 go.mod 要求 Go >= 1.24；发布流程用 1.26（GOTOOLCHAIN=local），这里仍单独指定工具链，和官方发布包同一版本。
 # go 命令会从 proxy.golang.org 自动下载这个工具链。
@@ -89,6 +98,8 @@ echo "[gost-runtime] applying nex-ssu.patch to go-gost/x v${GOST_X_VERSION}"
 (cd "$WORK/x" && patch -p1 --forward --batch < "$SCRIPT_DIR/nex-ssu.patch")
 echo "[gost-runtime] applying nex-service-close.patch to go-gost/x v${GOST_X_VERSION}"
 (cd "$WORK/x" && patch -p1 --forward --batch < "$SCRIPT_DIR/nex-service-close.patch")
+echo "[gost-runtime] applying nex-selector-noempty.patch to go-gost/x v${GOST_X_VERSION}"
+(cd "$WORK/x" && patch -p1 --forward --batch < "$SCRIPT_DIR/nex-selector-noempty.patch")
 
 if ! grep -q "github.com/go-gost/go-shadowsocks2 v${GOST_SS2_VERSION}\$" "$WORK/x/go.mod"; then
   echo "[gost-runtime] go-gost/x v${GOST_X_VERSION} does not pin go-shadowsocks2 v${GOST_SS2_VERSION}; update GOST_SS2_VERSION" >&2
