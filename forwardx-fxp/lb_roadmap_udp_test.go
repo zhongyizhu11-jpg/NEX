@@ -371,3 +371,57 @@ func TestRelayUDPIPHashUsesTheClientAddress(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// (d) 中转这一跳也一样：它替会话挑的出口被判成连不上，后面的包换到别的出口（会话号是入口定的，不变；
+// 入口那边的会话、访客的套接字都不动）。
+func TestRelayUDPSessionMovesOffAnExitThatBecomesUnhealthy(t *testing.T) {
+	resetFXPEndpointRegistry()
+	const tunnelID, ruleID = 381, 382
+	const entryKey, relayKey = "x3d-relay-entry-key", "x3d-relay-exit-key"
+	portA, _ := startUDPDirectExit(t, "127.0.0.1", tunnelID, ruleID, relayKey, startPrefixedUDPEcho(t, "A"))
+	portB, _ := startUDPDirectExit(t, "127.0.0.1", tunnelID, ruleID, relayKey, startPrefixedUDPEcho(t, "B"))
+	relayConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayPort := relayConn.LocalAddr().(*net.UDPAddr).Port
+	relayCfg := config{Role: "relay", TunnelID: tunnelID, Protocol: "udp", Key: entryKey, RelayKey: relayKey,
+		RelayExitHost: "127.0.0.1", RelayExitPort: portA, UDPRelayExitPort: portA, ExitStrategy: "fallback"}
+	relaySelector := newExitEndpointSelector(
+		[]exitEndpoint{{Host: "127.0.0.1", Port: portB, UDPPort: portB, Key: relayKey}},
+		exitEndpoint{Host: "127.0.0.1", Port: portA, UDPPort: portA, Key: relayKey},
+		"fallback",
+	)
+	relayDone := make(chan struct{})
+	go func() {
+		_ = serveRelayUDPDirect(relayConn, relayCfg, relaySelector)
+		close(relayDone)
+	}()
+	defer func() {
+		_ = relayConn.Close()
+		<-relayDone
+	}()
+	entrySelector := newExitEndpointSelector(nil, exitEndpoint{Host: "127.0.0.1", Port: relayPort, UDPPort: relayPort, Key: entryKey}, "")
+	entryCfg := config{Role: "entry", TunnelID: tunnelID, RuleID: ruleID, Protocol: "udp", Key: entryKey,
+		ExitHost: "127.0.0.1", ExitPort: relayPort, UDPExitPort: relayPort, TargetIP: "127.0.0.1", TargetPort: 9}
+	entry := startUDPDirectEntry(t, entryCfg, entrySelector)
+	client, err := net.DialUDP("udp", nil, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if reply, ok := udpAsk(t, client, "one", 2*time.Second); !ok || reply != "A:one" {
+		t.Fatalf("经中转的第一条会话应该走主出口：%q", reply)
+	}
+	relaySelector.markFailure(0, errTestEndpointDown)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		reply, ok := udpAsk(t, client, "two", 500*time.Millisecond)
+		if ok && reply == "B:two" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("中转的出口被判成连不上之后，后面的包应该换到备用出口（最后收到 %q ok=%v）", reply, ok)
+		}
+	}
+}
