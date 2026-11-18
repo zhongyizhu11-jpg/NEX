@@ -408,7 +408,7 @@ export type LandingMemberHealth = {
   hostId: number;
   /** 成员入站开出来了、没报错。 */
   ready: boolean;
-  /** 在线、不在维护。 */
+  /** 在线、不在维护、没被流量暂停（和组、线路同一个口径：shared/hostTrafficPolicy 的 hostTrafficExcluded）。 */
   healthy: boolean;
   /** 对外地址（客户端 / 中转连它用的）。 */
   address: string;

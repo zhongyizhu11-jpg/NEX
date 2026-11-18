@@ -42,6 +42,8 @@ import {
   type ProxyInboundUser,
 } from "../shared/proxyInbound";
 import { parseRoutePaths } from "../shared/routeGroup";
+import { hostTrafficExcluded } from "../shared/hostTrafficPolicy";
+import { getPresenceCapableHostLivenessSnapshot } from "./agentFastLiveness";
 
 /*
   落地池（2.3.500）的同步：池的那一份配置（node_pools.landingJson，shared/landingPool.ts）→
@@ -166,7 +168,9 @@ export async function landingMemberHealth(pool: NodePool, rows?: any[], states?:
     return {
       hostId,
       ready: !!row && dbBool(row.isEnabled, true) && !state?.error,
-      healthy: !!host && dbBool(host.isOnline) && !dbBool(host.maintenanceMode),
+      // 流量到阈值被暂停的机器和维护中的一样不算能用（P10）：以前只看在线和维护，流量暂停的那台
+      // 照样被当首选、照样发布到直连域名上 —— 组和线路早就把它拿掉了，客户端却还被解析到它。
+      healthy: !!host && dbBool(host.isOnline) && !hostTrafficExcluded(host),
       address: getHostEntryAddress(host),
       ipv4: hostIpv4(host),
       port: Number(row?.port || 0),
@@ -428,30 +432,96 @@ async function refreshLandingDependents(pool: NodePool, nodeIds: number[], moved
 
 // ---------------------------------------------------------------- DNS
 
-/** 写 DNS 失败过的（池 → 那次要写的值、时间）：同样的值十分钟内不再试，免得每分钟的健康检查刷一屏警告。 */
-const dnsFailures = new Map<number, { values: string; at: number; message: string }>();
-const DNS_RETRY_MS = 10 * 60_000;
+/*
+  写 DNS 失败过的（池 → 那次要写的值、第几次、时间）：同样的值按 1、2、5 分钟退避重试（之后一直 5 分钟）。
+  以前是固定十分钟内不再试：服务商抖一下（限流、超时），坏掉的成员要在解析里多留十分钟。
+  健康检查每分钟跑一遍，所以第一次失败后下一分钟就会再试。
+*/
+const dnsFailures = new Map<number, { values: string; at: number; attempts: number; message: string }>();
+export const LANDING_DNS_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000] as const;
 
-/** 直连域名：解析到能用的成员（和池同端口、有 IPv4）。一台能用的都没有时不动（别把记录写空）。 */
+/** 第 attempts 次失败之后要等多久才再试。 */
+export function landingDnsRetryDelayMs(attempts: number): number {
+  const index = Math.min(LANDING_DNS_RETRY_DELAYS_MS.length, Math.max(1, Math.floor(attempts))) - 1;
+  return LANDING_DNS_RETRY_DELAYS_MS[index];
+}
+
+/*
+  迟滞（P10）：成员掉出解析是立刻的，加回去要它连续能用满一分钟。
+  机器在「上线、掉线」之间抖的时候，每抖一次都把它写进解析、再拿出来，客户端按 TTL 缓存到的就是一台
+  时好时坏的机器。只管「加回去」：还在解析里的成员不因为这个被拿掉。
+
+  面板看到过它不能用（或者快速在线检测记着它刚从离线回来）才算「刚回来」；从没见它坏过的机器直接算稳
+  （新建的池、面板刚重启时不用白等一分钟）。按主机记，几个池共用一台时结论一样。
+*/
+export const LANDING_DNS_READD_STABLE_MS = 60_000;
+const landingHostSettling = new Map<number, { healthySince: number | null }>();
+
+function noteLandingHostHealth(hostId: number, healthy: boolean, now: number) {
+  const entry = landingHostSettling.get(hostId);
+  if (!healthy) {
+    landingHostSettling.set(hostId, { healthySince: null });
+    return;
+  }
+  if (entry && entry.healthySince === null) entry.healthySince = now;
+}
+
+function landingHostSettled(hostId: number, now: number) {
+  const restoredAt = Number(getPresenceCapableHostLivenessSnapshot(hostId)?.lastRestoredAt || 0);
+  if (restoredAt > 0 && now - restoredAt < LANDING_DNS_READD_STABLE_MS) return false;
+  const entry = landingHostSettling.get(hostId);
+  if (!entry) return true;
+  if (entry.healthySince === null) return false;
+  if (now - entry.healthySince < LANDING_DNS_READD_STABLE_MS) return false;
+  landingHostSettling.delete(hostId);
+  return true;
+}
+
+/** 测试用：清掉进程里记的失败退避和迟滞状态。 */
+export function resetLandingDnsStateForTests() {
+  dnsFailures.clear();
+  landingHostSettling.clear();
+}
+
+/**
+ * 直连域名：解析到能用的成员（开着、在线、不在维护、没被流量暂停、和池同端口、有 IPv4）。
+ * 一台能用的都没有时不动（别把记录写空）。TTL 用 DDNS 设置里的（服务商有下限的由 server/ddns.ts 抬上去）。
+ */
 async function refreshLandingDns(pool: NodePool, config: LandingConfig, health: LandingMemberHealth[], options: { force?: boolean } = {}): Promise<string | null> {
+  const now = Date.now();
+  // 每台成员这一轮能不能用都记一笔（没设域名的池也记：同一台机器可能在别的设了域名的池里）。
+  for (const member of health) noteLandingHostHealth(member.hostId, member.healthy, now);
   if (!pool.directDomain) return null;
-  const values = landingPoolDnsValues(health, config.port).sort();
-  if (values.length === 0) return "没有能用的成员，域名先保持原来的解析";
+  const published = new Set(String(pool.directDnsValue || "").split(",").map((value) => value.trim()).filter(Boolean));
+  const usable = health.filter((member) => !member.healthy || published.has(member.ipv4) || landingHostSettled(member.hostId, now));
+  const values = landingPoolDnsValues(usable, config.port).sort();
+  if (values.length === 0) {
+    return landingPoolDnsValues(health, config.port).length > 0
+      ? "成员刚恢复，稳定一分钟后再加回解析，域名先保持原来的解析"
+      : "没有能用的成员，域名先保持原来的解析";
+  }
   const serialized = values.join(",");
-  if (serialized === pool.directDnsValue) return null;
+  if (serialized === pool.directDnsValue) {
+    dnsFailures.delete(pool.id);
+    return null;
+  }
   const failed = dnsFailures.get(pool.id);
-  if (!options.force && failed && failed.values === serialized && Date.now() - failed.at < DNS_RETRY_MS) return failed.message;
+  const sameAsFailed = !!failed && failed.values === serialized;
+  if (!options.force && failed && sameAsFailed && now - failed.at < landingDnsRetryDelayMs(failed.attempts)) return failed.message;
   try {
-    const { updateDdnsRecordValues } = await import("./ddns");
-    await updateDdnsRecordValues({ domain: pool.directDomain, recordType: "A", values, ttl: 60, groupId: 0 });
+    const { getDdnsSettings, updateDdnsRecordValues } = await import("./ddns");
+    const ttl = Number((await getDdnsSettings()).ttl) || undefined;
+    await updateDdnsRecordValues({ domain: pool.directDomain, recordType: "A", values, ttl, groupId: 0 });
     await updateNodePool(pool.id, { directDnsValue: serialized });
     dnsFailures.delete(pool.id);
     appendPanelLog("info", `[LandingPool] pool=${pool.id} ${pool.directDomain} → ${serialized}`);
     return null;
   } catch (error) {
+    const attempts = (failed && sameAsFailed ? failed.attempts : 0) + 1;
+    const retryMinutes = Math.round(landingDnsRetryDelayMs(attempts) / 60_000);
     const message = `写 DNS 失败：${errorText(error)}`;
-    appendPanelLog("warn", `[LandingPool] pool=${pool.id} ${pool.directDomain} ${message}`);
-    dnsFailures.set(pool.id, { values: serialized, at: Date.now(), message });
+    appendPanelLog("warn", `[LandingPool] pool=${pool.id} ${pool.directDomain} ${message}（第 ${attempts} 次，${retryMinutes} 分钟后重试）`);
+    dnsFailures.set(pool.id, { values: serialized, at: now, attempts, message });
     return message;
   }
 }
