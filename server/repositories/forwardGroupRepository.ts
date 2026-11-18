@@ -103,6 +103,7 @@ import {
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
+import { FORWARD_GROUP_AUTO_SWITCH_EVENT, FORWARD_GROUP_FLAP_WINDOW_MS, forwardGroupFlapHoldAt, forwardGroupFlapHoldLabel } from "../forwardGroupFlapHold";
 import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
@@ -628,6 +629,8 @@ type MemberAgentLiveness = {
   trafficExcluded: boolean;
   failureSince: Date | null;
   lastOfflineAt: number | null;
+  /** 这台机器上一次从离线回到在线的时刻（面板看到的）；「刚回来」的成员不马上切回，见 evaluateMemberHealth。 */
+  lastRestoredAt: number | null;
   signature: string;
 };
 
@@ -685,6 +688,7 @@ async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()): Prom
     trafficExcluded,
     failureSince: available ? null : new Date(failureAt),
     lastOfflineAt,
+    lastRestoredAt: Number(fastState?.lastRestoredAt || 0) || null,
     signature: [
       hostId,
       available ? 1 : 0,
@@ -2159,7 +2163,11 @@ async function failoverAgentSelectionStillCurrent(group: any, active: any, next:
   const enabledMemberIds = new Set((latest.members || [])
     .filter((member: any) => dbBool(member?.isEnabled))
     .map((member: any) => Number(member.id || 0)));
-  if ((active && !enabledMemberIds.has(Number(active.id || 0)))
+  /*
+    评估之后成员又被改了（停用 / 去掉）才算过期。活动成员在评估时就已经是停用的不算：那正是这次要从它
+    身上换走的原因（P4）—— 以前这里一律要求活动成员启用，停用的活动成员永远换不走，评估还会不停重排。
+  */
+  if ((active && dbBool(active.isEnabled) && !enabledMemberIds.has(Number(active.id || 0)))
     || (next && !enabledMemberIds.has(Number(next.id || 0)))) return false;
   if (active && !(await memberAgentSelectionStillCurrent(active))) return false;
   if (next && !(await memberAgentSelectionStillCurrent(next))) return false;
@@ -4372,6 +4380,15 @@ export async function replaceForwardGroupMembers(
     }
   }
 
+  /*
+    删掉去掉的成员、写入留下 / 新加的成员放在一个事务里（P5）：以前是一条条直接写，中途哪一步失败
+    （写库报错、主机刚好被删）就留下「旧成员删了一半、新成员没写上」的组 —— 主备组可能一个成员都不剩。
+    现在要么整份换成新的，要么原样不动。已经在别人的事务里（转发链保存）时直接并进去。
+    事务里收子规则只标待删，结算、通知 Agent、收中继都在提交之后（removeManagedRule、afterForwardGroupSyncCommit）；
+    事务里要用事务自己的连接（getDb 在事务里返回它），所以这里重新取一次。
+  */
+  await withDatabaseTransaction(async () => {
+  const db = await getDb();
   for (const old of existing as any[]) {
     const key = `${old.memberType}:${old.memberType === "host" ? old.hostId : old.tunnelId}`;
     if (!keepKeys.has(key)) {
@@ -4417,6 +4434,7 @@ export async function replaceForwardGroupMembers(
       });
     }
   }
+  });
   // 组的第一个成员就是订阅里的入口机器，成员一变订阅缓存就得作废。
   invalidateProxySubCacheAll();
   if (options.skipSync) return;
@@ -4428,6 +4446,12 @@ export async function replaceForwardGroupMembers(
     });
   } else {
     await syncForwardGroupRules(groupId);
+    /*
+      主备组改了成员马上评估一次（P4）：定时启停、节点池同步改成员走的也是这里，以前只同步子规则、
+      不重选活动成员 —— 活动成员被停用 / 去掉之后，解析还指着它，要等下一次健康上报或巡检才换。
+      走健康上报用的那条防抖队列（不在这里内联跑：调用方可能拿着编辑锁，DNS 写入不该卡在里面）。
+    */
+    if (groupMode === "failover") scheduleForwardGroupFailover([groupId]);
   }
 }
 
@@ -4700,7 +4724,6 @@ async function evaluateMemberHealth(member: any, group: any) {
   let observedFailureSince: Date | null = null;
   let agentHealthPending = false;
   let agentFailureFinal = false;
-  let allRuleHealthAgentFinal = false;
   let nextProbeExpiryAt: number | null = null;
 
   if (agentLiveness.trafficExcluded) {
@@ -4708,7 +4731,13 @@ async function evaluateMemberHealth(member: any, group: any) {
     agentFailureFinal = true;
     observedFailureSince = now;
   } else if (!dbBool(member?.isEnabled)) {
+    /*
+      成员被停用（手动关、可用时段外、节点池里去掉）是管理动作，不是健康事件：它正好是活动成员时
+      马上换走，不等「异常多久切」那段观察时间 —— 那段时间里解析还指着一台已经不铺规则的机器。
+    */
     message = "Member disabled";
+    agentFailureFinal = true;
+    observedFailureSince = now;
   } else if (childRules.length === 0) {
     message = "No forwarding rule is using this group yet";
   } else {
@@ -4739,7 +4768,6 @@ async function evaluateMemberHealth(member: any, group: any) {
       message = "Member Agent offline";
     } else {
       healthy = true;
-      allRuleHealthAgentFinal = true;
       const latencies: number[] = [];
       for (const rule of activeChildRules as any[]) {
         if (!dbBool(rule.isEnabled) || dbBool(rule.pendingDelete)) {
@@ -4755,7 +4783,6 @@ async function evaluateMemberHealth(member: any, group: any) {
         const latestStat = await latestTcping(Number(rule.id));
         if (!agentHealthSampleIsCurrent(agentLiveness, latestStat?.recordedAt)) {
           healthy = false;
-          allRuleHealthAgentFinal = false;
           agentHealthPending = true;
           message = "Waiting for Agent health result after reconnect";
           break;
@@ -4763,7 +4790,6 @@ async function evaluateMemberHealth(member: any, group: any) {
         const stat = freshForwardGroupRuleProbe(latestStat, now);
         if (!stat) {
           healthy = false;
-          allRuleHealthAgentFinal = false;
           const recordedAt = toDate(latestStat?.recordedAt);
           if (recordedAt) {
             agentFailureFinal = true;
@@ -4792,7 +4818,6 @@ async function evaluateMemberHealth(member: any, group: any) {
         const agentHealthStatus = String(stat.healthStatus || "").trim().toLowerCase();
         if (agentHealthStatus === "unknown") {
           healthy = false;
-          allRuleHealthAgentFinal = false;
           agentHealthPending = true;
           message = "Waiting for Agent health decision";
           break;
@@ -4803,7 +4828,6 @@ async function evaluateMemberHealth(member: any, group: any) {
           message = "Agent health check failed";
           break;
         }
-        if (agentHealthStatus !== "healthy") allRuleHealthAgentFinal = false;
         if (agentHealthStatus !== "healthy" && dbBool(stat.isTimeout)) {
           healthy = false;
           message = "Latency probe timeout";
@@ -4873,8 +4897,23 @@ async function evaluateMemberHealth(member: any, group: any) {
 
   const failedLongEnough = agentFailureFinal
     || (!!failureSince && Date.now() - failureSince.getTime() >= forwardGroupFailoverDelayMs(group));
-  const recoveredLongEnough = (healthy && allRuleHealthAgentFinal)
-    || (!!healthySince && Date.now() - healthySince.getTime() >= forwardGroupRecoverDelayMs(group));
+  /*
+    「恢复够久」只按面板自己看到的算（P3）：成员连续健康满 recoverSeconds 才有资格被切回。
+
+    以前 Agent 报「健康」就立刻算数（healthy && allRuleHealthAgentFinal）。成员 Agent 重启后它本地的
+    恢复观察是从零开始的，第一个正常样本就报 healthy，面板马上把解析切回去 —— 那台机器可能还在
+    反复重启。Agent 的结论照样决定「健不健康」，但「稳没稳住」由面板计时：
+      · healthySince：面板第一次看到它健康的时刻，中间只要有一次不健康 / 等结果就清掉重计；
+      · 机器刚从离线回来（lastRestoredAt）：从回来那一刻起算，哪怕成员表里的 healthySince 更早
+        （面板没来得及在它离线期间评估一轮）。
+    逃生（当前成员不可用）不看这个，照旧立刻换。
+  */
+  const recoverySinceMs = healthy && healthySince
+    ? Math.max(healthySince.getTime(), Number(agentLiveness.lastRestoredAt || 0))
+    : 0;
+  const recoverySince = recoverySinceMs > 0 ? new Date(Math.min(recoverySinceMs, Date.now())) : null;
+  const recoveredLongEnough = !!recoverySince
+    && Date.now() - recoverySince.getTime() >= forwardGroupRecoverDelayMs(group);
   return {
     ...member,
     healthy,
@@ -4886,6 +4925,7 @@ async function evaluateMemberHealth(member: any, group: any) {
     healthySince,
     failedLongEnough,
     recoveredLongEnough,
+    recoverySince,
     nextProbeExpiryAt,
     agentLivenessSignature: agentLiveness.signature,
   };
@@ -5671,6 +5711,8 @@ async function syncSingleForwardGroupDdns(
     switchReason?: string;
     switchDetail?: string;
     previousMember?: any | null;
+    /** 活动成员没变时附在「当前入口 x」后面的说明（为什么这会儿不切回）。 */
+    currentNote?: string;
     beforeCommit?: () => boolean | Promise<boolean>;
   } = {},
 ) {
@@ -5706,7 +5748,7 @@ async function syncSingleForwardGroupDdns(
   ) {
     const changed = await updateForwardGroupRuntimeIfChanged(db, group, {
       lastStatus: "healthy",
-      lastMessage: `当前入口 ${value}`,
+      lastMessage: options.currentNote ? `当前入口 ${value}；${options.currentNote}` : `当前入口 ${value}`,
     });
     if (changed) await insertForwardGroupEvent(group.id, memberId, "ddns-current", `${currentMessage}；${detail}`);
     return;
@@ -5765,6 +5807,17 @@ async function syncSingleForwardGroupDdns(
     await insertForwardGroupEvent(group.id, memberId, "ddns-error", `DDNS 更新失败；${message}；${detail}`);
     throw error;
   }
+}
+
+/** 这个组最近一小时的自动切换（forward_group_events 里的 auto-switch）算出来的抖动抑制。 */
+async function forwardGroupFlapHold(groupId: number, nowMs = Date.now()) {
+  const sinceSeconds = Math.floor((nowMs - FORWARD_GROUP_FLAP_WINDOW_MS) / 1000);
+  const rows = await queryRaw<{ createdAt: unknown }>(
+    `SELECT ${quoteIdentifier("createdAt")} FROM ${quoteIdentifier("forward_group_events")}
+      WHERE ${quoteIdentifier("groupId")} = ? AND ${quoteIdentifier("type")} = ? AND ${quoteIdentifier("createdAt")} >= ?`,
+    [groupId, FORWARD_GROUP_AUTO_SWITCH_EVENT, sinceSeconds],
+  ).catch(() => []);
+  return forwardGroupFlapHoldAt(rows.map((row) => toDate(row.createdAt)?.getTime() || 0), nowMs);
 }
 
 type ForwardGroupFailoverContext = {
@@ -5856,7 +5909,8 @@ async function runForwardGroupFailoverForGroups(
     for (const member of members) evaluated.push(await evaluateMemberHealth(member, group));
 
     const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
-      members: evaluated,
+      // 「恢复够久」从 recoverySince 起算（机器刚回来时比 healthySince 晚），到点要再评估一次才切得回去。
+      members: evaluated.map((member) => ({ ...member, healthySince: member.recoverySince ?? member.healthySince })),
       failoverMs: forwardGroupFailoverDelayMs(group),
       recoverMs: forwardGroupRecoverDelayMs(group),
     });
@@ -5867,9 +5921,10 @@ async function runForwardGroupFailoverForGroups(
       .map((member: any) => Number(member.nextProbeExpiryAt || 0))
       .filter((value: number) => value > Date.now())
       .sort((left: number, right: number) => left - right)[0] ?? null;
-    forwardGroupHealthRechecks.replace(Number(group.id), healthRecheckAt && probeExpiryAt
+    const baseRecheckAt = healthRecheckAt && probeExpiryAt
       ? Math.min(healthRecheckAt, probeExpiryAt)
-      : healthRecheckAt ?? probeExpiryAt);
+      : healthRecheckAt ?? probeExpiryAt;
+    forwardGroupHealthRechecks.replace(Number(group.id), baseRecheckAt);
 
     if (!group.domain) {
       const anyHealthy = evaluated.some((member) => member.healthy);
@@ -5913,11 +5968,35 @@ async function runForwardGroupFailoverForGroups(
       && !!failbackCandidate
       && Number(failbackCandidate.priority) < Number(active.priority);
     const shouldFailover = !active || (!!active && !active.healthy && active.failedLongEnough);
+    /*
+      暂不切回的两种情况，都写进组状态让用户看得到原因（P3）：
+        · 高优先级成员已经恢复，但面板看到它连续正常还不满 recoverSeconds —— 观察中；
+        · 抖动抑制：一小时内自动切了三次以上，切回要多等（server/forwardGroupFlapHold.ts）。
+      只在当前成员还健康时才压着：当前成员不可用是逃生，照旧立刻换。人工操作（forcePriority）不受限制。
+    */
+    let holdNote = "";
+    let failbackHeld = false;
+    if (!options.forcePriority && dbBool(group.autoFailback) && active?.healthy) {
+      if (shouldFailback && failbackCandidate) {
+        const flap = await forwardGroupFlapHold(Number(group.id));
+        if (flap.untilMs > 0) {
+          failbackHeld = true;
+          holdNote = `1 小时内已自动切换 ${flap.switches} 次，暂缓切回「${await forwardGroupMemberLabel(failbackCandidate)}」（抖动抑制 ${forwardGroupFlapHoldLabel(flap.holdMs)}）`;
+          // 到点再评估一次，不然要等下一次健康上报或巡检才切得回去。
+          forwardGroupHealthRechecks.replace(Number(group.id), baseRecheckAt ? Math.min(baseRecheckAt, flap.untilMs) : flap.untilMs);
+        }
+      } else if (!shouldFailback) {
+        const recovering = healthyMembers.find((member) => Number(member.priority) < Number(active.priority) && !member.recoveredLongEnough);
+        if (recovering) {
+          holdNote = `高优先级入口「${await forwardGroupMemberLabel(recovering)}」已恢复，需持续正常 ${Math.round(forwardGroupRecoverDelayMs(group) / 1000)} 秒后切回`;
+        }
+      }
+    }
     let next = active;
     let switchReason = "";
     let switchDetail = "";
     if (options.forcePriority) next = firstHealthy;
-    else if (shouldFailback) {
+    else if (shouldFailback && !failbackHeld) {
       next = failbackCandidate;
       switchReason = "高优先级入口恢复，已自动回切";
       switchDetail = `恢复稳定时间已达到 ${Number(group.recoverSeconds || 120)} 秒`;
@@ -5957,9 +6036,18 @@ async function runForwardGroupFailoverForGroups(
       switchReason,
       switchDetail,
       previousMember: active || null,
+      currentNote: holdNote,
       beforeCommit: () => failoverAgentSelectionStillCurrent(group, active, next),
     });
     if (committed === false) scheduleForwardGroupFailover([Number(group.id)]);
+    /*
+      自动切换记一笔（抖动抑制按它计数）：有原来的活动成员、换了人、不是人工操作。逃生也算 ——
+      「坏了切走、好了切回」来回几次正是要压的那种；但压只压切回。写事件失败不影响切换本身。
+    */
+    if (committed !== false && active && Number(active.id) !== Number(next.id) && !options.forcePriority && !options.forceSync) {
+      await insertForwardGroupEvent(Number(group.id), Number(next.id), FORWARD_GROUP_AUTO_SWITCH_EVENT, `自动切换：${switchReason || "入口不可用，切到健康成员"}`)
+        .catch((error) => console.warn(`[ForwardGroup] auto-switch event failed group=${group.id}: ${error instanceof Error ? error.message : String(error)}`));
+    }
     await syncLines();
   }
 }

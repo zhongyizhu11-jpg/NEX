@@ -35,6 +35,8 @@ export type AgentFastLivenessState = {
   deadlineAt: number;
   offlineAt: number | null;
   lastOfflineAt: number | null;
+  /** 上一次从「确认离线」回到在线的时刻（面板自己看到的）；转发组据此算「刚回来，还在观察」。没掉过线是 null。 */
+  lastRestoredAt: number | null;
   confirmedOffline: boolean;
 };
 
@@ -94,6 +96,7 @@ function snapshot(state: MutableAgentFastLivenessState): AgentFastLivenessState 
     deadlineAt: state.deadlineAt,
     offlineAt: state.offlineAt,
     lastOfflineAt: state.lastOfflineAt,
+    lastRestoredAt: state.lastRestoredAt,
     confirmedOffline: state.confirmedOffline,
   };
 }
@@ -172,6 +175,7 @@ export class AgentFastLivenessTracker {
       // A persisted offline host must not reuse health samples from before a
       // panel restart when it reconnects during startup grace.
       lastOfflineAt: persistedOffline ? now : null,
+      lastRestoredAt: null,
       confirmedOffline: false,
       timerGeneration: 1,
       timer: null,
@@ -217,7 +221,10 @@ export class AgentFastLivenessTracker {
     state.deadlineAt = now + this.silenceMs;
     state.confirmedOffline = false;
     state.offlineAt = null;
-    if (wasOffline) state.transitionEpoch = this.nextTransitionEpoch();
+    if (wasOffline) {
+      state.transitionEpoch = this.nextTransitionEpoch();
+      state.lastRestoredAt = now;
+    }
     this.arm(state);
 
     if (wasOffline) this.emit("activity-restored", state);

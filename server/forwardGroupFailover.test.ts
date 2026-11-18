@@ -197,6 +197,13 @@ test("forward group switches after its configured heartbeat failure window", () 
         ["ruleId", "hostId", "latencyMs", "isTimeout", "healthStatus", "healthPending", "recordedAt"],
         [110, 1, 11, 0, "healthy", 0, now + 1],
       );
+      // P3：Agent 刚报健康不立刻切回，面板看到它连续健康满 recoverSeconds（120 秒）才切。
+      await forwardGroups.runForwardGroupFailover(10);
+      state = (await runtime.queryRaw(
+        'SELECT "activeMemberId", "lastDdnsValue" FROM "forward_groups" WHERE "id" = 10',
+      ))[0];
+      assert.equal(Number(state.activeMemberId), 102, "the recovered primary is still inside the panel-observed recovery window");
+      await runtime.executeRaw('UPDATE "forward_group_members" SET "healthySince" = ? WHERE "id" = 101', [now - 121]);
       await forwardGroups.runForwardGroupFailover(10);
       state = (await runtime.queryRaw(
         'SELECT "activeMemberId", "lastDdnsValue" FROM "forward_groups" WHERE "id" = 10',
@@ -920,17 +927,69 @@ test("failover groups return to the highest-priority recovered member after mult
       state = (await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue" FROM "forward_groups" WHERE "id" = 80'))[0];
       assert.equal(Number(state.activeMemberId), 803, "the second member failure should select member 3");
 
+      /*
+        P3：以前这里 Agent 一报 healthy 就立刻切回（成员 Agent 重启后第一个正常样本就算数）。现在「恢复够久」
+        按面板自己看到的算：成员连续健康满 recoverSeconds（这里 10 秒）才切回，没满之前留在当前成员上，
+        组状态里写明在等什么。
+      */
       await health(810, "healthy", now + 3);
       await groups.runForwardGroupFailover(80);
-      state = (await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue" FROM "forward_groups" WHERE "id" = 80'))[0];
+      state = (await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue", "lastMessage" FROM "forward_groups" WHERE "id" = 80'))[0];
+      assert.equal(Number(state.activeMemberId), 803, "a member that just reported healthy must not be failed back to before the panel has seen it stable");
+      assert.match(String(state.lastMessage), /已恢复，需持续正常 10 秒后切回/);
+      // 面板看到它连续健康超过 recoverSeconds 之后（把 healthySince 往前拨，等于过了 11 秒）立刻切回。
+      await runtime.executeRaw('UPDATE "forward_group_members" SET "healthySince" = ? WHERE "id" = 801', [now - 11]);
+      await groups.runForwardGroupFailover(80);
+      state = (await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue", "lastMessage" FROM "forward_groups" WHERE "id" = 80'))[0];
       assert.equal(Number(state.activeMemberId), 801, "a recovered member must reclaim its higher priority");
       assert.equal(state.lastDdnsValue, "198.51.100.11");
+      assert.equal(state.lastMessage, "DDNS 已切换到 198.51.100.11");
       assert.deepEqual(requests.map((request) => request.value), [
         "198.51.100.11",
         "198.51.100.12",
         "198.51.100.13",
         "198.51.100.11",
       ]);
+
+      /*
+        抖动抑制（P3）：到这里一小时内已经自动切了 3 次（801→802→803→801）。
+          · 逃生不受限：801 再坏，立刻换到 802；
+          · 切回被压：801 又好了、也稳够了，但 1 小时内已经切了 4 次 → 压 10 分钟，留在 802，状态里写明；
+          · 压的时间过了（把自动切换记录往前拨 11 分钟）就切回；
+          · 人工操作（调顺序 / 设为首选）不受限。
+      */
+      const autoSwitches = async () => Number((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "forward_group_events" WHERE "groupId" = 80 AND "type" = \'auto-switch\''))[0].n);
+      assert.equal(await autoSwitches(), 3);
+      const activeNow = async () => (await runtime.queryRaw('SELECT "activeMemberId", "lastMessage" FROM "forward_groups" WHERE "id" = 80'))[0];
+      const member801Recovers = async (offset) => {
+        await health(820, "healthy", now + offset);
+        await health(810, "healthy", now + offset);
+        await groups.runForwardGroupFailover(80);
+        await runtime.executeRaw('UPDATE "forward_group_members" SET "healthySince" = ? WHERE "id" IN (801, 802)', [now - 11]);
+        await groups.runForwardGroupFailover(80);
+      };
+      await health(820, "healthy", now + 4);
+      await health(810, "unhealthy", now + 5);
+      await groups.runForwardGroupFailover(80);
+      assert.equal(Number((await activeNow()).activeMemberId), 802, "escaping an unhealthy active member is never delayed by flap damping");
+      assert.equal(await autoSwitches(), 4);
+      await member801Recovers(6);
+      state = await activeNow();
+      assert.equal(Number(state.activeMemberId), 802, "the 5th automatic switch within an hour must be held back");
+      assert.match(String(state.lastMessage), /1 小时内已自动切换 4 次，暂缓切回.*抖动抑制 10 分钟/);
+      await runtime.executeRaw('UPDATE "forward_group_events" SET "createdAt" = "createdAt" - 660 WHERE "groupId" = 80 AND "type" = \'auto-switch\'');
+      await groups.runForwardGroupFailover(80);
+      assert.equal(Number((await activeNow()).activeMemberId), 801, "failback resumes once the flap hold has elapsed");
+      assert.equal(await autoSwitches(), 5);
+
+      await health(810, "unhealthy", now + 7);
+      await groups.runForwardGroupFailover(80);
+      assert.equal(Number((await activeNow()).activeMemberId), 802);
+      await member801Recovers(8);
+      assert.equal(Number((await activeNow()).activeMemberId), 802, "held again after the 6th switch");
+      await groups.runForwardGroupFailover(80, { forcePriority: true, forceSync: true });
+      assert.equal(Number((await activeNow()).activeMemberId), 801, "manual priority actions are exempt from flap damping");
+      assert.equal(await autoSwitches(), 6, "manual switches are not counted");
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
       await new Promise((resolve) => webhook.close(resolve));
