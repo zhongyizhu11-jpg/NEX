@@ -51,11 +51,12 @@ func TestExitGroupKeepsTwentyTargetsWithAlignedHostIDs(t *testing.T) {
 	if len(spec.BalanceReport.HostIDs) != 23 {
 		t.Fatal("不能改调用方的规格")
 	}
-	// 面板给的两边长度就对不上：整个不要，不拿错位的数据报
+	// 面板给的两边长度就对不上：主机号整个不要（不拿错位的数据报），但它还是出口组（F8）——
+	// 以前连 BalanceReport 一起扔掉，出口组悄悄变成了线路组（拨本机端口永远成功，健康就不会判了）。
 	broken := exitGroupSpec("round_robin", 3)
 	broken.BalanceReport.HostIDs = broken.BalanceReport.HostIDs[:2]
-	if normalizeFailoverSpec(broken).BalanceReport != nil {
-		t.Fatal("主机号数量对不上时不该留着上报")
+	if report := normalizeFailoverSpec(broken).BalanceReport; report == nil || report.TunnelID != 7 || report.HostIDs != nil {
+		t.Fatalf("主机号数量对不上时还是出口组、只是不带主机号：%+v", report)
 	}
 	// 手动指定指到被截掉的那一条：当没指定
 	pinned := exitGroupSpec("round_robin", 23)
@@ -63,6 +64,28 @@ func TestExitGroupKeepsTwentyTargetsWithAlignedHostIDs(t *testing.T) {
 	pinned.PinnedIndex = &index
 	if normalizeFailoverSpec(pinned).PinnedIndex != nil {
 		t.Fatal("指定的下标超出留下的目标时应当清掉")
+	}
+}
+
+// F8：清掉不合法的目标时，手动指定跟着它指的那一条走（以前下标不动，指到了别的出口上，或者被当成越界清掉）。
+func TestNormalizeFailoverSpecRemapsPinWhenDroppingTargets(t *testing.T) {
+	spec := exitGroupSpec("round_robin", 4)
+	spec.Targets[0].TargetIP = ""
+	pin := 2
+	spec.PinnedIndex = &pin
+	spec.PinnedUntil = 1234
+	clean := normalizeFailoverSpec(spec)
+	if clean.PinnedIndex == nil || *clean.PinnedIndex != 1 || clean.Targets[1].TargetPort != 47002 || clean.PinnedUntil != 1234 {
+		t.Fatalf("指定的是端口 47002 那台：前面清掉一条以后应当指到下标 1，拿到 %v", clean.PinnedIndex)
+	}
+	if *spec.PinnedIndex != 2 {
+		t.Fatal("不能改调用方的规格")
+	}
+	// 指定的那一条自己被清掉了：当没指定。
+	pin = 0
+	spec.PinnedIndex = &pin
+	if clean := normalizeFailoverSpec(spec); clean.PinnedIndex != nil || clean.PinnedUntil != 0 {
+		t.Fatalf("指定的那一条不合法、被清掉了：应当当没指定，拿到 %v", clean.PinnedIndex)
 	}
 }
 

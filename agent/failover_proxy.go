@@ -235,13 +235,6 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	default:
 		spec.Delivery = ""
 	}
-	if spec.PinnedIndex != nil && (*spec.PinnedIndex < 0 || *spec.PinnedIndex >= len(spec.Targets)) {
-		spec.PinnedIndex = nil
-		spec.PinnedUntil = 0
-	}
-	if spec.PinnedIndex == nil {
-		spec.PinnedUntil = 0
-	}
 	spec.Schedule = normalizeFailoverSchedule(spec.Schedule)
 	if spec.ProbeIntervalSeconds < 0 {
 		spec.ProbeIntervalSeconds = 0
@@ -258,13 +251,23 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	/*
 		出口组的主机号（BalanceReport.HostIDs）和目标一一对应：目标被清掉（地址不合法）或截断（超过上限）时主机号
 		跟着同一个下标走。以前只截目标（11 条）、不动主机号，两边长度对不上，整份上报就不发了；更糟的是中间清掉
-		一条时后面的主机号全部错位。对不上的（面板给的两边长度就不一样）整个不要，不拿错位的数据报。
+		一条时后面的主机号全部错位。面板给的两边长度就对不上时主机号整个不要（不拿错位的数据报、也不按主机号哈希），
+		但规格照样是出口组（F8）：以前连 BalanceReport 一起扔掉，出口组悄悄变成线路组 —— 拨本机端口永远成功，
+		出口的健康就再也不判了。
 	*/
 	var reportHostIDs []int
 	alignHostIDs := spec.BalanceReport != nil && len(spec.BalanceReport.HostIDs) == len(spec.Targets)
 	if spec.BalanceReport != nil && !alignHostIDs {
-		spec.BalanceReport = nil
+		if shouldLogAgentReport(fmt.Sprintf("failover-host-ids-mismatch:%d:%d", spec.BalanceReport.TunnelID, spec.ListenPort), time.Hour) {
+			logf("failover exit group spec has %d host ids for %d targets (tunnel=%d listen=%d); exit status will not be reported", len(spec.BalanceReport.HostIDs), len(spec.Targets), spec.BalanceReport.TunnelID, spec.ListenPort)
+		}
 	}
+	// 手动指定指的是哪一条（原规格里的下标）：清掉 / 截掉目标时跟着那一条走，它自己被清掉了就当没指定（F8）。
+	pinned := -1
+	if spec.PinnedIndex != nil {
+		pinned = *spec.PinnedIndex
+	}
+	spec.PinnedIndex = nil
 	cleaned := make([]failoverTarget, 0, len(spec.Targets))
 	for position, target := range spec.Targets {
 		target.TargetIP = strings.TrimSpace(target.TargetIP)
@@ -273,6 +276,10 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		}
 		if alignHostIDs {
 			reportHostIDs = append(reportHostIDs, spec.BalanceReport.HostIDs[position])
+		}
+		if position == pinned {
+			index := len(cleaned)
+			spec.PinnedIndex = &index
 		}
 		// 探测目标填得不合法时退回「探出站地址本身」，也就是老行为 —— 不能因为
 		// 一个填错的探测地址就让这条出站永远探不通、被当成挂了。
@@ -314,12 +321,11 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		}
 	}
 	spec.Targets = cleaned
-	if alignHostIDs {
+	if spec.BalanceReport != nil {
 		// 复制一份：别和调用方的规格共用同一个切片。
 		spec.BalanceReport = &failoverBalanceReport{TunnelID: spec.BalanceReport.TunnelID, HostIDs: reportHostIDs}
 	}
-	if spec.PinnedIndex != nil && *spec.PinnedIndex >= len(spec.Targets) {
-		spec.PinnedIndex = nil
+	if spec.PinnedIndex == nil {
 		spec.PinnedUntil = 0
 	}
 	return spec
