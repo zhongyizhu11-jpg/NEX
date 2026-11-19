@@ -102,6 +102,7 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 	}
 	// 现在会挑谁（没有新连接时用它当 active）
 	if s.strategy == "fallback" {
+		// 主备：实际会挑的那台就是「在用」，哪怕它到目标不稳 / 刚恢复（前面的都连不上时就是它在扛，路线图 X1）。
 		if index, ok := s.fallbackChoiceLocked(nil, tiers, now); ok && exits[index].State != "down" {
 			exits[index].State = "active"
 		}
@@ -109,7 +110,7 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 	}
 	candidates := s.candidatesLocked(nil, tiers)
 	factors := s.targetFactorsLocked(candidates, now)
-	for _, index := range filterByFactor(candidates, factors) {
+	for _, index := range s.filterByFactorLocked(candidates, factors) {
 		if exits[index].State == "standby" {
 			exits[index].State = "active"
 		}
@@ -158,19 +159,22 @@ var balanceReporter = struct {
 	mu      sync.Mutex
 	once    sync.Once
 	entries map[*exitEndpointSelector]config
+	refs    map[*exitEndpointSelector]int
 	rules   map[string]*balanceRuleState // "tunnel:rule"
 	dirty   bool
 	dirtyAt time.Time
 	last    time.Time
-}{entries: map[*exitEndpointSelector]config{}, rules: map[string]*balanceRuleState{}}
+}{entries: map[*exitEndpointSelector]config{}, refs: map[*exitEndpointSelector]int{}, rules: map[string]*balanceRuleState{}}
 
 // registerBalanceReport：入口的一条有几台出口的规则开始报状态，返回的函数撤销。
 func registerBalanceReport(s *exitEndpointSelector, cfg config) func() {
 	if s == nil || strings.TrimSpace(cfg.PanelURL) == "" || strings.TrimSpace(cfg.Token) == "" || cfg.RuleID <= 0 {
 		return func() {}
 	}
+	// 同一条规则的 TCP 运行时和 UDP 运行时共用一个选择器，各登记一次：都撤了才不再报。
 	balanceReporter.mu.Lock()
 	balanceReporter.entries[s] = cfg
+	balanceReporter.refs[s]++
 	balanceReporter.dirty = true
 	balanceReporter.mu.Unlock()
 	startBalanceReporter()
@@ -178,7 +182,10 @@ func registerBalanceReport(s *exitEndpointSelector, cfg config) func() {
 	return func() {
 		once.Do(func() {
 			balanceReporter.mu.Lock()
-			delete(balanceReporter.entries, s)
+			if balanceReporter.refs[s]--; balanceReporter.refs[s] <= 0 {
+				delete(balanceReporter.refs, s)
+				delete(balanceReporter.entries, s)
+			}
 			balanceReporter.mu.Unlock()
 		})
 	}

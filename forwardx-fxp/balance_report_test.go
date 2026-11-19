@@ -12,6 +12,7 @@ import (
 func resetBalanceReporterForTest() {
 	balanceReporter.mu.Lock()
 	balanceReporter.entries = map[*exitEndpointSelector]config{}
+	balanceReporter.refs = map[*exitEndpointSelector]int{}
 	balanceReporter.rules = map[string]*balanceRuleState{}
 	balanceReporter.dirty = false
 	balanceReporter.dirtyAt = time.Time{}

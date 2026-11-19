@@ -16,6 +16,13 @@ const (
 	// 确认到来之前，已经发出去的内容最多缓存这么多，用来换出口时重放。
 	// 超过了就放弃透明切换，这条连接跟着当前出口走到底。
 	fxpReplayBufferMax = 256 * 1024
+	/*
+		等出口回「连上目标没有」最多等这么久（路线图 X11）。以前这一帧没有截止时间：出口握手正常、
+		之后卡住（进程挂起、回程黑洞），入口就无限期等下去，客户端的连接悬着，这台出口也不会被判坏。
+		出口连目标最多等 4 秒（fxpTargetDialTimeoutDefault）才回话，所以比握手确认的 4 秒多留 2 秒：
+		只等 4 秒的话，「目标连接超时」的结果和入口的超时撞在一起，会被错当成出口的问题。
+	*/
+	fxpTargetStatusWait = fxpPipelinedAckFast + fxpTargetProbeReplyGrace
 )
 
 /*
@@ -55,6 +62,8 @@ type selectedTransport struct {
 	closed      bool
 	// load 是当前端点所在主机的负载记账（exit_load.go）：这条会话算它的一个活动连接，收发的字节记到它头上。
 	load *fxpHostLoad
+	// statusDeadline：等「连目标的结果」最晚等到什么时候（hello 发出去时起算，见 fxpTargetStatusWait）。
+	statusDeadline time.Time
 }
 
 func newSelectedTransport(selector *exitEndpointSelector, cfg config, selectionKey string) *selectedTransport {
@@ -111,12 +120,15 @@ func (t *selectedTransport) connectLocked() error {
 		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, nextHopDialStage(dialCfg), endpointLabel, time.Since(dialStarted), err)
 		if err != nil {
 			lastErr = err
+			// 没拨通：挑中时记在负载里的那一条退回去（exit_load.go 的 notePick / unpick）。
+			t.selector.unpick(index)
 			t.selector.markFailure(index, err)
 			continue
 		}
 		sec, err := newPipelinedClientSecureConn(conn, dialCfg, fxpWireCurrent)
 		if err != nil {
 			_ = conn.Close()
+			t.selector.unpick(index)
 			lastErr = err
 			continue
 		}
@@ -160,6 +172,7 @@ func (t *selectedTransport) connectV3Locked(endpoint exitEndpoint, index int, di
 		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, stage, endpointLabel, time.Since(started), err)
 	}
 	if err != nil {
+		t.selector.unpick(index)
 		if !v3EndpointFailureIsRetryable(err) {
 			return true, err
 		}
@@ -231,6 +244,9 @@ func (t *selectedTransport) takeTargetStatusLocked(frames [][]byte, from int) ([
 		return frames, nil
 	}
 	t.statusPending = false
+	// 第一帧到了：不再限时，后面的读照常没有截止时间。
+	t.sec.firstFrameDeadline = time.Time{}
+	_ = t.sec.conn.SetReadDeadline(time.Time{})
 	status, ok := decodeTargetStatus(frames[from])
 	if !ok {
 		// 标了会回报、却直接来了数据：当它没回，照常走。
@@ -266,6 +282,7 @@ func (t *selectedTransport) start(frames ...[]byte) error {
 	for _, frame := range frames {
 		t.bufferLocked(frame)
 	}
+	t.statusDeadline = time.Now().Add(fxpTargetStatusWait)
 	err := writeSecureFramesWithDeadline(t.sec, frames...)
 	if err == nil {
 		if t.committed {
@@ -308,6 +325,7 @@ func (t *selectedTransport) failoverLocked(cause error) error {
 		if err := t.connectLocked(); err != nil {
 			return fmt.Errorf("%v; failover: %w", cause, err)
 		}
+		t.statusDeadline = time.Now().Add(fxpTargetStatusWait)
 		err := writeSecureFramesWithDeadline(t.sec, t.replay...)
 		if err == nil {
 			log.Printf("fxp session failed over tunnel=%d rule=%d from=%s:%d to=%s:%d replayed=%dB reason=%v",
@@ -369,6 +387,10 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 		t.mu.Lock()
 		sec := t.sec
 		closed := t.closed
+		if t.statusPending && !closed && sec != nil {
+			// 还在等出口回「连上目标没有」：这一帧有截止时间（握手确认之后由 secureConn 设到连接上）。
+			sec.firstFrameDeadline = t.statusDeadline
+		}
 		t.mu.Unlock()
 		if closed {
 			return dst, net.ErrClosed
@@ -380,6 +402,12 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 				var statusErr error
 				frames, statusErr = t.takeTargetStatusLocked(frames, len(dst))
 				if statusErr != nil {
+					// 目标本身挂了（每台出口到它都不通）：换哪台都一样，不再挨个重放，直接告诉客户端
+					// （路线图 X8，见 targetDownEverywhere）。
+					if t.selector.targetDownEverywhere() {
+						t.mu.Unlock()
+						return dst, statusErr
+					}
 					// 这台出口连不上目标：换下一台，把发出去的内容重放过去。
 					failoverErr := t.failoverLocked(statusErr)
 					t.mu.Unlock()
@@ -409,6 +437,13 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 			// 等结果的时候出口把连接断了（出口进程没了之类）：还能换就换一台重放。
 			if t.sec == sec && t.statusPending && !isClosedErr(err) {
 				t.statusPending = false
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					// 握手确认了，「连目标的结果」却一直没来：出口卡住了或者回程不通。算这台出口的一次失败
+					// （新连接先不给它，由探测确认回来没有），这条连接换下一台重放（路线图 X11）。
+					err = fmt.Errorf("exit sent no target status within %s: %w", fxpTargetStatusWait, err)
+					t.selector.markFailure(t.index, err)
+				}
 				failoverErr := t.failoverLocked(err)
 				t.mu.Unlock()
 				if failoverErr == nil {

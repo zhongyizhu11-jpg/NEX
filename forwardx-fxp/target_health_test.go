@@ -342,9 +342,10 @@ func TestTargetProbeBacksOffForADownExit(t *testing.T) {
 			t.Fatalf("一直连不上，探测越来越慢，最长 60 秒：got %v want %v", got, want)
 		}
 	}
-	// 通了一次：加快确认（要连续 3 次通才算恢复），不再等 60 秒
+	// 通了一次：回到平常的间隔确认（要连续 3 次通才算恢复），不再等 60 秒。
+	// 以前是 4 秒（间隔的两倍）：一次 20 秒的中断，目标回来后要十几秒才恢复（路线图 X9）。
 	h.observe(true, 10, start.Add(10*time.Second), d)
-	if !h.down || targetProbeInterval(h, d) != 4*time.Second {
+	if !h.down || targetProbeInterval(h, d) != 2*time.Second {
 		t.Fatalf("通了一次就快一点确认恢复：down=%v interval=%v", h.down, targetProbeInterval(h, d))
 	}
 }
