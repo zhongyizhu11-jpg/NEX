@@ -343,6 +343,29 @@ func (lab *e2eLab) proxyLatency(index int) int {
 	return p.latencyMsLocked(index)
 }
 
+/*
+setExtraLatency 面板给这台出口的「出口 → 目标」延迟提示（ExtraLatencyMs，server/exitTargetHealth.ts 从出口机探目标
+的结果算的）：和心跳里 runningRules 同步规格一样再调一次 startFailoverProxy，规格签名不变，提示原地换上
+（applyRelayHintsLocked）。「延迟优先 / 自动」的整链延迟 = 本机探到的入口 → 出口 + 它。本机的三台出口都在回环上，
+入口 → 出口那一段一样快；要让一台「慢」，只能从这一段加（这台机器上没有 netem）。
+*/
+func (lab *e2eLab) setExtraLatency(index int, ms int) {
+	lab.t.Helper()
+	spec := lab.bundle.Failover.Spec
+	spec.Targets = append([]failoverTarget(nil), spec.Targets...)
+	spec.Targets[index].ExtraLatencyMs = ms
+	if !startFailoverProxy(lab.bundle.RuleID, lab.bundle.Failover.SourcePort, spec, nil) {
+		lab.t.Fatal("换提示时本机代理没起来")
+	}
+	p := lab.proxy()
+	p.mu.RLock()
+	got := p.spec.Targets[index].ExtraLatencyMs
+	p.mu.RUnlock()
+	if got != ms {
+		lab.t.Fatalf("提示没换上：出口 %d 的下游延迟是 %d，应当是 %d", index, got, ms)
+	}
+}
+
 func (lab *e2eLab) waitFor(what string, limit time.Duration, check func() bool) time.Duration {
 	lab.t.Helper()
 	started := time.Now()
@@ -580,9 +603,14 @@ func TestBalanceProxyE2E(t *testing.T) {
 				for i, target := range spec.Targets {
 					weights[i] = target.Weight
 				}
+				// 延迟优先：本机三台出口一样快；面板说第三台到目标比别的慢出门槛一大截（见下面的断言）
+				slowExit, slowExtraMs := 2, int(spec.LatencyMarginMs)+150
+				if scenario == "latency" {
+					lab.setExtraLatency(slowExit, slowExtraMs)
+				}
 				var tcp map[string]int
 				switch scenario {
-				case "least_load", "auto":
+				case "least_load", "auto", "latency":
 					tcp = lab.tcpHeldSpread(64, 16)
 				default:
 					tcp = lab.tcpSpread(64, 16)
@@ -634,11 +662,27 @@ func TestBalanceProxyE2E(t *testing.T) {
 					if tcp[exits[0].IP] <= tcp[exits[2].IP] {
 						t.Fatalf("自动：份数大的那台应当分得更多")
 					}
-				case "fallback", "latency":
-					// 主备：全走第一台。延迟优先：三台延迟一样（都在本机），没有谁明显更好，留在现在这台上
+				case "fallback":
+					// 主备：全走第一台
 					if tcp[exits[0].IP] != 64 || udp[exits[0].IP] != 32 {
 						t.Fatalf("%s 应当全走第一台", scenario)
 					}
+				case "latency":
+					/*
+						延迟优先（统一调度以后是 lbcore 的 NearSet + 自动，不再是「主备 + 择优」）：和最快的差不到门槛
+						（spec.LatencyMarginMs）的几台算「一样快」，在这几台里按自动的成本分（挂着的连接 ÷ 份数）；
+						慢出门槛的一条都分不到。以前这里断言「全走第一台」，那是旧实现（fallback + preferFastest：
+						三台一样快就留在现在这台上）的行为，统一调度时有意改掉了。
+					*/
+					for _, i := range []int{0, 1} {
+						if tcp[exits[i].IP] == 0 || udp[exits[i].IP] == 0 {
+							t.Fatalf("延迟优先：%s 和最快的一样快，应当一起分（TCP %d、UDP %d）", exits[i].IP, tcp[exits[i].IP], udp[exits[i].IP])
+						}
+					}
+					if tcp[exits[slowExit].IP] != 0 || udp[exits[slowExit].IP] != 0 {
+						t.Fatalf("延迟优先：%s 比最快的慢 %dms（门槛 %vms），不该分到（TCP %d、UDP %d）", exits[slowExit].IP, slowExtraMs, spec.LatencyMarginMs, tcp[exits[slowExit].IP], udp[exits[slowExit].IP])
+					}
+					t.Logf("延迟优先：%s 慢 %dms（门槛 %vms）一条没分到，另外两台一起分", exits[slowExit].IP, slowExtraMs, spec.LatencyMarginMs)
 				case "ip_hash":
 					if used(tcp) < 2 {
 						t.Fatalf("按访客固定：16 个访客应当散到不止一台")
@@ -870,9 +914,14 @@ func TestBalanceProxyE2E(t *testing.T) {
 		}
 		undo()
 		recovered := lab.waitFor("到目标恢复后放回", 15*time.Second, func() bool { return lab.healthy(victim) })
-		t.Logf("到目标恢复后 %s 放回（每轮经出口探通才算）", recovered.Round(10*time.Millisecond))
-		if recovered > 10*time.Second {
-			t.Fatalf("恢复用了 %s，超过 10 秒", recovered)
+		t.Logf("到目标恢复后 %s 放回（经出口连着探通 %d 次、每次等 %s）", recovered.Round(10*time.Millisecond), exitThroughRecoverOKs, exitConfirmWindow)
+		/*
+			上限 12 秒（以前是 10 秒）：F2 起判坏过的出口要经出口连着探通 exitThroughRecoverOKs（2）次、每次等满
+			exitConfirmWindow（4 秒，gost 拨死出口要 3 秒才关，等得短了死出口每次都像「探通」）才放回，这是有意的。
+			最坏：恢复后最多一轮探测（2 秒 + 抖动）才发起第一次，再 2 × 4 秒 —— 约 10 秒，留 2 秒余量。
+		*/
+		if recovered > 12*time.Second {
+			t.Fatalf("恢复用了 %s，超过 12 秒", recovered)
 		}
 		lab.noDirect()
 	})
@@ -998,6 +1047,19 @@ func TestBalanceProxyE2E(t *testing.T) {
 			t.Fatalf("没有流量时入口机不会知道中转后面的出口坏了")
 		}
 		firstHit := time.Now()
+		// 判坏的那一刻另外盯着记（循环一批要等最慢的那条，最多 3 秒，量出来的会比判坏晚一批）
+		var downAt time.Duration
+		watchDone := make(chan struct{})
+		go func() {
+			defer close(watchDone)
+			for time.Since(firstHit) < 20*time.Second {
+				if !lab.healthy(victim) {
+					downAt = time.Since(firstHit)
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}()
 		failed, slowest := 0, time.Duration(0)
 		during := map[string]int{}
 		for !(!lab.healthy(victim) && time.Since(firstHit) > 2*time.Second) && time.Since(firstHit) < 20*time.Second {
@@ -1022,21 +1084,33 @@ func TestBalanceProxyE2E(t *testing.T) {
 			}
 			wg.Wait()
 		}
-		downAfter := time.Since(firstHit)
-		t.Logf("多跳 黑洞一台出口：没有流量的 3 秒里照常算好的；有流量后失败 %d 条，最慢一条 %s（撞上它的约 3 秒后被中转关掉、换走），分布 %s；第一条连接后 %s 内判坏",
-			failed, slowest.Round(10*time.Millisecond), e2eCounts(during, exits), downAfter.Round(100*time.Millisecond))
+		<-watchDone
+		t.Logf("多跳 黑洞一台出口：没有流量的 3 秒里照常算好的；有流量后失败 %d 条，最慢一条 %s（撞上它的约 3 秒后被中转关掉、换走），分布 %s；第一条连接后 %s 判坏",
+			failed, slowest.Round(10*time.Millisecond), e2eCounts(during, exits), downAt.Round(10*time.Millisecond))
 		if failed != 0 || during[exits[victim].IP] != 0 {
 			t.Fatalf("多跳：出口黑洞期间连接应当全部被换到别的出口")
 		}
-		if lab.healthy(victim) {
+		if lab.healthy(victim) || downAt == 0 {
 			t.Fatalf("多跳：坏出口没有被判坏")
 		}
-		if downAfter > 12*time.Second {
-			t.Fatalf("多跳：判坏用了 %s", downAfter)
+		/*
+			第一条撞上它的真实连接约 3 秒后被关（中转拨出口的超时）、换走；同时经它复核（gost 又要 3 秒才关），拿别的出口
+			比的那几条和它同时开、它被关后再开着 exitCompareGrace 就判：约 3 + 3 + 1 = 7 秒。留 2 秒余量。
+		*/
+		if downAt > 9*time.Second {
+			t.Fatalf("多跳：判坏用了 %s（应当约 7 秒）", downAt)
 		}
 		undo()
 		recovered := lab.waitFor("多跳：出口恢复", 20*time.Second, func() bool { return lab.healthy(victim) })
-		t.Logf("多跳：出口回来后 %s 放回", recovered.Round(10*time.Millisecond))
+		t.Logf("多跳：出口回来后 %s 放回（经出口连着探通 %d 次，每次等 %s）", recovered.Round(10*time.Millisecond), exitThroughRecoverOKs, exitConfirmWindow)
+		if recovered > 12*time.Second {
+			t.Fatalf("多跳：恢复用了 %s，超过 12 秒", recovered)
+		}
+		// 放回以后真的又接连接
+		lab.waitFor("多跳：放回的出口接到连接", 10*time.Second, func() bool {
+			reply, err := lab.tcpOnce(e2eVisitor(int(time.Now().UnixNano()%100)), "", 6*time.Second)
+			return err == nil && reply.exitIP == exits[victim].IP
+		})
 		lab.noDirect()
 	})
 

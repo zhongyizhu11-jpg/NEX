@@ -101,6 +101,7 @@ type failoverProxy struct {
 	pickCounts           []uint64
 	exitThroughFailed    []bool
 	exitThroughOKs       []int
+	exitThroughGen       []uint64 // 直接探失败一次加一：在那之前发起的经出口恢复探测作废（recheckExitThrough）
 	exitConfirming       []bool
 	exitSilentCloseUntil time.Time
 	exitOthersOpenAt     time.Time
@@ -575,6 +576,10 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	if len(p.exitThroughOKs) != n {
 		p.exitThroughOKs = make([]int, n)
 	}
+	if len(p.exitThroughGen) != n {
+		p.exitThroughGen = make([]uint64, n)
+	}
+
 	p.udpSide.ensure(n)
 	if p.activeIndex < 0 || p.activeIndex >= n {
 		p.activeIndex = 0

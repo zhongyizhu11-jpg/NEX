@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -35,7 +36,7 @@ BalanceReport.HostIDs 是对应的主机号。带 BalanceReport 的规格就是�
  2. 被动信号 + 经出口复核：一条真实连接「拨通本机端口、出口一个字节没回就被关」—— gost 在后面拨出口 / 出口拨
     目标失败时就是这个样子（真实 gost 实测：目标拒绝 3ms、出口拒绝 1ms、出口黑洞 3s 后被关）。这条连接当场换
     下一台出口重发（failover_early_close.go，客户端无感），同时**经这台出口再探一次**（failoverThroughProbe：连
-    本机端口、什么都不发，等 exitConfirmWindow，看会不会又被关）：
+    本机端口、什么都不发，最多等 exitConfirmWindow，看会不会又被关；拿别的出口比的那几条同时开，exitConfirmFault）：
     - 又被关，而别的能用的出口经出口照样开着：不是那个客户端的问题，是这台出口到目标走不通 —— 当场判坏
     （不用凑两个不同访客）。之后每轮探测除了直接探出口机，还要经出口连着探通 exitThroughRecoverOKs 次才算恢复
     （exitThroughFailed）；不然出口机本身是通的，下一轮就被放回来、再坏一次，来回翻。
@@ -62,8 +63,8 @@ UDP：一个访客一个会话，建会话时挑出口；出口判坏的那一�
 
 多跳链路（出口在中转后面，目标带 ViaRelay）：入口机连不到出口机，第 1 条做不了 —— 每台出口的本机 gost 端口挂的
 是「中转 → 这台出口」的链，健康只靠第 2、3 条：出口死了以后第一条撞上去的 TCP 连接约 3 秒后被关、无感换走，
-再约 3 秒复核完判坏；恢复同样要经出口等满 exitConfirmWindow（gost 拨死出口要 3 秒才关，等得短了死出口每次都像
-「探通」，F2）。没有 TCP 流量（空闲、只转 UDP 的规则）时要等面板的提示。以前 gost 选择器那条路同样只在
+复核那条又要约 3 秒才被关、别的出口再开着 1 秒（exitCompareGrace）就判坏：第一条连接后约 7 秒；恢复同样要经
+出口等满 exitConfirmWindow（gost 拨死出口要 3 秒才关，等得短了死出口每次都像「探通」，F2）。没有 TCP 流量（空闲、只转 UDP 的规则）时要等面板的提示。以前 gost 选择器那条路同样只在
 连接失败时才发现，这一点没有变差；想在多跳上也做到「几秒内本地摘掉」，得让出口机上有一个可以穿过隧道去问的
 探测端口，现在没有。
 
@@ -121,16 +122,19 @@ failoverThroughProbe 经出口探一次：连这台出口的本机 gost 端口�
 
 gost 收下本机连接就去拨出口、让出口拨目标，哪一步失败都会把本机这条连接关掉；都成功就一直开着（目标先说话的
 协议会回数据）—— 除非目标自己很快关掉不说话的连接，那和「拨不通」在这里看起来一样（relay 的应答被入口的 gost
-读掉了），所以「window 内被关」要再拿别的出口比过才算这台的账（exitCloseIsOwnFault）。「还开着 / 有数据」= 走得通。
-第二个返回值是收到第一个字节花了多久（毫秒；没收到数据是 0）。测试里换掉。
+读掉了），所以「window 内被关」要再拿别的出口比过才算这台的账（exitConfirmFault / exitCloseIsOwnFault）。
+「还开着 / 有数据」= 走得通。ctx 提前结束（拿它比的那台已经有结论了）时还开着的也算 exitThroughOK —— 意思是
+「看着的这段时间里一直开着」。第二个返回值是收到第一个字节花了多久（毫秒；没收到数据是 0）。测试里换掉。
 */
-var failoverThroughProbe = func(target failoverTarget, window time.Duration) (exitThroughVerdict, int) {
+var failoverThroughProbe = func(ctx context.Context, target failoverTarget, window time.Duration) (exitThroughVerdict, int) {
 	started := time.Now()
-	conn, err := failoverDialTCP(context.Background(), target, failoverProbeDefaultTimeout)
+	conn, err := failoverDialTCP(ctx, target, failoverProbeDefaultTimeout)
 	if err != nil {
 		return exitThroughUnknown, 0
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
+	defer stop()
 	_ = conn.SetReadDeadline(time.Now().Add(window))
 	buf := make([]byte, 1)
 	n, err := conn.Read(buf)
@@ -171,9 +175,27 @@ func (p *failoverProxy) startExitConfirmLocked(index int) {
 	go p.confirmExitEarlyClose(p.spec.Targets[index])
 }
 
+/*
+confirmExitEarlyClose 复核一次「出口没回就被关」，是这台的账就判坏。
+
+复核的同时直接探一次出口机（多跳的探不到，不探）：出口机本身也连不上（进程死掉时 gost 拨它被拒，真实连接 1 毫秒
+就被关，复核比每轮的直接探测先判坏），就是机器的问题，和直接探测判坏的出口一样靠直接探测恢复，不记 exitThroughFailed
+—— 不然进程重启后还要经出口连着探通 2 × exitConfirmWindow 才放回（真实 gost：9 秒，本来 4 秒）。出口机通、经它却
+被关，才是「出口到目标走不通」，要经出口恢复。
+*/
 func (p *failoverProxy) confirmExitEarlyClose(target failoverTarget) {
-	verdict, _ := failoverThroughProbe(target, exitConfirmWindow)
-	fault := verdict == exitThroughClosed && p.exitCloseIsOwnFault(target)
+	machine := make(chan bool, 1)
+	if target.ViaRelay {
+		machine <- true
+	} else {
+		p.mu.RLock()
+		protocol, timeout := failoverProtocol(p.spec), p.probeTimeoutLocked()
+		p.mu.RUnlock()
+		probe := failoverExitMachineProbe
+		go func() { machine <- probe(protocol, target, timeout) }()
+	}
+	fault := p.exitConfirmFault(target)
+	machineUp := <-machine
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	index := p.indexOfTargetLocked(target)
@@ -185,65 +207,164 @@ func (p *failoverProxy) confirmExitEarlyClose(target failoverTarget) {
 		return
 	}
 	reason := "exit closed before reply (confirmed through the exit)"
-	p.exitThroughFailed[index] = true
-	p.exitThroughOKs[index] = 0
+	if machineUp {
+		p.exitThroughFailed[index] = true
+		p.exitThroughOKs[index] = 0
+	} else {
+		reason = "exit closed before reply (the exit machine is unreachable too)"
+	}
 	p.markUnhealthyLocked(index, reason, "")
 	p.updateFallbackActiveLocked(reason)
 }
 
+// failoverExitMachineProbe 直接探一次出口机（和每轮探测同一个探法）。测试里换掉。
+var failoverExitMachineProbe = func(protocol string, target failoverTarget, timeout time.Duration) bool {
+	_, results := probeExitGroupTargets(protocol, []failoverTarget{target}, timeout)
+	return results[0]
+}
+
+// exitCompareGrace：复核时拿别的出口比，那台被关以后别的出口还要再开着这么久才算「照样开着」。
+// 目标自己关不说话的连接时，同一刻开的几条差不多同时被关，差不出这么多。
+const exitCompareGrace = time.Second
+
 /*
-exitCloseIsOwnFault 经 target 这台出口被关了：算不算它的账。拿别的此刻能用的出口各经出口探一次比（有界并行）：
-有一台照样开着 → 是这台的问题；全被关 → 是目标的脾气（很快关掉不说话的连接），记下 exitSilentCloseUntil；
-没有别的可比、或者别的都说不准 → 不算（不拿这个信号摘掉最后一台）。exitCompareReuse 里比出过「别的照样开着」
-就直接用那个结论。调用方不能持有 p.mu。
+exitConfirmFault 复核（第一次判坏，要快）：经 target 探一次，被关了算不算它的账。
+
+拿别的出口比的那几条和经 target 的这条**同时**开（exitCloseIsOwnFault 是先探完这台再比，多跳上那就是 gost 拨死出口
+的 3 秒 + 别的出口等满 exitConfirmWindow 的 4 秒，真实连接撞上以后 7 秒才判坏，再加上撞上的那 3 秒就是 10 秒）。
+经 target 的这条在 c 时刻被关：别的出口那时已经回了数据 / 到 c + exitCompareGrace 还开着 → 是这台的问题；别的
+到那时全被关了 → 是目标的脾气（exitSilentCloseUntil）；经 target 的一直开着 / 说不准 → 不判，别的那几条当场收掉。
+exitCompareReuse 里比出过「别的照样开着」就只探这一台；没有别的能用的出口可比时不判（也不去探）。
+代价：经 target 的这条最后没被关时，别的出口也白开了一条不说话的连接 —— 复核只在真实连接「没回就被关」时才有，
+每台同一时刻一个。调用方不能持有 p.mu。
 */
-func (p *failoverProxy) exitCloseIsOwnFault(target failoverTarget) bool {
+func (p *failoverProxy) exitConfirmFault(target failoverTarget) bool {
+	others, known := p.exitCompareOthers(target)
+	if known {
+		verdict, _ := failoverThroughProbe(context.Background(), target, exitConfirmWindow)
+		return verdict == exitThroughClosed
+	}
+	if len(others) == 0 {
+		return false
+	}
+	probe := failoverThroughProbe
+	// 返回前收掉还开着的那几条，等它们退出（cancel 先跑：defer 后进先出）。
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	verdicts := make(chan exitThroughVerdict, len(others))
+	sem := make(chan struct{}, failoverProbeParallelism)
+	for _, other := range others {
+		wg.Add(1)
+		go func(other failoverTarget) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				verdicts <- exitThroughUnknown
+				return
+			}
+			verdict, _ := probe(ctx, other, exitConfirmWindow)
+			verdicts <- verdict
+		}(other)
+	}
+	if verdict, _ := probe(ctx, target, exitConfirmWindow); verdict != exitThroughClosed {
+		return false
+	}
+	grace := time.NewTimer(exitCompareGrace)
+	defer grace.Stop()
+	closed := false
+	for pending := len(others); pending > 0; {
+		select {
+		case verdict := <-verdicts:
+			pending--
+			if verdict == exitThroughOK {
+				p.noteExitOthersOpen()
+				return true
+			}
+			closed = closed || verdict == exitThroughClosed
+		case <-grace.C:
+			// 这台被关以后又过了 exitCompareGrace，别的还开着。
+			p.noteExitOthersOpen()
+			return true
+		}
+	}
+	if closed {
+		p.noteExitSilentClose()
+	}
+	return false
+}
+
+// exitCompareOthers 拿来比的别的出口（此刻能用的）；known：exitCompareReuse 里已经比出过「别的照样开着」，不用再比。
+func (p *failoverProxy) exitCompareOthers(target failoverTarget) (others []failoverTarget, known bool) {
 	key := targetStateKey(target)
 	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if !p.exitOthersOpenAt.IsZero() && time.Since(p.exitOthersOpenAt) < exitCompareReuse {
-		p.mu.RUnlock()
-		return true
+		return nil, true
 	}
-	others := make([]failoverTarget, 0, len(p.spec.Targets))
 	for i, other := range p.spec.Targets {
 		if targetStateKey(other) != key && p.healthyLocked(i) {
 			others = append(others, other)
 		}
 	}
-	p.mu.RUnlock()
+	return others, false
+}
+
+func (p *failoverProxy) noteExitOthersOpen() {
+	p.mu.Lock()
+	p.exitOthersOpenAt = time.Now()
+	p.mu.Unlock()
+}
+
+func (p *failoverProxy) noteExitSilentClose() {
+	p.mu.Lock()
+	p.exitSilentCloseUntil = time.Now().Add(exitSilentCloseBackoff)
+	p.mu.Unlock()
+	if shouldLogAgentReport(fmt.Sprintf("failover-exit-silent-close:%d:%d", p.ruleID, p.sourcePort), time.Hour) {
+		logf("failover exit group: the target closes silent connections through every exit; not blaming exits for it rule=%d source=%d", p.ruleID, p.sourcePort)
+	}
+}
+
+/*
+exitCloseIsOwnFault 经 target 这台出口已经被关了（恢复复核时）：算不算它的账。拿别的此刻能用的出口各经出口探一次比
+（有界并行）：有一台照样开着 → 是这台的问题；全被关 → 是目标的脾气（很快关掉不说话的连接），记下 exitSilentCloseUntil；
+没有别的可比、或者别的都说不准 → 不算（不拿这个信号摘掉最后一台）。exitCompareReuse 里比出过「别的照样开着」
+就直接用那个结论。恢复不赶时间，先探完这台、被关了才比（不白开连接）；第一次判坏用 exitConfirmFault（同时比）。
+调用方不能持有 p.mu。
+*/
+func (p *failoverProxy) exitCloseIsOwnFault(target failoverTarget) bool {
+	others, known := p.exitCompareOthers(target)
+	if known {
+		return true
+	}
 	if len(others) == 0 {
 		return false
 	}
 	_, verdicts := probeFailoverTargetsWith(others, func(other failoverTarget) (int, exitThroughVerdict) {
-		verdict, _ := failoverThroughProbe(other, exitConfirmWindow)
+		verdict, _ := failoverThroughProbe(context.Background(), other, exitConfirmWindow)
 		return 0, verdict
 	})
 	closed := false
 	for _, verdict := range verdicts {
 		if verdict == exitThroughOK {
-			p.mu.Lock()
-			p.exitOthersOpenAt = time.Now()
-			p.mu.Unlock()
+			p.noteExitOthersOpen()
 			return true
 		}
 		closed = closed || verdict == exitThroughClosed
 	}
 	if closed {
-		p.mu.Lock()
-		p.exitSilentCloseUntil = time.Now().Add(exitSilentCloseBackoff)
-		p.mu.Unlock()
-		if shouldLogAgentReport(fmt.Sprintf("failover-exit-silent-close:%d:%d", p.ruleID, p.sourcePort), time.Hour) {
-			logf("failover exit group: the target closes silent connections through every exit; not blaming exits for it rule=%d source=%d", p.ruleID, p.sourcePort)
-		}
+		p.noteExitSilentClose()
 	}
 	return false
 }
 
 /*
 gateExitThroughLocked 一轮探测之后：经出口复核判坏过的出口（exitThroughFailed），直接探通不够 —— 还要经出口探通。
-经出口的探测要等满 exitConfirmWindow，比一轮探测的超时长，所以另起协程跑（每台同一时刻一个），这一轮用的是它攒下的
-「连着通了几次」：至少一次才算这一轮通（恢复从这时起计时），够 exitThroughRecoverOKs 次才放回（checkHealth）。
-直接探都不通的清零。调用方持有 p.mu。
+经出口的探测要等满 exitConfirmWindow，比一轮探测的超时长，所以另起协程跑（每台同一时刻一个，recheckExitThrough），
+这一轮用的是它攒下的「连着通了几次」：至少一次才算这一轮通，够 exitThroughRecoverOKs 次（还要过 RecoverSeconds
+那道门槛）才放回。直接探都不通的清零，正在跑的那次作废（exitThroughGen）。调用方持有 p.mu。
 */
 func (p *failoverProxy) gateExitThroughLocked(results []bool) {
 	for i := range results {
@@ -252,11 +373,12 @@ func (p *failoverProxy) gateExitThroughLocked(results []bool) {
 		}
 		if !results[i] {
 			p.exitThroughOKs[i] = 0
+			p.exitThroughGen[i]++
 			continue
 		}
-		if !p.exitConfirming[i] {
+		if !p.exitConfirming[i] && p.exitThroughOKs[i] < exitThroughRecoverOKs {
 			p.exitConfirming[i] = true
-			go p.recheckExitThrough(p.spec.Targets[i])
+			go p.recheckExitThrough(p.spec.Targets[i], p.exitThroughGen[i])
 		}
 		results[i] = p.exitThroughOKs[i] > 0
 	}
@@ -267,8 +389,21 @@ func (p *failoverProxy) exitThroughRecoveredLocked(index int) bool {
 	return index >= len(p.exitThroughFailed) || !p.exitThroughFailed[index] || p.exitThroughOKs[index] >= exitThroughRecoverOKs
 }
 
-func (p *failoverProxy) recheckExitThrough(target failoverTarget) {
-	verdict, _ := failoverThroughProbe(target, exitConfirmWindow)
+/*
+recheckExitThrough 判坏过的出口经出口探一次（恢复）。gen 是发起时的 exitThroughGen：中间直接探失败过（清零了）
+这次的结果作废。
+
+探通了不等下一轮探测：
+  - 恢复从这次探测开始时算起（recoveredSince）—— 它开着的这 exitConfirmWindow 里路一直是通的，中间直接探也没失败；
+    以前要等下一轮探测才开始计时，第二次经出口探又要等再下一轮才发起，到目标恢复后 13 秒才放回；
+  - 还不够 exitThroughRecoverOKs 次就接着探下一次；
+  - 够了、恢复门槛也过了，当场放回（readmitLocked），不等下一轮。
+
+这样到目标恢复以后最多「一轮探测的间隔 + 2 × exitConfirmWindow」放回（默认约 10 秒）。
+*/
+func (p *failoverProxy) recheckExitThrough(target failoverTarget, gen uint64) {
+	started := time.Now()
+	verdict, _ := failoverThroughProbe(context.Background(), target, exitConfirmWindow)
 	if verdict == exitThroughClosed && !p.exitCloseIsOwnFault(target) {
 		// 别的出口也被关（目标的脾气），或者没有别的可比：不拿它把这台一直扣着。
 		verdict = exitThroughOK
@@ -280,7 +415,7 @@ func (p *failoverProxy) recheckExitThrough(target failoverTarget) {
 		return
 	}
 	p.exitConfirming[index] = false
-	if !p.exitThroughFailed[index] {
+	if !p.exitThroughFailed[index] || p.exitThroughGen[index] != gen || p.retired() {
 		return
 	}
 	switch verdict {
@@ -288,6 +423,25 @@ func (p *failoverProxy) recheckExitThrough(target failoverTarget) {
 		p.exitThroughOKs[index]++
 	case exitThroughClosed:
 		p.exitThroughOKs[index] = 0
+		return
+	default:
+		return
+	}
+	if p.targetHealth[index] {
+		return
+	}
+	if p.recoveredSince[index].IsZero() {
+		p.recoveredSince[index] = started
+	}
+	if p.exitThroughOKs[index] < exitThroughRecoverOKs {
+		p.exitConfirming[index] = true
+		go p.recheckExitThrough(target, gen)
+		return
+	}
+	now := time.Now()
+	if p.recoverGateReachedLocked(now.Sub(p.recoveredSince[index])) {
+		p.readmitLocked(index, now)
+		p.updateFallbackActiveLocked("health check")
 	}
 }
 
