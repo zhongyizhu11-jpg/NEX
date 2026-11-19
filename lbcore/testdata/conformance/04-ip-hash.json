@@ -52,44 +52,46 @@
     ]
   },
   {
-    "name": "ip-hash-bounded-load-under-skewed-keys",
-    "about": "按访客固定 + 有界负载：一个大访客（一整栋楼共用一个出口地址）占了一半连接。没有上限的话这 150 条全压在一个成员上；有上限，任何成员都不超过它该分的 1.25 倍",
+    "name": "ip-hash-a-heavy-visitor-never-spills",
+    "about": "按访客固定不设负载上限：一个访客自己开了 150 条一直挂着的连接，全部落在他的那个成员上（出口 IP 不变才是这个分法的意义；以前带 1.25 倍的上限，超过的连接落到别的成员上）",
     "strategy": "ip_hash",
     "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
     "steps": [
+      { "keys": { "list": ["203.0.113.250"] }, "mode": "hold", "save": "home", "expect": {} },
       {
-        "about": "150 条来自同一个访客，一直挂着：三个成员各该分 50，谁也不超过 63（50 × 1.25 向上取整）",
-        "keys": { "list": ["203.0.113.250"], "repeat": 150 },
+        "about": "再来 149 条，同一个访客，前面的都挂着：一条都不换成员",
+        "keys": { "list": ["203.0.113.250"], "repeat": 149 },
         "mode": "hold",
-        "expect": { "counts": { "a": [24, 63], "b": [24, 63], "c": [24, 63] } }
+        "expect": { "sameAs": "home" }
       },
       {
-        "about": "再来 150 个各不相同的访客：一共 300 条，每个该分 100，谁也不超过 125",
+        "about": "再来 150 个各不相同的访客：照样按纯哈希落，不因为那个成员压得重就被挤走",
         "keys": { "pattern": "198.51.100.%d", "count": 150 },
         "mode": "hold",
-        "expect": { "totals": { "a": [50, 125], "b": [50, 125], "c": [50, 125] } }
+        "expect": { "reference": true }
       }
     ]
   },
   {
-    "name": "ip-hash-bounded-load-by-weight",
-    "about": "有界负载按分量算：分量 3:1，400 条全来自一个访客。大的那个该分 300、最多 375；小的该分 100、最多 125",
+    "name": "ip-hash-heavy-visitor-ignores-weight-share",
+    "about": "分量 3:1，400 条全来自一个访客、一直挂着：全在同一个成员上（分量只决定访客落在哪，不限制一个访客能压多少）",
     "strategy": "ip_hash",
     "members": [
       { "name": "a", "weight": 3 },
       { "name": "b", "weight": 1 }
     ],
     "steps": [
+      { "keys": { "list": ["203.0.113.9"] }, "mode": "hold", "save": "home", "expect": {} },
       {
-        "keys": { "list": ["203.0.113.9"], "repeat": 400 },
+        "keys": { "list": ["203.0.113.9"], "repeat": 399 },
         "mode": "hold",
-        "expect": { "counts": { "a": [275, 375], "b": [25, 125] } }
+        "expect": { "sameAs": "home" }
       }
     ]
   },
   {
     "name": "ip-hash-first-connections-stay-together",
-    "about": "会话少的时候上限向上取整：同一个访客的头两条连接落在同一个成员上",
+    "about": "同一个访客的头两条连接（第一条还挂着）落在同一个成员上",
     "strategy": "ip_hash",
     "members": [{ "name": "a" }, { "name": "b" }],
     "steps": [

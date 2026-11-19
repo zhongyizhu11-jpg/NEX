@@ -321,7 +321,7 @@ type failoverReservation struct {
 	held  bool
 }
 
-// loadLocked 这条路径此刻的负载：挂着的连接 + 已经挑中、还在拨的。「按负载」「自动」「按访客固定」的上限按它算；
+// loadLocked 这条路径此刻的负载：挂着的连接 + 已经挑中、还在拨的。「按负载」「自动」按它算（按访客固定不看负载）；
 // 报给面板的连接数仍然只是挂着的（connectionsLocked）。
 func (p *failoverProxy) loadLocked(index int) int {
 	active, inflight := p.pathLoadLocked(index)

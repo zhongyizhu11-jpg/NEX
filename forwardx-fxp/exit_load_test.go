@@ -190,8 +190,9 @@ func TestIPHashRendezvousOnlyMovesFailedExitVisitors(t *testing.T) {
 	}
 }
 
-// 按访客固定：同一个访客反复来还是同一台；一台已经比它该分的多太多就往下一台放。
-func TestIPHashBoundedLoad(t *testing.T) {
+// 按访客固定：同一个访客反复来还是同一台，那台压了多少都不挪（不设负载上限，lbcore/rendezvous.go：出口 IP 不变
+// 才是这个分法的意义；以前一台比它该分的多 25% 就往下一台放，一个访客自己开十几条连接就换了出口）。
+func TestIPHashKeepsAVisitorOnItsExit(t *testing.T) {
 	resetFXPEndpointRegistry()
 	selector := newExitEndpointSelector(
 		[]exitEndpoint{{Host: "10.0.0.2", Port: 2}},
@@ -204,11 +205,11 @@ func TestIPHashBoundedLoad(t *testing.T) {
 			t.Fatal("同一个访客换了出口")
 		}
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 40; i++ {
 		selector.loads[first].open(time.Now())
-	}
-	if _, index, _ := selector.pick(nil, "203.0.113.7"); index == first {
-		t.Fatal("一台已经压了 10 条、另一台空着，还往满的那台放")
+		if _, index, _ := selector.pick(nil, "203.0.113.7"); index != first {
+			t.Fatalf("那台压了 %d 条、另一台空着：访客也不该被挪走", i+1)
+		}
 	}
 }
 

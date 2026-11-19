@@ -490,8 +490,8 @@ func checkStep(t *testing.T, driver Driver, c Case, label string, expect Expect,
 		}
 		wrong := 0
 		for i, key := range keys {
-			// 这一步用 release 跑（不留负载），有界负载的上限碰不到：就是纯哈希的结果。
-			if want := lbcore.Rendezvous(members, memberKeys, all, key, lbcore.RendezvousOptions{LoadFactor: -1}); want != picks[i] {
+			// 按访客固定不设负载上限：留着负载（hold）也是纯哈希的结果。
+			if want := lbcore.Rendezvous(members, memberKeys, all, key, lbcore.RendezvousOptions{}); want != picks[i] {
 				wrong++
 			}
 		}

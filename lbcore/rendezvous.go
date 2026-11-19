@@ -13,18 +13,23 @@ import "math"
 最后一段），同一个访客对这两个成员算出来的哈希只差在低位，换算成 0~1 的数几乎相等，加权之后永远是分量大的
 那个赢 —— 900:100 的两个成员，所有访客都固定到 900 那个上（路线图 X2 的回归测试跑出来的）。
 
-有界负载（默认开，DefaultHashLoadFactor = 1.25）：一个成员挂着的会话已经到了「它该分的 × 1.25」，这个访客就往
-分数第二的成员放，以此类推；都满了还是给分数最高的。该分的 = (全部会话 + 1) × 它的分量占比。没有这一条，
-一个大 NAT 出口（几千人共用一个地址）或者一个开了几百条连接的访客能把一个成员压垮，而别的成员空着。
-代价要知道：一个访客自己就占了大头时（比如整条规则只有他一个人在用），他的连接超过上限的那部分会落到
-别的成员上 —— 「固定」让位给「别压垮」。会话少的时候上限向上取整，头一两条连接总是落在同一个成员上。
+不设负载上限（默认，产品定的）：按访客固定的意义就是「同一个访客的出口 IP 不变」—— 登录态、风控、按 IP 授权都靠它。
+所以这个访客的成员只要还能用，他的每一条连接都落在那上面，不管那个成员此刻压了多少。以前默认带「有界负载」
+（一个成员挂着的会话到了它该分的 × 1.25 就往分数第二的放）：一个访客自己就占了大头时（整条规则只有他一个人
+在用、他一次开十几条连接、或者别的访客的 UDP 会话还挂着），他的连接就在几个成员之间来回落，出口 IP 一会儿一个，
+真实 gost 端到端（gost-runtime/test/balance-proxy）里一个访客连 4 次就换了出口。大 NAT 出口压垮一个成员的
+风险要靠「按负载 / 自动」去分，选了按访客固定就是选了「别换」。
+
+有界负载仍然留着可选（RendezvousOptions.LoadFactor > 0，常用 DefaultHashLoadFactor = 1.25）：一个成员挂着的会话
+已经到了「它该分的 × 倍数」，这个访客就往分数第二的成员放，以此类推；都满了还是给分数最高的。该分的 =
+(全部会话 + 1) × 它的分量占比。会话少的时候上限向上取整。现在没有哪个分配方式默认开它。
 
 同一个访客、同一批成员标识、同样的分量和负载，在哪台机器、哪个进程里算出来都是同一个成员。成员标识由调用方定
 （FXP 是「主机:端口」，线路组是「地址:端口#下标」或落地的标识），所以跨产品不保证落在「同一台」上，
 保证的是算法一样。
 
-参数：RendezvousOptions.LoadFactor（默认 1.25，负数关掉上限 —— 结果要在几台机器上算出同一个时用，
-各台看到的负载不一样）。
+参数：RendezvousOptions.LoadFactor（默认 0 = 不设上限，结果只由访客、成员标识和分量决定 —— 几台机器上算出来
+也是同一个；> 0 才按那个倍数设上限）。
 */
 
 const (
@@ -64,13 +69,13 @@ func RendezvousScore(hash uint64, weight float64) float64 {
 	return -weight / math.Log(u)
 }
 
-// DefaultHashLoadFactor：按访客固定时，一个成员最多比它该分的多 25%。
+// DefaultHashLoadFactor：要开有界负载时常用的倍数（一个成员最多比它该分的多 25%）。默认不开，见文件开头。
 const DefaultHashLoadFactor = 1.25
 
-// RendezvousOptions 是按访客固定的可选项。零值 = 上限 1.25。
+// RendezvousOptions 是按访客固定的可选项。零值 = 不设上限（纯 rendezvous 哈希）。
 type RendezvousOptions struct {
-	// LoadFactor：有界负载的上限倍数。0 用 DefaultHashLoadFactor；负数表示不设上限（纯哈希，结果只由
-	// 访客和成员决定 —— FXP 叠加连接要各台中继算出同一个结果，各台看到的负载不一样，必须关）。
+	// LoadFactor：有界负载的上限倍数。≤ 0（默认）不设上限：结果只由访客、成员标识和分量决定，访客的成员
+	// 能用就一直是它（按访客固定的承诺；FXP 叠加连接还要各台中继算出同一个结果）。> 0 才设上限，
 	// 负载看的是 Member.Active + Member.InFlight。
 	LoadFactor float64
 	// Scratch：有上限时用来放每个成员分数的临时区（按成员下标，长度 ≥ len(members)）。不给或不够长就现分配。
@@ -89,10 +94,7 @@ func Rendezvous(members []Member, keys []string, candidates []int, key string, o
 	}
 	mode := staticModeOf(members, candidates)
 	factor := opts.LoadFactor
-	if factor == 0 {
-		factor = DefaultHashLoadFactor
-	}
-	if factor < 0 {
+	if factor <= 0 {
 		best, bestScore := -1, 0.0
 		for _, index := range candidates {
 			weight := members[index].weightBy(mode)

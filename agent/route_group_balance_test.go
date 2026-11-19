@@ -170,21 +170,30 @@ func (p *failoverProxy) rendezvousPickLocked(candidates []int, key string) int {
 	return p.spreadPickLocked(lbcore.StrategyIPHash, candidates, key, false)
 }
 
-// 按访客固定带有界负载（和出口组同一个实现）：一个访客自己占了大头时，超过「该分的 × 1.25」的连接落到别的路径上；
-// 头两条连接总在同一条上。
-func TestRouteIPHashBoundedLoad(t *testing.T) {
+// 按访客固定不设负载上限（和出口组同一个实现，lbcore/rendezvous.go）：这个访客的路径能用，他的每一条连接都落在
+// 那上面，压了多少都不挪（出口 IP 不变才是这个分法的意义；以前超过「该分的 × 1.25」就落到别的路径上）。
+func TestRouteIPHashKeepsAVisitorOnItsPath(t *testing.T) {
 	p := balanceTestProxy("ip_hash", 1, 1)
 	p.ensureHealthStateLocked()
 	_, home := p.pickTargetForKey("203.0.113.7", nil)
-	autoHoldConn(t, p, home)
-	if _, second := p.pickTargetForKey("203.0.113.7", nil); second != home {
-		t.Fatal("同一个访客的第二条连接换了路径")
-	}
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 40; i++ {
 		autoHoldConn(t, p, home)
+		if _, index := p.pickTargetForKey("203.0.113.7", nil); index != home {
+			t.Fatalf("同一个访客挂着 %d 条以后换了路径（另一条空着也不该挪）", i+1)
+		}
 	}
+	// 他的路径挂了才换；回来以后又回去。
+	p.mu.Lock()
+	p.targetHealth[home] = false
+	p.mu.Unlock()
 	if _, index := p.pickTargetForKey("203.0.113.7", nil); index == home {
-		t.Fatal("一条已经压了 10 条、另一条空着，还往满的那条放")
+		t.Fatal("路径挂了还往上放")
+	}
+	p.mu.Lock()
+	p.targetHealth[home] = true
+	p.mu.Unlock()
+	if _, index := p.pickTargetForKey("203.0.113.7", nil); index != home {
+		t.Fatal("路径回来以后访客没回去")
 	}
 	// 不知道访客是谁：轮流，不把所有人钉在同一条上。
 	q := balanceTestProxy("ip_hash", 1, 1)

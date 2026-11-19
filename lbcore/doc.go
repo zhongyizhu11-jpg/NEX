@@ -26,7 +26,7 @@ forwardx-fxp/ 里各写了一遍，界面上是同一个下拉框，算出来的
     按权重      SmoothWRR.Pick       平滑加权轮询，随机起步（wrr.go）
     轮流        RoundRobin           随机起步；刚恢复的轮到时按几成收（wrr.go）
     随机        Random               （wrr.go）
-    按访客固定  Rendezvous           加权 rendezvous 哈希 + 有界负载 1.25（rendezvous.go）
+    按访客固定  Rendezvous           加权 rendezvous 哈希，不设负载上限（rendezvous.go）
 
     另有三件跨分配方式的：SlowStart（刚恢复的成员 60 秒里从 10% 线性加到满份，slowstart.go）、
     FlapDamper（切得越勤、下一次等得越久，flap.go）、SwitchPolicy（主备里「B 好到值得换过去吗」：只看质量的
@@ -49,7 +49,7 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
 	进了「一样快」至少留     1 分钟     DefaultNearHold
 	择优还要低出             两成       DefaultSwitchRatio
 	好得多时只等             10 秒      DefaultSwitchFastHold
-	有界负载的上限           1.25 倍    DefaultHashLoadFactor
+	按访客固定的负载上限     不设       （可选 DefaultHashLoadFactor 1.25，没有分配方式默认开）
 	慢启动                   60 秒、从 10% 起   DefaultSlowStart
 	软信号最多摘掉           五成       DefaultMaxSoftEject
 	恐慌门槛                 正常的不到 1 个    EjectPolicy.PanicBelow
@@ -64,7 +64,9 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
  2. 「按负载」。线路组是 (连接 + 在途 + 1) ÷ 分量，永远全扫；出口组多一项流量、候选多于 3 个时 P2C。
     定成同一个成本（在途 + 活动 + 1，流量通过「利用率 = 流量 ÷ 线路带宽」进来）和同一个 P2C 规矩。
  3. 按访客固定。线路组的哈希是 FNV-1a 64 直接换算、没有上限；出口组在 FNV 之后再搅一遍、带 1.25 倍的上限。
-    定成出口组的。线路组升级后访客会重新分一次，之后稳定；一个访客自己占了大头时，超过上限的连接会落到别的成员上。
+    哈希定成出口组的（FNV + 终混），上限两边都不要：访客的成员能用就一直是它，出口 IP 不变才是这个分法的意义
+    （带上限时一个访客自己占了大头，超过上限的连接落到别的成员上，真实 gost 端到端里一个访客连 4 次就换了出口）。
+    线路组升级后访客会重新分一次，之后稳定。
  4. 慢启动。两边都是 60 秒从 10% 加到满份；原来两边的轮流 / 随机都不乘。定成：除了按访客固定（乘了访客会被挪走
     再挪回来）和主备，都乘。
  5. 轮询、加权从哪起步。出口组每个选择器随机定（路线图 X4），线路组永远从第一条起。定成都随机。
@@ -79,7 +81,7 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
 
   - 主备里「现在走哪条」的粘性、切回、时段表是 Agent 的状态机（agent/failover_selection.go，线路组和 GOST 出口组
     共用），NEX 出口组的主备每次按 First 现挑。共用的是健康信号怎么排序、抖动抑制和择优的判断（SwitchPolicy）。
-  - FXP 叠加连接按会话固定出口用的是没有上限的哈希（RendezvousOptions{LoadFactor: -1}）：
-    那个结果要几台中继各自算出同一个，各台看到的负载不一样。
+  - FXP 叠加连接按会话固定出口也用 Rendezvous（同样不设上限）：那个结果要几台中继各自算出同一个，
+    各台看到的负载不一样，所以它永远不能开上限 —— 以后谁要给按访客固定加回上限，这一处也不能跟着变。
 */
 package lbcore

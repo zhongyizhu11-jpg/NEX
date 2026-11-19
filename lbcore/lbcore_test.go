@@ -210,18 +210,33 @@ func TestRendezvousOnlyMovesTheLeavingMembersVisitors(t *testing.T) {
 	}
 }
 
-func TestRendezvousBoundedLoadSpillsToTheNextMember(t *testing.T) {
+// 默认不设上限（按访客固定的承诺：访客的成员能用就一直是它）；LoadFactor > 0 才按倍数往下一个放。
+func TestRendezvousIsUnboundedByDefaultAndBoundedOnRequest(t *testing.T) {
 	members, candidates := equalMembers(1, 1)
 	keys := []string{"a", "b"}
-	scratch := make([]float64, 2)
-	options := RendezvousOptions{Scratch: scratch}
-	home := Rendezvous(members, keys, candidates, "203.0.113.7", options)
-	if again := Rendezvous(members, keys, candidates, "203.0.113.7", options); again != home {
+	home := Rendezvous(members, keys, candidates, "203.0.113.7", RendezvousOptions{})
+	if again := Rendezvous(members, keys, candidates, "203.0.113.7", RendezvousOptions{}); again != home {
 		t.Fatal("同一个访客换了成员")
 	}
-	members[home].Active = 10
+	// 默认：压了多少都回自己的成员（挂着的、在途的都不看）。负数和 0 一样。
+	members[home].Active, members[home].InFlight = 100, 10
+	for _, factor := range []float64{0, -1} {
+		if got := Rendezvous(members, keys, candidates, "203.0.113.7", RendezvousOptions{LoadFactor: factor}); got != home {
+			t.Fatalf("LoadFactor=%v：不设上限时一个访客不该因为负载被挪走", factor)
+		}
+	}
+	if got := Pick(StrategyIPHash, State{}, members, keys, candidates, "203.0.113.7", time.Time{}, nil, Options{}); got != home {
+		t.Fatal("总入口的按访客固定默认也不设上限")
+	}
+
+	// 开了上限：满的往分数第二的放。
+	members[home].Active, members[home].InFlight = 10, 0
+	options := RendezvousOptions{LoadFactor: DefaultHashLoadFactor, Scratch: make([]float64, 2)}
 	if spilled := Rendezvous(members, keys, candidates, "203.0.113.7", options); spilled == home {
-		t.Fatal("一个已经压了 10 条、另一个空着，还往满的那个放")
+		t.Fatal("开了上限：一个已经压了 10 条、另一个空着，还往满的那个放")
+	}
+	if got := Pick(StrategyIPHash, State{}, members, keys, candidates, "203.0.113.7", time.Time{}, nil, Options{HashLoadFactor: DefaultHashLoadFactor}); got == home {
+		t.Fatal("总入口开了上限也该往下一个放")
 	}
 	// 都满了：还是给分数最高的。
 	members[1-home].Active = 10
@@ -229,14 +244,11 @@ func TestRendezvousBoundedLoadSpillsToTheNextMember(t *testing.T) {
 		t.Fatalf("都满了应该回到分数最高的 %d，实际 %d", home, got)
 	}
 	// 不给临时区也能算（现分配）。
-	if got := Rendezvous(members, keys, candidates, "203.0.113.7", RendezvousOptions{LoadFactor: 1.25}); got != home {
+	if got := Rendezvous(members, keys, candidates, "203.0.113.7", RendezvousOptions{LoadFactor: DefaultHashLoadFactor}); got != home {
 		t.Fatalf("不给临时区结果应该一样：%d", got)
 	}
-	// 关掉上限：不管压了多少都回自己的成员。在途的也算负载。
+	// 在途的也算负载。
 	members[1-home].Active = 0
-	if got := Rendezvous(members, keys, candidates, "203.0.113.7", RendezvousOptions{LoadFactor: -1}); got != home {
-		t.Fatal("关掉上限应该是纯哈希")
-	}
 	members[home].Active, members[home].InFlight = 0, 10
 	if got := Rendezvous(members, keys, candidates, "203.0.113.7", options); got == home {
 		t.Fatal("在途的 10 条也该算进上限")
@@ -753,7 +765,7 @@ func BenchmarkAuto(b *testing.B) {
 
 func BenchmarkRendezvousBounded(b *testing.B) {
 	members, candidates, keys := benchMembers()
-	options := RendezvousOptions{Scratch: make([]float64, len(members))}
+	options := RendezvousOptions{LoadFactor: DefaultHashLoadFactor, Scratch: make([]float64, len(members))}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		Rendezvous(members, keys, candidates, "203.0.113.7", options)
