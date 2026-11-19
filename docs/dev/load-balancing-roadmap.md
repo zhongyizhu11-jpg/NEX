@@ -149,7 +149,7 @@
 | P16 节点池比组的上限大 | `server/nodePoolGroups.ts` 的 `assertPoolFitsFollowingGroups`（保存前拦），节点池卡片 `followerWarnings` |
 | P12 线路的主机在线提示 | `server/routeNodeHealth.ts`：快速存活状态 + 读库失败保留上一份 |
 
-没做 / 留给阶段 4：数据库租约（多实例只有一个跑评估和 DNS 写入，P15）；外部观察不覆盖落地池直连域名、共享 TLS 入站的规则、还没有规则在用的主备组；分线路记录不带权重；没有快速存活状态的主机（从没连过面板的）仍走按库里心跳算在线的老分支。
+没做 / 留给阶段 4：数据库租约（多实例只有一个跑评估和 DNS 写入，P15，已做，见阶段 4）；外部观察不覆盖落地池直连域名、共享 TLS 入站的规则、还没有规则在用的主备组；分线路记录不带权重；没有快速存活状态的主机（从没连过面板的）仍走按库里心跳算在线的老分支。
 
 ### 阶段 2 · 挑选算法统一 + FXP 遗留项（2026-11-19）
 
@@ -197,3 +197,20 @@
 | 共享 TLS 入站 + 按访客固定（GOST） | SNI 分流器给这种规则发 PROXY v2（`server/tlsInboundRuntime.ts` 的 `visitorHeaderRuleIds`），规则的回环 gost 监听收下（`agentHeartbeatGostPlan.ts`），访客地址一路传到本机代理 |
 | tcp / mtcp 出口进程卡死 | 直接探出口机时发一个坏请求等 gost 断开（`agent/failover_exit_group.go` 的 `failoverProbeRelay`，规格 `probeRelay`） |
 | 多跳 GOST 空闲 / 只转 UDP | 没做，缺的东西写在规格 §10 |
+### 阶段 4 · 控制面：后台任务租约、拆仓库、去掉老的在线判断（2026-11-19）
+
+| 范围 | 落点 |
+|---|---|
+| P15 多实例：只有一个实例跑后台任务 | `server/panelLease.ts`：表 `panel_leases`（name 主键、holder、expiresAt、updatedAt，毫秒）。带条件的 UPDATE（自己拿着或已过期）+ 主键冲突即放弃的 INSERT，三种库上原子；TTL 30 秒、每 10 秒续，持有者只信到「续约开始 + TTL − 5 秒」，续不上先自己停手；正常退出放掉；接手最迟 TTL + 一个续约间隔（40 秒）。每个实例另续一行 `instance:<id>` 作登记。哪些任务只由持有者跑的表在文件开头 |
+| 定时任务 | `scheduler.ts` 里写共享状态的任务都带 `shouldRun: leaseHolderOnly`（`scheduledTask.ts` 原有的放行条件）；状态页采样、异地备份、解锁排期、用户流量日历史、流量异常检测、Telegram 轮询同样；自测超时清扫（逐行条件更新）、更新检查、连接池、SQLite optimize 每个实例照跑 |
+| 非持有者上的评估 | `server/panelWorkRequests.ts`：表 `panel_work_requests`，非持有者写「哪个组、带什么选项」（同一件事只留一行），持有者每 2 秒按 requestedAt 条件删、取走执行；`forwardGroups/evaluateDriver.ts` 的 `runForwardGroupFailoverByIds` 在非持有者上直接转过去，发布队列跑之前丢了租约的同样 |
+| 在线状态跨实例 | 非持有者不把主机写成离线、不发上下线通知（`hostStatusNotifier.ts`）；有别的实例时 `server/agentPresenceElsewhere.ts` 每 10 秒读 `hosts.lastHeartbeat`（连着 Agent 的实例约每 90 秒写一次），`agentFastLiveness.ts` 只认比本进程看到的更晚的时刻：沉默期限按库里的时刻放宽到 200 秒，判了离线后库里出现更晚的时刻就当它回来了。Agent 连在本实例上时仍是 90 秒 |
+| 落地池直连域名 | 只由持有者写（`landingPools.ts` 的 `refreshLandingDns`），非持有者保存池时不写，持有者一分钟一轮补上 |
+| 接手 | 中途拿到租约时给转发组一段就绪宽限（上一任内存里的存活状态带不过来）并补一轮巡检 |
+| 看得到 | `/api/database-health` 带 `backgroundTasks`；系统设置 → 面板日志一行「后台任务由本实例执行 / 由另一实例 xxx 执行」 |
+| 拆 `forwardGroupRepository.ts`（7535 → 1460 行，不改行为） | `server/forwardGroups/`：`evaluateDriver.ts`、`evaluateScope.ts`、`liveness.ts`（评估）、`ddnsPublish.ts`、`ddnsEntryGroup.ts`（记录写入 / 入口组记录集合）、`health.ts`（健康上报）、`probeTopology.ts`（探测拓扑）、`ruleSync.ts`、`runtime.ts`、`portPolicy.ts`（子规则 / 运行时 / 端口）、`common.ts`（共用）。`server/db.ts` 按名字再导出原来的公开函数 |
+| 老的在线判断分支 | `forwardGroups/liveness.ts` 只认快速存活状态，没有的算离线（不再按库里心跳另算 150 秒）；预热完成前就绪宽限里挂起评估 |
+
+验证：tsc、lint（no-explicit-any 7203 → 7202）、`pnpm test:all`；租约在 SQLite（同一进程两个实例：只有一个跑巡检、非持有者的评估交给持有者、接手在 40 秒内、DNS 不重复写）、PostgreSQL 16、MariaDB 10.11（`panelLease.external.test.ts`，并发 8 个抢同一个租约只有 1 个成功、过期后并发接手也只有 1 个）上跑过。
+
+限制：SQLite 部署不支持多实例（租约照常续）。各实例时钟要同步（NTP），偏差吃掉 5 秒余量。Agent 推送（`pushAgentRefresh`）、稳定心跳计划缓存、外部观察结果表都还在进程内：改了配置，连在别的实例上的 Agent 最迟在下一次完整对账（约 5 分钟）拿到；观察点连在非持有实例上时，它的观察结果持有者看不到。非持有者上点「立即同步」立刻返回，结果几秒后在界面上刷新出来。

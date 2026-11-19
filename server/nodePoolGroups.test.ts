@@ -141,6 +141,8 @@ test("主备组跟着节点池：池里去掉活动成员后马上重选", () =>
       const now = Math.floor(Date.now() / 1000);
       for (const [id, ip] of [[1, "198.51.100.1"], [2, "198.51.100.2"], [3, "198.51.100.3"]]) {
         await exec('INSERT INTO hosts (id, name, ip, ipv4, "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, 1, 1, ?)', [id, "h" + id, ip, ip, now]);
+        // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+        (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
       }
       await exec(
         'INSERT INTO forward_groups (id, name, "groupType", "groupMode", domain, "recordType", "targetIp", "userId", "isEnabled") VALUES (40, ?, ?, ?, ?, ?, ?, 1, 1)',
@@ -148,7 +150,7 @@ test("主备组跟着节点池：池里去掉活动成员后马上重选", () =>
       );
       const pools = await import(url("server/nodePools.ts"));
       const follow = await import(url("server/nodePoolGroups.ts"));
-      const repo = await import(url("server/repositories/forwardGroupRepository.ts"));
+      const repo = await import(url("server/db.ts"));
       const poolId = await pools.createNodePool({ userId: 1, name: "入口池", role: "landing", hostIds: [1, 2] });
       await follow.setGroupPool(40, poolId);
       await repo.runForwardGroupFailover(40);

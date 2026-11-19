@@ -101,7 +101,7 @@ test("tunnel update does not wait on a rule exit-mapping lock while its SQLite t
 test("entry-group members count tunnel rules as occupying their source port", () => {
   runScenario("entry-group-ports", String.raw`
     const tunnelRepo = await import(moduleUrl("server/repositories/tunnelRepository.ts"));
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const { tunnelsRouter } = await import(moduleUrl("server/routers/tunnels.ts"));
     const hostCols = ["id", "name", "ip", "hostType", "userId", "isOnline"];
     await insert("hosts", hostCols, [1, "entry-a", "198.51.100.1", "slave", 1, 1]);
@@ -235,7 +235,7 @@ test("re-enabling or restoring a tunnel rule re-reserves its exit port and pendi
 
 test("forward-group member ports are validated before writing and a conflict does not abort the whole sync", () => {
   runScenario("group-members", String.raw`
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const hostCols = ["id", "name", "ip", "ipv4", "hostType", "userId", "isOnline"];
     for (const id of [1, 2, 3]) await insert("hosts", hostCols, [id, "h" + id, "198.51.100." + id, "198.51.100." + id, "slave", 1, 1]);
     const groupCols = ["id", "name", "groupType", "groupMode", "forwardType", "domain", "recordType", "targetIp", "userId", "isEnabled"];
@@ -292,7 +292,7 @@ test("monthly traffic reset days past the end of a short month reset on its last
 
 test("restoring a tunnel on an entry group checks the rule port on every enabled group host", () => {
   runScenario("entry-group-restore", String.raw`
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const hostCols = ["id", "name", "ip", "hostType", "userId", "isOnline"];
     await insert("hosts", hostCols, [1, "entry-a", "198.51.100.1", "slave", 1, 1]);
     await insert("hosts", hostCols, [2, "entry-b", "198.51.100.2", "slave", 1, 1]);
@@ -388,7 +388,7 @@ test("system stop/restore of a route-group parent refreshes its relay hosts", ()
 
 test("a DDNS provider error while enabling a forward group does not roll the enable back", () => {
   runScenario("enable-ddns", String.raw`
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
     // Webhook 地址为空：DDNS 更新直接报错，正好模拟 DNS 服务商出错。
     await settings.setSettings({ ddnsEnabled: "true", ddnsProvider: "webhook", ddnsWebhookUrl: "" });
@@ -410,7 +410,7 @@ test("a DDNS provider error while enabling a forward group does not roll the ena
 
 test("a background forward-group sync treats a port reserved by another request as a conflict", () => {
   runScenario("group-sync-reservation", String.raw`
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const reservations = await import(moduleUrl("server/portReservations.ts"));
     const hostCols = ["id", "name", "ip", "ipv4", "hostType", "userId", "isOnline"];
     for (const id of [1, 2]) await insert("hosts", hostCols, [id, "h" + id, "198.51.100." + id, "198.51.100." + id, "slave", 1, 1]);
@@ -436,7 +436,7 @@ test("a background forward-group sync treats a port reserved by another request 
 
 test("lock-taking batch lifecycle paths refuse to run inside a database transaction", () => {
   runScenario("tx-guard", String.raw`
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     await assert.rejects(
       () => runtime.withDatabaseTransaction(() => groups.healAutoStoppedForwardRules("test")),
       /programming error/,

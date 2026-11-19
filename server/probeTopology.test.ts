@@ -67,7 +67,7 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
     await schema.ensureDatabaseSchema();
 
     try {
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const tunnels = await import(moduleUrl("server/repositories/tunnelRepository.ts"));
       const q = (name) => '"' + name + '"';
       const insert = async (table, columns, values) => {

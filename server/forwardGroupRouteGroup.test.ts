@@ -53,7 +53,7 @@ test("转发组子规则：UDP、TCP+UDP、realm / socat 跟着模板开线路�
         ], [id, 1, "template-" + id, forwardType, protocol, 10, 1, sourcePort, "203.0.113.10", 80, 1, 1, 0, 1, backup]);
       }
 
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       await forwardGroups.syncForwardGroupRules(10);
       const children = await runtime.queryRaw(
         'SELECT "forwardGroupRuleId", "forwardType", "protocol", "failoverEnabled", "failoverTargets" FROM "forward_rules"'
@@ -127,7 +127,7 @@ test("端口转发模板的线路组带中转：子规则照抄路径、中转�
         "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "failoverEnabled", "routeMode", "routePaths",
       ], [200, 1, "tpl", "gost", "tcp", 10, 1, 17000, "203.0.113.10", 45855, 1, 1, 0, 1, "failover", paths]);
 
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       const routeGroups = await import(moduleUrl("server/routeGroups.ts"));
       await forwardGroups.syncForwardGroupRules(10);
       // 模板保存后也会走一遍中继同步：模板自己不该建

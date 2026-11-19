@@ -934,6 +934,32 @@ const tables: TableDef[] = [
   { name: "user_host_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "hostId"]], indexes: [["hostId"]] },
   { name: "user_tunnel_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "tunnelId"]], indexes: [["tunnelId"]] },
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
+  /*
+    面板后台任务租约（server/panelLease.ts）：name = "background" 那一行谁拿着谁跑后台任务，name = "instance:<id>"
+    是各实例的登记。expiresAt / updatedAt 是毫秒。不进 MIGRATION_TABLES：记的是这个面板进程的随机 id，
+    换库 / 迁到新面板后由新进程重新抢（最多等一个 TTL）。
+  */
+  {
+    name: "panel_leases",
+    columns: [
+      c("name", "varchar", { length: 128, notNull: true }), c("holder", "varchar", { length: 128, notNull: true }),
+      c("expiresAt", "bigint", { notNull: true, default: 0 }), c("updatedAt", "bigint", { notNull: true, default: 0 }),
+    ],
+    unique: [["name"]],
+  },
+  /*
+    非持有实例交给持有实例的活（server/panelWorkRequests.ts）：同一件事（name，如 "forward-group:12"）只留一行，
+    持有者每隔几秒取走。requestedAt 是毫秒。不进 MIGRATION_TABLES：只活几秒，记的是这个面板的组 id。
+  */
+  {
+    name: "panel_work_requests",
+    columns: [
+      c("name", "varchar", { length: 128, notNull: true }), c("payload", "text"),
+      c("requestedAt", "bigint", { notNull: true, default: 0 }),
+    ],
+    unique: [["name"]],
+    indexes: [["requestedAt"]],
+  },
   { name: "system_settings", columns: [c("key", "varchar", { length: 191, notNull: true }), c("value", "longtext"), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["key"]] },
   { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("planDurationDays", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("stockReserved", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"]] },
   /*

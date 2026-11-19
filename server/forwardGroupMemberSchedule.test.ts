@@ -26,7 +26,7 @@ test("成员可用时段：进出时段自动停用 / 恢复，手动停用不�
     await schema.ensureDatabaseSchema();
     console.info = () => {};
     console.warn = () => {};
-    const repo = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const repo = await import(moduleUrl("server/db.ts"));
     const sweep = await import(moduleUrl("server/forwardGroupMemberSchedule.ts"));
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const query = (sql, params = []) => runtime.queryRaw(sql, params);
@@ -126,7 +126,7 @@ const scheduleScriptHead = String.raw`
     await schema.ensureDatabaseSchema();
     console.info = () => {};
     console.warn = () => {};
-    const repo = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const repo = await import(moduleUrl("server/db.ts"));
     const sweep = await import(moduleUrl("server/forwardGroupMemberSchedule.ts"));
     const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);
@@ -139,6 +139,8 @@ const scheduleScriptHead = String.raw`
     const nowSeconds = Math.floor(Date.now() / 1000);
     for (const [id, ip] of [[1, "10.0.0.1"], [2, "10.0.0.2"], [3, "10.0.0.3"]]) {
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, 1, 1, ?)', [id, "h" + id, ip, ip, nowSeconds]);
+      // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
 `;
 

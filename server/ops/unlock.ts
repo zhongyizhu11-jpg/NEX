@@ -13,6 +13,7 @@
 */
 import { randomBytes } from "node:crypto";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
+import { isPanelBackgroundLeaseHolder } from "../panelLease";
 import { getSetting, setSetting } from "../repositories/settingsRepository";
 import {
   normalizeUnlockFamily,
@@ -362,7 +363,8 @@ export function startUnlockScheduleJob() {
   scheduleStarted = true;
   let running = false;
   const tick = () => {
-    if (running) return;
+    // 多实例部署：排期只由跑后台任务的实例做（server/panelLease.ts）。
+    if (running || !isPanelBackgroundLeaseHolder()) return;
     running = true;
     void runUnlockScheduleTick()
       .catch((error) => console.warn(`[Unlock] schedule tick failed: ${error instanceof Error ? error.message : String(error)}`))
