@@ -45,7 +45,7 @@ const PRELUDE = String.raw`
   await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
   await schema.ensureDatabaseSchema();
   const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-  const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+  const groups = await import(moduleUrl("server/db.ts"));
   const fast = await import(moduleUrl("server/agentFastLiveness.ts"));
   const readiness = await import(moduleUrl("server/forwardGroups/readiness.ts"));
   await settings.setSettings({

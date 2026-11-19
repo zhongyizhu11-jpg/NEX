@@ -19,6 +19,7 @@ import * as db from "../db";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
 import { getSetting, setSetting } from "../repositories/settingsRepository";
 import { createNonOverlappingScheduledTask } from "../scheduledTask";
+import { leaseHolderOnly } from "../panelLease";
 import {
   advanceAvailabilityTick,
   coverageFromSamples,
@@ -302,7 +303,7 @@ let started = false;
 export function startStatusAvailabilityJob() {
   if (started) return;
   started = true;
-  const task = createNonOverlappingScheduledTask("status availability sampling", runStatusAvailabilityTick, { slowTaskMs: 20_000 });
+  const task = createNonOverlappingScheduledTask("status availability sampling", runStatusAvailabilityTick, { slowTaskMs: 20_000, shouldRun: leaseHolderOnly });
   // 启动后先等 3 分钟：面板刚起来时 Agent 还没重连，心跳都是旧的，这时采样会把所有主机记成断线。
   const startTimer = setTimeout(() => {
     void task();

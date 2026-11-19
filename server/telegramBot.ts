@@ -80,6 +80,7 @@ import {
 } from "./services/userCommandService";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 import { isTelegramLoginEnabled, TELEGRAM_LOGIN_SWITCHED_OFF_MESSAGE } from "./telegramLoginSwitch";
+import { isPanelBackgroundLeaseHolder } from "./panelLease";
 
 
 type TelegramUser = {
@@ -6387,6 +6388,11 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 }
 
 async function pollOnce() {
+  // 多实例部署：只由跑后台任务的实例轮询（server/panelLease.ts）—— 同一个 Token 两边一起 getUpdates，Telegram 回 409。
+  if (!isPanelBackgroundLeaseHolder()) {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    return;
+  }
   const settings = await getTelegramSettings();
   if (!settings.enabled || !settings.token) {
     await new Promise((resolve) => setTimeout(resolve, 30000));

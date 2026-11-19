@@ -91,7 +91,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     await schema.ensureDatabaseSchema();
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
     const ddns = await import(moduleUrl("server/ddns.ts"));
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     await settings.setSettings({
       ddnsEnabled: "true",
       ddnsProvider: "tencentcloud",
@@ -111,6 +111,8 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     const now = Math.floor(Date.now() / 1000);
     for (const [id, ip] of [[1, "198.51.100.10"], [2, "198.51.100.20"], [3, "198.51.100.30"]]) {
       await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "host-" + id, ip, ip, 1, 1, now]);
+      // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
     const memberColumns = ["id", "groupId", "memberType", "hostId", "priority", "isEnabled", "healthStatus", "lastCheckedAt", "healthySince", "ddnsLines"];
     const groupColumns = ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "failoverSeconds"];
@@ -317,7 +319,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     const base = {
       ddnsEnabled: "true",
       ddnsTtl: "600",
@@ -340,6 +342,8 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     const now = Math.floor(Date.now() / 1000);
     for (const [id, ip] of [[1, "198.51.100.10"], [2, "198.51.100.20"], [3, "198.51.100.30"]]) {
       await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "host-" + id, ip, ip, 1, 1, now]);
+      // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
     const memberColumns = ["id", "groupId", "memberType", "hostId", "priority", "isEnabled", "healthStatus", "lastCheckedAt", "healthySince", "ddnsLines"];
     const groupColumns = ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "failoverSeconds"];

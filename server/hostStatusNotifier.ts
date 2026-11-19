@@ -16,6 +16,7 @@ import { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } from "./discord
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
 import { recordHostStatusEvent } from "./ops/eventHooks";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
+import { isPanelBackgroundLeaseHolder } from "./panelLease";
 
 type HostStatus = "online" | "offline";
 
@@ -177,6 +178,8 @@ function recordHostStatusTransition(host: any, status: HostStatus) {
 
 async function notifyHostStatusChange(host: any, status: HostStatus) {
   if (!recordHostStatusTransition(host, status)) return;
+  // 多实例部署：上下线通知和事件只由跑后台任务的实例发（server/panelLease.ts），别的实例只记状态。
+  if (!isPanelBackgroundLeaseHolder()) return;
   recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
   await sendHostStatusTelegram(host, status);
 }
@@ -190,7 +193,7 @@ async function notifyHostStatusChange(host: any, status: HostStatus) {
  */
 async function notifyHostStatusChanges(hosts: any[], status: HostStatus) {
   const due = hosts.filter((host) => recordHostStatusTransition(host, status));
-  if (due.length === 0) return;
+  if (due.length === 0 || !isPanelBackgroundLeaseHolder()) return;
   for (const host of due) recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
   const notify = await hostsWithStatusNotify(due);
   if (notify.length > HOST_STATUS_SUMMARY_THRESHOLD) {
@@ -247,7 +250,8 @@ export async function primeHostStatusNotifier() {
       lastKnownStatus.set(Number(host.id), host.isOnline ? "online" : "offline");
     }
     const staleIds = (staleOnlineHosts as any[]).map((host) => Number(host.id)).filter((id) => Number.isFinite(id) && id > 0);
-    if (staleIds.length > 0) {
+    // 把库里过期的主机标成离线是写共享状态：只由跑后台任务的实例做（server/panelLease.ts）。
+    if (staleIds.length > 0 && isPanelBackgroundLeaseHolder()) {
       const transitionedIds = await db.markStaleHostsOffline(staleIds);
       for (const hostId of transitionedIds) {
         lastKnownStatus.set(hostId, "offline");
@@ -294,7 +298,8 @@ async function handlePresenceCapableHostOnline(event: AgentFastLivenessTransitio
   // The regular presence route deliberately throttles database writes. A
   // recovery transition must still repair a host that was marked offline by a
   // just-completed silence deadline, then immediately re-evaluate its groups.
-  await db.touchHostHeartbeat(hostId);
+  // 从库里看到「别的实例见过它」而恢复的（多实例部署）：本进程没收到它的请求，不替那个实例写在线时刻。
+  if (!event.elsewhere) await db.touchHostHeartbeat(hostId);
   if (!event.isCurrent()) return;
   const host = await db.getHostById(hostId);
   if (!host || !event.isCurrent()) return;
@@ -307,6 +312,12 @@ async function handlePresenceCapableHostOnline(event: AgentFastLivenessTransitio
 export async function handlePresenceCapableHostOffline(event: AgentFastLivenessTransition) {
   if (event.kind !== "confirmed-offline" || event.confirmedOffline !== true || !event.offlineAt) return;
   const hostId = Number(event.hostId || 0);
+  // 多实例部署：只有跑后台任务的实例把主机写成离线、清运行状态、发通知（server/panelLease.ts）。别的实例
+  // 只看到「这台没连本实例」—— 它可能连在别的实例上；本进程内存里的离线状态照样生效（界面显示用）。
+  if (!isPanelBackgroundLeaseHolder()) {
+    clearTunnelRuntimeStatusForHost(hostId);
+    return;
+  }
   const host = await db.getHostById(hostId);
   if (!host || !event.isCurrent()) return;
 

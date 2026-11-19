@@ -6,7 +6,7 @@ import { setSetting, setSettings } from "./repositories/settingsRepository";
 import { getUserByUsername } from "./repositories/userRepository";
 import { hashPassword } from "./password";
 import { randomAvataaarsValue } from "../shared/avatar";
-import { syncForwardGroupRules } from "./repositories/forwardGroupRepository";
+import { syncForwardGroupRules } from "./forwardGroups/ruleSync";
 import { reconcileForwardRuleTunnelExits } from "./repositories/tunnelRepository";
 import { insertForwardRuleRouteEvent } from "./repositories/forwardRuleRepository";
 import { syncRouteRelayRulesForRule } from "./routeGroups";

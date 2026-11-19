@@ -86,7 +86,10 @@ test("DDNS 候选：没就绪的成员不切过去，但当前在用的那台不
 });
 
 test("接上了：转发组故障转移和入口组 DDNS 都过这道筛", () => {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, "repositories/forwardGroupRepository.ts"), "utf8");
+  // 评估的驱动（主备组、分线路）和入口组的解析集合各在一个文件里（server/forwardGroups/）。
+  const source = ["forwardGroups/evaluateDriver.ts", "forwardGroups/ddnsEntryGroup.ts"]
+    .map((file) => fs.readFileSync(path.resolve(import.meta.dirname, file), "utf8"))
+    .join("\n");
   // 故障转移：健康成员再按 SNI 就绪筛一遍，firstHealthy / 回切候选都从筛过的里挑。
   assert.match(source, /const healthyMembers = \(await sniReadyGroupCandidates\(group, templates, defaultEvaluated/);
   // 入口组：还没解析到的成员 SNI 没确认就先不加进来。

@@ -333,7 +333,7 @@ export type NormalizeFailoverContext = {
  * 转发组模板的线路组能不能带中转。
  *
  * 模板本身不跑，跑的是每台成员机上的子规则：子规则照抄模板的路径，各自按自己的入口机在中转机上
- * 建中继（forwardGroupRepository.ensureMemberRuleForTemplate → routeGroups）。所以只要成员都是
+ * 建中继（forwardGroups/ruleSync.ts 的 ensureMemberRuleForTemplate → routeGroups）。所以只要成员都是
  * 直连主机（端口转发、主备组）就行；转发链的中转就是成员本身，隧道成员的调度在隧道出口上，都不带。
  */
 export function routeHopsAllowedForGroup(group: any): boolean {
@@ -3657,7 +3657,7 @@ export const crudRulesRouter = router({
           if (groupChanged) await markTemplateChildrenPendingDelete(input.id, "forward-group-rule-route-changed");
           await db.updateForwardRule(input.id, data);
           // 模板上的「切到这条 / 交回自动」和普通规则一样记进切换记录（同一个事务：后面同步失败就不留这条）；
-          // 子规则跟着组同步拿到钉子（forwardGroupRepository.childRoutePolicyColumns），Agent 跑的是子规则。
+          // 子规则跟着组同步拿到钉子（forwardGroups/ruleSync.ts 的 childRoutePolicyColumns），Agent 跑的是子规则。
           if (failoverFieldsProvided(input) && !groupChanged) await recordRoutePinChange(rule, data);
         }));
         if (groupChanged) await db.runForwardGroupFailover(groupId);

@@ -57,6 +57,7 @@ import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSett
 import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discordSettings";
 import { isOidcLoginUsable, readOidcLoginSettings } from "../oidcLoginSettings";
 import { reconcileHostDdnsRecords } from "../hostDdns";
+import { panelBackgroundLeaseView } from "../panelLeaseView";
 import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile } from "../ruleEntryDomain";
 import { resolveRuleEntryDomainRuntimeSettings } from "../repositories/ruleEntryDomainRepository";
 import type { DatabaseConfig } from "../dbRuntime";
@@ -3162,6 +3163,8 @@ export const systemRouter = router({
       return {
         ...page,
         checkedAt: new Date().toISOString(),
+        // 多实例部署时后台任务由哪个实例跑（server/panelLease.ts），日志卡片上显示一行。
+        backgroundLease: panelBackgroundLeaseView(),
       };
     }),
 

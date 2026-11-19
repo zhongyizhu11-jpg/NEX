@@ -30,7 +30,7 @@ import {
 } from "../../shared/planPricing";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, quoteDbIdentifier, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
 import { getForwardRulesForUserSync, resetForwardRulesForUserSync } from "./forwardRuleRepository";
-import { getForwardGroupEntryPortRange } from "./forwardGroupRepository";
+import { getForwardGroupEntryPortRange } from "../forwardGroups/portPolicy";
 import { getHostById } from "./hostRepository";
 import { getTunnelById, updateTunnel } from "./tunnelRepository";
 import { pruneMapEntries, setBoundedMapValue } from "../boundedCache";

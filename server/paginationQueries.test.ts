@@ -58,7 +58,7 @@ test("database-backed list queries page, search, scope, and hydrate only request
       const users = await import(moduleUrl("server/repositories/userRepository.ts"));
       const hosts = await import(moduleUrl("server/repositories/hostRepository.ts"));
       const tunnels = await import(moduleUrl("server/repositories/tunnelRepository.ts"));
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const rules = await import(moduleUrl("server/repositories/forwardRuleRepository.ts"));
       const billing = await import(moduleUrl("server/repositories/billingRepository.ts"));
       const { tunnelsRouter } = await import(moduleUrl("server/routers/tunnels.ts"));

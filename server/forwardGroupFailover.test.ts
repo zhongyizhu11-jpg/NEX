@@ -85,7 +85,7 @@ test("forward group switches after its configured heartbeat failure window", () 
       const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
       const ddns = await import(moduleUrl("server/ddns.ts"));
       const hosts = await import(moduleUrl("server/repositories/hostRepository.ts"));
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       const forwardGroupHealth = await import(moduleUrl("server/forwardGroupHealthRecheck.ts"));
       const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
       const address = webhook.address();
@@ -118,6 +118,11 @@ test("forward group switches after its configured heartbeat failure window", () 
         ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"],
         [2, "standby", "198.51.100.20", "198.51.100.20", 1, 1, now],
       );
+      // 两台都连着面板（有快速存活状态，见 server/forwardGroups/liveness.ts）。下面改库里的 isOnline / lastHeartbeat
+      // 只是「通信标记」，不该推翻 Agent 的健康判断。
+      const fast = await import(moduleUrl("server/agentFastLiveness.ts"));
+      fast.registerPresenceCapableHost(1);
+      fast.registerPresenceCapableHost(2);
       await insert(
         "forward_groups",
         ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "activeMemberId", "failoverSeconds", "recoverSeconds", "autoFailback"],
@@ -734,7 +739,7 @@ test("entry group health windows suppress transient DDNS flaps", () => {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
       const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const activity = await import(moduleUrl("server/agentActivity.ts"));
       const address = webhook.address();
       await settings.setSettings({
@@ -754,6 +759,10 @@ test("entry group health windows suppress transient DDNS flaps", () => {
       for (const [id, ip] of [[1, "198.51.100.10"], [2, "198.51.100.20"]]) {
         await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "entry-" + id, ip, ip, 1, 1, now]);
       }
+      // 在线 = 连着面板、有快速存活状态；离线用「没有这份状态」表示（server/forwardGroups/liveness.ts）。
+      const fast = await import(moduleUrl("server/agentFastLiveness.ts"));
+      fast.registerPresenceCapableHost(1);
+      fast.registerPresenceCapableHost(2);
       await insert(
         "forward_groups",
         ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "failoverSeconds", "recoverSeconds", "chinaHealthCheckEnabled"],
@@ -769,7 +778,7 @@ test("entry group health windows suppress transient DDNS flaps", () => {
 
       activity.recordAuthenticatedAgentActivity(1, (now - 300) * 1000);
       await groups.runForwardGroupFailover(70);
-      assert.deepEqual(requests.at(-1).values, ["198.51.100.10", "198.51.100.20"], "newer DB heartbeat must win over stale in-memory activity");
+      assert.deepEqual(requests.at(-1).values, ["198.51.100.10", "198.51.100.20"], "a stale authenticated request must not override the fast-liveness state");
 
       const baseline = requests.length;
       await runtime.executeRaw('UPDATE "forward_group_members" SET "chinaHealthStatus" = \'unhealthy\', "chinaHealthCheckedAt" = ? WHERE "id" = 701', [now]);
@@ -791,6 +800,7 @@ test("entry group health windows suppress transient DDNS flaps", () => {
 
       const beforePendingHealth = requests.length;
       await runtime.executeRaw('UPDATE "hosts" SET "isOnline" = 0, "lastHeartbeat" = ? WHERE "id" = 1', [now - 300]);
+      fast.removePresenceCapableHost(1);
       await runtime.executeRaw('UPDATE "forward_group_members" SET "chinaHealthStatus" = \'unknown\', "chinaHealthCheckedAt" = NULL, "failureSince" = ? WHERE "id" = 701', [now - 11]);
       await groups.runForwardGroupFailover(70);
       assert.equal(requests.length, beforePendingHealth + 1, "confirmed host offline must override a pending health snapshot");
@@ -805,6 +815,7 @@ test("entry group health windows suppress transient DDNS flaps", () => {
 
       const oneEntry = requests.length;
       await runtime.executeRaw('UPDATE "hosts" SET "isOnline" = 0, "lastHeartbeat" = ? WHERE "id" = 2', [now - 300]);
+      fast.removePresenceCapableHost(2);
       await groups.runForwardGroupFailover(70);
       assert.equal(requests.length, oneEntry, "an all-offline group must retain its last managed record");
       await runtime.executeRaw(
@@ -816,6 +827,7 @@ test("entry group health windows suppress transient DDNS flaps", () => {
       assert.deepEqual(requests.at(-1).values, ["198.51.100.20"], "all-offline entry groups must retain one managed record");
 
       await runtime.executeRaw('UPDATE "hosts" SET "isOnline" = 1, "lastHeartbeat" = ? WHERE "id" = 1', [now]);
+      fast.registerPresenceCapableHost(1);
       await runtime.executeRaw(
         'UPDATE "forward_group_members" SET "chinaHealthStatus" = \'healthy\', "chinaHealthCheckedAt" = ?, "failureSince" = NULL, "healthySince" = ? WHERE "id" = 701',
         [now, now - 11],
@@ -848,7 +860,7 @@ test("failover groups return to the highest-priority recovered member after mult
     const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
     const runtime = await import(moduleUrl("server/dbRuntime.ts"));
     const schema = await import(moduleUrl("server/dbSchema.ts"));
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
     const requests = [];
     const webhook = http.createServer((request, response) => {
@@ -894,6 +906,8 @@ test("failover groups return to the highest-priority recovered member after mult
       const now = Math.floor(Date.now() / 1000);
       for (const [id, ip] of [[1, "198.51.100.11"], [2, "198.51.100.12"], [3, "198.51.100.13"]]) {
         await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "member-" + id, ip, ip, 1, 1, now]);
+        // 在线 = 连着面板、有快速存活状态（server/forwardGroups/liveness.ts）
+        (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
       }
       await insert(
         "forward_groups",

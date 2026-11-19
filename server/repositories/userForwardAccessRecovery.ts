@@ -5,7 +5,8 @@ import { afterDatabaseCommit, getDb, nowDate } from "../dbRuntime";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { keyedTaskDepth, runWithTrafficBillingUserLockHeld, trafficBillingUserLockKey, withKeyedTaskLock } from "../keyedTaskLock";
 import { getForwardRulesForUserSync } from "./forwardRuleRepository";
-import { runForwardGroupFailover, syncForwardGroupRules } from "./forwardGroupRepository";
+import { runForwardGroupFailover } from "../forwardGroups/evaluateDriver";
+import { syncForwardGroupRules } from "../forwardGroups/ruleSync";
 import { forwardRuleRestorePortConflict, getTunnelById, getTunnelExitNodes, getTunnelHops, updateTunnel } from "./tunnelRepository";
 import { getUserById, type ForwardAccessPauseReason } from "./userRepository";
 

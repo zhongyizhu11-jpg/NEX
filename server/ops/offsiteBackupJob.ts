@@ -7,6 +7,7 @@
 */
 import { claimSettingKey } from "../repositories/settingsRepository";
 import { createNonOverlappingScheduledTask } from "../scheduledTask";
+import { leaseHolderOnly } from "../panelLease";
 import { isOffsiteBackupDue, offsiteBackupClaimKey } from "./offsiteBackupLogic";
 import { readOffsiteBackupSettings, runOffsiteBackup } from "./offsiteBackup";
 
@@ -32,7 +33,7 @@ let started = false;
 export function startOffsiteBackupJob() {
   if (started) return;
   started = true;
-  const task = createNonOverlappingScheduledTask("offsite backup", () => runOffsiteBackupIfDue(), { slowTaskMs: 120_000 });
+  const task = createNonOverlappingScheduledTask("offsite backup", () => runOffsiteBackupIfDue(), { slowTaskMs: 120_000, shouldRun: leaseHolderOnly });
   const startTimer = setTimeout(() => {
     void task();
     const timer = setInterval(() => { void task(); }, 10 * 60_000);

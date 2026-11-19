@@ -19,7 +19,7 @@ test("confirmed Agent offline overrides fresh forwarding health and triggers DDN
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const hostStatus = await import(moduleUrl("server/hostStatusNotifier.ts"));
 
       const q = (name) => '"' + name + '"';
@@ -84,6 +84,9 @@ test("confirmed Agent offline overrides fresh forwarding health and triggers DDN
         );
       }
 
+      // 主机 2 连着面板（有快速存活状态）；主机 1 的快速存活刚判了离线 —— 评估里「没有这份状态 / 确认离线」
+      // 都算离线（server/forwardGroups/liveness.ts），这里不登记它。
+      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(2);
       const offlineAt = Date.now();
       await hostStatus.handlePresenceCapableHostOffline({
         kind: "confirmed-offline",
@@ -152,7 +155,7 @@ test("presence-capable hosts stay eligible during panel startup grace", () => {
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const fastLiveness = await import(moduleUrl("server/agentFastLiveness.ts"));
       const now = Math.floor(Date.now() / 1000);
 
@@ -191,6 +194,11 @@ test("presence-capable hosts stay eligible during panel startup grace", () => {
 
       assert.equal(await groups.primeForwardGroupHostLivenessDeadlines(), 1);
       assert.equal(fastLiveness.getPresenceCapableHostLivenessSnapshot(1)?.confirmedOffline, false);
+      // 主机 2 库里没有版本号（预热不登记它），但它连着面板：第一次 presence 就登记上。
+      assert.equal(fastLiveness.getPresenceCapableHostLivenessSnapshot(2), null);
+      fastLiveness.registerPresenceCapableHost(2);
+      // 主机 3 从没连过面板：没有快速存活状态，就是离线。
+      assert.equal(fastLiveness.getPresenceCapableHostLivenessSnapshot(3), null);
       await groups.runForwardGroupFailover(30);
 
       const [state] = await runtime.queryRaw(
@@ -203,7 +211,7 @@ test("presence-capable hosts stay eligible during panel startup grace", () => {
       const [legacyState] = await runtime.queryRaw(
         'SELECT "activeMemberId", "lastDdnsValue" FROM "forward_groups" WHERE "id" = 31',
       );
-      assert.equal(Number(legacyState?.activeMemberId), 312, "a legacy host with no activity cannot remain available forever");
+      assert.equal(Number(legacyState?.activeMemberId), 312, "a host that never connected (no fast-liveness state) reads offline");
       assert.equal(legacyState?.lastDdnsValue, "198.51.100.20");
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
@@ -218,6 +226,77 @@ test("presence-capable hosts stay eligible during panel startup grace", () => {
         DATABASE_TYPE: "sqlite",
         FORWARDX_TEST_DB: databasePath,
       },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/*
+  没有快速存活状态的主机在评估里算离线。面板刚启动、预热（按库里的主机登记快速存活状态）还没做完的那几秒，
+  所有成员都没有这份状态 —— 这时不能把解析换走，要等预热做完（就绪宽限里挂起，过几秒再评估）。
+*/
+test("before host liveness is primed, the readiness grace keeps the published record", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-unprimed-"));
+  const databasePath = path.join(directory, "unprimed.db");
+  const script = String.raw`
+    import assert from "node:assert/strict";
+    import path from "node:path";
+    import { pathToFileURL } from "node:url";
+
+    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
+    const schema = await import(moduleUrl("server/dbSchema.ts"));
+    try {
+      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+      await schema.ensureDatabaseSchema();
+      const groups = await import(moduleUrl("server/db.ts"));
+      const readiness = await import(moduleUrl("server/forwardGroups/readiness.ts"));
+      const now = Math.floor(Date.now() / 1000);
+      for (const [id, address] of [[1, "198.51.100.10"], [2, "198.51.100.20"]]) {
+        await runtime.executeRaw(
+          'INSERT INTO "hosts" ("id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, "host-" + id, address, address, 1, 1, now, "2.2.264"],
+        );
+      }
+      await runtime.executeRaw(
+        'INSERT INTO "forward_groups" ("id", "name", "groupType", "groupMode", "targetIp", "userId", "isEnabled", "activeMemberId", "lastDdnsValue", "failoverSeconds") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [40, "unprimed", "host", "failover", "0.0.0.0", 1, 1, 401, "198.51.100.10", 0],
+      );
+      for (const [id, hostId, priority] of [[401, 1, 0], [402, 2, 1]]) {
+        await runtime.executeRaw(
+          'INSERT INTO "forward_group_members" ("id", "groupId", "memberType", "hostId", "priority", "isEnabled") VALUES (?, ?, ?, ?, ?, ?)',
+          [id, 40, "host", hostId, priority, 1],
+        );
+      }
+      // 面板「就绪」了（调度器起来），预热还没做完
+      readiness.setForwardGroupPanelReadyAtForTests(Date.now());
+      await groups.runForwardGroupFailover(40);
+      let [state] = await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue", "lastMessage" FROM "forward_groups" WHERE "id" = 40');
+      assert.equal(Number(state.activeMemberId), 401);
+      assert.equal(state.lastDdnsValue, "198.51.100.10");
+      assert.match(String(state.lastMessage), /主机在线状态还没加载完/);
+
+      // 预热做完：两台都按库里的版本号登记（启动宽限里算在线），照常评估，活动成员不动
+      assert.equal(await groups.primeForwardGroupHostLivenessDeadlines(), 2);
+      await groups.runForwardGroupFailover(40);
+      [state] = await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue", "lastMessage" FROM "forward_groups" WHERE "id" = 40');
+      assert.equal(Number(state.activeMemberId), 401);
+      assert.doesNotMatch(String(state.lastMessage), /主机在线状态还没加载完/);
+      readiness.setForwardGroupPanelReadyAtForTests(0);
+    } finally {
+      await runtime.closeDatabase().catch(() => undefined);
+    }
+    process.exit(0);
+  `;
+
+  try {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd: process.cwd(),
+      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
       encoding: "utf8",
       timeout: 60_000,
     });

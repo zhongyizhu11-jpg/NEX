@@ -135,7 +135,7 @@ export function resolveNextSourcePortEnd(input: { sourcePort?: unknown; sourcePo
 /**
  * 「端口转发」资源（port 模式的转发组）上的端口段：模板落库前，在每台入口主机上整段查一遍，
  * 并把段里除起点以外的端口占住（起点由转发组那条路自己按单端口占，见 rules.crud）。
- * 成员主机上的子规则由转发组同步照着模板建（forwardGroupRepository 的子规则同步会带上段结尾）。
+ * 成员主机上的子规则由转发组同步照着模板建（forwardGroups/ruleSync.ts 的子规则同步会带上段结尾）。
  *
  * 转发链、主备转发组、带隧道成员的端口转发不支持：返回明确的原因。
  */

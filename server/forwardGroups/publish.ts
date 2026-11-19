@@ -10,7 +10,7 @@ import crypto from "node:crypto";
       （最新的期望状态生效，中间的不补发）。正在跑的时候又来一次，跑完再跑一遍。
     · 失败按退避重试（1 秒起翻倍，最长 30 秒），成功清零。
 
-  这里只管排队和重试；「发什么、怎么只动面板自己的记录」还是 forwardGroupRepository / ddns.ts 那一套。
+  这里只管排队和重试；「发什么、怎么只动面板自己的记录」还是 ddnsPublish.ts / ddnsEntryGroup.ts / ddns.ts 那一套。
 */
 
 type TimerHandle = ReturnType<typeof setTimeout>;

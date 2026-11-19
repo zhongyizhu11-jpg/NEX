@@ -27,7 +27,7 @@ import { getDb, nowDate } from "./dbRuntime";
   的规划把每条非默认线路的记录写到服务商，并把结果记在组的 ddnsLineState 里。
 
   对没分线路的组（也没有残留的线路记录）prepareForwardGroupDdnsLines 直接返回 null：
-  forwardGroupRepository 里所有分支都按 null 走原来的路，不多发一个请求、不多读一次库。
+  转发组评估（server/forwardGroups/）里所有分支都按 null 走原来的路，不多发一个请求、不多读一次库。
 
   失败的处理：一条线路写失败不影响别的线路，也不回滚默认线路；失败的那条保持上一次的状态（下一轮
   照旧会重试），全部处理完后抛错，让组的评估队列按退避重试。
@@ -111,7 +111,7 @@ export type ForwardGroupLineSyncInput = {
   forceSync?: boolean;
   rank?: LinePlanInput["rank"];
   /**
-   * 评估只算结论时用（见 forwardGroupRepository 的 deferProviderWrite）：走到要写服务商的地方先问一句，
+   * 评估只算结论时用（见 forwardGroups/evaluateScope.ts 的 deferProviderWrite）：走到要写服务商的地方先问一句，
    * 返回 true 就不写、状态也不动，等发布队列那一轮再来。
    */
   deferNetwork?: () => boolean;

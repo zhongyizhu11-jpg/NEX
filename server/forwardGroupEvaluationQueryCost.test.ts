@@ -48,6 +48,8 @@ function runProbe(): Probe {
     for (let i = 1; i <= 60; i++) {
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)',
         [i, "h" + i, "10.9.0." + i, "10.9.0." + i, "slave", "tok" + i, now]);
+      // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+      (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(i);
     }
 
     // 入口组：5 个成员 / 20 个成员，成员自己报告健康
@@ -79,7 +81,7 @@ function runProbe(): Probe {
     await failoverGroup(3, 1, 5);
     await failoverGroup(4, 30, 20);
 
-    const groups = await import(url("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(url("server/db.ts"));
     const cost = {};
     const values = {};
     for (const [label, gid] of [["入口5", 1], ["入口20", 2], ["主备5", 3], ["主备20", 4]]) {
