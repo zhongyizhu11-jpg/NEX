@@ -331,3 +331,82 @@ test("本地运行态比对：认得已在跑的规则，保护端口，多出�
   assert.equal(removal.fxp, undefined);
   assert.equal(matchers.localTunnelMatches(99, "gost-tunnel", 20099), false, "本地没有这条隧道");
 });
+
+/*
+  并联中转（中转主备）在旧运行时上（评审 FXP/gost F7）：选择器把中转全摘掉时，nex6 之前的 gost 会让入口机直连目标、
+  绕过隧道。这台入口机报的运行时构建号低于 nex6 时只下发第一台中转（单节点、不带选择器、不重试）——
+  中转挂了这条规则就不通，而不是偷偷直连；nex6 起照旧几台中转带选择器。
+*/
+async function relayFailoverPlan(runtimeVersion: string | null) {
+  const { createGostRuntimePlan } = await import("./agentHeartbeatGostPlan");
+  const tunnel = { id: 12, mode: "tls", isEnabled: true, entryHostId: 5, exitHostId: 8, relayMode: "failover" };
+  const hops = [
+    { tunnelId: 12, seq: 0, hostId: 5, listenPort: 0 },
+    { tunnelId: 12, seq: 1, hostId: 6, listenPort: 41001 },
+    { tunnelId: 12, seq: 2, hostId: 7, listenPort: 41002 },
+    { tunnelId: 12, seq: 3, hostId: 8, listenPort: 41003 },
+  ];
+  const rule = { id: 77, forwardType: "gost", isEnabled: true, tunnelId: 12, sourcePort: 30077, targetIp: "203.0.113.7", targetPort: 443, protocol: "tcp" };
+  const plan = await createGostRuntimePlan(ctxFor({
+    host: { id: 5, name: "edge-5", agentVersion: "2.2.264", runtimeVersion },
+    agentAllRules: [rule],
+    tunnelById: new Map([[12, tunnel]]),
+    tunnelHopsByTunnelId: new Map([[12, hops]]),
+    tunnelExitEndpointById: new Map([[12, { host: "198.51.100.8" }]]),
+  }), {
+    VERBOSE_AGENT_ACTIONS: false,
+    anyTunnelDnsRefresh: () => false,
+    applyGostLimiter: (service: any) => service,
+    buildPrimaryExitNode: (async (_r: any, _t: any, exitHost?: string) => ({ name: "exit-77", addr: `${exitHost || "198.51.100.8"}:41003` })) as any,
+    buildProxyRuleDebugCmd: unused("buildProxyRuleDebugCmd"),
+    currentHostTunnelExitPortsForRule: () => [],
+    dnsRuntimeRefreshCmd: unused("dnsRuntimeRefreshCmd"),
+    failoverTargetAddr: (r: any) => `${r.targetIp}:${r.targetPort}`,
+    getHopDialAddress: (async (hop: any) => `198.51.100.${hop.hostId}`) as any,
+    gostBalancePlans: new Map(),
+    gostRateLimiters: [],
+    gostRelayFailoverHopMetadata: { strategy: "fifo", maxFails: 1, failTimeout: "5s" },
+    gostRules: [rule],
+    gostRuntimeApiSection: () => ({}),
+    gostRuntimeExecStart: (service: string, configPath: string) => `run ${service} ${configPath}`,
+    gostRuntimeSyncCmd: (service: string, configPath: string) => `sync ${service} ${configPath}`,
+    gostServiceName: "forwardx-runtime",
+    gostServiceUnit: "[Unit]",
+    gostTunnelExitTargetAddr: ((r: any) => `${r.targetIp}:${r.targetPort}`) as any,
+    guardBackendPort: unused("guardBackendPort"),
+    isCurrentHostTunnelEntry: () => true,
+    isForwardXTunnel: () => false,
+    maybeProxyProtocolMetadata: () => undefined,
+    proxyProtocolEnabled: () => false,
+    proxyProtocolVersion: () => 1,
+    routeHeaderStripRuleIds: new Set<number>(),
+    shouldUseRuleGuard: async () => false,
+    tunnelEgressHelpers: new Map(),
+    tunnelExitEndpointsForRule: () => [{ exitNodeId: 0, exitSeq: 0, exitHostId: 8, listenPort: 41003, rulePort: 0, primary: true }],
+    tunnelExitRules: [],
+    tunnelForwardProtos: () => ["tcp"],
+    tunnelProxyProtocolPlan: () => ({}) as any,
+  });
+  plan.buildGostReloadCmds();
+  const written = JSON.parse(Buffer.from(plan.gostManagedConfigs[0].contentBase64, "base64").toString("utf8"));
+  return { written, services: plan.gostServiceConfig as any[] };
+}
+
+test("并联中转：入口机运行时低于 nex6 时只下发第一台中转（单节点、没有选择器、不重试）；nex6 起几台带选择器", async () => {
+  for (const runtimeVersion of ["3.2.6-nex5", "3.2.6", null]) {
+    const { written, services } = await relayFailoverPlan(runtimeVersion);
+    const chain = written.chains.find((item: any) => item.name === "chain-tunnel-77");
+    assert.ok(chain, `运行时 ${runtimeVersion}：链没生成`);
+    const relayHop = chain.hops[0];
+    assert.equal(relayHop.nodes.length, 1, `运行时 ${runtimeVersion}：旧运行时上中转全挂会绕过隧道，只能下发一台中转`);
+    assert.equal(relayHop.selector, undefined, `运行时 ${runtimeVersion}：不能带选择器`);
+    assert.match(relayHop.nodes[0].addr, /^198\.51\.100\.6:/, "第一台中转");
+    const service = services.find((item) => item.name === "fwx-77-tcp");
+    assert.equal(service.handler.retries, undefined, "只有一台中转：不重试");
+  }
+  const { written, services } = await relayFailoverPlan("3.2.6-nex6");
+  const chain = written.chains.find((item: any) => item.name === "chain-tunnel-77");
+  assert.equal(chain.hops[0].nodes.length, 2);
+  assert.deepEqual(chain.hops[0].selector, { strategy: "fifo", maxFails: 1, failTimeout: "5s" });
+  assert.equal(services.find((item) => item.name === "fwx-77-tcp").handler.retries, 1);
+});

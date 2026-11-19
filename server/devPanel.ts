@@ -1634,7 +1634,7 @@ async function seedLineDemo(adminId: number) {
     return insertAndGetId("forward_rules", {
       userId: adminId, hostId: po0, name, forwardType: "gost", protocol: "tcp", sourcePort, targetIp, targetPort, sortOrder, isRunning: true, isEnabled: true,
       failoverEnabled: true, routeMode: mode, routeSwitchMode: delivery === "hot" ? "fast" : "smooth", routeFailureThreshold: delivery === "hot" ? 2 : 3,
-      routeScoreMargin: 10, routeScoreHoldSeconds: 120, routePrewarmSeconds: 0, failoverSeconds: 5, recoverSeconds: 180, failoverTargets: "[]",
+      routeScoreHoldSeconds: 120, routePrewarmSeconds: 0, failoverSeconds: 5, recoverSeconds: 180, failoverTargets: "[]",
       routeDelivery: delivery, routeLines: serializeRouteLines(lines as any), routePaths: JSON.stringify(paths),
       tunnelId: null, tunnelExitPort: null, forwardGroupId: null, forwardGroupRuleId: null, forwardGroupMemberId: null, isForwardGroupTemplate: false,
       createdAt: now, updatedAt: now,
@@ -1754,7 +1754,7 @@ async function seedLineDemo(adminId: number) {
   const portTemplate = await insertAndGetId("forward_rules", {
     userId: adminId, hostId: po0, name: "Jinx/hk/3", forwardType: "gost", protocol: "both", sourcePort: 26340, targetIp: "hkboil.ddos.top", targetPort: 45855,
     sortOrder: 24, isRunning: false, isEnabled: true, failoverEnabled: true, routeMode: "smart", routeSwitchMode: "smooth", routeFailureThreshold: 2,
-    routeScoreMargin: 10, routeScoreHoldSeconds: 30, routePrewarmSeconds: 300, failoverSeconds: 3, recoverSeconds: 300, failoverMinHoldSeconds: 60,
+    routeScoreHoldSeconds: 30, routePrewarmSeconds: 300, failoverSeconds: 3, recoverSeconds: 300, failoverMinHoldSeconds: 60,
     failoverPreferFastest: true, failoverTargets: "[]", routeDelivery: "hot", routeLines: serializeRouteLines(templateLines as Parameters<typeof serializeRouteLines>[0]),
     routePaths: JSON.stringify(expand(templateLines)), tunnelId: null, tunnelExitPort: null, forwardGroupId: portLineGroupId, forwardGroupRuleId: null,
     forwardGroupMemberId: null, isForwardGroupTemplate: true, createdAt: now, updatedAt: now,
@@ -1864,7 +1864,7 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
     // 线路组：一个入口 + 三条路径 + 混合策略。主线路经 JP 中转，备用经 SG → US 两跳到另一个落地，
     // 第三条直连。保存后由 syncRouteRelayRulesForRule 在中转机上生成中继规则、把 dial 写回。
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "US game route group", forwardType: "gost", protocol: "tcp", sourcePort: 25300, targetIp: "10.95.0.10", targetPort: 443, sortOrder: 6, isRunning: true,
-      failoverEnabled: true, routeMode: "hybrid", routeSwitchMode: "smooth", routeFailureThreshold: 3, routeScoreMargin: 10, routeScoreHoldSeconds: 180, routePrewarmSeconds: 300,
+      failoverEnabled: true, routeMode: "hybrid", routeSwitchMode: "smooth", routeFailureThreshold: 3, routeScoreHoldSeconds: 180, routePrewarmSeconds: 300,
       failoverSeconds: 10, recoverSeconds: 300, failoverMinHoldSeconds: 600, failoverPreferFastest: true, failoverTargets: "[]",
       routePaths: JSON.stringify([
         { key: "main", name: "主线路", hops: [hostIds[1]], dest: null, weight: 60, probe: null, dial: null },

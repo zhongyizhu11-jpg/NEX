@@ -14,7 +14,9 @@ import { isTunnelRelayFailover } from "../../shared/tunnelRelay";
 import { AGENT_FAST_LIVENESS_SILENCE_MS, getPresenceCapableHostLivenessSnapshot } from "../agentFastLiveness";
 import { memberEntryHostId, toDate } from "./common";
 import { evaluationHost, evaluationTunnel } from "./evaluateScope";
-import { getForwardGroupById } from "../repositories/forwardGroupRepository";
+import { eq } from "drizzle-orm";
+import { forwardGroupMembers, forwardGroups } from "../../drizzle/schema";
+import { getDb } from "../dbRuntime";
 
 export type MemberAgentLiveness = {
   hostId: number;
@@ -113,11 +115,19 @@ export async function memberAgentSelectionStillCurrent(member: any) {
 }
 
 export async function failoverAgentSelectionStillCurrent(group: any, active: any, next: any) {
-  const latest = await getForwardGroupById(Number(group?.id || 0)).catch(() => null) as any;
+  // 只读要比的那两样（当前成员、哪些成员启用着），不经过转发组仓库。
+  const groupId = Number(group?.id || 0);
+  const latest = await (async () => {
+    const db = await getDb();
+    const row = (await db.select({ activeMemberId: forwardGroups.activeMemberId }).from(forwardGroups).where(eq(forwardGroups.id, groupId)).limit(1))[0];
+    if (!row) return null;
+    const members = await db.select({ id: forwardGroupMembers.id, isEnabled: forwardGroupMembers.isEnabled }).from(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, groupId));
+    return { activeMemberId: row.activeMemberId, members };
+  })().catch(() => null);
   if (!latest || Number(latest.activeMemberId || 0) !== Number(group?.activeMemberId || 0)) return false;
-  const enabledMemberIds = new Set((latest.members || [])
-    .filter((member: any) => dbBool(member?.isEnabled))
-    .map((member: any) => Number(member.id || 0)));
+  const enabledMemberIds = new Set(latest.members
+    .filter((member: { id: unknown; isEnabled: unknown }) => dbBool(member?.isEnabled))
+    .map((member: { id: unknown; isEnabled: unknown }) => Number(member.id || 0)));
   /*
     评估之后成员又被改了（停用 / 去掉）才算过期。活动成员在评估时就已经是停用的不算：那正是这次要从它
     身上换走的原因（P4）—— 以前这里一律要求活动成员启用，停用的活动成员永远换不走，评估还会不停重排。

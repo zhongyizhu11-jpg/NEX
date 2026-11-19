@@ -2,8 +2,8 @@ import * as db from "./db";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 import { appendPanelLog } from "./_core/panelLogger";
 import { dbBool } from "./repositories/repositoryUtils";
-import { withKeyedTaskLock } from "./keyedTaskLock";
 import { memberEnabledIntent, resolveMemberScheduleState } from "../shared/memberSchedule";
+import { withForwardGroupEditLock } from "./panelKeyedLock";
 
 /*
   线路按时间段启用（shared/memberSchedule.ts）的执行端：每分钟看一遍设了可用时段的成员，
@@ -37,7 +37,7 @@ export async function applyForwardGroupMemberSchedules(at = new Date()) {
   let applied = 0;
   for (const groupId of candidateGroupIds) {
     try {
-      await withKeyedTaskLock(`forward-group:${groupId}`, async () => {
+      await withForwardGroupEditLock(groupId, async () => {
         const group = await db.getForwardGroupById(groupId) as any;
         if (!group) return;
         const current = (group.members || []) as any[];

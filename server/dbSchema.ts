@@ -414,6 +414,8 @@ const tables: TableDef[] = [
       c("routeMode", "varchar", { length: 24 }), c("routePaths", "text"),
       c("routeSwitchMode", "varchar", { length: 16, notNull: true, default: "smooth" }),
       c("routeFailureThreshold", "int", { notNull: true, default: 3 }),
+      // routeScoreMargin 已经没人读了（线路组的延迟优先门槛固定 50 ms，见 docs/dev/scheduler-spec.md）；这个仓库从不在
+      // 升级时删列（老版本回滚、迁移导入还认它），列留着、不再写。
       c("routeScoreMargin", "int", { notNull: true, default: 10 }), c("routeScoreHoldSeconds", "int", { notNull: true, default: 180 }),
       c("routePrewarmSeconds", "int", { notNull: true, default: 300 }),
       // 线路定义（分层候选，shared/routeLines.ts）和备用怎么候着（冷备 / 热备 / 聚合 / 复制）。
@@ -949,13 +951,15 @@ const tables: TableDef[] = [
   },
   /*
     非持有实例交给持有实例的活（server/panelWorkRequests.ts）：同一件事（name，如 "forward-group:12"）只留一行，
-    持有者每隔几秒取走。requestedAt 是毫秒。不进 MIGRATION_TABLES：只活几秒，记的是这个面板的组 id。
+    持有者每隔几秒取走。requestedAt / nextAttemptAt 是毫秒（库的时钟）；nextAttemptAt 是正在跑（认领到期时刻）或
+    失败后退避到什么时候，attempts 是失败了几次。不进 MIGRATION_TABLES：只活几秒，记的是这个面板的组 id。
   */
   {
     name: "panel_work_requests",
     columns: [
       c("name", "varchar", { length: 128, notNull: true }), c("payload", "text"),
       c("requestedAt", "bigint", { notNull: true, default: 0 }),
+      c("nextAttemptAt", "bigint", { notNull: true, default: 0 }), c("attempts", "int", { notNull: true, default: 0 }),
     ],
     unique: [["name"]],
     indexes: [["requestedAt"]],

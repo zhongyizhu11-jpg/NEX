@@ -2,11 +2,12 @@ import { pushAgentRefresh } from "./agentEvents";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 import { appendPanelLog } from "./_core/panelLogger";
 import { clearTunnelRuntimeStatusForHosts } from "./tunnelRuntimeStatus";
+import { getTunnelEntryHostIds } from "./repositories/tunnelRepository";
 
 /*
   手动指定的出口掉线 / 回来时，马上让入口重新拿配置（C1）。
 
-  下发时「指定的那台离线就不理它、照常自动分」（agentHeartbeatRoute 的 pinnedExitHostId）—— 可那是下一次
+  下发时「指定的那台离线就不理它、照常自动分」（agentHeartbeatRoute 的 pinnedExitHostId，NEX 和 GOST 隧道都是）—— 可那是下一次
   下发时才看的。指定的出口掉线之后没有任何东西去催入口，入口手里还是「只走这一台」的那份配置，流量全进
   黑洞，直到入口自己下一次整份心跳（最长约 5 分钟）。回来的时候同理：入口要等很久才重新只走它。
 
@@ -27,17 +28,8 @@ export async function refreshTunnelsPinnedToHost(hostId: number, reason: string)
   const pushed = new Set<number>();
   for (const tunnel of tunnels) {
     const tunnelId = Number(tunnel.id);
-    const entryHostIds = new Set<number>();
-    if (Number(tunnel.entryHostId || 0) > 0) entryHostIds.add(Number(tunnel.entryHostId));
-    const entryGroupId = Number(tunnel.entryGroupId || 0);
-    if (entryGroupId > 0) {
-      // 入口是入口组：组里每台都替这条链路监听，都要推
-      const members = await queryRaw<{ hostId?: number | null }>(
-        `SELECT ${q("hostId")} FROM ${q("forward_group_members")} WHERE ${q("groupId")} = ? AND ${q("memberType")} = ?`,
-        [entryGroupId, "host"],
-      );
-      for (const member of members) if (Number(member.hostId || 0) > 0) entryHostIds.add(Number(member.hostId));
-    }
+    // 入口是入口组：组里每台都替这条链路监听，都要推
+    const entryHostIds = new Set(await getTunnelEntryHostIds(tunnel));
     if (entryHostIds.size === 0) continue;
     clearTunnelRuntimeStatusForHosts(tunnelId, Array.from(entryHostIds));
     for (const entryHostId of entryHostIds) {

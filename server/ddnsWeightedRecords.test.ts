@@ -98,8 +98,10 @@ test("权重是否变了：值的集合相同且差在死区内算没变", () =>
   assert.equal(shared.ddnsWeightsEqual(null, null), true);
   assert.equal(shared.ddnsWeightsEqual(null, { [A]: 1 }), false);
   assert.deepEqual(shared.parseDdnsWeightState(JSON.stringify({ provider: "aliyun", domain: "Edge.Example.com", recordType: "a", weights: { [A]: 100, [B]: 0, bad: "x" } })), {
-    provider: "aliyun", domain: "edge.example.com", recordType: "A", weights: { [A]: 100 },
+    // 没记副记录的老状态：按「副记录也按权重发过」算（最多多收一次）
+    provider: "aliyun", domain: "edge.example.com", recordType: "A", weights: { [A]: 100 }, mirrorWeighted: true,
   });
+  assert.equal(shared.parseDdnsWeightState(JSON.stringify({ provider: "aliyun", domain: "e.example.com", weights: { [A]: 1 }, mirrorWeighted: false }))?.mirrorWeighted, false);
   assert.equal(shared.parseDdnsWeightState("{oops"), null);
   assert.equal(shared.describeDdnsWeights({ [A]: 100, [B]: 40 }, [B, A]), `${B}=40、${A}=100`);
 });

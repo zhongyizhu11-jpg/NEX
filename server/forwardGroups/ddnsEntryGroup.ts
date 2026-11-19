@@ -9,15 +9,11 @@ import { forwardGroupMembers, forwardGroups, type ForwardRule } from "../../driz
 import type { SniReadinessTemplate } from "../tlsInboundReadiness";
 import { DEFAULT_DDNS_TTL, type DdnsSettings } from "../ddns";
 import { prepareForwardGroupDdnsLines } from "../forwardGroupDdnsLines";
-import { getDb, nowDate, queryRaw } from "../dbRuntime";
-import { quoteIdentifier } from "../dbCompat";
+import { getDb, nowDate } from "../dbRuntime";
 import { getForwardGroupTemplateRules } from "../repositories/forwardRuleRepository";
-import { getHostsByIds } from "../repositories/hostRepository";
-import { getLatestHostMetricSnapshots } from "../repositories/metricsRepository";
 import {
   applyAggregationToDdnsValues,
   buildEntryGroupAggregationPlan,
-  hostThroughputMbpsFromSnapshots,
   isBandwidthAggregationGroup,
   resolveAggregationSettings,
   type AggregationMemberRow,
@@ -30,7 +26,7 @@ import {
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
-import { FORWARD_GROUP_AUTO_SWITCH_EVENT, FORWARD_GROUP_FLAP_WINDOW_MS, forwardGroupFlapHoldAt } from "../forwardGroupFlapHold";
+import { FORWARD_GROUP_AUTO_SWITCH_EVENT, forwardGroupAutoSwitchTimesByMember, forwardGroupFlapHoldAt } from "../forwardGroupFlapHold";
 import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
 import { dbBool } from "../repositories/repositoryUtils";
 import { entryMemberInclusion, planEntryGroupRecordSet } from "./evaluate";
@@ -43,13 +39,15 @@ import {
   ddnsWeightsFromAggregationPlan,
   describeDdnsWeights,
   parseDdnsWeightState,
+  type DdnsWeights,
 } from "../../shared/ddnsWeights";
 import type { BandwidthAggregationPlan } from "../../shared/bandwidthAggregation";
 import { ForwardGroupFailoverOptions, ForwardGroupRecordType, LineGroupRow, LooseRow, forwardGroupFailoverDelayMs, forwardGroupRecoverDelayMs, groupSwitchNotifyEnabled, insertForwardGroupEvent, memberEntryHostId, normalizeForwardGroupRecordType, recordTypeRequirementLabel, sortedMembers, switchNotifySuppressed, toDate, updateForwardGroupRuntimeIfChanged } from "./common";
 import { ForwardGroupLineHook, createForwardGroupLineHook, ddnsValueSetSignature, exactDdnsReconciliationDue, memberDdnsValue, publishForwardGroupDdnsValues, rememberExactDdnsReconciliation, syncForwardGroupLinesAfterDefault } from "./ddnsPublish";
-import { forwardGroupHealthRechecks, scheduleForwardGroupFailover } from "./evaluateDriver";
+import { forwardGroupHealthRechecks, scheduleForwardGroupFailover } from "./evaluationQueue";
 import { deferProviderWrite } from "./evaluateScope";
-import { evaluateMemberPeerHealth } from "./health";
+import { chinaReachableSinceByMember, evaluateMemberPeerHealth } from "./health";
+import { memberThroughputMbps, withHostLineBandwidth } from "./bandwidth";
 import { MemberAgentLiveness, agentHealthSampleIsCurrent, resolveMemberAgentLiveness } from "./liveness";
 
 /** 这个组这一轮的记录权重：发不发、发什么、要不要因为权重变了重写一次记录。 */
@@ -75,42 +73,21 @@ function resolveEntryGroupDdnsWeighting(
     if (ddnsWeightsEqual(previousHere.weights, weights, tolerance)) weights = previousHere.weights;
   }
   const clearWeights = !weights && !!previousHere;
+  const previousMirrorWeighted = !!previousHere?.mirrorWeighted;
   return {
     weights,
     clearWeights,
+    previousMirrorWeighted,
     /** 值的集合没变也要写一次服务商（权重变了、或者要把权重收掉）。 */
     writeNeeded: weights ? !previousHere || !ddnsWeightsEqual(previousHere.weights, weights) : clearWeights,
-    nextState: weights ? JSON.stringify({ provider: ddnsSettings.provider, domain, recordType, weights }) : null,
+    /** 发布后记的状态；mirrorWeighted 是这次双栈副记录有没有按权重发（没写服务商时沿用上一次的）。 */
+    nextState: (mirrorWeighted: boolean = previousMirrorWeighted) => ddnsWeightStateJson(ddnsSettings, domain, recordType, weights, mirrorWeighted),
     note: weights ? `；按权重解析 ${describeDdnsWeights(weights, values)}` : "",
   };
 }
 
-/** Live uplink throughput, in Mbps, for the hosts behind a set of members. */
-export async function memberThroughputMbps(members: AggregationMemberRow[]) {
-  const hostIds = Array.from(new Set(members
-    .map((member) => Number(member.hostId || 0))
-    .filter((hostId) => Number.isInteger(hostId) && hostId > 0)));
-  if (hostIds.length === 0) return new Map<number, number>();
-  const snapshots = await getLatestHostMetricSnapshots(hostIds).catch(() => []);
-  return hostThroughputMbpsFromSnapshots(snapshots as any[]);
-}
-
-/**
- * Build the bandwidth aggregation plan for an entry group and apply it to the
- * DDNS values about to be published.
- *
- * Returns `null` for groups that did not opt into aggregation so the caller
- * keeps its existing behaviour untouched.
- */
-/** 成员上没填「上行 Mbps」时，用主机上的「线路带宽」（一台机器只填一处）。 */
-export async function withHostLineBandwidth<T extends { hostId: number; bandwidthMbps?: number | null }>(members: T[]): Promise<T[]> {
-  const missing = Array.from(new Set(members.filter((member) => !(Number(member.bandwidthMbps) > 0) && member.hostId > 0).map((member) => member.hostId)));
-  if (missing.length === 0) return members;
-  const rows = await getHostsByIds(missing).catch(() => []) as any[];
-  const lineById = new Map(rows.map((row) => [Number(row.id), Math.max(0, Number(row.lineBandwidthMbps) || 0)]));
-  return members.map((member) => (Number(member.bandwidthMbps) > 0 || !lineById.get(member.hostId)
-    ? member
-    : { ...member, bandwidthMbps: lineById.get(member.hostId)! }));
+function ddnsWeightStateJson(ddnsSettings: DdnsSettings, domain: string, recordType: string, weights: DdnsWeights | null, mirrorWeighted: boolean) {
+  return weights ? JSON.stringify({ provider: ddnsSettings.provider, domain: domain.toLowerCase(), recordType, weights, mirrorWeighted }) : null;
 }
 
 async function resolveEntryGroupAggregation(
@@ -191,26 +168,6 @@ export async function syncEntryGroupDdns(group: any, ddnsSettings: any, options:
   if (hook.settled) await syncForwardGroupLinesAfterDefault(group, ddnsSettings, hook, "multi", options);
 }
 
-/** 这个组最近一小时每个成员的自动进出（auto-switch 事件，按成员分）：入口组的抖动抑制按成员算。 */
-async function forwardGroupAutoSwitchTimesByMember(groupId: number, nowMs: number) {
-  const sinceSeconds = Math.floor((nowMs - FORWARD_GROUP_FLAP_WINDOW_MS) / 1000);
-  const rows = await queryRaw<{ memberId: unknown; createdAt: unknown }>(
-    `SELECT ${quoteIdentifier("memberId")}, ${quoteIdentifier("createdAt")} FROM ${quoteIdentifier("forward_group_events")}
-      WHERE ${quoteIdentifier("groupId")} = ? AND ${quoteIdentifier("type")} = ? AND ${quoteIdentifier("createdAt")} >= ?`,
-    [groupId, FORWARD_GROUP_AUTO_SWITCH_EVENT, sinceSeconds],
-  ).catch(() => []);
-  const byMember = new Map<number, number[]>();
-  for (const row of rows) {
-    const memberId = Number(row.memberId || 0);
-    const at = toDate(row.createdAt)?.getTime() || 0;
-    if (!(memberId > 0) || !(at > 0)) continue;
-    const list = byMember.get(memberId);
-    if (list) list.push(at);
-    else byMember.set(memberId, [at]);
-  }
-  return byMember;
-}
-
 /*
   入口组一个健康成员都没有时怎么办（plan 来自 evaluate.ts 的 planEntryGroupRecordSet）：
 
@@ -234,15 +191,29 @@ async function holdEntryGroupDdns(
   const ddnsReady = ddnsSettings.enabled && ddnsSettings.provider !== "disabled";
   const ttl = Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL);
   const previousWeights = parseDdnsWeightState(group.ddnsWeightState);
-  const weightsHere = previousWeights && previousWeights.provider === ddnsSettings.provider
-    && previousWeights.domain === domain.toLowerCase() && previousWeights.recordType === recordType ? previousWeights.weights : null;
+  const stateHere = previousWeights && previousWeights.provider === ddnsSettings.provider
+    && previousWeights.domain === domain.toLowerCase() && previousWeights.recordType === recordType ? previousWeights : null;
+  const weightsHere = stateHere?.weights ?? null;
+  const previousMirrorWeighted = !!stateHere?.mirrorWeighted;
 
   if (plan.mode === "empty") {
     if ((previousValue || options.forceSync) && ddnsReady && domain) {
       if (deferProviderWrite()) return "deferred" as const;
-      await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: [], ttl }, { clearWeights: !!weightsHere }).catch((error) => {
-        console.warn(`[ForwardGroup] removing traffic-excluded DDNS values failed group=${groupId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
+      try {
+        await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: [], ttl }, { clearWeights: !!weightsHere, previousMirrorWeighted });
+      } catch (error) {
+        /*
+          没清掉：记着的值和权重状态都留着（它们说的正是服务商那边现在的样子），抛出去让发布队列退避重试。
+          以前吞掉错误、照样把状态清空 —— 下一轮以为记录早没了，再也不去清。
+        */
+        const message = error instanceof Error ? error.message : String(error);
+        await updateForwardGroupRuntimeIfChanged(db, group, {
+          lastStatus: "error",
+          lastMessage: `没有可用成员（流量到阈值的主机已暂停参与），清空解析失败，稍后重试：${message}`,
+        });
+        await insertForwardGroupEvent(groupId, null, "ddns-error", `清空入口组解析失败：${message}；domain=${domain} type=${recordType} 原记录=${previousValue || "-"}`);
+        throw error;
+      }
     }
     await updateForwardGroupRuntimeIfChanged(db, group, {
       activeMemberId: null,
@@ -286,11 +257,11 @@ async function holdEntryGroupDdns(
     : null;
   if (deferProviderWrite()) return "deferred" as const;
   try {
-    await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: retained, ttl }, { weights: heldWeights, clearWeights: !heldWeights && !!weightsHere });
+    const published = await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: retained, ttl }, { weights: heldWeights, clearWeights: !heldWeights && !!weightsHere, previousMirrorWeighted });
     rememberExactDdnsReconciliation(group, joined);
     await db.update(forwardGroups).set({
       lastDdnsValue: joined,
-      ddnsWeightState: heldWeights ? JSON.stringify({ provider: ddnsSettings.provider, domain: domain.toLowerCase(), recordType, weights: heldWeights }) : null,
+      ddnsWeightState: ddnsWeightStateJson(ddnsSettings, domain, recordType, heldWeights, published.mirrorWeighted),
       lastDdnsAt: nowDate(),
       lastFailoverAt: nowDate(),
       lastStatus: "down",
@@ -310,20 +281,25 @@ async function holdEntryGroupDdns(
   }
 }
 
-/*
-  国内检测「原始结果连得上」是从什么时候开始的（面板看到的，进程内存）。成员 Agent 自己要连续正常满
-  recoverSeconds 才报 healthy，但它重启后状态是空的，第一个正常样本就报 healthy —— 入口组把成员加回来
-  之前要「连续健康满 recoverSeconds」，这段时间只认面板自己看到的：Agent 稳了一阵才报的 healthy，
-  面板这边早就在数了，不用再等一遍；Agent 刚重启就报的，从现在数起。
-*/
-export const chinaReachableSinceByMember = new Map<number, number>();
-
 async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: DdnsSettings, options: ForwardGroupFailoverOptions = {}, lines: ForwardGroupLineHook | null = null) {
+  const classified = await classifyEntryGroupMembers(group, options, lines);
+  const plan = await planEntryGroupPublish(group, classified, lines);
+  return publishEntryGroupDefaultDdns(group, ddnsSettings, options, lines, classified, plan);
+}
+
+/*
+  入口组这一轮分三步（以前是一个 450 行的函数）：
+    1. classifyEntryGroupMembers —— 逐个成员判：进不进解析、为什么（健康、外部观察、恢复观察、抖动抑制、流量暂停、
+       SNI 没就绪），成员行上的故障 / 恢复计时顺手写回；
+    2. planEntryGroupPublish —— 排下一次到点重评、分线路时只留默认线路上的成员、带宽聚合排序、状态消息里的那几句；
+    3. publishEntryGroupDefaultDdns —— 等结果 / 没域名 / 全挂保留 / 自动解析关着 / DDNS 没开 / 已是最新 / 真的写服务商。
+  每一步只读前一步交出来的东西。
+*/
+async function classifyEntryGroupMembers(group: LineGroupRow, options: ForwardGroupFailoverOptions, lines: ForwardGroupLineHook | null) {
   const db = await getDb();
   const members = sortedMembers(group, true) as any[];
   const sniTemplates = await sniTemplatesUsingEntryGroup(Number(group.id));
   const recordType = normalizeForwardGroupRecordType(group.recordType);
-  const forceSync = !!options.forceSync;
   const previousValue = String(group.lastDdnsValue || "").trim();
   const previousValues = new Set(previousValue.split(",").map((value) => value.trim()).filter(Boolean));
   const values: string[] = [];
@@ -573,6 +549,76 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     recoveringCount = 0;
     flapHeldCount = 0;
   }
+  return {
+    members,
+    recordType,
+    previousValue,
+    previousValues,
+    values,
+    excluded,
+    quotaExcludedValues,
+    healthWindows,
+    initialHealthSnapshot,
+    initialAgentLivenessSnapshot,
+    agentLivenessByMemberId,
+    pendingHealthExpiryCandidates,
+    activeMemberId: activeMemberId as number | null,
+    chinaHealthEnabled,
+    chinaHealthNow,
+    failoverMs,
+    recoverMs,
+    pendingAgentHealth,
+    trafficExcludedMemberCount,
+    valuedMemberCount,
+    recoveringCount,
+    flapHeldCount,
+    externalKeptCount,
+    externalDownCount,
+    peerObservedCount,
+    autoChanges,
+    aggregationMembers,
+  };
+}
+
+type EntryGroupClassification = Awaited<ReturnType<typeof classifyEntryGroupMembers>>;
+
+/** 评估期间成员的存活状态、健康上报有没有变过：变了这一轮的结论作废、重排一次。 */
+async function entryAgentSelectionStillCurrent(group: LineGroupRow, c: EntryGroupClassification) {
+  const { members, initialAgentLivenessSnapshot, initialHealthSnapshot, chinaHealthEnabled } = c;
+  const db = await getDb();
+  for (const member of members) {
+    const initial = initialAgentLivenessSnapshot.get(Number(member.id));
+    if (initial === undefined) continue;
+    const current = await resolveMemberAgentLiveness(member);
+    if (current.signature !== initial) return false;
+  }
+  if (initialHealthSnapshot.size > 0) {
+    const currentRows = await db.select({
+      id: forwardGroupMembers.id,
+      healthStatus: forwardGroupMembers.healthStatus,
+      lastCheckedAt: forwardGroupMembers.lastCheckedAt,
+      chinaHealthStatus: forwardGroupMembers.chinaHealthStatus,
+      chinaHealthCheckedAt: forwardGroupMembers.chinaHealthCheckedAt,
+    }).from(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, Number(group.id)));
+    const seen = new Set<number>();
+    for (const member of currentRows as any[]) {
+      const memberId = Number(member.id);
+      const initial = initialHealthSnapshot.get(memberId);
+      if (initial === undefined) continue;
+      seen.add(memberId);
+      const currentStatus = chinaHealthEnabled ? member.chinaHealthStatus : member.healthStatus;
+      const currentCheckedAt = chinaHealthEnabled ? member.chinaHealthCheckedAt : member.lastCheckedAt;
+      const current = `${String(currentStatus || "unknown")}:${toDate(currentCheckedAt)?.getTime() || 0}`;
+      if (current !== initial) return false;
+    }
+    if (seen.size !== initialHealthSnapshot.size) return false;
+  }
+  return true;
+}
+
+async function planEntryGroupPublish(group: LineGroupRow, c: EntryGroupClassification, lines: ForwardGroupLineHook | null) {
+  let { activeMemberId } = c;
+  const { members, recordType, previousValues, values, excluded, healthWindows, agentLivenessByMemberId, pendingHealthExpiryCandidates, chinaHealthEnabled, chinaHealthNow, failoverMs, recoverMs, recoveringCount, flapHeldCount, externalKeptCount, externalDownCount, aggregationMembers } = c;
   const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
     members: healthWindows,
     failoverMs,
@@ -598,39 +644,6 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     .filter((value): value is number => typeof value === "number" && value > chinaHealthNow)
     .sort((left, right) => left - right)[0] ?? null;
   forwardGroupHealthRechecks.replace(Number(group.id), nextHealthRecheckAt);
-  const agentSelectionStillCurrent = async () => {
-    for (const member of members) {
-      const initial = initialAgentLivenessSnapshot.get(Number(member.id));
-      if (initial === undefined) continue;
-      const current = await resolveMemberAgentLiveness(member);
-      if (current.signature !== initial) return false;
-    }
-    if (initialHealthSnapshot.size > 0) {
-      const currentRows = await db.select({
-        id: forwardGroupMembers.id,
-        healthStatus: forwardGroupMembers.healthStatus,
-        lastCheckedAt: forwardGroupMembers.lastCheckedAt,
-        chinaHealthStatus: forwardGroupMembers.chinaHealthStatus,
-        chinaHealthCheckedAt: forwardGroupMembers.chinaHealthCheckedAt,
-      }).from(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, Number(group.id)));
-      const seen = new Set<number>();
-      for (const member of currentRows as any[]) {
-        const memberId = Number(member.id);
-        const initial = initialHealthSnapshot.get(memberId);
-        if (initial === undefined) continue;
-        seen.add(memberId);
-        const currentStatus = chinaHealthEnabled ? member.chinaHealthStatus : member.healthStatus;
-        const currentCheckedAt = chinaHealthEnabled ? member.chinaHealthCheckedAt : member.lastCheckedAt;
-        const current = `${String(currentStatus || "unknown")}:${toDate(currentCheckedAt)?.getTime() || 0}`;
-        if (current !== initial) return false;
-      }
-      if (seen.size !== initialHealthSnapshot.size) return false;
-    }
-    return true;
-  };
-  const retryChangedAgentSelection = () => {
-    scheduleForwardGroupFailover([Number(group.id)]);
-  };
   if (lines) {
     // 分线路：默认线路只发布默认线路上的成员（server/ddnsLinePlanner.ts 规则 1），其余交给线路发布。
     const kept = aggregationMembers.filter((entry) => lines.defaultMemberIds.has(entry.memberId));
@@ -660,6 +673,25 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
   const nextValues = new Set(publishedValues);
   const removedValues = Array.from(previousValues).filter((value) => !nextValues.has(value));
 
+  return { activeMemberId, aggregation, publishedValues, aggregationSuffix, joined, excludedSuffix, holdSuffix, addedValues, removedValues };
+}
+
+async function publishEntryGroupDefaultDdns(
+  group: LineGroupRow,
+  ddnsSettings: DdnsSettings,
+  options: ForwardGroupFailoverOptions,
+  lines: ForwardGroupLineHook | null,
+  c: EntryGroupClassification,
+  plan: Awaited<ReturnType<typeof planEntryGroupPublish>>,
+) {
+  const db = await getDb();
+  const forceSync = !!options.forceSync;
+  const { recordType, previousValue, previousValues, values, excluded, quotaExcludedValues, pendingAgentHealth, trafficExcludedMemberCount, valuedMemberCount, externalKeptCount, externalDownCount, peerObservedCount, autoChanges } = c;
+  const { activeMemberId, aggregation, publishedValues, aggregationSuffix, joined, excludedSuffix, holdSuffix, addedValues, removedValues } = plan;
+  const agentSelectionStillCurrent = () => entryAgentSelectionStillCurrent(group, c);
+  const retryChangedAgentSelection = () => {
+    scheduleForwardGroupFailover([Number(group.id)]);
+  };
   // A newly enabled health check starts with unknown member states.  Keep the
   // current provider record intact until at least one probe result arrives;
   // once results exist, only healthy members are emitted above.
@@ -737,7 +769,7 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
       lastStatus: "healthy",
       lastMessage: `入口组 DDNS 已是最新；${publishedValues.length} 个入口${excludedSuffix}${aggregationSuffix}${weighting.note}${holdSuffix}${peerSuffix}`,
       // 记着的权重状态对不上现在的服务商 / 域名了（没法去那边收）：只把状态丢掉。
-      ...(String(group.ddnsWeightState ?? "") !== String(weighting.nextState ?? "") ? { ddnsWeightState: weighting.nextState } : {}),
+      ...(String(group.ddnsWeightState ?? "") !== String(weighting.nextState() ?? "") ? { ddnsWeightState: weighting.nextState() } : {}),
     });
     if (lines) lines.settled = true;
     return;
@@ -749,13 +781,13 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
   }
   if (deferProviderWrite()) return;
   try {
-    await publishForwardGroupDdnsValues(group, {
+    const published = await publishForwardGroupDdnsValues(group, {
       groupId: Number(group.id),
       domain: String(group.domain || ""),
       recordType,
       values: publishedValues,
       ttl: Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL),
-    }, { weights: weighting.weights, clearWeights: weighting.clearWeights });
+    }, { weights: weighting.weights, clearWeights: weighting.clearWeights, previousMirrorWeighted: weighting.previousMirrorWeighted });
     if (!(await agentSelectionStillCurrent())) {
       retryChangedAgentSelection();
       return;
@@ -764,7 +796,7 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     await db.update(forwardGroups).set({
       activeMemberId,
       lastDdnsValue: joined,
-      ddnsWeightState: weighting.nextState,
+      ddnsWeightState: weighting.nextState(published.mirrorWeighted),
       lastDdnsAt: nowDate(),
       lastFailoverAt: nowDate(),
       lastStatus: "healthy",

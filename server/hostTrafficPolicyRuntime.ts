@@ -1,5 +1,5 @@
 import { getForwardGroups } from "./repositories/forwardGroupRepository";
-import { scheduleForwardGroupFailover } from "./forwardGroups/evaluateDriver";
+import { scheduleForwardGroupFailover } from "./forwardGroups/evaluationQueue";
 import { getTunnelExitNodesByTunnelIds, getTunnelHopsByTunnelIds, getTunnels } from "./repositories/tunnelRepository";
 import { getForwardGroupChildRules } from "./repositories/forwardRuleRepository";
 import { pushAgentRefresh } from "./agentEvents";

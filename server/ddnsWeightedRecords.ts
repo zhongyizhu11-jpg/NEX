@@ -202,12 +202,29 @@ async function clearTencentWeights(settings: DdnsSettings, input: Omit<WeightedR
   const target = tencentTarget(settings, input.domain.trim(), recordType);
   const ttl = parseDdnsTtl(input.ttl, settings.tencentcloudTtl);
   const list = await transport("DescribeRecordList", target.listPayload) as { RecordList?: unknown } | null;
+  const published = new Set(uniqueDdnsValues(input.values));
   let writes = 0;
   for (const record of arrayOf(list?.RecordList).filter(target.matches)) {
+    // 只收面板这次要发布的值上的权重；别的值（之后的发布会按值对账）不去改。
+    if (!published.has(String(record.Value || "").trim())) continue;
     const weight = currentWeight(record.Weight);
     if (weight === null || weight === 0) continue;
     // 权重设回 0（关闭）；TTL 用记录现在的，别顺手改了别的东西。
     await transport("ModifyRecord", { ...target.payloadFor(String(record.Value || "").trim(), Number(record.TTL) || ttl), RecordId: Number(record.RecordId), Weight: 0 });
+    writes += 1;
+  }
+  return { writes };
+}
+
+/** 删组：只删值在 values 里的记录（面板发布过的），别的记录、别的记录的权重都不碰。 */
+async function deleteTencentPublished(settings: DdnsSettings, recordType: string, domain: string, published: Set<string>): Promise<WeightedRecordResult> {
+  const transport = deps.tencent(settings);
+  const target = tencentTarget(settings, domain, recordType);
+  const list = await transport("DescribeRecordList", target.listPayload) as { RecordList?: unknown } | null;
+  let writes = 0;
+  for (const record of arrayOf(list?.RecordList).filter(target.matches)) {
+    if (!published.has(String(record.Value || "").trim())) continue;
+    await transport("DeleteRecord", { Domain: target.root, RecordId: Number(record.RecordId) });
     writes += 1;
   }
   return { writes };
@@ -293,6 +310,37 @@ async function clearAliyunWeights(settings: DdnsSettings, input: Omit<WeightedRe
   const target = aliyunTarget(settings, input.domain.trim(), recordType);
   await deps.aliyun(settings)("SetDNSSLBStatus", target.slbParams(false));
   return { writes: 1 };
+}
+
+/**
+ * 删组：只删值在 values 里的记录。权重配置是整个子域名的开关：删完还剩别人的记录就不动它
+ * （关掉会改别人记录的解析方式），一条都不剩了才关。
+ */
+async function deleteAliyunPublished(settings: DdnsSettings, recordType: string, domain: string, published: Set<string>): Promise<WeightedRecordResult> {
+  const transport = deps.aliyun(settings);
+  const target = aliyunTarget(settings, domain, recordType);
+  const list = await transport("DescribeSubDomainRecords", target.listParams) as { DomainRecords?: { Record?: unknown } } | null;
+  const records = arrayOf(list?.DomainRecords?.Record).filter(target.matches);
+  let writes = 0;
+  let remaining = 0;
+  for (const record of records) {
+    if (!published.has(String(record.Value || "").trim())) {
+      remaining += 1;
+      continue;
+    }
+    await transport("DeleteDomainRecord", { RecordId: String(record.RecordId) });
+    writes += 1;
+  }
+  if (remaining === 0 && writes > 0) {
+    try {
+      await transport("SetDNSSLBStatus", target.slbParams(false));
+      writes += 1;
+    } catch (error) {
+      // 本来就没开 / 记录已经没了：没有可关的。
+      if (!(error instanceof DdnsProviderError)) throw error;
+    }
+  }
+  return { writes };
 }
 
 // ===== 华为云 DNS =====
@@ -398,6 +446,26 @@ async function clearHuaweiWeights(settings: DdnsSettings, input: Omit<WeightedRe
   return { writes };
 }
 
+/**
+ * 删组：一个值一个记录集（按权重）或一个记录集装全部值（不按权重）两种写法都认。
+ * 值全是面板发布过的记录集删掉；混着别人的值的只拿掉面板的值（权重不动）；全是别人的不碰。
+ */
+async function deleteHuaweiPublished(settings: DdnsSettings, recordType: string, domain: string, published: Set<string>): Promise<WeightedRecordResult> {
+  const ttl = parseDdnsTtl(undefined, settings.huaweicloudTtl);
+  const { transport, name, sets, base } = await huaweiRecordSets(settings, domain, recordType);
+  let writes = 0;
+  for (const set of sets) {
+    const setValues = huaweiSetValues(set);
+    const remaining = setValues.filter((value) => !published.has(value));
+    if (remaining.length === setValues.length) continue;
+    const pathOf = `${base}/${encodeURIComponent(String(set.id))}`;
+    if (remaining.length === 0) await transport("DELETE", pathOf, {});
+    else await transport("PUT", pathOf, {}, { name, type: recordType, ttl: Number(set.ttl) || ttl, records: remaining });
+    writes += 1;
+  }
+  return { writes };
+}
+
 // ===== 对外 =====
 
 function lockFor(settings: DdnsSettings, input: { domain: string; recordType: string }) {
@@ -443,5 +511,22 @@ export async function clearDdnsRecordWeights(settings: DdnsSettings, input: Omit
       }
       throw error;
     }
+  });
+}
+
+/**
+ * 删组时清掉面板发布过的记录（按权重发布过的组走这里，不先「收权重」—— 收权重会合并 / 改动这个名字上
+ * 所有的记录，包括别人加的）。只碰值在 input.values 里的记录。
+ */
+export async function deleteWeightedDdnsRecords(settings: DdnsSettings, input: Omit<WeightedRecordInput, "weights">): Promise<WeightedRecordResult> {
+  const provider = assertWeightSupport(settings);
+  const recordType = String(input.recordType || "A").trim().toUpperCase();
+  const domain = String(input.domain || "").trim();
+  const published = new Set(uniqueDdnsValues(input.values));
+  if (!domain || published.size === 0) return { writes: 0 };
+  return withKeyedTaskLock(lockFor(settings, input), () => {
+    if (provider === "tencentcloud") return deleteTencentPublished(settings, recordType, domain, published);
+    if (provider === "aliyun") return deleteAliyunPublished(settings, recordType, domain, published);
+    return deleteHuaweiPublished(settings, recordType, domain, published);
   });
 }

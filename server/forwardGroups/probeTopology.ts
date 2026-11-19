@@ -41,7 +41,7 @@ import {
 } from "./topology";
 import { LooseRow, chainEntryMembers, ddnsValueForHostByRecordType, entryAddressForHost, forwardChainTargetLabel, hostDisplayLabel, normalizeForwardGroupRecordType, sortedMembers, supportsChinaHealthMode } from "./common";
 import { getForwardGroupById, getForwardGroupPrimaryTemplateRule, resolveChainConnectHost } from "../repositories/forwardGroupRepository";
-import { normalizeChinaHealthTarget } from "./health";
+import { normalizeChinaHealthTarget } from "./healthTarget";
 
 export type ForwardGroupChainProbe = {
   groupId: number;
@@ -468,13 +468,19 @@ async function buildForwardGroupProbeTopologySnapshot(): Promise<ForwardGroupPro
   if (peerGroups.length > 0) {
     await buildForwardGroupPeerTopology(snapshot, { peerGroups, hostById, tunnelEntryHostById, forHost });
   }
-  // 不再安排的观察关系，结果表里的旧结论丢掉。
+  return snapshot;
+}
+
+/*
+  不再安排的观察关系，结果表里的旧结论丢掉。只在一份拓扑真的留进缓存时做（TopologyCache 的 onCommit）：
+  建到一半被作废的那份读的可能是改之前的数据，拿它来删会把新安排里还要用的结论删掉。
+*/
+function prunePeerObservationsToTopology(snapshot: ForwardGroupProbeTopologySnapshot) {
   forwardGroupPeerObservations.prune((observerHostId, groupId, memberId) => {
     const peer = snapshot.peerByGroup.get(groupId);
     if (!peer || !peer.observerHostIds.has(observerHostId)) return false;
     return memberId === PEER_REFERENCE_MEMBER_ID || !!peer.assignments.get(memberId)?.observerHostIds.includes(observerHostId);
   });
-  return snapshot;
 }
 
 /*
@@ -646,7 +652,7 @@ async function buildForwardGroupPeerTopology(
 
 const FORWARD_GROUP_PROBE_TOPOLOGY_TTL_MS = 30_000;
 
-export const forwardGroupProbeTopology = new TopologyCache(buildForwardGroupProbeTopologySnapshot, FORWARD_GROUP_PROBE_TOPOLOGY_TTL_MS);
+export const forwardGroupProbeTopology = new TopologyCache(buildForwardGroupProbeTopologySnapshot, FORWARD_GROUP_PROBE_TOPOLOGY_TTL_MS, Date.now, prunePeerObservationsToTopology);
 
 /** 组、成员、主机地址改了：探测拓扑立刻作废（下一次心跳 / 上报 / 评估重建）。 */
 export function invalidateForwardGroupProbeTopology() {

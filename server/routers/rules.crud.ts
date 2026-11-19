@@ -119,6 +119,7 @@ import {
 } from "../ruleEntryBridges";
 import { isPortRangeRule, portRangeShapeError, portRangeUnsupportedReason } from "@shared/portRange";
 import { reserveForwardGroupPortRangeTail, reserveRulePortRange, resolveNextSourcePortEnd } from "../rulePortRange";
+import { withForwardGroupEditLock } from "../panelKeyedLock";
 
 /**
  * 规则行上的协议封禁三列永远写 false。
@@ -2310,7 +2311,7 @@ async function createSniForwardGroupRuleForActor(
   options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> } = {},
 ) {
   const forwardGroupId = Number(input.forwardGroupId);
-  return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+  return withForwardGroupEditLock(forwardGroupId, async () => {
     let quotaReservation: RuleQuotaReservation | null = null;
     let backendReservation: HostPortReservation | null = null;
     try {
@@ -2527,7 +2528,7 @@ async function updateSniForwardGroupRuleForActor(
 ) {
   await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
   const forwardGroupId = Number(rule.forwardGroupId);
-  return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+  return withForwardGroupEditLock(forwardGroupId, async () => {
     const group = await db.getForwardGroupById(forwardGroupId);
     const unsupported = sniGroupUnsupportedReason(group);
     if (unsupported) throw new Error(unsupported);
@@ -2794,7 +2795,7 @@ export const crudRulesRouter = router({
       let currentUser = await db.getUserById(ctx.user.id);
       if (input.forwardGroupId) {
         const forwardGroupId = Number(input.forwardGroupId);
-        return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+        return withForwardGroupEditLock(forwardGroupId, async () => {
         const groupReservations: HostPortReservation[] = [];
         let quotaReservation: RuleQuotaReservation | null = null;
         try {

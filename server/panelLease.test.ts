@@ -18,16 +18,24 @@ import { createNonOverlappingScheduledTask } from "./scheduledTask";
   - 正常退出放掉租约，下一轮续约就接手。
 */
 
+/** 内存里的表；「库的时钟」是 databaseClock（不传就用各实例共用的测试时钟）。 */
 class MemoryLeaseStore implements PanelLeaseStore {
   readonly rows = new Map<string, PanelLeaseRecord>();
   failing = false;
+  databaseClock: () => number = () => sharedClock.now();
 
   private check() {
     if (this.failing) throw new Error("database unavailable");
   }
 
-  async tryAcquire(name: string, holder: string, now: number, ttlMs: number) {
+  async now() {
     this.check();
+    return this.databaseClock();
+  }
+
+  async tryAcquire(name: string, holder: string, ttlMs: number) {
+    this.check();
+    const now = this.databaseClock();
     const row = this.rows.get(name);
     if (row && row.holder !== holder && row.expiresAt > now) return false;
     this.rows.set(name, { name, holder, expiresAt: now + ttlMs, updatedAt: now });
@@ -49,8 +57,9 @@ class MemoryLeaseStore implements PanelLeaseStore {
     if (this.rows.get(name)?.holder === holder) this.rows.delete(name);
   }
 
-  async prune(prefix: string, before: number) {
+  async prune(prefix: string, olderThanMs: number) {
     this.check();
+    const before = this.databaseClock() - olderThanMs;
     let removed = 0;
     for (const [name, row] of this.rows) {
       if (name.startsWith(prefix) && row.expiresAt < before) {
@@ -63,10 +72,13 @@ class MemoryLeaseStore implements PanelLeaseStore {
 }
 
 const quiet = { info: () => {}, warn: () => {} };
+const sharedClock = { now: () => Date.now() };
 
 function makeClock(start = 1_700_000_000_000) {
   let now = start;
-  return { now: () => now, advance: (ms: number) => { now += ms; } };
+  const clock = { now: () => now, advance: (ms: number) => { now += ms; } };
+  sharedClock.now = clock.now;
+  return clock;
 }
 
 function makeLease(store: PanelLeaseStore, clock: { now: () => number }, instanceId: string) {
@@ -227,4 +239,119 @@ test("没启动租约（单进程 / 测试 / 命令行）：当作持有者", as
   assert.equal(lease.panelHasOtherLiveInstances(), false);
   assert.equal(lease.panelBackgroundLeaseStatus(), null);
   assert.equal(describePanelBackgroundLease(null), "后台任务由本实例执行");
+});
+
+/*
+  续约排期（评审 F5）：下一轮续约按「这次续上的有效期」排，不按「上一轮结束后再等一个间隔」。库慢、一次续约
+  卡了十几秒时，以前下一轮排在有效期之后，中间有一段谁都不是持有者（后台任务停了又起）；续约一直卡着不回时，
+  丢了持有也要等那一轮结束才说出来。
+  这里的假定时器按到点时刻逐个跑；库的时钟就是测试时钟，tryAcquire 慢的时候把时钟往前拨。
+  （改之前的版本跑这两条时用的是一个兼容旧签名的假库，两条都不过。）
+*/
+class FakeTimers {
+  private timers: Array<{ due: number; callback: () => void; cancelled: boolean }> = [];
+  constructor(private clock: { now: () => number; set: (ms: number) => void }) {}
+  setTimer = (callback: () => void, delayMs: number) => {
+    const timer = { due: this.clock.now() + Math.max(0, delayMs), callback, cancelled: false };
+    this.timers.push(timer);
+    return { unref() {}, timer } as unknown as ReturnType<typeof setTimeout>;
+  };
+  clearTimer = (handle: ReturnType<typeof setTimeout>) => {
+    const timer = (handle as unknown as { timer?: { cancelled: boolean } }).timer;
+    if (timer) timer.cancelled = true;
+  };
+  /** 跑到 until 为止：每个定时器到点时先调 beforeFire（看那一刻的状态），再跑它，等它的异步链走完。 */
+  async runUntil(until: number, beforeFire: (at: number) => void = () => {}) {
+    for (;;) {
+      const next = this.timers.filter((timer) => !timer.cancelled && timer.due <= until).sort((left, right) => left.due - right.due)[0];
+      if (!next) break;
+      next.cancelled = true;
+      if (next.due > this.clock.now()) this.clock.set(next.due);
+      beforeFire(next.due);
+      next.callback();
+      for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (until > this.clock.now()) this.clock.set(until);
+  }
+}
+
+class SlowLeaseStore extends MemoryLeaseStore {
+  slowMs = 0;
+  hang: Promise<void> | null = null;
+  constructor(clock: { now: () => number; set: (ms: number) => void }) {
+    super();
+    this.databaseClock = clock.now;
+    this.advance = (ms) => clock.set(clock.now() + ms);
+  }
+  private readonly advance: (ms: number) => void;
+  override async tryAcquire(name: string, holder: string, ttlMs: number) {
+    if (name === "background" && this.hang) await this.hang;
+    if (name === "background" && this.slowMs > 0) this.advance(this.slowMs);
+    return super.tryAcquire(name, holder, ttlMs);
+  }
+}
+
+function settableClock(start = 1_700_000_000_000) {
+  let now = start;
+  return { now: () => now, set: (ms: number) => { now = ms; } };
+}
+
+test("库慢、每次续约都卡十几秒：下一轮按有效期提前续，持有从不中断", async () => {
+  const clock = settableClock();
+  const timers = new FakeTimers(clock);
+  const store = new SlowLeaseStore(clock);
+  const lease = new PanelLease({ store, instanceId: "aaaa", now: clock.now, setTimer: timers.setTimer, clearTimer: timers.clearTimer, logger: quiet });
+  const changes: boolean[] = [];
+  lease.onChange((holder) => changes.push(holder));
+  await lease.start();
+  const startedAt = clock.now();
+  store.slowMs = 16_000;
+  const gaps: number[] = [];
+  await timers.runUntil(startedAt + 120_000, (at) => { if (!lease.isHolder()) gaps.push(at - startedAt); });
+  assert.deepEqual(gaps, [], `这些时刻不是持有者：${gaps.join(",")}`);
+  assert.equal(lease.isHolder(), true);
+  assert.deepEqual(changes, [true], "持有状态一次都没翻");
+});
+
+test("续约一直卡着不回：到有效期那一刻就说「不再持有」，不等那一轮结束", async () => {
+  const clock = settableClock();
+  const timers = new FakeTimers(clock);
+  const store = new SlowLeaseStore(clock);
+  const lease = new PanelLease({ store, instanceId: "aaaa", now: clock.now, setTimer: timers.setTimer, clearTimer: timers.clearTimer, logger: quiet });
+  const changes: Array<[boolean, number]> = [];
+  lease.onChange((holder) => changes.push([holder, clock.now()]));
+  await lease.start();
+  const startedAt = clock.now();
+  let release!: () => void;
+  store.hang = new Promise<void>((resolve) => { release = resolve; });
+  await timers.runUntil(startedAt + PANEL_LEASE_TTL_MS);
+  assert.equal(lease.isHolder(), false);
+  assert.deepEqual(changes.map(([holder]) => holder), [true, false], "卡着的续约还没回，丢了持有也要马上说");
+  const lostAt = changes[1][1];
+  assert.ok(lostAt <= startedAt + PANEL_LEASE_TTL_MS - 5_000, `丢了持有 ${lostAt - startedAt}ms 后才说`);
+  // 库恢复：那一轮回来、接着续上
+  store.hang = null;
+  release();
+  for (let index = 0; index < 20; index += 1) await new Promise((resolve) => setImmediate(resolve));
+  await timers.runUntil(clock.now() + 2 * PANEL_LEASE_RENEW_INTERVAL_MS);
+  assert.equal(lease.isHolder(), true);
+  assert.deepEqual(changes.map(([holder]) => holder), [true, false, true]);
+});
+
+test("各实例的时钟差几十秒：快的那个也抢不走还在有效期里的租约（过期按库的时钟算）", async () => {
+  const store = new MemoryLeaseStore();
+  const databaseClock = makeClock();
+  store.databaseClock = databaseClock.now;
+  const a = makeLease(store, databaseClock, "aaaa");
+  // B 的时钟快 40 秒（比 TTL 还多）
+  const b = makeLease(store, { now: () => databaseClock.now() + 40_000 }, "bbbb");
+  await a.start();
+  await b.start();
+  for (let round = 0; round < 6; round += 1) {
+    databaseClock.advance(PANEL_LEASE_RENEW_INTERVAL_MS);
+    await a.tick();
+    await b.tick();
+    assert.equal(a.isHolder(), true);
+    assert.equal(b.isHolder(), false, "时钟快的实例把租约抢走了");
+  }
 });

@@ -16,7 +16,6 @@ test("拓扑缓存：没过期只建一次，并发只建一次，作废后重�
   now += 2_000;
   assert.equal((await cache.get()).version, 2, "TTL 到了重建");
   cache.invalidate();
-  assert.equal(cache.peek(), null);
   assert.equal((await cache.get()).version, 3, "作废后重建");
 });
 
@@ -36,7 +35,28 @@ test("拓扑缓存：建的过程中被作废，那一份不留在缓存里", as
   release();
   assert.equal(await stale, 1, "已经在等的调用方拿到它那一份");
   assert.equal(await fresh, 2, "作废之后来的重新建");
-  assert.equal(cache.peek(), 2);
+  assert.equal(await cache.get(), 2, "缓存里留的是作废之后建的那份");
+  assert.equal(builds, 2, "不再重建");
+});
+
+test("拓扑缓存：只有留进缓存的那份才调 onCommit（建到一半被作废的不调）", async () => {
+  let release!: () => void;
+  let builds = 0;
+  const committed: number[] = [];
+  const cache = new TopologyCache(async () => {
+    builds += 1;
+    const mine = builds;
+    if (mine === 1) await new Promise<void>((resolve) => { release = resolve; });
+    return mine;
+  }, 30_000, Date.now, (snapshot) => committed.push(snapshot));
+  const stale = cache.get();
+  await new Promise((resolve) => setImmediate(resolve));
+  cache.invalidate();
+  const fresh = cache.get();
+  await fresh;
+  release();
+  await stale;
+  assert.deepEqual(committed, [2], "被作废的那份拿来收拾状态，会按旧安排删掉新安排还要用的东西");
 });
 
 test("探哪些端口：TCP 优先，同端口的 UDP 让给 TCP，最多三个", () => {

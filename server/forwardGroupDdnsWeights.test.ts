@@ -27,6 +27,7 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
     const records = [];
     const calls = [];
     let nextId = 7000;
+    let failDeletes = false;
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init = {}) => {
       if (!String(url).includes("dnspod.tencentcloudapi.com")) return realFetch(url, init);
@@ -46,6 +47,7 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
         if (payload.Weight !== undefined) record.Weight = payload.Weight;
         response = { RecordId: record.RecordId };
       } else if (action === "DeleteRecord") {
+        if (failDeletes) return new Response(JSON.stringify({ Response: { Error: { Code: "InternalError", Message: "provider is down" } } }), { status: 200, headers: { "Content-Type": "application/json" } });
         records.splice(records.findIndex((item) => item.RecordId === payload.RecordId), 1);
       }
       return new Response(JSON.stringify({ Response: response }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -75,16 +77,16 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
       const now = Math.floor(Date.now() / 1000);
       const A = "198.51.100.10";
       const B = "198.51.100.20";
-      for (const [id, ip] of [[1, A], [2, B]]) {
-        await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "entry-" + id, ip, ip, 1, 1, now]);
+      for (const [id, ip, ipv6] of [[1, A, "2001:db8::10"], [2, B, ""]]) {
+        await insert("hosts", ["id", "name", "ip", "ipv4", "ipv6", "userId", "isOnline", "lastHeartbeat"], [id, "entry-" + id, ip, ip, ipv6, 1, 1, now]);
         // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
         (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
       }
-      const entryGroup = async (id, domain, weighted) => {
+      const entryGroup = async (id, domain, weighted, dualStack = false) => {
         await insert(
           "forward_groups",
-          ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "bandwidthAggregationEnabled", "bandwidthAggregationStrategy", "ddnsWeightEnabled", "peerProbeEnabled"],
-          [id, "g" + id, "host", "entry", domain, "A", "0.0.0.0", 1, 1, 1, "capacity", weighted ? 1 : 0, 0],
+          ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "bandwidthAggregationEnabled", "bandwidthAggregationStrategy", "ddnsWeightEnabled", "peerProbeEnabled", "ddnsDualStack"],
+          [id, "g" + id, "host", "entry", domain, "A", "0.0.0.0", 1, 1, 1, "capacity", weighted ? 1 : 0, 0, dualStack ? 1 : 0],
         );
         for (const [index, hostId, bandwidth] of [[1, 1, 1000], [2, 2, 500]]) {
           await insert(
@@ -103,7 +105,7 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
       let current = await state(80);
       assert.equal(current.lastStatus, "healthy");
       assert.match(current.lastMessage, /按权重解析 198\.51\.100\.10=100、198\.51\.100\.20=50/);
-      assert.deepEqual(JSON.parse(current.ddnsWeightState), { provider: "tencentcloud", domain: "weighted.example.com", recordType: "A", weights: { [A]: 100, [B]: 50 } });
+      assert.deepEqual(JSON.parse(current.ddnsWeightState), { provider: "tencentcloud", domain: "weighted.example.com", recordType: "A", weights: { [A]: 100, [B]: 50 }, mirrorWeighted: false });
 
       calls.length = 0;
       await groups.runForwardGroupFailover(80);
@@ -134,6 +136,38 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
       assert.deepEqual(calls.map((call) => call.action), ["DescribeRecordList", "CreateRecord", "CreateRecord"]);
       for (const call of writes()) assert.equal("Weight" in call.payload, false, "没开按权重解析的组，请求里不能出现 Weight");
       assert.equal((await state(81)).ddnsWeightState, null);
+
+      // —— 双栈、副记录（AAAA）只有一台有地址：副记录带不了权重。只在第一次（老状态说不清副记录有没有权重时）
+      //    收一次 AAAA 的权重，之后每次发布都不再去收（以前每次发布都多列一遍、阿里云那边是一个无条件的写请求）。
+      const listsOf = (type) => calls.filter((call) => call.action === "DescribeRecordList" && call.payload.RecordType === type).length;
+      await entryGroup(82, "dual.example.com", true, true);
+      await groups.runForwardGroupFailover(82);
+      assert.deepEqual(JSON.parse((await state(82)).ddnsWeightState).mirrorWeighted, false);
+      assert.deepEqual(records.filter((record) => record.Name === "dual" && record.Type === "AAAA").map((record) => [record.Value, record.Weight]), [["2001:db8::10", null]]);
+      calls.length = 0;
+      await groups.runForwardGroupFailover(82, { forceSync: true });
+      assert.equal(listsOf("A"), 1, "主记录按权重发：列一次");
+      assert.equal(listsOf("AAAA"), 1, "副记录上一次就没按权重发：不再去收权重，只按值对账那一次");
+
+      // —— 成员全部暂停参与（维护模式）：清空解析。服务商报错时记着的值和权重状态不能丢，抛出去让发布队列重试
+      const policy = await import(moduleUrl("server/hostTrafficPolicy.ts"));
+      await entryGroup(83, "empty.example.com", true);
+      await groups.runForwardGroupFailover(83);
+      assert.equal((await state(83)).lastDdnsValue, A + "," + B);
+      await runtime.executeRaw('UPDATE "hosts" SET "maintenanceMode" = 1');
+      policy.invalidateHostTrafficPolicyCache();
+      failDeletes = true;
+      await assert.rejects(groups.runForwardGroupFailover(83), /provider is down/);
+      current = await state(83);
+      assert.equal(current.lastDdnsValue, A + "," + B, "没清掉：记着的值留着，下一次还知道要清什么");
+      assert.notEqual(current.ddnsWeightState, null);
+      assert.equal(current.lastStatus, "error");
+      failDeletes = false;
+      await groups.runForwardGroupFailover(83);
+      current = await state(83);
+      assert.equal(current.lastDdnsValue, null);
+      assert.equal(current.ddnsWeightState, null);
+      assert.deepEqual(records.filter((record) => record.Name === "empty"), []);
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
     }

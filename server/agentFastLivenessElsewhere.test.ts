@@ -118,3 +118,34 @@ test("判了离线之后库里出现更晚的时刻（它换连到别的实例�
   assert.equal(restored.isCurrent(), true);
   assert.equal(instance.state(5)!.lastSeenElsewhereAt, offlineAt + 15_000);
 });
+
+test("本实例从没见过的主机（启动后新加的，Agent 只连别的实例）：库里看到别的实例刚见过它，就登记成在线，不当成永远离线", () => {
+  const start = 4_000_000;
+  const clock = harness(start);
+  const elsewhere = new Map<number, number>();
+  const { instance, events } = tracker(clock, elsewhere);
+  elsewhere.set(42, start - 5_000);
+  assert.equal(instance.observeElsewhereActivity(42, start - 5_000, "2.2.264"), true, "没登记过的主机被忽略了");
+  const state = instance.state(42);
+  assert.ok(state, "没有存活状态的主机在转发组评估里算离线");
+  assert.equal(state!.confirmedOffline, false);
+  assert.equal(state!.lastSeenElsewhereAt, start - 5_000);
+  assert.equal(state!.lastRestoredAt, null, "不是「刚恢复」：不用等恢复观察");
+  assert.deepEqual(events, [], "第一次见到不发上线事件（不会发一条多余的「主机上线」通知）");
+  // 别的实例一直见得到它：一直在线
+  for (let step = 1; step <= 10; step += 1) {
+    elsewhere.set(42, start + step * 60_000 - 5_000);
+    clock.advanceTo(start + step * 60_000);
+    instance.observeElsewhereActivity(42, start + step * 60_000 - 5_000, "2.2.264");
+    assert.equal(instance.isConfirmedOffline(42), false);
+  }
+  // 别的实例也见不到它了：按库里的时刻等够 elsewhere 沉默期后判离线
+  const lastElsewhere = start + 10 * 60_000 - 5_000;
+  clock.advanceTo(lastElsewhere + AGENT_FAST_LIVENESS_ELSEWHERE_SILENCE_MS + 1);
+  assert.equal(instance.isConfirmedOffline(42), true);
+  // 太旧的时刻、不支持快速存活的版本：不登记
+  assert.equal(instance.observeElsewhereActivity(43, clock.now() - AGENT_FAST_LIVENESS_ELSEWHERE_SILENCE_MS - 1, "2.2.264"), false);
+  assert.equal(instance.observeElsewhereActivity(44, clock.now() - 1_000, "2.2.100"), false);
+  assert.equal(instance.state(43), null);
+  assert.equal(instance.state(44), null);
+});

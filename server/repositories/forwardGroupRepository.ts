@@ -67,7 +67,7 @@ import { dbBool, sqlBool } from "./repositoryUtils";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { ForwardGroupMode, ForwardGroupRecordType, chainEntryMembers, ddnsValueForHostByRecordType, entryAddressForHost, entryGroupMembersFor, forwardChainTargetLabel, insertForwardGroupEvent, ipv6AddressForConnectHost, isCollectionGroupMode, isSafeHostAddress, memberEntryHostId, memberListenHostIds, normalizeForwardGroupRecordType, privateAddressForHost, recordTypeRequirementLabel, sortedMembers, targetHostIdForMember } from "../forwardGroups/common";
-import { memberThroughputMbps } from "../forwardGroups/ddnsEntryGroup";
+import { memberThroughputMbps } from "../forwardGroups/bandwidth";
 import { clearForwardGroupPublishedDdns, exactDdnsReconciledGroups, memberDdnsValue } from "../forwardGroups/ddnsPublish";
 import { forwardGroupHealthRechecks, runForwardGroupFailover, scheduleForwardGroupFailover } from "../forwardGroups/evaluateDriver";
 import { resolveMemberAgentLiveness } from "../forwardGroups/liveness";
@@ -75,6 +75,7 @@ import { isPortUsedOnHostForGroupChild } from "../forwardGroups/portPolicy";
 import { invalidateForwardGroupProbeTopologyAfterChange } from "../forwardGroups/probeTopology";
 import { existingChildRule, removeManagedRule, settleAndMarkForwardGroupRulePendingDelete, syncForwardGroupRules } from "../forwardGroups/ruleSync";
 import { handleTrafficBillingShortfallLazily, refreshForwardGroupReferences } from "../forwardGroups/runtime";
+import { withForwardGroupEvaluationLock } from "../panelKeyedLock";
 
 export type ForwardGroupMemberInput = {
   memberType: "host" | "tunnel";
@@ -1270,8 +1271,6 @@ export async function deleteForwardGroup(id: number) {
 
 async function deleteForwardGroupUnwatched(id: number) {
   const db = await getDb();
-  // 删之前留一份（带成员）：删完要按它发布过的值把解析记录清掉（clearForwardGroupPublishedDdns）。
-  const groupBeforeDelete = await getForwardGroupById(id).catch(() => null);
   const childRules = await getForwardGroupChildRules(id);
   for (const rule of childRules as any[]) await removeManagedRule(Number(rule.id));
   const templates = await getForwardGroupTemplateRules(id);
@@ -1290,28 +1289,34 @@ async function deleteForwardGroupUnwatched(id: number) {
   for (const member of members as any[]) {
     if (member.ruleId) await removeManagedRule(Number(member.ruleId));
   }
-  await db.delete(forwardGroupEvents).where(eq(forwardGroupEvents.groupId, id));
-  await db.delete(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, id));
-  await db.delete(userForwardGroupPermissions).where(eq(userForwardGroupPermissions.forwardGroupId, id));
-  /**
-   * 套餐里绑着它的那一行也要删。
-   *
-   * 留着的话套餐会继续宣称带着一个已经不存在的转发组：商店上的数量多一个，
-   * 管理端的套餐编辑里显示成一个只有编号的空壳，而买了这个套餐的人拿到的是
-   * 一条指向不存在资源的授权。主机那一路一直是这么删的，这几路当初漏了。
-   */
-  await db.delete(subscriptionPlanForwardGroups).where(eq(subscriptionPlanForwardGroups.forwardGroupId, id));
-  await db.delete(forwardGroups).where(eq(forwardGroups.id, id));
-  forwardGroupHealthRechecks.replace(id, null);
-  exactDdnsReconciledGroups.delete(id);
   /*
-    组行删掉之后再清解析，并且拿评估用的那把锁：正在跑的一轮评估（可能还要写一次服务商）先跑完，
-    之后的评估读不到组就直接返回，不会在清完之后又把记录写回去。清理失败不影响删除（里面自己记日志）。
+    删组行、读「发布过什么」、清解析都在评估锁里做（评审 F4）：正在跑的一轮评估（可能正往服务商写）先跑完，
+    之后再读组 —— 读到的 lastDdnsValue 就是服务商那边现在的样子；删完之后的评估读不到组，直接返回，不会在清完
+    之后又把记录写回去。以前组是在锁外先读的，那一轮评估写上去的新值没人清。多实例时这把锁跨实例
+    （panelKeyedLock.ts），持有实例上的评估同样排在后面。清理失败不影响删除（里面自己记日志）。
   */
-  if (groupBeforeDelete) {
-    await withKeyedTaskLock(`forward-group-failover:${id}`, () => clearForwardGroupPublishedDdns(groupBeforeDelete))
-      .catch((error) => appendPanelLog("warn", `[DDNS] 转发组 ${id} 已删除，清理解析记录时出错：${error instanceof Error ? error.message : String(error)}`));
-  }
+  await withForwardGroupEvaluationLock(id, async () => {
+    // 删之前留一份（带成员）：删完要按它发布过的值把解析记录清掉（clearForwardGroupPublishedDdns）。
+    const groupBeforeDelete = await getForwardGroupById(id).catch(() => null);
+    await db.delete(forwardGroupEvents).where(eq(forwardGroupEvents.groupId, id));
+    await db.delete(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, id));
+    await db.delete(userForwardGroupPermissions).where(eq(userForwardGroupPermissions.forwardGroupId, id));
+    /**
+     * 套餐里绑着它的那一行也要删。
+     *
+     * 留着的话套餐会继续宣称带着一个已经不存在的转发组：商店上的数量多一个，
+     * 管理端的套餐编辑里显示成一个只有编号的空壳，而买了这个套餐的人拿到的是
+     * 一条指向不存在资源的授权。主机那一路一直是这么删的，这几路当初漏了。
+     */
+    await db.delete(subscriptionPlanForwardGroups).where(eq(subscriptionPlanForwardGroups.forwardGroupId, id));
+    await db.delete(forwardGroups).where(eq(forwardGroups.id, id));
+    forwardGroupHealthRechecks.replace(id, null);
+    exactDdnsReconciledGroups.delete(id);
+    if (groupBeforeDelete) {
+      await clearForwardGroupPublishedDdns(groupBeforeDelete)
+        .catch((error) => appendPanelLog("warn", `[DDNS] 转发组 ${id} 已删除，清理解析记录时出错：${error instanceof Error ? error.message : String(error)}`));
+    }
+  });
 }
 
 /**

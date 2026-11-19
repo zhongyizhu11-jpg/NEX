@@ -2544,6 +2544,46 @@ export async function getTunnelExitNodes(tunnelId: number) {
   return db.select().from(tunnelExitNodes).where(eq(tunnelExitNodes.tunnelId, tunnelId)).orderBy(asc(tunnelExitNodes.seq));
 }
 
+/**
+ * 一条链路的入口机（以前五处各写一份）：entryHostId，加上入口组里的主机成员（按优先级，去重）。
+ *   · enabledOnly：只要启用的入口组（组模式是 entry）和启用的成员 —— 测速、真的要跑的那几台；
+ *     默认全要（推配置、清就绪、认上报：停用的成员也可能还拿着旧配置）。
+ *   · entryHost："always"（默认）总带上 entryHostId；"fallback" 只在组里一台都没有时才用它。
+ * 只查 forward_groups / forward_group_members 两张表，不经过转发组仓库（免得拉进一串模块）。
+ */
+export async function getTunnelEntryHostIds(
+  tunnel: { entryHostId?: unknown; entryGroupId?: unknown } | null | undefined,
+  options: { enabledOnly?: boolean; entryHost?: "always" | "fallback" } = {},
+): Promise<number[]> {
+  const ids: number[] = [];
+  const push = (value: unknown) => {
+    const id = Number(value || 0);
+    if (Number.isInteger(id) && id > 0 && !ids.includes(id)) ids.push(id);
+  };
+  const entryHostMode = options.entryHost ?? "always";
+  if (entryHostMode === "always") push(tunnel?.entryHostId);
+  const entryGroupId = Number(tunnel?.entryGroupId || 0);
+  if (Number.isInteger(entryGroupId) && entryGroupId > 0) {
+    const db = await getDb();
+    const group = options.enabledOnly && db
+      ? (await db.select({ isEnabled: forwardGroups.isEnabled, groupMode: forwardGroups.groupMode }).from(forwardGroups).where(eq(forwardGroups.id, entryGroupId)).limit(1))[0]
+      : null;
+    const groupUsable = !options.enabledOnly || (!!group && dbBool(group.isEnabled) && String(group.groupMode || "") === "entry");
+    if (db && groupUsable) {
+      const members = await db.select({ hostId: forwardGroupMembers.hostId, isEnabled: forwardGroupMembers.isEnabled })
+        .from(forwardGroupMembers)
+        .where(and(eq(forwardGroupMembers.groupId, entryGroupId), eq(forwardGroupMembers.memberType, "host")))
+        .orderBy(asc(forwardGroupMembers.priority), asc(forwardGroupMembers.id));
+      for (const member of members) {
+        if (options.enabledOnly && !dbBool(member.isEnabled, true)) continue;
+        push(member.hostId);
+      }
+    }
+  }
+  if (entryHostMode === "fallback" && ids.length === 0) push(tunnel?.entryHostId);
+  return ids;
+}
+
 export async function getTunnelExitNodesByTunnelIds(tunnelIds: number[]) {
   const ids = Array.from(new Set(tunnelIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
   const db = await getDb();

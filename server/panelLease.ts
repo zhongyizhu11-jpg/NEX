@@ -7,8 +7,9 @@ import { quoteIdentifier } from "./dbCompat";
   后台任务；别的实例照常接网页 / API 请求和 Agent 连接，只是不跑下面标「持有者」的那些。
 
   租约是 panel_leases 里的一行（name = "background"）：holder = 实例启动时随机生成的 id，expiresAt = 到期时刻（毫秒）。
-  抢 / 续是一条带条件的 UPDATE（自己拿着，或者已经过期），没有这一行时再 INSERT（主键冲突就算没抢到），
-  三种库上都是原子的。TTL 30 秒、每 10 秒续一次；持有者自己只信到「这次续约开始 + TTL − 5 秒」，
+  抢 / 续是一条带条件的 UPDATE（自己拿着，或者已经过期），没有这一行时再 INSERT（name 上的唯一索引冲突就算没抢到），
+  三种库上都是原子的，过期判断和写进去的到期时刻都按库的时钟（不受各实例时钟差影响）。TTL 30 秒、大约每 10 秒
+  续一次（慢的续约之后按有效期提前续）；持有者自己只信到「这次续约开始 + TTL − 5 秒」，
   续不上（库连不上）就先自己停手，不等别人来抢。持有者停了（进程退出 / 卡死 / 连不上库），
   另一个实例最迟在「TTL + 一个续约间隔」（40 秒）内接手；正常退出时主动放掉，下一轮续约就接上。
 
@@ -55,24 +56,35 @@ export const PANEL_LEASE_RENEW_INTERVAL_MS = 10_000;
 export const PANEL_LEASE_FENCE_MS = 5_000;
 export const PANEL_BACKGROUND_LEASE = "background";
 export const PANEL_INSTANCE_LEASE_PREFIX = "instance:";
+/** 跨实例按 key 串行的锁行（server/panelKeyedLock.ts）；过期没放的由持有者顺手删掉。 */
+export const PANEL_KEYED_LOCK_ROW_PREFIX = "lock:";
 /** 实例登记过期多久后由持有者删掉（留着几分钟方便排查）。 */
 const INSTANCE_ROW_RETENTION_MS = 10 * 60_000;
 
 export type PanelLeaseRecord = {
   name: string;
   holder: string;
+  /** 到期时刻（毫秒，数据库的时钟）。 */
   expiresAt: number;
   updatedAt: number;
 };
 
+/*
+  租约的时刻一律用数据库的时钟（评审 F6）：抢 / 续的条件「已经过期」以前拿调用方自己的时钟算，两个实例的
+  时钟差几十秒时，快的那个会在持有者还在有效期里就把租约抢走（两边同时跑后台任务）。现在过期判断、写进去的
+  到期时刻都在同一条 SQL 里按库的时钟算，各实例的时钟差多少都没关系。
+  实例自己「信到什么时候」仍按本机时钟、从这次续约开始算（validUntil）：只要求本机时钟走得不比库快，不要求对得上。
+*/
 export type PanelLeaseStore = {
-  /** 自己拿着或者已过期就拿下 / 续上，返回拿没拿到。必须是原子的。 */
-  tryAcquire(name: string, holder: string, now: number, ttlMs: number): Promise<boolean>;
+  /** 自己拿着或者已过期（按库的时钟）就拿下 / 续上，返回拿没拿到。必须是原子的。 */
+  tryAcquire(name: string, holder: string, ttlMs: number): Promise<boolean>;
+  /** 库现在的时刻（毫秒）：拿来判断别的行过没过期。 */
+  now(): Promise<number>;
   read(name: string): Promise<PanelLeaseRecord | null>;
   list(prefix: string): Promise<PanelLeaseRecord[]>;
   release(name: string, holder: string): Promise<void>;
-  /** 删掉 prefix 下 expiresAt 早于 before 的行。 */
-  prune(prefix: string, before: number): Promise<number>;
+  /** 删掉 prefix 下按库的时钟已经过期超过 olderThanMs 的行。 */
+  prune(prefix: string, olderThanMs: number): Promise<number>;
 };
 
 function leaseRow(row: Record<string, unknown> | undefined): PanelLeaseRecord {
@@ -84,27 +96,59 @@ function leaseRow(row: Record<string, unknown> | undefined): PanelLeaseRecord {
   };
 }
 
-/** 存在面板主库的 panel_leases 表里（三种库通用的 SQL）。 */
+/**
+ * 数据库现在的时刻（毫秒，整数）的 SQL 表达式：
+ *   SQLite      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+ *   MySQL       CAST(UNIX_TIMESTAMP(NOW(3)) * 1000 AS SIGNED)
+ *   PostgreSQL  CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT)（clock_timestamp 不是事务开始的时刻）
+ */
+export function databaseNowMsSql(kind = getDatabaseKind()) {
+  if (kind === "mysql") return "CAST(UNIX_TIMESTAMP(NOW(3)) * 1000 AS SIGNED)";
+  if (kind === "postgresql") return "CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT)";
+  return "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+}
+
+export type SqlPanelLeaseStoreOptions = {
+  /** 测试用：在库的时钟上加一个偏移（毫秒），模拟时间过去。生产里不传。 */
+  clockOffsetMs?: () => number;
+};
+
+/** 存在面板主库的 panel_leases 表里（三种库通用的 SQL，时刻用库的时钟）。 */
 export class SqlPanelLeaseStore implements PanelLeaseStore {
+  constructor(private readonly options: SqlPanelLeaseStoreOptions = {}) {}
+
   private table() {
     return quoteIdentifier("panel_leases");
   }
 
-  async tryAcquire(name: string, holder: string, now: number, ttlMs: number) {
+  /** 库的时钟（加上测试偏移）；偏移作为参数传，SQL 不随它变。 */
+  private clock(): [string, number] {
+    return [`(${databaseNowMsSql()} + ?)`, Math.round(Number(this.options.clockOffsetMs?.() ?? 0)) || 0];
+  }
+
+  async now() {
+    const [clock, offset] = this.clock();
+    const rows = await queryRaw<{ now: unknown }>(`SELECT ${clock} AS ${quoteIdentifier("now")}`, [offset]);
+    return Number(rows[0]?.now ?? 0) || 0;
+  }
+
+  async tryAcquire(name: string, holder: string, ttlMs: number) {
     const q = quoteIdentifier;
-    const expiresAt = now + ttlMs;
+    const [clock, offset] = this.clock();
+    const ttl = Math.max(1, Math.round(ttlMs));
     const updated = await executeRaw(
-      `UPDATE ${this.table()} SET ${q("holder")} = ?, ${q("expiresAt")} = ?, ${q("updatedAt")} = ?
-        WHERE ${q("name")} = ? AND (${q("holder")} = ? OR ${q("expiresAt")} <= ?)`,
-      [holder, expiresAt, now, name, holder, now],
+      `UPDATE ${this.table()} SET ${q("holder")} = ?, ${q("expiresAt")} = ${clock} + ?, ${q("updatedAt")} = ${clock}
+        WHERE ${q("name")} = ? AND (${q("holder")} = ? OR ${q("expiresAt")} <= ${clock})`,
+      [holder, offset, ttl, offset, name, holder, offset],
     );
     if (rawAffectedRows(updated) > 0) return true;
     const kind = getDatabaseKind();
     const columns = `(${q("name")}, ${q("holder")}, ${q("expiresAt")}, ${q("updatedAt")})`;
+    const values = `VALUES (?, ?, ${clock} + ?, ${clock})`;
     const insertSql = kind === "mysql"
-      ? `INSERT IGNORE INTO ${this.table()} ${columns} VALUES (?, ?, ?, ?)`
-      : `INSERT INTO ${this.table()} ${columns} VALUES (?, ?, ?, ?) ON CONFLICT (${q("name")}) DO NOTHING`;
-    const inserted = await executeRaw(insertSql, [name, holder, expiresAt, now]);
+      ? `INSERT IGNORE INTO ${this.table()} ${columns} ${values}`
+      : `INSERT INTO ${this.table()} ${columns} ${values} ON CONFLICT (${q("name")}) DO NOTHING`;
+    const inserted = await executeRaw(insertSql, [name, holder, offset, ttl, offset]);
     return rawAffectedRows(inserted) > 0;
   }
 
@@ -131,11 +175,12 @@ export class SqlPanelLeaseStore implements PanelLeaseStore {
     await executeRaw(`DELETE FROM ${this.table()} WHERE ${q("name")} = ? AND ${q("holder")} = ?`, [name, holder]);
   }
 
-  async prune(prefix: string, before: number) {
+  async prune(prefix: string, olderThanMs: number) {
     const q = quoteIdentifier;
+    const [clock, offset] = this.clock();
     const result = await executeRaw(
-      `DELETE FROM ${this.table()} WHERE ${q("name")} LIKE ? AND ${q("expiresAt")} < ?`,
-      [`${prefix}%`, before],
+      `DELETE FROM ${this.table()} WHERE ${q("name")} LIKE ? AND ${q("expiresAt")} < ${clock} - ?`,
+      [`${prefix}%`, offset, Math.max(0, Math.round(olderThanMs))],
     );
     return rawAffectedRows(result);
   }
@@ -192,6 +237,8 @@ export class PanelLease {
   private started = false;
   private stopped = false;
   private timer: TimerHandle | null = null;
+  /** 到 validUntil 那一刻响一次：续约卡着没回时，丢了持有也马上说（不等那一轮结束）。 */
+  private expiryTimer: TimerHandle | null = null;
   private ticking: Promise<void> | null = null;
   private lastHolderState = false;
   private holderId: string | null = null;
@@ -214,7 +261,7 @@ export class PanelLease {
     this.logger = options.logger ?? console;
   }
 
-  /** 先续一轮（等它完成），之后每 renewIntervalMs 续一次。 */
+  /** 先续一轮（等它完成），之后按有效期排下一轮（见 schedule）。 */
   async start() {
     if (this.started) return;
     this.started = true;
@@ -227,14 +274,15 @@ export class PanelLease {
     this.stopped = true;
     if (this.timer) this.clearTimer(this.timer);
     this.timer = null;
+    if (this.expiryTimer) this.clearTimer(this.expiryTimer);
+    this.expiryTimer = null;
     if (this.ticking) await this.ticking.catch(() => undefined);
-    const wasHolder = this.isHolder();
     this.validUntil = 0;
     if (options.release) {
       await this.store.release(this.name, this.instanceId).catch(() => undefined);
       await this.store.release(`${PANEL_INSTANCE_LEASE_PREFIX}${this.instanceId}`, this.instanceId).catch(() => undefined);
     }
-    if (wasHolder) this.emit(false);
+    this.publishChange();
   }
 
   isHolder() {
@@ -257,7 +305,7 @@ export class PanelLease {
       instanceId: this.instanceId,
       role: this.stopped ? "stopped" : holder ? "holder" : this.lastRenewedAt === null && this.tickCount === 0 ? "starting" : "standby",
       holderId: holder ? this.instanceId : this.holderId,
-      holderExpiresAt: holder ? this.validUntil + this.fenceMs : this.holderExpiresAt,
+      holderExpiresAt: this.holderExpiresAt,
       otherInstanceIds: [...this.otherInstances],
       lastRenewedAt: this.lastRenewedAt,
       lastError: this.lastError,
@@ -274,15 +322,40 @@ export class PanelLease {
     return this.ticking;
   }
 
+  /*
+    下一轮什么时候续（评审 F5）：持有着的时候按这次续上的有效期排 —— 最晚在 validUntil 前留出一段余量开始，
+    平时还是每 renewIntervalMs 一次。以前是「上一轮结束后再等一个间隔」：一次续约卡了十几秒，下一轮就排到了
+    有效期之后，中间有一段谁都不是持有者（后台任务停了又起、在途的活被丢掉）。没持有时照常每个间隔试一次。
+  */
+  private nextDelayMs() {
+    if (!this.isHolder()) return this.renewIntervalMs;
+    const margin = Math.max(this.fenceMs, Math.floor(this.renewIntervalMs / 5));
+    return Math.max(0, Math.min(this.renewIntervalMs, this.validUntil - this.now() - margin));
+  }
+
   private schedule() {
     if (this.stopped) return;
     const timer = this.setTimer(() => {
       if (this.timer !== timer) return;
       this.timer = null;
       void this.tick().finally(() => this.schedule());
-    }, this.renewIntervalMs);
+    }, this.nextDelayMs());
     (timer as { unref?: () => void } | null)?.unref?.();
     this.timer = timer;
+  }
+
+  /** 有效期到点时把「不再持有」说出来；每次续上重新排。 */
+  private armExpiry() {
+    if (this.expiryTimer) this.clearTimer(this.expiryTimer);
+    this.expiryTimer = null;
+    if (this.stopped || !this.isHolder()) return;
+    const timer = this.setTimer(() => {
+      if (this.expiryTimer !== timer) return;
+      this.expiryTimer = null;
+      this.publishChange();
+    }, Math.max(0, this.validUntil - this.now()));
+    (timer as { unref?: () => void } | null)?.unref?.();
+    this.expiryTimer = timer;
   }
 
   private async runTick() {
@@ -290,41 +363,47 @@ export class PanelLease {
     const startedAt = this.now();
     this.tickCount += 1;
     try {
-      const acquired = await this.store.tryAcquire(this.name, this.instanceId, startedAt, this.ttlMs);
+      const acquired = await this.store.tryAcquire(this.name, this.instanceId, this.ttlMs);
       if (this.stopped) return;
+      // 别的行过没过期按库的时钟看（各实例的时钟可能差很多）。
+      const databaseNow = await this.store.now();
       if (acquired) {
+        // 本机只信到「这次续约开始 + TTL − 余量」：请求在路上花的时间都算进去了。
         this.validUntil = startedAt + this.ttlMs - this.fenceMs;
         this.holderId = this.instanceId;
-        this.holderExpiresAt = startedAt + this.ttlMs;
+        this.holderExpiresAt = databaseNow + this.ttlMs;
       } else {
         this.validUntil = 0;
         const record = await this.store.read(this.name);
-        const live = record && record.expiresAt > startedAt ? record : null;
+        const live = record && record.expiresAt > databaseNow ? record : null;
         this.holderId = live?.holder || null;
         this.holderExpiresAt = live?.expiresAt ?? null;
       }
-      await this.store.tryAcquire(`${PANEL_INSTANCE_LEASE_PREFIX}${this.instanceId}`, this.instanceId, startedAt, this.ttlMs);
+      await this.store.tryAcquire(`${PANEL_INSTANCE_LEASE_PREFIX}${this.instanceId}`, this.instanceId, this.ttlMs);
       const instances = await this.store.list(PANEL_INSTANCE_LEASE_PREFIX);
       this.otherInstances = instances
-        .filter((row) => row.holder !== this.instanceId && row.expiresAt > startedAt)
+        .filter((row) => row.holder !== this.instanceId && row.expiresAt > databaseNow)
         .map((row) => row.holder)
         .sort();
       if (acquired && this.tickCount % 30 === 1) {
-        await this.store.prune(PANEL_INSTANCE_LEASE_PREFIX, startedAt - INSTANCE_ROW_RETENTION_MS).catch(() => 0);
+        await this.store.prune(PANEL_INSTANCE_LEASE_PREFIX, INSTANCE_ROW_RETENTION_MS).catch(() => 0);
+        await this.store.prune(PANEL_KEYED_LOCK_ROW_PREFIX, INSTANCE_ROW_RETENTION_MS).catch(() => 0);
       }
       this.lastRenewedAt = startedAt;
       if (this.lastError) this.logger.info(`[PanelLease] renewed again instance=${this.instanceId}`);
       this.lastError = null;
     } catch (error) {
-      // 续不上：validUntil 不动，到点自己就不算持有者了（不等别人来抢）。
+      // 续不上：validUntil 不动，到点自己就不算持有者了（不等别人来抢；expiryTimer 到点会说出来）。
       const message = error instanceof Error ? error.message : String(error);
       if (this.lastError !== message) this.logger.warn(`[PanelLease] renew failed instance=${this.instanceId}: ${message}`);
       this.lastError = message;
     } finally {
+      this.armExpiry();
       this.publishChange();
     }
   }
 
+  /** 持有状态变了就通知（唯一的通知点：续约结束、有效期到点、停下）。 */
   private publishChange() {
     const holder = this.isHolder();
     if (holder === this.lastHolderState) return;
@@ -374,10 +453,6 @@ export async function stopPanelBackgroundLease(options: { release?: boolean } = 
 export function setPanelBackgroundLeaseForTests(lease: PanelLease | null) {
   activeLease = lease;
   if (lease) for (const listener of pendingListeners) lease.onChange(listener);
-}
-
-export function getPanelBackgroundLease() {
-  return activeLease;
 }
 
 /** 本实例现在该不该跑「只由持有者跑」的后台任务。没启动租约（单进程 / 测试 / 命令行）时为 true。 */

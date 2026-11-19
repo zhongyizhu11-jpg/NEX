@@ -1,3 +1,6 @@
+import { quoteIdentifier } from "./dbCompat";
+import { queryRaw, rawEpochToDate } from "./dbRuntime";
+
 /*
   主备转发组的抖动抑制（P3）：和线路组在入口 Agent 上的规矩同一套（agent/failover_selection.go 的
   flapHoldLocked）—— 一小时内自动切了三次以上，下一次「切回 / 按优先级换」要多等：三次起 5 分钟，
@@ -51,3 +54,50 @@ export function forwardGroupFlapHoldAt(switchTimesMs: readonly number[], nowMs: 
 export function forwardGroupFlapHoldLabel(holdMs: number): string {
   return `${Math.max(1, Math.round(holdMs / 60_000))} 分钟`;
 }
+
+/*
+  读「这个组最近一小时的自动切换」（forward_group_events 里的 auto-switch），按成员分（入口组按成员算抖动抑制，
+  主备组按整组算 —— 两处以前各写一份查询）。
+  读失败时不能当成「没在抖」：那样一次数据库抖动就会把抖动抑制悄悄关掉。用上一次读到的（记日志）；这个进程
+  还没读成功过的组只能按没有记录算。
+*/
+const lastSwitchTimesByGroup = new Map<number, Map<number, number[]>>();
+
+export async function forwardGroupAutoSwitchTimesByMember(groupId: number, nowMs = Date.now()): Promise<Map<number, number[]>> {
+  const id = Number(groupId);
+  const sinceSeconds = Math.floor((nowMs - FORWARD_GROUP_FLAP_WINDOW_MS) / 1000);
+  try {
+    const rows = await queryRaw<{ memberId: unknown; createdAt: unknown }>(
+      `SELECT ${quoteIdentifier("memberId")}, ${quoteIdentifier("createdAt")} FROM ${quoteIdentifier("forward_group_events")}
+        WHERE ${quoteIdentifier("groupId")} = ? AND ${quoteIdentifier("type")} = ? AND ${quoteIdentifier("createdAt")} >= ?`,
+      [id, FORWARD_GROUP_AUTO_SWITCH_EVENT, sinceSeconds],
+    );
+    const byMember = new Map<number, number[]>();
+    for (const row of rows) {
+      // 整组的切换（主备组）memberId 可能是空：记在 0 下面。
+      const memberId = Math.max(0, Number(row.memberId || 0) || 0);
+      const at = rawEpochToDate(row.createdAt)?.getTime() || 0;
+      if (!(at > 0)) continue;
+      const list = byMember.get(memberId);
+      if (list) list.push(at);
+      else byMember.set(memberId, [at]);
+    }
+    if (lastSwitchTimesByGroup.size >= 4096 && !lastSwitchTimesByGroup.has(id)) lastSwitchTimesByGroup.clear();
+    lastSwitchTimesByGroup.set(id, byMember);
+    return byMember;
+  } catch (error) {
+    console.warn(`[ForwardGroup] reading auto-switch events failed group=${id}; keeping the last known flap state: ${error instanceof Error ? error.message : String(error)}`);
+    return lastSwitchTimesByGroup.get(id) ?? new Map();
+  }
+}
+
+/** 整组的抖动抑制（主备组）：所有成员的自动切换合起来算。 */
+export async function forwardGroupFlapHoldForGroup(groupId: number, nowMs = Date.now()) {
+  const byMember = await forwardGroupAutoSwitchTimesByMember(groupId, nowMs);
+  return forwardGroupFlapHoldAt(Array.from(byMember.values()).flat(), nowMs);
+}
+
+export function resetForwardGroupFlapStateForTests() {
+  lastSwitchTimesByGroup.clear();
+}
+
