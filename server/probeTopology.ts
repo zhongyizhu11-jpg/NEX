@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { exitGroupUsesMultipleExits, normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "../shared/loadBalance";
 import { normalizeTunnelRelayMode } from "../shared/tunnelRelay";
 
 function text(value: unknown) {
@@ -22,7 +22,7 @@ export function tunnelProbeTopologyKey(tunnel: any, hops: any[] = [], exitNodes:
       text(hop?.connectHost),
       hop?.isEnabled !== false,
     ]);
-  const exitParts = (exitGroupUsesMultipleExits(exitStrategy) ? [...(exitNodes || [])] : [])
+  const exitParts = [...(exitNodes || [])]
     .filter((node) => node?.isEnabled !== false)
     .sort((a, b) => Number(a?.seq || 0) - Number(b?.seq || 0))
     .map((node) => [

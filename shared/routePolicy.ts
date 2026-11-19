@@ -254,7 +254,8 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
       round_robin: `轮流走这 ${lineCount} 条`,
       random: `从 ${lineCount} 条里随机挑一条`,
       ip_hash: perSession ? "按会话固定分到其中一条" : "按来源 IP 固定分到其中一条",
-      auto: `按最近延迟和沿途主机负载自动算权重，从 ${lineCount} 条里随机挑两条取更好的那条`,
+      auto: `从 ${lineCount} 条里挑最划算的那条（整链延迟、丢包、沿途负载和已有的${perSession ? "会话" : "连接"}合成一个数）`,
+      latency: `只在 ${lineCount} 条里整链最快的那几条里分（差 50ms 以内算一样快）`,
     };
     conditions.push({ kind: "spread", key: "spread", when: perSession ? "每个新会话" : "每条新连接", then: spread[policy.spread], targetIndex: null, state: "deciding" });
     deciding = "spread";
@@ -319,9 +320,9 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
       conditions.push({
         kind: "fastest",
         key: "fastest",
-        when: "按线路评分",
-        // 延迟那两道门槛写死在 Agent 里（failoverFastestMarginMs / Ratio），这里照抄。
-        then: `挑评分明显更高的那条（高出 ${policy.scoreMargin} 分，或快 20ms 且快 20%），连续 ${formatPolicyDuration(policy.scoreHoldSeconds)}才换`,
+        when: "按整链质量",
+        // 门槛写死在 Agent 里（lbcore 的 DefaultLatencyMargin / DefaultSwitchRatio / DefaultSwitchFastHold），这里照抄。
+        then: `挑整链明显更快的那条（快 50ms 以上、而且快 20% 以上；丢包和沿途负载按变慢算），连续 ${formatPolicyDuration(policy.scoreHoldSeconds)}才换，快一半以上的 10 秒就换`,
         targetIndex: null,
         state: deciding === "fastest" ? "deciding" : deciding === "pin" || deciding === "schedule" ? "overridden" : "idle",
       });

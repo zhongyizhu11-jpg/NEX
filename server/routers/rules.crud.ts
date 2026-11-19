@@ -13,7 +13,6 @@ import {
   validateFailoverSchedule,
 } from "@shared/failoverSchedule";
 import { readFailoverPin } from "@shared/failoverPin";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import {
   MAX_ROUTE_HOPS,
   MAX_ROUTE_PATHS,
@@ -243,7 +242,6 @@ const routeGroupInputSchema = z.object({
   recoverSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.recoverSeconds.min).max(ROUTE_GUARD_LIMITS.recoverSeconds.max).optional(),
   minHoldSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.minHoldSeconds.min).max(ROUTE_GUARD_LIMITS.minHoldSeconds.max).optional(),
   autoFailback: z.boolean().optional(),
-  scoreMargin: z.number().int().min(ROUTE_GUARD_LIMITS.scoreMargin.min).max(ROUTE_GUARD_LIMITS.scoreMargin.max).optional(),
   scoreHoldSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.scoreHoldSeconds.min).max(ROUTE_GUARD_LIMITS.scoreHoldSeconds.max).optional(),
   prewarmSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.prewarmSeconds.min).max(ROUTE_GUARD_LIMITS.prewarmSeconds.max).optional(),
   switchMode: z.enum(ROUTE_SWITCH_MODES).optional(),
@@ -607,7 +605,6 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
       recoverSeconds: clampGuard(routeGroup.recoverSeconds ?? base?.recoverSeconds, "recoverSeconds", template.recoverSeconds),
       minHoldSeconds: clampGuard(routeGroup.minHoldSeconds ?? base?.minHoldSeconds, "minHoldSeconds", template.minHoldSeconds),
       autoFailback: routeGroup.autoFailback ?? base?.autoFailback ?? template.autoFailback,
-      scoreMargin: clampGuard(routeGroup.scoreMargin ?? base?.scoreMargin, "scoreMargin", template.scoreMargin),
       scoreHoldSeconds: clampGuard(routeGroup.scoreHoldSeconds ?? base?.scoreHoldSeconds, "scoreHoldSeconds", template.scoreHoldSeconds),
       prewarmSeconds: clampGuard(routeGroup.prewarmSeconds ?? base?.prewarmSeconds, "prewarmSeconds", template.prewarmSeconds),
       switchMode: normalizeRouteSwitchMode(routeGroup.switchMode ?? base?.switchMode),
@@ -660,7 +657,6 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
     routePaths: serializeRoutePaths(paths),
     routeSwitchMode: policy.switchMode,
     routeFailureThreshold: policy.failureThreshold,
-    routeScoreMargin: policy.scoreMargin,
     routeScoreHoldSeconds: policy.scoreHoldSeconds,
     routePrewarmSeconds: policy.prewarmSeconds,
     routeDelivery: normalizeRouteDelivery(policy.delivery),
@@ -698,7 +694,7 @@ export function routeSchedulerHostIds(hostId: number, tunnel: any | null | undef
   const primary = routeEntryHostId(hostId, tunnel);
   if (!tunnel) return [primary];
   const ids = [primary];
-  if (dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none") {
+  if (dbBool(tunnel.loadBalanceEnabled)) {
     for (const node of exitNodes) {
       if (!node || !dbBool(node.isEnabled, true) || Number(node.hostId) <= 0 || Number(node.listenPort) <= 0) continue;
       ids.push(Number(node.hostId));
@@ -943,7 +939,6 @@ const ROUTE_RULE_COLUMNS = [
   "routeDelivery",
   "routeSwitchMode",
   "routeFailureThreshold",
-  "routeScoreMargin",
   "routeScoreHoldSeconds",
   "routePrewarmSeconds",
 ] as const;

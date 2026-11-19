@@ -89,7 +89,7 @@ export function routeTemplateGuards(mode: RouteMode): RouteGuards {
     case "smart":
     case "hybrid":
       // 整链最优：别的线路明显更快、持续 30 秒就切（快得多的 Agent 10 秒就切）；切过去至少走 1 分钟，防来回漂。
-      return { ...base, minHoldSeconds: 60, scoreMargin: 10, scoreHoldSeconds: 30, prewarmSeconds: 300 };
+      return { ...base, minHoldSeconds: 60, scoreHoldSeconds: 30, prewarmSeconds: 300 };
     default:
       return base;
   }
@@ -142,7 +142,6 @@ export function routePolicyOf(rule: RouteGroupRule, options: { nowMs?: number; p
     recoverSeconds: clampInt(rule.recoverSeconds, ROUTE_GUARD_LIMITS.recoverSeconds.min, ROUTE_GUARD_LIMITS.recoverSeconds.max, ROUTE_GUARD_DEFAULTS.recoverSeconds),
     minHoldSeconds: clampInt(rule.failoverMinHoldSeconds, ROUTE_GUARD_LIMITS.minHoldSeconds.min, ROUTE_GUARD_LIMITS.minHoldSeconds.max, ROUTE_GUARD_DEFAULTS.minHoldSeconds),
     autoFailback: truthy(rule.autoFailback, true),
-    scoreMargin: clampInt(rule.routeScoreMargin, ROUTE_GUARD_LIMITS.scoreMargin.min, ROUTE_GUARD_LIMITS.scoreMargin.max, ROUTE_GUARD_DEFAULTS.scoreMargin),
     scoreHoldSeconds: clampInt(rule.routeScoreHoldSeconds, ROUTE_GUARD_LIMITS.scoreHoldSeconds.min, ROUTE_GUARD_LIMITS.scoreHoldSeconds.max, ROUTE_GUARD_DEFAULTS.scoreHoldSeconds),
     prewarmSeconds: clampInt(rule.routePrewarmSeconds, ROUTE_GUARD_LIMITS.prewarmSeconds.min, ROUTE_GUARD_LIMITS.prewarmSeconds.max, ROUTE_GUARD_DEFAULTS.prewarmSeconds),
     switchMode: normalizeRouteSwitchMode(rule.routeSwitchMode),

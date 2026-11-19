@@ -1,4 +1,3 @@
-import { exitGroupUsesMultipleExits } from "../shared/exitStrategy";
 import { isTunnelRelayFailover, tunnelRelayCandidates } from "../shared/tunnelRelay";
 
 type TunnelLatencySeriesSample = {
@@ -173,7 +172,7 @@ export function tunnelDetailsMatchTopology(input: {
     allowedEdges.add(edge);
     requiredEdges.add(edge);
   }
-  if (tunnel?.loadBalanceEnabled && exitGroupUsesMultipleExits(tunnel?.loadBalanceStrategy) && hopHostIds.length === 2) {
+  if (tunnel?.loadBalanceEnabled && hopHostIds.length === 2) {
     const extraExitHostIds = uniqueHostIds((input.exitNodes || [])
       .filter((node) => node?.isEnabled !== false && positiveInteger(node?.listenPort) > 0)
       .map((node) => node?.hostId));

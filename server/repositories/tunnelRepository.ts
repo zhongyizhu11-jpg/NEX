@@ -32,8 +32,7 @@ import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { mapWithConcurrency } from "../asyncPool";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
-import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
-import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { normalizeExitGroupStrategy, serializeBalanceDetect } from "../../shared/loadBalance";
 import { tunnelExitPinUnsupportedReason } from "../../shared/tunnelExitPin";
 import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
@@ -2904,7 +2903,6 @@ export async function clearStaleTunnelExitPin(tunnelId: number): Promise<boolean
     .filter((node) => dbBool(node?.isEnabled, true))
     .map((node) => Number(node?.hostId || 0))];
   const usable = dbBool(tunnel.loadBalanceEnabled)
-    && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
     && exitHostIds.includes(pinHostId)
     && !tunnelExitPinUnsupportedReason(tunnel, hops.length);
   if (usable) return false;

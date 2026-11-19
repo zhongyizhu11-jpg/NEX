@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { EXIT_GROUP_STRATEGIES, EXIT_GROUP_STRATEGY_LABELS, exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import { BALANCE_STRATEGIES, BALANCE_STRATEGY_LABELS, exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "../shared/loadBalance";
 import { forwardXExitStrategy } from "./tunnelExitStrategy";
 
 /**
@@ -19,8 +19,8 @@ import { forwardXExitStrategy } from "./tunnelExitStrategy";
  */
 
 test("按权重：名字、规整、份数", () => {
-  assert.ok((EXIT_GROUP_STRATEGIES as readonly string[]).includes("weighted"));
-  assert.match(EXIT_GROUP_STRATEGY_LABELS.weighted, /^按权重/);
+  assert.ok((BALANCE_STRATEGIES as readonly string[]).includes("weighted"));
+  assert.equal(BALANCE_STRATEGY_LABELS.weighted.label, "按权重");
   assert.equal(normalizeExitGroupStrategy("WEIGHTED"), "weighted");
   assert.equal(forwardXExitStrategy("weighted"), "weighted");
   assert.deepEqual(exitGroupWeights("weighted", [500, 300]), [5, 3]);
@@ -31,7 +31,7 @@ test("按权重：名字、规整、份数", () => {
 });
 
 test("按负载：名字、老的 least_conn 归过来、GOST/nginx 也有份数、FXP 拿线路带宽", () => {
-  assert.match(EXIT_GROUP_STRATEGY_LABELS.least_load, /^按负载/);
+  assert.equal(BALANCE_STRATEGY_LABELS.least_load.label, "按负载");
   assert.equal(normalizeExitGroupStrategy("least_load"), "least_load");
   assert.equal(normalizeExitGroupStrategy("least_conn"), "least_load");
   assert.equal(forwardXExitStrategy("least_load"), "least_load");

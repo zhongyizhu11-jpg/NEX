@@ -29,7 +29,6 @@ export type RouteAgentSpec = {
   recoverSeconds: number;
   autoFailback: boolean;
   failureThreshold: number;
-  scoreMargin: number;
   scoreHoldSeconds: number;
   prewarmSeconds: number;
   switchMode: string;
@@ -74,7 +73,6 @@ export function expectedRouteAgentSpec(policy: RouteGroupPolicy, pathCount: numb
     recoverSeconds: policy.recoverSeconds,
     autoFailback: policy.autoFailback,
     failureThreshold: policy.failureThreshold,
-    scoreMargin: policy.scoreMargin,
     scoreHoldSeconds: policy.scoreHoldSeconds,
     prewarmSeconds: policy.prewarmSeconds,
     switchMode: policy.switchMode,
@@ -104,7 +102,6 @@ export function parseRouteAgentSpec(raw: unknown): RouteAgentSpec | null {
     recoverSeconds: Math.max(0, int(value.recoverSeconds)),
     autoFailback: value.autoFailback === true,
     failureThreshold: Math.max(0, int(value.failureThreshold)),
-    scoreMargin: Math.max(0, int(value.scoreMargin)),
     scoreHoldSeconds: Math.max(0, int(value.scoreHoldSeconds)),
     prewarmSeconds: Math.max(0, int(value.prewarmSeconds)),
     switchMode: String(value.switchMode || "smooth").trim().slice(0, 16),
@@ -126,7 +123,7 @@ function formatDuration(seconds: number) {
 
 const DELIVERY_LABEL: Record<string, string> = { cold: "冷备", hot: "热备", aggregate: "聚合", replicate: "复制" };
 const STRATEGY_LABEL: Record<string, string> = {
-  fallback: "主备（一次走一条）", weighted: "按权重", least_load: "按负载", round_robin: "轮流", random: "随机", ip_hash: "按访客固定", auto: "自动权重",
+  fallback: "主备（一次走一条）", weighted: "按权重", least_load: "按负载", round_robin: "轮流", random: "随机", ip_hash: "按访客固定", auto: "自动", latency: "延迟优先",
 };
 const SWITCH_LABEL: Record<string, string> = { smooth: "平滑", fast: "故障时断开", force: "每次都断开" };
 
@@ -169,7 +166,6 @@ export function routeSpecDriftFields(
   same("failoverSeconds", "异常多久切走", expected.failoverSeconds, actual.failoverSeconds, formatDuration);
   same("recoverSeconds", "恢复观察", expected.recoverSeconds, actual.recoverSeconds, formatDuration);
   same("autoFailback", "恢复后切回", expected.autoFailback, actual.autoFailback, (value) => (value ? "切回" : "不切回"));
-  same("scoreMargin", "评分差多少才换", expected.scoreMargin, actual.scoreMargin, (value) => `${value} 分`);
   same("scoreHold", "更优持续多久才换", expected.scoreHoldSeconds, actual.scoreHoldSeconds, formatDuration);
   same("prewarm", "计划切换预热", expected.prewarmSeconds, actual.prewarmSeconds, formatDuration);
   same("switchMode", "旧连接", expected.switchMode, actual.switchMode, (value) => SWITCH_LABEL[value] || value);

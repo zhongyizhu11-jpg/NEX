@@ -122,7 +122,7 @@ import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
 import { dbBool, sqlBool } from "./repositoryUtils";
 import { isSniGroupTemplate, planSniChild, syncSniChildNames } from "../sniGroupChildren";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { parseRoutePaths, routeGroupForwardTypeSupported, routeGroupTunnelModeSupported, serializeRoutePaths, type RoutePath } from "../../shared/routeGroup";
 import { parseRouteLines, serializeRouteLines } from "../../shared/routeLines";
@@ -373,7 +373,7 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
       && nullableString(normalizedRouteLines(existing?.routeLines)) === nullableString(normalizedRouteLines(payload?.routeLines))
       && (payload?.routeMode == null || (
         nullableString(existing?.routeSwitchMode) === nullableString(payload?.routeSwitchMode)
-        && ["routeFailureThreshold", "routeScoreMargin", "routeScoreHoldSeconds", "routePrewarmSeconds"].every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
+        && ["routeFailureThreshold", "routeScoreHoldSeconds", "routePrewarmSeconds"].every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
       )));
   // 人工指定：钉在第 0 条（主线路）也是钉住，不能按「0 = 没有」比；到期时间按毫秒比。
   const pinSame = pinIndexOf(existing?.failoverPinnedIndex) === pinIndexOf(payload?.failoverPinnedIndex)
@@ -479,7 +479,6 @@ function childRouteColumns(templateRule: any, existing: any, childFailoverEnable
       routeMode: templateRule.routeMode || "failover",
       routeSwitchMode: templateRule.routeSwitchMode || "smooth",
       routeFailureThreshold: Number(templateRule.routeFailureThreshold ?? 3),
-      routeScoreMargin: Number(templateRule.routeScoreMargin ?? 10),
       routeScoreHoldSeconds: Number(templateRule.routeScoreHoldSeconds ?? 180),
       routePrewarmSeconds: Number(templateRule.routePrewarmSeconds ?? 300),
       // 线路（2.3.496）和切换方式跟着模板走：热备 / 聚合在每台成员机上一样生效，详情里画的线路也是模板那份。

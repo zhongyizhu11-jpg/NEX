@@ -1707,7 +1707,7 @@ async function seedLineDemo(adminId: number) {
   const sgPaths = await readPaths(sg);
   recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
     ruleId: sg, sourcePort: 26310, strategy: "fallback", activeIndex: 1, activeSince: nowMs - 118 * 60_000, prewarmIndex: -1, inboundOk: 410, inboundFailed: 1,
-    spec: { pinnedIndex: null, minHoldSeconds: 0, preferFastest: false, strategy: "fallback", delivery: "cold", failoverSeconds: 5, recoverSeconds: 180, autoFailback: true, failureThreshold: 3, scoreMargin: 10, scoreHoldSeconds: 120, prewarmSeconds: 0, switchMode: "smooth", targetCount: 2 },
+    spec: { pinnedIndex: null, minHoldSeconds: 0, preferFastest: false, strategy: "fallback", delivery: "cold", failoverSeconds: 5, recoverSeconds: 180, autoFailback: true, failureThreshold: 3, scoreHoldSeconds: 120, prewarmSeconds: 0, switchMode: "smooth", targetCount: 2 },
     targets: [
       { index: 0, target: dial(sgPaths[0]), healthy: false, down: true, downReason: "maintenance: HK2", score: 0, latencyMs: -1, lossPct: 100, jitterMs: 0, availabilityPct: 0, consecutiveFailures: 5, connections: 0, samples: 120, lastProbeAt: nowMs - 2000 },
       { index: 1, target: dial(sgPaths[1]), healthy: true, score: 88, latencyMs: 31, lossPct: 0, jitterMs: 2, availabilityPct: 100, consecutiveFailures: 0, connections: 12, samples: 120, lastProbeAt: nowMs - 2000, dialOk: 405, dialFailed: 2 },

@@ -3,7 +3,7 @@ import { isValidTlsServerName } from "./nginxTlsInput";
 import { killByPatternCmd, removeManagedServiceCmd, shQuote, startManagedServiceCmd } from "./agentActionCommands";
 import { cleanEndpointHost, isIpv6Literal } from "./forwardRuntimeConfigs";
 import { forwardRuleProtocols } from "@shared/forwardTypes";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "@shared/loadBalance";
 
 /*
   nginx stream 运行时：配置文件的拼装（server / upstream 块、证书）、配置哈希与重载命令、

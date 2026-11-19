@@ -1,5 +1,4 @@
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { BALANCE_ANTI_FLAP, GOST_BALANCE_MAX_EXITS, type BalanceDetect } from "@shared/loadBalance";
+import { BALANCE_MIN_HOLD_SECONDS, type BalanceDetect, GOST_BALANCE_MAX_EXITS, normalizeExitGroupStrategy } from "@shared/loadBalance";
 
 /*
   GOST 隧道的出口组交给入口机的本机代理挑（入口机的 Agent 要能执行统一调度：shared/loadBalance.ts 的 agentSupportsUnifiedBalance）。
@@ -56,24 +55,12 @@ export type GostBalanceSpecInput = {
 };
 
 /**
- * 面板的分配方式 → 调度器认的策略。
- *
- *   auto          → auto：份数 × 延迟系数 × 负载系数，随机挑两台取更闲的
- *   fallback/none → fallback：按顺序用第一台，坏了换下一台，好了切回（切过去至少待 1 分钟）
- *   ip_hash       → ip_hash：按访客地址加权 rendezvous 哈希（访客地址从 gost 加的 PROXY 头里读）
- *   latency       → fallback + 自动择优：整链延迟（入口探出口 + 出口探目标）明显更好、而且持续够久才换。
- *                   「择优」和「好了切回」不会互相打架（Agent 2.2.263 起：开了择优，同样健康的两台之间由评分
- *                   说了算，不再按顺序切回；agent 的 TestExitGroupLatencyDoesNotPingPong 钉着）
- *   least_load    → least_load：(挂着的连接 + 1) ÷ 份数最小的
- *   weighted      → weighted：平滑加权轮询
- *   round_robin   → round_robin
- *   random        → random
+ * 面板的分配方式原样交给调度器：八种名字在 Agent 和 FXP 里是同一段算法（lbcore，见 docs/dev/scheduler-spec.md）。
+ * 主备（fallback）是「按顺序用第一台，坏了换下一台，好了切回（切过去至少待 1 分钟）」；延迟优先在「一样快」
+ * （整链差不到「检测与切换」里那个毫秒数）的几台里按自动分，和 NEX 隧道一样。
  */
-export function gostBalanceProxyStrategy(value: unknown): { strategy: string; preferFastest: boolean } {
-  const strategy = normalizeExitGroupStrategy(value);
-  if (strategy === "latency") return { strategy: "fallback", preferFastest: true };
-  if (strategy === "none") return { strategy: "fallback", preferFastest: false };
-  return { strategy, preferFastest: false };
+export function gostBalanceProxyStrategy(value: unknown): string {
+  return normalizeExitGroupStrategy(value);
 }
 
 /** 份数压进调度器认的 1–100，比例不变（手填的份数可以比 100 大）。 */
@@ -109,7 +96,7 @@ export function gostBalanceProbeTiming(detect: BalanceDetect) {
 export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
   const exits = input.exits.slice(0, GOST_BALANCE_MAX_EXITS);
   const hostIds = exits.map((exit) => exit.hostId);
-  const { strategy, preferFastest } = gostBalanceProxyStrategy(input.strategy);
+  const strategy = gostBalanceProxyStrategy(input.strategy);
   const weights = gostBalanceTargetWeights(input.weights, exits.length);
   const timing = gostBalanceProbeTiming(input.detect);
   const pinIndex = input.pinHostId > 0 ? hostIds.indexOf(input.pinHostId) : -1;
@@ -119,7 +106,8 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     bindAddress: "127.0.0.1",
     protocol: input.protocol,
     strategy,
-    preferFastest,
+    // 延迟优先「一样快」的门槛（毫秒）：「检测与切换」里的「比最快的慢多少就少分」
+    latencyMarginMs: input.detect.latencyMarginMs,
     targets: exits.map((exit, index) => {
       const extra = input.extraLatencyMs.get(exit.hostId);
       return {
@@ -141,9 +129,7 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     probeTimeoutMs: timing.probeTimeoutMs,
     autoFailback: true,
     // 切过去至少用 1 分钟；一小时切 3 次以上放慢是调度器内置的
-    minHoldSeconds: BALANCE_ANTI_FLAP.minHoldSeconds,
-    // 延迟优先：更好的那台要连着领先这么久才换（「检测与切换」里的「持续多久才处理」）
-    ...(preferFastest ? { scoreHoldSeconds: Math.max(10, input.detect.jitterHoldSeconds) } : {}),
+    minHoldSeconds: BALANCE_MIN_HOLD_SECONDS,
     ...(input.detect.slowStart ? {} : { noSlowStart: true }),
     pinnedIndex: pinIndex >= 0 ? pinIndex : null,
     pinnedUntil: 0,

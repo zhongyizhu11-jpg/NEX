@@ -1,5 +1,3 @@
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-
 export function tunnelEndpointName(tunnel: any | null | undefined, role: "entry" | "exit", hosts: any[] | undefined) {
   const hostId = Number(role === "entry" ? tunnel?.entryHostId : tunnel?.exitHostId);
   const fromList = hosts?.find((host: any) => Number(host.id) === hostId);
@@ -20,7 +18,6 @@ export function tunnelHopHostName(tunnel: any | null | undefined, hostId: number
 }
 
 export function getTunnelLoadBalanceExitNames(tunnel: any | null | undefined, hosts: any[] | undefined) {
-  if (normalizeExitGroupStrategy(tunnel?.loadBalanceStrategy) === "none") return [];
   if (!Array.isArray(tunnel?.loadBalanceExits)) return [];
   const names = tunnel.loadBalanceExits
     .map((exit: any) => Number(exit?.hostId || 0))

@@ -118,7 +118,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { BalanceDetectPanel, BalanceStrategySelect, BalanceSummaryLine } from "@/features/links/LoadBalanceFields";
-import { DEFAULT_BALANCE_DETECT, UNIFIED_BALANCE_AGENT_VERSION, normalizeBalanceDetect, normalizeBalanceStrategy, type BalanceDetect } from "@shared/loadBalance";
+import { type BalanceDetect, type BalanceStrategy, DEFAULT_BALANCE_DETECT, exitGroupWeights, normalizeBalanceDetect, normalizeBalanceStrategy, normalizeExitGroupStrategy, UNIFIED_BALANCE_AGENT_VERSION } from "@shared/loadBalance";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -136,11 +136,6 @@ import {
   type ForwardRuleProtocol,
   type ForwardType,
 } from "@shared/forwardTypes";
-import {
-  exitGroupWeights,
-  normalizeExitGroupStrategy,
-  type ExitGroupStrategy,
-} from "@shared/exitStrategy";
 import {
   FORWARD_GROUP_HEALTH_CHECK_METHODS,
   FORWARD_GROUP_HEALTH_CHECK_METHOD_HINTS,
@@ -197,7 +192,7 @@ type GroupForm = {
   name: string;
   groupMode: GroupMode;
   /** 出口组的分配方式；新建时是空的，要人自己挑（统一负载均衡，2026-11） */
-  exitStrategy: ExitGroupStrategy | null;
+  exitStrategy: BalanceStrategy | null;
   /** 出口组的「检测与切换」（shared/loadBalance.ts） */
   balanceDetect: BalanceDetect;
   entryGroupId: number | null;
@@ -417,7 +412,7 @@ type ForwardGroupsContentProps = {
   hideHeaderActions?: boolean;
   createRequestKey?: number;
   /** 跟着 createRequestKey 一起来的预填值（「按目标新建」替用户选好的出口策略）。 */
-  createPreset?: { exitStrategy?: ExitGroupStrategy };
+  createPreset?: { exitStrategy?: BalanceStrategy };
   /**
    * 新建框打开以后调用，外面把请求清掉。有了它，页签刚挂载时带着的请求也照样打开
    * （「按目标新建」是先切页签、再发请求的，这一块是新挂载的）。
@@ -1054,7 +1049,7 @@ export function ForwardGroupsContent({
 
   useEffect(() => () => clearCloseResetTimer(), []);
 
-  const openCreate = (preset?: { exitStrategy?: ExitGroupStrategy }) => {
+  const openCreate = (preset?: { exitStrategy?: BalanceStrategy }) => {
     clearCloseResetTimer();
     const initial = makeDefaultForm();
     setForm({
@@ -1129,7 +1124,7 @@ export function ForwardGroupsContent({
       name: group.name || "",
       groupMode,
       // 老的「只用第一个」在统一的下拉框里是「主备」（坏了自动换下一台）
-      exitStrategy: (normalizeBalanceStrategy(group.exitStrategy) ?? normalizeExitGroupStrategy(group.exitStrategy)) as ExitGroupStrategy,
+      exitStrategy: (normalizeBalanceStrategy(group.exitStrategy) ?? normalizeExitGroupStrategy(group.exitStrategy)) as BalanceStrategy,
       balanceDetect: normalizeBalanceDetect(group.balanceDetect),
       entryGroupId: group.entryGroupId ? Number(group.entryGroupId) : null,
       groupType: "host",

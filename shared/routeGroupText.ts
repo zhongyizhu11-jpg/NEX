@@ -2,7 +2,7 @@
   线路组在界面上的说法：模式、分法、切换方式、备用怎么候着、事件的名字，切换原因和
   路径问题怎么翻成人话。shared/routeGroup.ts 统一再导出。
 */
-import { LINK_SPREAD_LABELS } from "./linkTerms";
+import { BALANCE_STRATEGY_LABELS } from "./loadBalance";
 import type {
   RouteDelivery,
   RouteDestSpread,
@@ -18,7 +18,7 @@ export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; 
   round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
   random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },
   ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一个落地，适合要保持登录的服务" },
-  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "这条线路在用时，按最近延迟和落地主机的负载自动算权重，新连接随机挑两个落地取更好的那个" },
+  auto: { label: BALANCE_STRATEGY_LABELS.auto.label, hint: "这条线路在用时，延迟、丢包和落地主机的负载合成一个数，新连接给最划算的那个落地" },
 };
 
 /** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
@@ -53,7 +53,7 @@ export const ROUTE_MODE_INFO: Record<RouteMode, RouteModeInfo> = {
   failover: { label: "自动故障切换", template: "稳定优先", hint: "平时只走主线路，出问题自动换到下一条；主线路恢复并稳定一阵子再切回" },
   scheduled: { label: "定时主备", template: "早晚高峰", hint: "按时段表决定首选（比如晚高峰走 B），时段外回主线路；出问题照样往下切" },
   manual: { label: "手动主备", template: "人工掌控", hint: "一直走你指定的那条，直到你换；它挂了才临时往下切，恢复后再回来" },
-  smart: { label: "智能择优", template: "延迟优先", hint: "按线路评分（延迟、丢包、抖动、可用率）走最好的一条；分差够大、持续够久才换，不来回漂" },
+  smart: { label: "智能择优", template: "延迟优先", hint: "走整条链最快的一条（丢包、抖动、沿途负载按变慢算）；快得够多、持续够久才换，不来回漂" },
   hybrid: { label: "混合策略", template: "晚高峰优化", hint: "时段表给出首选，到点前先预热预检；预检不过就不切，继续走当前这条" },
   weighted: { label: "权重负载", template: "负载均衡", hint: "新连接按权重分到各条路径，旧连接不动；哪条出问题就先跳过它" },
 };
@@ -77,14 +77,15 @@ export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
   weighted: "负载",
 };
 
-// 名字和出口组的策略同一套（shared/linkTerms.ts），只是这里说的是「路径」。
+// 名字和出口组的分配方式同一套（shared/loadBalance.ts），算法也是同一份（lbcore），只是这里说的是「路径」。
 export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: string }> = {
-  weighted: { label: LINK_SPREAD_LABELS.weighted.label, hint: "新连接按每条路径的权重分配" },
-  least_load: { label: LINK_SPREAD_LABELS.least_load.label, hint: "新连接给现在挂着连接最少的那条（按权重折算），长连接多时比按权重更均匀" },
-  round_robin: { label: LINK_SPREAD_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
-  random: { label: LINK_SPREAD_LABELS.random.label, hint: "新连接随机挑一条能用的" },
-  ip_hash: { label: LINK_SPREAD_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
-  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "按每条路径最近的延迟和沿途主机的负载自动算权重，新连接随机挑两条取更好的那条；慢了、忙了的少分" },
+  weighted: { label: BALANCE_STRATEGY_LABELS.weighted.label, hint: "新连接按每条路径的权重分配" },
+  least_load: { label: BALANCE_STRATEGY_LABELS.least_load.label, hint: "新连接给现在挂着连接最少的那条（按权重折算、沿途主机越忙算得越满），长连接多时比按权重更均匀" },
+  round_robin: { label: BALANCE_STRATEGY_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
+  random: { label: BALANCE_STRATEGY_LABELS.random.label, hint: "新连接随机挑一条能用的" },
+  ip_hash: { label: BALANCE_STRATEGY_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条（那条坏了才换），适合要保持登录的服务" },
+  auto: { label: BALANCE_STRATEGY_LABELS.auto.label, hint: "整链延迟、抖动、丢包、建连失败、沿途主机负载和这条上已有的连接合成一个数，新连接给最划算的那条；刚变慢、变忙的立刻少分" },
+  latency: { label: BALANCE_STRATEGY_LABELS.latency.label, hint: "只在整链最快的那几条里分：比最快的慢不到 50ms 算一样快，慢出这么多的不分" },
 };
 
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {
@@ -103,7 +104,8 @@ export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
   round_robin: "新会话轮流走每一条",
   random: "新会话随机挑一条能用的",
   ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",
-  auto: "按每条路径最近的延迟和沿途主机的负载自动算权重，新会话随机挑两条取更好的那条",
+  auto: "整链延迟、抖动、丢包、沿途主机负载和这条上已有的会话合成一个数，新会话给最划算的那条",
+  latency: "只在整链最快的那几条里分：比最快的慢不到 50ms 算一样快，慢出这么多的不分",
 };
 
 export const ROUTE_SWITCH_MODE_SESSION_HINTS: Record<RouteSwitchMode, string> = {

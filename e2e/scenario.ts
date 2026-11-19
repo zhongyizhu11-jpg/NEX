@@ -336,7 +336,6 @@ type RouteGroupInput = {
   recoverSeconds: number;
   minHoldSeconds: number;
   autoFailback: boolean;
-  scoreMargin: number;
   scoreHoldSeconds: number;
   prewarmSeconds: number;
 };
@@ -358,7 +357,6 @@ function baseRouteGroup(hosts: Hosts): RouteGroupInput {
     recoverSeconds: 2,
     minHoldSeconds: 0,
     autoFailback: true,
-    scoreMargin: 10,
     scoreHoldSeconds: 5,
     prewarmSeconds: 0,
   };

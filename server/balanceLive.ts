@@ -31,7 +31,16 @@ export type LiveExit = {
   jitterMs: number | null;
   lossPct: number | null;
   samples: number;
+  /**
+   * 这台出口的 UDP 那一侧（只有规则转 UDP、入口在用它时才报；NEX 隧道 FXP 2.2.145 起）：ok 探活在回；down 探活连着没回，
+   * UDP 新会话不给它；unverified 从没回过探活包（对端版本过旧，或者 UDP 一直不通），UDP 的健康只能跟着 TCP 走。没报是 null。
+   */
+  udpState: LiveUdpState | null;
+  /** 对端（出口机的 FXP）版本过旧：现在只有一种情况 —— 不回 UDP 探活包 */
+  peerOutdated: boolean;
 };
+
+export type LiveUdpState = "ok" | "down" | "unverified";
 
 export type LiveEvent = {
   at: number;
@@ -77,7 +86,17 @@ function finiteOrNull(value: unknown) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-type RawExit = { hostId?: unknown; host?: unknown; port?: unknown; state?: unknown; reason?: unknown; share?: unknown; picks?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown };
+type RawExit = {
+  hostId?: unknown; host?: unknown; port?: unknown; state?: unknown; reason?: unknown; share?: unknown; picks?: unknown;
+  medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; udpState?: unknown; peerOutdated?: unknown;
+};
+
+const UDP_STATES: readonly LiveUdpState[] = ["ok", "down", "unverified"];
+
+function asUdpState(value: unknown): LiveUdpState | null {
+  const text = String(value || "").toLowerCase();
+  return (UDP_STATES as readonly string[]).includes(text) ? text as LiveUdpState : null;
+}
 type RawEvent = { at?: unknown; hostId?: unknown; host?: unknown; from?: unknown; to?: unknown; reason?: unknown };
 type RawRule = { tunnelId?: unknown; ruleId?: unknown; strategy?: unknown; targetAware?: unknown; exits?: unknown; events?: unknown };
 
@@ -180,6 +199,8 @@ export async function ingestBalanceLiveReport(input: {
         jitterMs: finiteOrNull(exit?.jitterMs) ?? (Number(exit?.medianMs) > 0 ? 0 : null),
         lossPct: finiteOrNull(exit?.lossPct) ?? (Number(exit?.samples) > 0 ? 0 : null),
         samples: Math.max(0, Math.floor(Number(exit?.samples || 0))),
+        udpState: asUdpState(exit?.udpState),
+        peerOutdated: exit?.peerOutdated === true,
       };
     });
     if (exits.length < 2) continue;
@@ -229,6 +250,8 @@ const pruneTimer = setInterval(() => pruneStale(Date.now()), 5 * 60_000);
 pruneTimer.unref?.();
 
 const STATE_RANK: Record<LiveExitState, number> = { active: 3, standby: 2, unstable: 1, down: 0 };
+// 几台入口合成一份时，UDP 那一侧取最差的那个（有一台入口看它不通就写不通）。
+const UDP_RANK: Record<LiveUdpState, number> = { ok: 0, unverified: 1, down: 2 };
 
 /**
  * 一条规则合起来的真实状态（入口组时几台入口各报一份，合成一份：一台出口只要有入口在往它分就算在用，
@@ -259,6 +282,8 @@ export function liveBalanceForRule(ruleId: number, nowMs = Date.now()): LiveRule
         current.reason = exit.reason;
       }
       current.picks += exit.picks;
+      if (exit.udpState && (!current.udpState || UDP_RANK[exit.udpState] > UDP_RANK[current.udpState])) current.udpState = exit.udpState;
+      current.peerOutdated ||= exit.peerOutdated;
     }
   }
   const exits = order.map((key) => merged.get(key)!);

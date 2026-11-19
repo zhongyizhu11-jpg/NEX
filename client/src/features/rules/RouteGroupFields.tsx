@@ -247,7 +247,6 @@ export function routeGroupPayload(group: RouteGroupDraft) {
     recoverSeconds: policy.recoverSeconds,
     minHoldSeconds: policy.minHoldSeconds,
     autoFailback: policy.autoFailback,
-    scoreMargin: policy.scoreMargin,
     scoreHoldSeconds: policy.scoreHoldSeconds,
     prewarmSeconds: policy.prewarmSeconds,
     switchMode: policy.switchMode,
@@ -301,8 +300,8 @@ export function summarizeRouteAdvanced({ policy, probes }: RouteAdvancedSummaryI
     if (policy.minHoldSeconds !== template.minHoldSeconds) items.push(policy.minHoldSeconds > 0 ? `最短驻留 ${formatPolicyDuration(policy.minHoldSeconds)}` : "不限驻留");
     if (policy.autoFailback !== template.autoFailback) items.push(policy.autoFailback ? "恢复后切回" : "恢复后不切回");
   }
-  if ((policy.mode === "smart" || policy.mode === "hybrid") && (policy.scoreMargin !== template.scoreMargin || policy.scoreHoldSeconds !== template.scoreHoldSeconds)) {
-    items.push(`择优门槛 ${policy.scoreMargin} 分 / ${formatPolicyDuration(policy.scoreHoldSeconds)}`);
+  if ((policy.mode === "smart" || policy.mode === "hybrid") && policy.scoreHoldSeconds !== template.scoreHoldSeconds) {
+    items.push(`更快的持续 ${formatPolicyDuration(policy.scoreHoldSeconds)}才换`);
   }
   if ((policy.mode === "scheduled" || policy.mode === "hybrid") && policy.prewarmSeconds !== template.prewarmSeconds) {
     items.push(policy.prewarmSeconds > 0 ? `预热 ${formatPolicyDuration(policy.prewarmSeconds)}` : "不预热");
@@ -857,18 +856,9 @@ export function RouteGroupFields({
             {usesScore ? (
               <PolicyGroup
                 title="择优门槛"
-                note="评分 0–100，由延迟、丢包、抖动、建连成功率、可用率算出（90 起是优、80 起是良、其余较差）。候选要比当前明显更好、而且持续一阵，才换 —— 不然线路会来回漂。"
+                note="比的是整条链的延迟，丢包、抖动、建连失败和沿途主机负载都按「变慢」算进去。另一条要比现在这条快 50ms 以上、而且快两成，并且持续一阵，才换 —— 不然线路会来回漂。"
               >
                 <div className="grid grid-cols-2 gap-2">
-                  <NumberField
-                    label="高出多少分"
-                    hint="候选比当前至少高这么多"
-                    unit="分"
-                    value={routePolicy.scoreMargin}
-                    min={ROUTE_GUARD_LIMITS.scoreMargin.min}
-                    max={ROUTE_GUARD_LIMITS.scoreMargin.max}
-                    onChange={(scoreMargin) => setPolicy({ scoreMargin })}
-                  />
                   <NumberField
                     label="持续多久"
                     hint={`明显更好要持续多久才换，最少 ${ROUTE_GUARD_LIMITS.scoreHoldSeconds.min} 秒；快一半以上的 10 秒就换`}

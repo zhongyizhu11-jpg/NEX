@@ -6,8 +6,7 @@ import { getSetting, setSetting } from "./repositories/settingsRepository";
 import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
-import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
-import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
+import { type BalanceDetect, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeExitGroupStrategy } from "../shared/loadBalance";
 import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
 
 /*
@@ -299,7 +298,7 @@ function truthy(value: unknown) {
 
 /** 这条链路是不是「几台出口一起分」的负载均衡。 */
 export function tunnelBalancesExits(tunnel: TunnelRow | null | undefined) {
-  return !!tunnel && truthy(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none";
+  return !!tunnel && truthy(tunnel.loadBalanceEnabled);
 }
 
 /** 链路的检测参数（没设 = 默认值）。 */
@@ -533,6 +532,15 @@ export type ExitTargetExitSummary = {
   slowerMs: number | null;
   /** 数据从哪来：traffic = 真实连接的内核 RTT，probe = 主动探测（多数规则是哪种就写哪种） */
   source: "traffic" | "probe" | null;
+  /**
+   * UDP 那一侧（只有入口真实上报、规则转 UDP 时有）：几条规则里 UDP 探活在回 / 不通 / 从没回过。三个都是 0 = 没有 UDP 规则
+   * 或者没报（GOST 的 UDP 跟着出口机走，不单独报）。
+   */
+  udpOk: number;
+  udpDown: number;
+  udpUnverified: number;
+  /** 出口机的 FXP 版本过旧（不回 UDP 探活包）：弹窗写「对端版本过旧」 */
+  peerOutdated: boolean;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -792,6 +800,10 @@ export function exitTargetSummaryForTunnel(
         baselineRules: entry.baselines.length,
         slowerMs: entry.slower > 0 ? entry.slower : null,
         source: entry.traffic + entry.probe === 0 ? null : entry.traffic >= entry.probe ? "traffic" : "probe",
+        udpOk: 0,
+        udpDown: 0,
+        udpUnverified: 0,
+        peerOutdated: false,
       };
     }),
     targetIssues,
@@ -825,7 +837,7 @@ function exitTargetSummaryFromLive(
   const names = (hostIds: number[]) => hostIds.map(nameOf).join("、");
   const perExit = new Map(ids.map((hostId) => [hostId, {
     rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
-    baselines: [] as number[], slower: 0, picks: 0,
+    baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
   }]));
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
   const hows = new Map<string, number>();
@@ -844,6 +856,10 @@ function exitTargetSummaryFromLive(
       else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
       if (exit.state === "active") entry.activeRules += 1;
       entry.picks += exit.picks;
+      if (exit.udpState === "ok") entry.udpOk += 1;
+      else if (exit.udpState === "down") entry.udpDown += 1;
+      else if (exit.udpState === "unverified") entry.udpUnverified += 1;
+      entry.peerOutdated ||= exit.peerOutdated;
       if (exit.state !== "down" && exit.medianMs != null) entry.medians.push(exit.medianMs);
       if (exit.state !== "down" && exit.jitterMs != null) entry.jitters.push(exit.jitterMs);
       if (exit.lossPct != null) entry.losses.push(exit.lossPct);
@@ -906,6 +922,10 @@ function exitTargetSummaryFromLive(
         baselineRules: entry.baselines.length,
         slowerMs: entry.slower > 0 ? entry.slower : null,
         source: entry.rules === 0 ? null : entry.picks > 0 ? "traffic" : "probe",
+        udpOk: entry.udpOk,
+        udpDown: entry.udpDown,
+        udpUnverified: entry.udpUnverified,
+        peerOutdated: entry.peerOutdated,
       };
     }),
     targetIssues,

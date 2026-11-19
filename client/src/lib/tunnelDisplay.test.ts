@@ -47,7 +47,7 @@ test("does not append an exit summary to single-exit tunnels", () => {
   assert.equal(getTunnelRouteText(tunnel, hosts), "广州 01 -> 香港 07");
 });
 
-test("does not display unused backup exits for the none strategy", () => {
+test("the legacy none strategy is fallback: backup exits are displayed", () => {
   const tunnel = {
     entryHostId: 1,
     exitHostId: 2,
@@ -56,8 +56,7 @@ test("does not display unused backup exits for the none strategy", () => {
     loadBalanceExits: [{ hostId: 3 }],
   };
 
-  assert.deepEqual(getTunnelExitNames(tunnel, hosts), ["香港 07"]);
-  assert.equal(getTunnelRouteText(tunnel, hosts, "18.02"), "广州 01 -> 18.02；出口：香港 07");
+  assert.equal(getTunnelExitNames(tunnel, hosts).length, 2);
 });
 
 test("renders relay failover candidates as alternatives instead of a serial chain", () => {

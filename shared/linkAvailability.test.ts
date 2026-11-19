@@ -123,7 +123,7 @@ test("a shared tunnel uses the server summary without exposing endpoint hosts", 
   assert.equal(tunnelAvailabilityById.get(12)?.source, "hosts");
 });
 
-test("an exit group using no strategy follows only its first enabled member", () => {
+test("an exit group with the legacy none strategy is fallback: a healthy backup member keeps it available", () => {
   const { groupAvailabilityById, tunnelAvailabilityById } = buildLinkAvailabilityIndex({
     now,
     hosts: [
@@ -154,8 +154,8 @@ test("an exit group using no strategy follows only its first enabled member", ()
     }],
   });
 
-  assert.equal(groupAvailabilityById.get(20)?.available, false);
-  assert.equal(tunnelAvailabilityById.get(21)?.available, false);
+  assert.equal(groupAvailabilityById.get(20)?.available, true);
+  assert.equal(tunnelAvailabilityById.get(21)?.available, true);
 });
 
 test("a relay failover tunnel only requires one relay host when probes are stale", () => {

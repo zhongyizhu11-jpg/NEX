@@ -268,8 +268,10 @@ test("SQLite Agent traffic route is atomic, idempotent, and follows the current 
       assert.deepEqual(await trafficRows(500), [
         { hostId: 41, bytesIn: 10, bytesOut: 20, connections: 1 },
       ]);
+      // 库里老的 none（只用第一个出口）现在就是主备：备用出口上的流量也记
       assert.deepEqual(await trafficRows(600), [
         { hostId: 51, bytesIn: 10, bytesOut: 20, connections: 1 },
+        { hostId: 52, bytesIn: 10, bytesOut: 20, connections: 1 },
       ]);
       assert.deepEqual(await trafficRows(701), [
         { hostId: 21, bytesIn: 42, bytesOut: 50, connections: 2 },
