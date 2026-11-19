@@ -106,3 +106,19 @@
 | GOST 一条 UDP 会话，中途黑洞所在出口 | 一直无回包 | 仍然一直无回包（GOST 的 UDP 还在 gost 自己的选择器上，阶段 2 处理） |
 
 遗留到阶段 2：GOST 出口组交给入口 Agent（含 UDP）；NEX UDP 掉线发现从约 16 秒压到 5 秒以内；V3 多路复用下的状态帧超时；同一规则 TCP+UDP 时 UDP 单独被封发现不了；主出口换位 / 重新上线时规则仍会短暂显示未运行。
+
+### 阶段 3（2026-11-19，DNS 层的组 + 评估引擎；要求 Agent 2.2.264）
+
+| 范围 | 落点 |
+|---|---|
+| 外部观察（成员健康不再只听自己的 Agent） | 判定 `server/forwardGroups/evaluate.ts` 的 `decideExternalHealth`（纯函数）；观察结果表 `peerObservations.ts`；安排谁探谁 `topology.ts` 的 `planPeerObservers` + `forwardGroupRepository.ts` 的 `buildForwardGroupPeerTopology`；下发走原来的转发组探测（`forwardGroupProbes`，`probeType = "peer"`），Agent 只加了 `agent/forward_group_peer_probe.go`（间隔收紧、每分钟报全量） |
+| P3 的入口组版：恢复后稳够久才加回、频繁进出暂缓、全挂保留整组、没有健康入口时直接加回 | `entryMemberInclusion` / `planEntryGroupRecordSet`（纯函数）+ `syncEntryGroupDefaultDdns`、`holdEntryGroupDdns` |
+| P1 入口组权重 | `shared/ddnsWeights.ts`、`server/ddnsWeightedRecords.ts`（DNSPod 记录 Weight；阿里云 SetDNSSLBStatus + UpdateDNSSLBWeight；华为云记录集 weight）；Cloudflare / Webhook 界面置灰 |
+| 面板重启 / 数据库恢复后第一个回来的成员抢解析 | `server/forwardGroups/readiness.ts` + `readinessGrace` + `holdForwardGroupForReadiness`；`databaseHealthState.ts` 加了恢复通知 |
+| P7 评估串行、DNS 内联、每成员重复查库 | 评估作用域批量读（20 成员入口组 65 → 5 次查询，主备组 90 → 10 次）；要写服务商的组交给 `server/forwardGroups/publish.ts` 的按账号发布队列 |
+| P8 每次心跳加载全部组拓扑 | `TopologyCache`（改组 / 成员 / 主机地址时作废，30 秒 TTL 兜底），按主机取 0 次查询（原来每次 3 次） |
+| P16 节点池比组的上限大 | `server/nodePoolGroups.ts` 的 `assertPoolFitsFollowingGroups`（保存前拦），节点池卡片 `followerWarnings` |
+| P12 线路的主机在线提示 | `server/routeNodeHealth.ts`：快速存活状态 + 读库失败保留上一份 |
+
+没做 / 留给阶段 4：数据库租约（多实例只有一个跑评估和 DNS 写入，P15）；外部观察不覆盖落地池直连域名、共享 TLS 入站的规则、还没有规则在用的主备组；分线路记录不带权重；没有快速存活状态的主机（从没连过面板的）仍走按库里心跳算在线的老分支。
+
