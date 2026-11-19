@@ -208,7 +208,7 @@ for proto in tcp udp; do
   ok=0
   for i in 1 2 3; do probe "$proto" && ok=$((ok + 1)); done
   seen="$(peers "$proto")"
-  echo "  $proto：3 次通了 $ok 次，目标看到的对端：[$seen]"
+  echo "  ${proto}：3 次通了 $ok 次，目标看到的对端：[$seen]"
   [ "$ok" = 3 ] || fail "bypass 命中时 $proto 不通"
   [ "$seen" = "$ENTRY_IP" ] || fail "bypass 命中时 $proto 不是入口直连：[$seen]"
   stop_all
