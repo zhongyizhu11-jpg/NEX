@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -141,5 +143,63 @@ func TestFailoverEarlyCloseMarksPathOnlyForDistinctVisitors(t *testing.T) {
 	proxy.mu.Unlock()
 	if reset != 0 {
 		t.Fatal("a normal reply resets the early close count")
+	}
+}
+
+/*
+保护期里换路时，拨新路径那一下也记在途（A8），拨通后这条客户端连接马上记到新路径名下。以前换路走的是不记在途的
+pickTargetForKey + dialFailoverPath：一批连接同时撞上同一条坏路径、一起换路时，它们挑新路径时互相看不见，
+「按负载」「自动」会把它们全压到同一条上；换过去以后保护期（最长 8 秒）里连接还算在旧路径头上。
+*/
+func TestEarlyRerouteCountsTheNewDialAsInFlight(t *testing.T) {
+	echo := failoverEchoBackend(t)
+	targets := []failoverTarget{{TargetIP: "127.0.0.1", TargetPort: failoverTestPort(t)}, {TargetIP: "127.0.0.1", TargetPort: echo}}
+	proxy := routeTestProxy(failoverSpec{Strategy: "least_load", Targets: targets})
+	release := make(chan struct{})
+	dialing := make(chan struct{}, 1)
+	hook := failoverDialFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
+		if strings.HasSuffix(address, ":"+strconv.Itoa(echo)) {
+			dialing <- struct{}{}
+			<-release
+		}
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, network, address)
+	})
+	failoverTCPDialHook.Store(&hook)
+	t.Cleanup(func() { failoverTCPDialHook.Store(nil) })
+
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	proxy.trackConn(0, client)
+	dead, deadPeer := net.Pipe()
+	defer deadPeer.Close()
+	type rerouted struct {
+		conn  net.Conn
+		index int
+		ok    bool
+	}
+	done := make(chan rerouted, 1)
+	go func() {
+		conn, index, ok := proxy.earlyReroute(client, dead, 0, "203.0.113.5", map[int]bool{}, []byte("hello"), true, 0)
+		done <- rerouted{conn, index, ok}
+	}()
+	<-dialing
+	proxy.mu.RLock()
+	inflight := proxy.inflight[1]
+	proxy.mu.RUnlock()
+	close(release)
+	result := <-done
+	if !result.ok || result.index != 1 {
+		t.Fatalf("应当换到第 2 条：%+v", result)
+	}
+	defer result.conn.Close()
+	if inflight != 1 {
+		t.Fatalf("换路时拨新路径那一下应当记一笔在途，实际 %d", inflight)
+	}
+	proxy.mu.RLock()
+	defer proxy.mu.RUnlock()
+	if proxy.inflight[1] != 0 || proxy.connectionsLocked(1) != 1 || proxy.connectionsLocked(0) != 0 {
+		t.Fatalf("拨通以后在途转成连接、连接记到新路径名下：inflight=%d conns=%d/%d", proxy.inflight[1], proxy.connectionsLocked(0), proxy.connectionsLocked(1))
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -150,16 +151,41 @@ type failoverDialResult struct {
 	reservation failoverReservation
 }
 
-// dialFailoverPath 拨已经挑好的路径；允许竞速时按上面的规则再拨一条备选。拨失败的路径记一次
-// 失败并加进 attempted（和原来一样）；被取消的输家不算失败。返回实际连上的那条。
-func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, index int, attempted map[int]bool, timeout time.Duration) (net.Conn, failoverTarget, int, error) {
-	conn, target, index, reservation, err := p.dialFailoverPathReserved(visitor, target, index, failoverReservation{}, attempted, timeout)
-	p.releaseReservation(reservation)
-	return conn, target, index, err
+// errFailoverNoPath：没有可挑的路径了（都试过、或者剩下的都被管理上排除）。
+var errFailoverNoPath = errors.New("no path available")
+
+/*
+dialNextPathReserved 挑一条 attempted 里没有的路径去拨（挑中就记在途，A8），拨不通的记进 attempted 再挑下一条，
+直到拨通或者没得挑。建连接（handleConn）和保护期里换路（earlyReroute）都走它。accept 不为空时拨通以后再过一道
+（换路要先把留着的数据重发过去）：过不了的那条关掉、算试过，接着挑。返回拨通那条的连接、下标和在途（调用方
+转成连接或者退掉）；一条都没拨通返回最后一次的错误，一条都没挑出来是 errFailoverNoPath。
+*/
+func (p *failoverProxy) dialNextPathReserved(visitor string, attempted map[int]bool, accept func(net.Conn) error) (net.Conn, int, failoverReservation, error) {
+	err := errFailoverNoPath
+	for {
+		target, index, reservation := p.pickReserved(visitor, attempted, false)
+		if index < 0 {
+			return nil, -1, failoverReservation{}, err
+		}
+		var conn net.Conn
+		// 拨失败的在里面记失败、加进 attempted；允许竞速的策略实际连上的可能是另一条。
+		conn, _, index, reservation, err = p.dialFailoverPathReserved(visitor, target, index, reservation, attempted, failoverProxyDialTimeout)
+		if err == nil && accept != nil {
+			if err = accept(conn); err != nil {
+				_ = conn.Close()
+				attempted[index] = true
+				p.releaseReservation(reservation)
+			}
+		}
+		if err == nil {
+			return conn, index, reservation, nil
+		}
+	}
 }
 
 /*
-dialFailoverPathReserved 同 dialFailoverPath，带着在途（A8）：reservation 是调用方挑 index 时记的那一笔
+dialFailoverPathReserved 拨已经挑好的路径；允许竞速时按上面的规则再拨一条备选。拨失败的路径记一次失败并加进
+attempted；被取消的输家不算失败。返回实际连上的那条。带着在途（A8）：reservation 是调用方挑 index 时记的那一笔
 （pickReserved；零值 = 没记）。拨失败的、竞速输掉的在这里退掉；返回的是连上那条的在途，调用方把它转成连接
 （trackConnReserved）或者退掉。竞速时另拨的那条自己记一笔。
 */

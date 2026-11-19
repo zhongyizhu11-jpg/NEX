@@ -353,6 +353,17 @@ func (p *failoverProxy) releaseReservation(reservation failoverReservation) {
 	p.releaseReservationLocked(reservation)
 }
 
+// moveConnReserved 保护期里换了路：在途转成连接，客户端连接从原来那条路径名下挪到 index 上，一把锁里做完。
+func (p *failoverProxy) moveConnReserved(client net.Conn, index int, reservation failoverReservation) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.releaseReservationLocked(reservation)
+	for i := range p.conns {
+		delete(p.conns[i], client)
+	}
+	p.trackConnLocked(index, client)
+}
+
 // trackConnReserved 拨通了：在途转成连接，一把锁里做完（中间不会被别的挑选看到少算或多算一条）。
 func (p *failoverProxy) trackConnReserved(index int, conn net.Conn, reservation failoverReservation) {
 	p.mu.Lock()
