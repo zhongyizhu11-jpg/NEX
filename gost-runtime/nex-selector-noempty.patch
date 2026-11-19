@@ -18,7 +18,7 @@ connection and UDP session left through the entry host (or the relay host) for t
 The same nil is what hop.Select returns on purpose when a bypass matches, which is why upstream
 goes direct on it.
 
-Fix, two layers:
+Fix, three layers:
   1. selector/filter.go - failFilter.Filter never returns an empty list: when every object is
      marked failed it returns all of them (try them anyway, as nginx does when all upstream
      servers are down). The connection then fails on a dead exit instead of leaving the tunnel,
@@ -33,15 +33,42 @@ Fix, two layers:
      so no selector or filter (present or future, built-in or custom) can turn "all nodes
      unavailable" into a direct dial. Hop.Select itself is unchanged for its other callers
      (forwarders); plugin hops, which cannot report the reason, behave as upstream.
+  3. chain/router.go, chain/chain.go - no chain is not "no tunnel". A service names its chain; the
+     router holds a registry wrapper that looks the name up on every connection, and the wrapper
+     returns a nil route while the name is not registered: the API's updateChain unregisters and
+     re-registers it, deleteChain removes it, a reload swaps the registries. chainGroup.Route is nil
+     too when its selector picks none of its chains. Router.dial turned that nil into DefaultRoute,
+     a direct dial of the target from this host, for every connection in the window. Now, when a
+     chain is configured and the route is nil, that attempt fails with ErrNexNoChain (Router.Bind
+     already refused it with ErrEmptyRoute). Chain.Route of a chain without hops returns a route
+     without nodes instead of nil, so the deliberate direct cases (no hops, hop / node bypass) stay
+     direct and nil only means "no chain available".
 
 Regression tests: selector/nex_noempty_test.go, chain/nex_noroute_test.go (go test ./selector/
 ./chain/ in the patched go-gost/x tree). End to end with real processes, TCP and UDP, single and
-multi hop, and the bypass paths that must stay direct: gost-runtime/test/bypass-check/run.sh.
+multi hop, the bypass paths that must stay direct, and a chain deleted / updated through the API
+(scenario g): gost-runtime/test/bypass-check/run.sh.
 
 diff --git a/chain/chain.go b/chain/chain.go
 --- a/chain/chain.go
 +++ b/chain/chain.go
-@@ -91,12 +91,28 @@
+@@ -80,9 +80,14 @@
+ }
+ 
+ func (c *Chain) Route(ctx context.Context, network, address string, opts ...chain.RouteOption) chain.Route {
+-	if c == nil || len(c.hops) == 0 {
++	if c == nil {
+ 		return nil
+ 	}
++	if len(c.hops) == 0 {
++		// NEX: a chain without hops goes direct on purpose; say so with a route without nodes, so
++		// that nil keeps meaning "no chain available" to the router (nex-selector-noempty.patch).
++		return NewRoute(ChainRouteOption(c))
++	}
+ 
+ 	var options chain.RouteOptions
+ 	for _, opt := range opts {
+@@ -91,12 +96,28 @@
  
  	rt := NewRoute(ChainRouteOption(c))
  	for _, h := range c.hops {
@@ -72,7 +99,7 @@ diff --git a/chain/chain.go b/chain/chain.go
  			return rt
  		}
  		if node.Options().Transport.Multiplex() {
-@@ -112,6 +128,12 @@
+@@ -112,6 +133,12 @@
  	return rt
  }
  
@@ -88,7 +115,7 @@ diff --git a/chain/chain.go b/chain/chain.go
 diff --git a/chain/nex_noroute_test.go b/chain/nex_noroute_test.go
 --- /dev/null
 +++ b/chain/nex_noroute_test.go
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,233 @@
 +package chain_test
 +
 +import (
@@ -101,9 +128,11 @@ diff --git a/chain/nex_noroute_test.go b/chain/nex_noroute_test.go
 +	"github.com/go-gost/core/chain"
 +	"github.com/go-gost/core/connector"
 +	"github.com/go-gost/core/hop"
++	"github.com/go-gost/core/selector"
 +	xchain "github.com/go-gost/x/chain"
 +	xhop "github.com/go-gost/x/hop"
 +	xlogger "github.com/go-gost/x/logger"
++	"github.com/go-gost/x/registry"
 +)
 +
 +// A selector that selects nothing: what the upstream fail filter made the real selector do while
@@ -238,16 +267,103 @@ diff --git a/chain/nex_noroute_test.go b/chain/nex_noroute_test.go
 +		<-accepted
 +	}
 +}
++
++type nexNilChainSelector struct{}
++
++func (nexNilChainSelector) Select(context.Context, ...chain.Chainer) chain.Chainer { return nil }
++
++// NEX: a router with a chain configured never dials directly because the chain gave no route: the
++// named chain is not registered right now (the API's updateChain unregisters, then registers it;
++// deleteChain; a reload), or a chain group selected none of its chains (nex-selector-noempty.patch).
++func TestNexRouterWithoutAChainDoesNotDialDirect(t *testing.T) {
++	target, accepted := nexTarget(t)
++	ctx := context.Background()
++
++	registered := xchain.NewChain("nex-registered")
++	registered.AddHop(xhop.NewHop(xhop.NodeOption(chain.NewNode("relay", "127.0.0.1:1",
++		chain.TransportNodeOption(&nexRelayTransport{target: target})))))
++	for name, c := range map[string]chain.Chainer{
++		"unregistered chain": registry.ChainRegistry().Get("nex-not-registered"),
++		"chain group selecting none": xchain.NewChainGroup(registered).
++			WithSelector(selector.Selector[chain.Chainer](nexNilChainSelector{})),
++		"chain group of an unregistered chain": xchain.NewChainGroup(registry.ChainRegistry().Get("nex-not-registered")).
++			WithSelector(selector.Selector[chain.Chainer](nexNilChainSelector{})),
++	} {
++		r := xchain.NewRouter(chain.ChainRouterOption(c), chain.LoggerRouterOption(xlogger.Nop()))
++		for _, network := range []string{"tcp", "udp"} {
++			conn, err := r.Dial(ctx, network, target)
++			if conn != nil {
++				conn.Close()
++			}
++			if !errors.Is(err, xchain.ErrNexNoChain) {
++				t.Fatalf("%s %s: dial err = %v, want ErrNexNoChain", name, network, err)
++			}
++		}
++		if _, err := r.Bind(ctx, "tcp", "127.0.0.1:0"); err == nil {
++			t.Fatalf("%s: bind succeeded without a chain", name)
++		}
++	}
++	select {
++	case <-accepted:
++		t.Fatal("target was dialed directly")
++	default:
++	}
++
++	// A chain that is registered again routes through it again.
++	if err := registry.ChainRegistry().Register("nex-registered", registered); err != nil {
++		t.Fatal(err)
++	}
++	defer registry.ChainRegistry().Unregister("nex-registered")
++	r := xchain.NewRouter(chain.ChainRouterOption(registry.ChainRegistry().Get("nex-registered")), chain.LoggerRouterOption(xlogger.Nop()))
++	conn, err := r.Dial(ctx, "tcp", target)
++	if err != nil {
++		t.Fatalf("registered chain: %v", err)
++	}
++	conn.Close()
++	<-accepted
++}
++
++// The deliberate direct paths through a router stay direct: no chain at all, a chain without hops,
++// a hop-level bypass.
++func TestNexRouterDirectPathsStayDirect(t *testing.T) {
++	target, accepted := nexTarget(t)
++	ctx := context.Background()
++
++	bypassed := xchain.NewChain("nex-bypassed")
++	bypassed.AddHop(xhop.NewHop(
++		xhop.NodeOption(chain.NewNode("a", "127.0.0.1:1"), chain.NewNode("b", "127.0.0.1:2")),
++		xhop.SelectorOption(nexNilSelector{}),
++		xhop.BypassOption(nexMatchAll{}),
++	))
++	for name, opts := range map[string][]chain.RouterOption{
++		"no chain":           nil,
++		"chain without hops": {chain.ChainRouterOption(xchain.NewChain("nex-empty"))},
++		"hop bypass":         {chain.ChainRouterOption(bypassed)},
++	} {
++		r := xchain.NewRouter(append(opts, chain.LoggerRouterOption(xlogger.Nop()))...)
++		conn, err := r.Dial(ctx, "tcp", target)
++		if err != nil {
++			t.Fatalf("%s: direct dial failed: %v", name, err)
++		}
++		conn.Close()
++		<-accepted
++	}
++}
 diff --git a/chain/route.go b/chain/route.go
 --- a/chain/route.go
 +++ b/chain/route.go
-@@ -26,6 +26,26 @@
+@@ -26,6 +26,31 @@
  	DefaultRoute chain.Route = &defaultRoute{}
  )
  
 +// ErrNexNoNode is returned by a route whose chain has eligible nodes in a hop but selected none
 +// (NEX, nex-selector-noempty.patch).
 +var ErrNexNoNode = errors.New("no node available in chain hop")
++
++// ErrNexNoChain is returned by Router.Dial when a chain is configured but gives no route: the named
++// chain is not registered at the moment (API update / delete, reload) or a chain group selected none
++// (NEX, nex-selector-noempty.patch). Router.Bind already refuses that case with ErrEmptyRoute.
++var ErrNexNoChain = errors.New("chain not available")
 +
 +// nexNoNodeRoute fails every dial and bind. Chain.Route returns it instead of a route without
 +// nodes, which would be dialed directly.
@@ -268,6 +384,27 @@ diff --git a/chain/route.go b/chain/route.go
  // defaultRoute is a Route without nodes.
  type defaultRoute struct{}
  
+diff --git a/chain/router.go b/chain/router.go
+--- a/chain/router.go
++++ b/chain/router.go
+@@ -116,6 +116,17 @@
+ 		var route chain.Route
+ 		if r.options.Chain != nil {
+ 			route = r.options.Chain.Route(ctx, network, ipAddr, chain.WithHostRouteOption(address))
++			if route == nil {
++				// NEX: a chain is configured but produced no route at all - the named chain is not
++				// registered right now (the API's updateChain unregisters and re-registers it,
++				// deleteChain, a reload) or a chain group selected none of its chains. DefaultRoute
++				// below would dial the target from this host, outside the tunnel; fail this attempt
++				// instead (nex-selector-noempty.patch). Deliberate direct routes (hop / node bypass,
++				// a chain without hops) are routes without nodes, not nil, and still go direct.
++				err = ErrNexNoChain
++				log.Errorf("route(retry=%d) %s", i, err)
++				continue
++			}
+ 		}
+ 
+ 		if buf == nil {
 diff --git a/hop/hop.go b/hop/hop.go
 --- a/hop/hop.go
 +++ b/hop/hop.go
