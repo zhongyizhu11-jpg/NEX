@@ -171,13 +171,13 @@ func TestBalanceReportSimulationEntryWithOneExitBlockedByTarget(t *testing.T) {
 	blockedPort := freeTCPUDPPort(t)
 	goodPort := freeTCPUDPPort(t)
 	entryPort := freeTCPUDPPort(t)
-	exitTargetDialHook = func(listenPort int, _ helloFrame) error {
+	setExitTargetDialHook(func(listenPort int, _ helloFrame) error {
 		if listenPort == blockedPort {
 			return errors.New("simulated: target firewall drops this exit")
 		}
 		return nil
-	}
-	defer func() { exitTargetDialHook = nil }()
+	})
+	defer setExitTargetDialHook(nil)
 	done := make(chan struct{})
 	defer close(done)
 	for _, port := range []int{blockedPort, goodPort} {

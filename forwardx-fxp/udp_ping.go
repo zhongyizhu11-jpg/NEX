@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -52,13 +53,21 @@ func validFXPUDPPacketType(packetType byte) bool {
 	return packetType >= fxpUDPTypeData && packetType <= fxpUDPTypeClient
 }
 
-// fxpUDPPingHook 只给测试用：非 nil 时代替真的发包。
-var fxpUDPPingHook func(host string, port int, cfg config) error
+// fxpUDPPingHook 只给测试用：非 nil 时代替真的发包。探活在后台协程里跑，测试换钩子时它可能正在读，所以放在原子指针里。
+var fxpUDPPingHook atomic.Pointer[func(host string, port int, cfg config) error]
+
+func setFXPUDPPingHook(hook func(host string, port int, cfg config) error) {
+	if hook == nil {
+		fxpUDPPingHook.Store(nil)
+		return
+	}
+	fxpUDPPingHook.Store(&hook)
+}
 
 // fxpUDPPing 向 host:port 发一轮 UDP 探活，等对端的应答。nil 表示对端回了。
 func fxpUDPPing(host string, port int, cfg config) error {
-	if hook := fxpUDPPingHook; hook != nil {
-		return hook(host, port, cfg)
+	if hook := fxpUDPPingHook.Load(); hook != nil {
+		return (*hook)(host, port, cfg)
 	}
 	conn, err := net.DialTimeout("udp", net.JoinHostPort(host, strconv.Itoa(port)), fxpUDPPingWait)
 	if err != nil {

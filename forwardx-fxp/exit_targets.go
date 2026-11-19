@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -97,12 +98,21 @@ func checkResolvedExitTarget(hello helloFrame, ip net.IP) error {
 
 // exitTargetDialHook 只给测试用：返回错误就当这台出口（按监听端口认）连不上目标，
 // 用来在一台机器上模拟「三台出口里一台到落地不通」。生产里永远是 nil。
-var exitTargetDialHook func(listenPort int, hello helloFrame) error
+// 出口的会话协程在读它，测试换钩子时可能正读着，所以放在原子指针里。
+var exitTargetDialHook atomic.Pointer[func(listenPort int, hello helloFrame) error]
+
+func setExitTargetDialHook(hook func(listenPort int, hello helloFrame) error) {
+	if hook == nil {
+		exitTargetDialHook.Store(nil)
+		return
+	}
+	exitTargetDialHook.Store(&hook)
+}
 
 // dialExitTargetFor 是出口这边拨目标的入口：先过测试钩子，再 dialExitTarget。
 func dialExitTargetFor(cfg config, hello helloFrame, timeout time.Duration) (net.Conn, error) {
-	if hook := exitTargetDialHook; hook != nil {
-		if err := hook(cfg.ListenPort, hello); err != nil {
+	if hook := exitTargetDialHook.Load(); hook != nil {
+		if err := (*hook)(cfg.ListenPort, hello); err != nil {
 			return nil, err
 		}
 	}

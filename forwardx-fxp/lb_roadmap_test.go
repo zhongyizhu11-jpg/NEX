@@ -303,15 +303,15 @@ func TestIPHashUsesTheProxyProtocolSource(t *testing.T) {
 	ports := startRoadmapExits(t, 2, 161, 162, key, targetPort)
 	var mu sync.Mutex
 	keys := map[string]int{}
-	exitTargetDialHook = func(_ int, hello helloFrame) error {
+	setExitTargetDialHook(func(_ int, hello helloFrame) error {
 		if !hello.TargetProbe {
 			mu.Lock()
 			keys[hello.SelectionKey]++
 			mu.Unlock()
 		}
 		return nil
-	}
-	defer func() { exitTargetDialHook = nil }()
+	})
+	defer setExitTargetDialHook(nil)
 	entryPort := freeTCPUDPPort(t)
 	done := make(chan struct{})
 	defer close(done)
@@ -374,7 +374,7 @@ func TestTargetDownEverywhereTriesOneExitPerConnection(t *testing.T) {
 	var mu sync.Mutex
 	dials := map[int]int{}
 	var targetUp atomic.Bool
-	exitTargetDialHook = func(listenPort int, hello helloFrame) error {
+	setExitTargetDialHook(func(listenPort int, hello helloFrame) error {
 		if hello.TargetProbe {
 			if targetUp.Load() {
 				return nil
@@ -388,8 +388,8 @@ func TestTargetDownEverywhereTriesOneExitPerConnection(t *testing.T) {
 			return nil
 		}
 		return errors.New("simulated: target down")
-	}
-	defer func() { exitTargetDialHook = nil }()
+	})
+	defer setExitTargetDialHook(nil)
 	entryPort := freeTCPUDPPort(t)
 	done := make(chan struct{})
 	defer close(done)
@@ -550,7 +550,7 @@ func TestTargetStatusWaitHasADeadline(t *testing.T) {
 	ports := startRoadmapExits(t, 2, 211, 212, key, targetPort)
 	release := make(chan struct{})
 	defer close(release)
-	exitTargetDialHook = func(listenPort int, hello helloFrame) error {
+	setExitTargetDialHook(func(listenPort int, hello helloFrame) error {
 		if listenPort == ports[0] && !hello.TargetProbe {
 			select {
 			case <-release:
@@ -558,8 +558,8 @@ func TestTargetStatusWaitHasADeadline(t *testing.T) {
 			}
 		}
 		return nil
-	}
-	defer func() { exitTargetDialHook = nil }()
+	})
+	defer setExitTargetDialHook(nil)
 	entryPort := freeTCPUDPPort(t)
 	done := make(chan struct{})
 	defer close(done)

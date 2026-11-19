@@ -233,8 +233,8 @@ func TestEndpointHealthLogsCarryTheIndex(t *testing.T) {
 // 报给面板，UDP 新会话优先给验证过的出口。不再悄悄退回去探它的 TCP 端口（阶段 2：这一版要求各台都升级）。
 func TestExitThatNeverAnswersUDPPingsIsFlaggedNotJudgedDead(t *testing.T) {
 	resetFXPEndpointRegistry()
-	fxpUDPPingHook = func(string, int, config) error { return errors.New("no reply") }
-	defer func() { fxpUDPPingHook = nil }()
+	setFXPUDPPingHook(func(string, int, config) error { return errors.New("no reply") })
+	defer setFXPUDPPingHook(nil)
 	closedPort := freeTCPUDPPort(t)
 	selector := newExitEndpointSelector(
 		[]exitEndpoint{{Host: "127.0.0.1", Port: freeTCPUDPPort(t)}},
@@ -380,8 +380,8 @@ func TestUDPReachabilityIsTrackedSeparatelyFromTCP(t *testing.T) {
 func TestUDPPingCadenceFollowsActiveSessions(t *testing.T) {
 	resetFXPEndpointRegistry()
 	var pings atomic.Int64
-	fxpUDPPingHook = func(string, int, config) error { pings.Add(1); return nil }
-	defer func() { fxpUDPPingHook = nil }()
+	setFXPUDPPingHook(func(string, int, config) error { pings.Add(1); return nil })
+	defer setFXPUDPPingHook(nil)
 	selector := newExitEndpointSelector(
 		[]exitEndpoint{{Host: "127.0.0.1", Port: 30082}},
 		exitEndpoint{Host: "127.0.0.1", Port: 30081},

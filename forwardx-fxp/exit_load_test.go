@@ -65,33 +65,43 @@ func TestLeastLoadAvoidsBusyExit(t *testing.T) {
 	}
 }
 
-// 按负载：握手慢很多的出口往后放；差得不多（50ms 内）就当一样快。
-func TestLeastLoadPenalizesSlowExit(t *testing.T) {
-	selector := leastLoadSelector(
-		[]exitEndpoint{{Host: "10.0.0.2", Port: 2, CapacityMbps: 500}},
-		exitEndpoint{Host: "10.0.0.1", Port: 1, CapacityMbps: 500},
-	)
-	now := time.Now()
-	selector.loads[0].observeLatency(400*time.Millisecond, now)
-	selector.loads[1].observeLatency(60*time.Millisecond, now)
-	if _, index, _ := selector.pick(nil); index != 1 {
-		t.Fatal("应该先给握手快的那台")
+// 按负载不看延迟（阶段 2：它是「自动」那个成本只留负载的一半）；握手慢的那台少分是「自动」的事。
+func TestLeastLoadIgnoresLatencyAutoPenalizesIt(t *testing.T) {
+	build := func(strategy string) *exitEndpointSelector {
+		resetFXPEndpointRegistry()
+		selector := newExitEndpointSelector(
+			[]exitEndpoint{{Host: "10.0.0.2", Port: 2, CapacityMbps: 500}},
+			exitEndpoint{Host: "10.0.0.1", Port: 1, CapacityMbps: 500},
+			strategy,
+		)
+		selector.random = seededExitRandom(20261102)
+		now := time.Now()
+		selector.loads[0].observeLatency(400*time.Millisecond, now)
+		selector.loads[1].observeLatency(60*time.Millisecond, now)
+		return selector
 	}
-	resetFXPHostLoads()
-	selector = leastLoadSelector(
-		[]exitEndpoint{{Host: "10.0.0.2", Port: 2, CapacityMbps: 500}},
-		exitEndpoint{Host: "10.0.0.1", Port: 1, CapacityMbps: 500},
-	)
-	selector.loads[0].observeLatency(80*time.Millisecond, now)
-	selector.loads[1].observeLatency(60*time.Millisecond, now)
-	counts := map[int]int{}
-	for i := 0; i < 20; i++ {
-		_, index, _ := selector.pick(nil)
-		counts[index]++
-		selector.loads[index].open(time.Now())
+	hold := func(selector *exitEndpointSelector, picks int) map[int]int {
+		counts := map[int]int{}
+		for i := 0; i < picks; i++ {
+			_, index, _ := selector.pick(nil)
+			counts[index]++
+			selector.loads[index].open(time.Now())
+			selector.unpick(index)
+		}
+		return counts
 	}
-	if counts[0] != 10 || counts[1] != 10 {
-		t.Fatalf("只差 20ms 应该当一样快：%v", counts)
+	if counts := hold(build("least_load"), 20); counts[0] != 10 || counts[1] != 10 {
+		t.Fatalf("按负载不看延迟，应该一人一半：%v", counts)
+	}
+	auto := build("auto")
+	if _, index, _ := auto.pick(nil); index != 1 {
+		t.Fatal("自动：都闲着时先给握手快的那台")
+	} else {
+		auto.unpick(index)
+	}
+	// 成本 = 延迟 × (会话 + 1)：400ms 对 60ms，快的那台拿大约 400 ÷ 460 = 87%。
+	if counts := hold(auto, 46); counts[1] < 38 || counts[1] > 42 {
+		t.Fatalf("自动：握手慢 6.7 倍的那台应该只分到一成多：%v", counts)
 	}
 }
 
