@@ -165,7 +165,11 @@ func (p *failoverProxy) probeJitterLocked(index int) float64 {
 }
 
 // routeSuccessMinDials：真实拨号不到这么多次，不拿拨通率说事（一两次失败说明不了什么）。
-const routeSuccessMinDials = 5
+// routeAllFailedSuccess：全失败时的拨通率。Success 的 0 是「不知道」，全失败给一个最小的正数，按「几乎全失败」罚。
+const (
+	routeSuccessMinDials  = 5
+	routeAllFailedSuccess = 0.01
+)
 
 /*
 qualityLocked：这条路径有多好（lbcore.Quality）。peak 为 true 时延迟取整链的 peak EWMA 读数（自动），
@@ -192,8 +196,7 @@ func (p *failoverProxy) qualityLocked(index int, now time.Time, peak bool) lbcor
 		if dials := p.stats[index].dialSummary(now); dials.ok+dials.failed >= routeSuccessMinDials {
 			quality.Success = float64(dials.ok) / float64(dials.ok+dials.failed)
 			if quality.Success <= 0 {
-				// 全失败：Success 的 0 是「不知道」，这里给一个最小的正数，按「几乎全失败」罚。
-				quality.Success = 0.01
+				quality.Success = routeAllFailedSuccess
 			}
 		}
 	}
@@ -272,9 +275,12 @@ type failoverRandSource interface {
 	Intn(n int) int
 }
 
+// randomSpreadStartRange：轮转计数随机初值的范围。比路径数大得多就行（对路径数取模后各条机会一样）。
+const randomSpreadStartRange = 1 << 16
+
 // randomSpreadStart：轮流、平手时从谁数起的随机初值（起代理时给 roundRobinNext，路线图 X4）。
 func randomSpreadStart(ruleID int, sourcePort int) int {
-	return newFailoverRand(ruleID, sourcePort).Intn(1 << 16)
+	return newFailoverRand(ruleID, sourcePort).Intn(randomSpreadStartRange)
 }
 
 /*

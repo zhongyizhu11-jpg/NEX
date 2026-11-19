@@ -131,7 +131,7 @@
 
 规格：`gostBalanceProbeTiming`（`server/gostBalancePlan.ts:90`）—— 固定节拍每 `间隔` 一轮，探测超时 1000 ms（间隔 ≤ 2 s）
 否则 2000 ms；`failoverSeconds = 间隔 × (次数 − 1)`，`recoverSeconds = 间隔 × (恢复次数 − 1)`；固定节拍下「持续够久」
-留 15% 余量（`agent/failover_health.go:126`）。判坏 = 连续失败够次数 **且** 持续够久（`:212`）。
+留 15% 余量（`fixedTickGatePercent`，`agent/failover_health.go`）。判坏 = 连续失败够次数 **且** 持续够久（`checkHealth`）。
 
 信号：
 1. 直接探出口机的隧道监听（`probeExitGroupTargets`，`agent/failover_exit_group.go:188`）。tcp / mtcp 隧道带 `probeRelay`：

@@ -31,6 +31,8 @@ const (
 	failoverEarlyReplayLimit   = 64 * 1024
 	failoverEarlyMaxRetries    = 3
 	failoverEarlyReadChunkSize = 32 * 1024
+	// 「回之前就关」最多记几个不同的访客：判坏只要两个，多记几个只为日志里看得出是不是很多人。
+	failoverEarlyMaxVisitors = 16
 )
 
 type failoverEarlyChunk struct {
@@ -354,7 +356,7 @@ func (p *failoverProxy) markEarlyClose(index int, visitor string) {
 	state.count++
 	// 访客地址不知道（没带 PROXY 头，看到的只是前面那个转发工具的 127.0.0.1）时不记：所有人都是同一个
 	// 「访客」，凑不出两个不同的，也就永远不会靠这个判坏 —— 宁可不判，也不假装知道是两个人。
-	if failoverVisitorKnown(visitor) && len(state.visitors) < 16 {
+	if failoverVisitorKnown(visitor) && len(state.visitors) < failoverEarlyMaxVisitors {
 		state.visitors[visitor] = true
 	}
 	// 出口组：不靠「两个不同访客」，经这台出口再探一次，又被关才判坏（failover_exit_group.go）。

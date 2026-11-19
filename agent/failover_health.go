@@ -28,6 +28,18 @@ func jitterDuration(interval time.Duration) time.Duration {
 	return time.Duration(float64(interval) * (0.9 + 0.2*mathrand.Float64()))
 }
 
+/*
+固定节拍（规格带 ProbeIntervalSeconds，出口组）的两个数：
+
+  - 「持续够久」那道门槛按 fixedTickGatePercent% 算。面板把它算成「间隔 × (次数 − 1)」，而每轮间隔有 ±10% 的抖动 ——
+    不留余量的话，抖到 0.9 倍的那一半时候「2 秒一轮、2 次判坏」差 0.2 秒不够数，要多等一整轮。
+  - 一轮探得再慢（黑洞的出口要等满超时），到下一轮也至少歇间隔的 1/fixedTickMinRestDivisor。
+*/
+const (
+	fixedTickGatePercent    = 85
+	fixedTickMinRestDivisor = 4
+)
+
 func (p *failoverProxy) healthInterval() time.Duration {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -53,7 +65,7 @@ func (p *failoverProxy) nextHealthDelay(started time.Time) time.Duration {
 		return interval
 	}
 	delay := interval - time.Since(started)
-	if floor := interval / 4; delay < floor {
+	if floor := interval / fixedTickMinRestDivisor; delay < floor {
 		delay = floor
 	}
 	return delay
@@ -114,16 +126,13 @@ func (p *failoverProxy) checkHealth() {
 	if p.spec.ProbeTimeoutMs > 0 {
 		probeTimeout = time.Duration(p.spec.ProbeTimeoutMs) * time.Millisecond
 	}
-	/*
-		带探测节奏的规格（固定节拍）：「持续够久」那道门槛留 15% 的余量。面板把它算成「间隔 × (次数 − 1)」，而每轮
-		间隔有 ±10% 的抖动 —— 不留余量的话，抖到 0.9 倍的那一半时候「2 秒一轮、2 次判坏」差 0.2 秒不够数，要多等一整轮
-		（真实 gost 上实测：进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
-	*/
+	// 带探测节奏的规格（固定节拍）：「持续够久」那道门槛留余量（fixedTickGatePercent；真实 gost 上实测不留的话
+	// 进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
 	fixedTick := p.spec.ProbeIntervalSeconds > 0
 	gateReached := func(elapsed time.Duration, seconds int) bool {
 		gate := time.Duration(seconds) * time.Second
 		if fixedTick {
-			gate = gate * 85 / 100
+			gate = gate * fixedTickGatePercent / 100
 		}
 		return elapsed >= gate
 	}
