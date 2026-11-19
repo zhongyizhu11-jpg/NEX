@@ -9,7 +9,6 @@ import { buildCountingChainCmds, shQuote, stopManagedServiceCmd, writeManagedSer
 import { endpointHostPort } from "./forwardRuntimeConfigs";
 import { forwardRuleProtocols } from "@shared/forwardTypes";
 import { isTunnelRelayFailover, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
-import { gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import { buildGostEgressChain, gostEgressChainName, ruleEgressRuntime } from "./ssEgress";
 import { isSniRuntimeRule } from "./tlsInboundRuntime";
 import { AGENT_DYNAMIC_CACHE_MAX, tunnelRouteLogCache } from "./agentHeartbeatState";
@@ -43,7 +42,8 @@ export type GostRuntimePlanDeps = {
   VERBOSE_AGENT_ACTIONS: boolean;
   anyTunnelDnsRefresh: (tunnels: HeartbeatRow[]) => boolean;
   applyGostLimiter: (service: HeartbeatRow, rule: HeartbeatRow, tunnel?: HeartbeatRow) => HeartbeatRow;
-  buildLoadBalancedExitNodes: (rule: HeartbeatRow, tunnel: HeartbeatRow, primaryHostOverride?: string | undefined) => Promise<HeartbeatRow[]>;
+  /** 这条规则的主出口节点（不走本机代理时链里只有它一台；没有选择器）。解析不出地址返回 null。 */
+  buildPrimaryExitNode: (rule: HeartbeatRow, tunnel: HeartbeatRow, primaryHostOverride?: string | undefined) => Promise<HeartbeatRow | null>;
   buildProxyRuleDebugCmd: (label: string, rule: HeartbeatRow, extra?: Record<string, unknown>) => string;
   currentHostTunnelExitPortsForRule: (rule: HeartbeatRow, tunnel: HeartbeatRow) => number[];
   dnsRuntimeRefreshCmd: (label: string) => string;
@@ -92,7 +92,7 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     VERBOSE_AGENT_ACTIONS,
     anyTunnelDnsRefresh,
     applyGostLimiter,
-    buildLoadBalancedExitNodes,
+    buildPrimaryExitNode,
     buildProxyRuleDebugCmd,
     currentHostTunnelExitPortsForRule,
     dnsRuntimeRefreshCmd,
@@ -137,16 +137,10 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
           isMultiHopTunnel
           && isCurrentHostTunnelEntry(tunnel);
         const relayFailover = useMultiHopEntry && tunnelRelayUsesParallelRelays(tunnel, tunnelHops);
-        const exitCandidateCount = tunnel ? tunnelExitEndpointsForRule(r, tunnel).length : 0;
-        const routeRetries = Math.max(
-          relayFailover ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0,
-          exitCandidateCount - 1,
-        );
-        // Every multi-exit strategy must fail over promptly when a node is
-        // blackholed.  The selector already retries the remaining nodes;
-        // leaving the default dial timeout here makes round-robin/random/
-        // hash wait on the dead endpoint before that retry can happen.
-        const fastFailover = shouldUseFastTunnelFailover(exitCandidateCount, relayFailover);
+        // 并联中转（中转故障切换）：一台中转拨不通就换下一台重拨，拨号别等默认的长超时。出口那一跳永远只有一个
+        // 节点（几台出口由本机代理挑，见下面的 balanceGostChains），不靠 gost 重试。
+        const routeRetries = relayFailover ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0;
+        const fastFailover = relayFailover;
         const tunnelExitHost = tunnel ? tunnelExitEndpointById.get(tunnel.id)?.host : "";
         const tunnelProxyPlan = tunnel ? tunnelProxyProtocolPlan(r) : null;
         const protocolPlan = tunnel ? planGostTunnelRuleProtocol({
@@ -287,17 +281,59 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
       · dialTimeout 3 秒：出口被黑洞时 3 秒后关本机连接（代理的「连上就被关」保护期是 8 秒，够它换路重发）。
       · 限速、计数只在前面那个公网端口上算一次，这里不挂。
   */
+  /*
+    多跳链路从入口到最后一台中转的那几跳（不含出口那一跳）。并联中转是一跳、几台中转按顺序用（中转的故障切换，
+    和出口组无关）；串联中转一台一跳。有中转的地址解析不出来返回 null（整条链不生成）。suffix 给跳和节点的名字
+    加后缀：每台出口各有一条链时名字不能撞。
+  */
+  const buildRelayHops = async (r: any, tunnel: any, tunnelHops: any[], suffix: string, routeParts?: string[]) => {
+    const hops: any[] = [];
+    if (isTunnelRelayFailover(tunnel, tunnelHops)) {
+      const relayNodes = await Promise.all(tunnelRelayCandidates(tunnelHops).map(async (hop: any, index: number) => {
+        const hopDialHost = await getHopDialAddress(hop, tunnel);
+        if (!hopDialHost || !Number(hop.listenPort)) return null;
+        const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
+        routeParts?.push(`relay#${index + 1}:${Number(hop.hostId)}@${hopAddr}`);
+        return gostTunnelNode(`relay-${r.id}-${Number(hop.seq)}${suffix}`, hopAddr, gostTunnelTransportType(tunnel.mode), tunnel);
+      }));
+      const validRelayNodes = relayNodes.filter(Boolean);
+      if (validRelayNodes.length !== tunnelRelayCandidates(tunnelHops).length) return null;
+      hops.push({ name: `hop-tunnel-${r.id}-relay-failover${suffix}`, selector: gostRelayFailoverHopMetadata, nodes: validRelayNodes });
+      return hops;
+    }
+    for (let i = 1; i < tunnelHops.length - 1; i++) {
+      const hop = tunnelHops[i] as any;
+      const hopDialHost = await getHopDialAddress(hop, tunnel);
+      if (!hopDialHost || !Number(hop.listenPort)) return null;
+      const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
+      routeParts?.push(`hop#${Number(hop.hostId)}@${hopAddr}`);
+      hops.push({
+        name: `hop-tunnel-${r.id}-${Number(hop.seq)}${suffix}`,
+        nodes: [gostTunnelNode(`mhop-${r.id}-${Number(hop.seq)}${suffix}`, hopAddr, gostTunnelTransportType(tunnel.mode), tunnel)],
+      });
+    }
+    return hops;
+  };
   const balanceGostChains: Array<Record<string, unknown>> = [];
-  for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown; protocol?: string | null }>) {
+  for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown; protocol?: string | null; tunnelId?: number | null }>) {
     const balance = gostBalancePlans.get(Number(r?.id || 0));
     if (!balance || !runtimeBool(r.isEnabled)) continue;
+    const tunnel = tunnelById.get(Number(r.tunnelId)) as any;
+    const tunnelHops = tunnel ? tunnelHopsByTunnelId.get(Number(tunnel.id)) as any[] | undefined : undefined;
+    const multiHop = Array.isArray(tunnelHops) && tunnelHops.length >= 3;
+    // 并联中转：一台中转拨不通，这条本机连接换下一台中转重拨（出口还是这一台）
+    const relayRetries = multiHop && tunnelRelayUsesParallelRelays(tunnel, tunnelHops) ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0;
     for (const exit of balance.exits) {
       const chainName = `chain-tunnel-${r.id}-x${exit.hostId}`;
+      const relayHops = multiHop ? await buildRelayHops(r, tunnel, tunnelHops as any[], `-x${exit.hostId}`) : [];
+      // 中转解析不出来：这台出口的本机端口照样听着，只是链是空的会直连 —— 不能留。不生成服务，代理拨不上本机端口，
+      // 不算出口的账，流量走不通（和不走代理时整条链不生成一样）。
+      if (!relayHops) continue;
       for (const proto of tunnelForwardProtos(String(r.protocol || "tcp"))) {
         gostServiceConfig.push({
           name: `fwx-${r.id}-${proto}-x${exit.hostId}`,
           addr: endpointHostPort("127.0.0.1", exit.localPort),
-          handler: { type: proto, chain: chainName },
+          handler: { type: proto, chain: chainName, ...(relayRetries > 0 ? { retries: relayRetries } : {}) },
           listener: buildGostRuleListener(proto),
           metadata: { dialTimeout: "3s" },
           forwarder: {
@@ -310,111 +346,54 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
           },
         });
       }
-      balanceGostChains.push({ name: chainName, hops: [{ name: `hop-tunnel-${r.id}-x${exit.hostId}`, nodes: [exit.node] }] });
+      balanceGostChains.push({ name: chainName, hops: [...relayHops, { name: `hop-tunnel-${r.id}-x${exit.hostId}`, nodes: [exit.node] }] });
     }
   }
+  /*
+    不走本机代理的隧道规则（只有一台出口；或者这台入口机的 Agent 还不能执行统一调度 —— 那时只走主出口，链路上标
+    「需要升级 Agent」）：一条链，出口那一跳只有主出口一个节点。几台出口带选择器的链已经没有了：gost 的选择器
+    摘空时会让入口机直连目标，而且它的算法、健康判断和别的运行时都不一样。
+  */
   const tunnelGostChains = (await Promise.all(gostRules
     .filter((r: any) => runtimeBool(r.isEnabled) && r.forwardType === "gost" && r.tunnelId)
     .map(async (r: any) => {
       const tunnel = tunnelById.get((r as any).tunnelId) as any;
       if (!isGostTunnelMode(tunnel)) return null;
-      // 负载均衡由本机代理挑的规则（TCP、UDP 都是）：原来那条几台出口带选择器的链没人用了，不生成
+      // 负载均衡由本机代理挑的规则（TCP、UDP 都是）：用的是上面每台出口各一条的链
       if (gostBalancePlans.has(Number(r.id))) return null;
       const tunnelExitHost = tunnel ? tunnelExitEndpointById.get(tunnel.id)?.host : "";
       if (!tunnel || !tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0) return null;
       const tunnelHops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       const firstHop = Array.isArray(tunnelHops) && tunnelHops.length >= 2 ? (tunnelHops[0] as any) : null;
       const isMultiHopTunnel = Array.isArray(tunnelHops) && tunnelHops.length >= 3;
-      const useMultiHopEntry =
-        isMultiHopTunnel
-        && isCurrentHostTunnelEntry(tunnel);
+      if (!isMultiHopTunnel) {
+        const exitNode = await buildPrimaryExitNode(r, tunnel);
+        if (!exitNode) return null;
+        return { name: `chain-tunnel-${r.id}`, hops: [{ name: `hop-tunnel-${r.id}`, nodes: [exitNode] }] };
+      }
       // Multi-hop rules on the entry host must build an explicit B->...->exit chain.
       // Dialing the local first-hop listener only proves the generic probe path and bypasses
       // the selected tunnel exit listener.
-      if (isMultiHopTunnel && !useMultiHopEntry) {
+      if (!isCurrentHostTunnelEntry(tunnel)) {
         console.warn(`[TunnelRoute] skip direct fallback for multi-hop tunnel=${tunnel.id} rule=${r.id}; entry host mismatch host=${host.id} firstHop=${Number(firstHop?.hostId) || 0}`);
         return null;
       }
-      if (isMultiHopTunnel && useMultiHopEntry) {
-        const chainHops: any[] = [];
-        const routeParts: string[] = [`entry#${Number(host.id)}:${Number((r as any).sourcePort)}`];
-        const relayFailover = isTunnelRelayFailover(tunnel, tunnelHops);
-        if (relayFailover) {
-          const relayNodes = await Promise.all(tunnelRelayCandidates(tunnelHops).map(async (hop: any, index: number) => {
-            const hopDialHost = await getHopDialAddress(hop, tunnel);
-            if (!hopDialHost || !Number(hop.listenPort)) return null;
-            const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
-            routeParts.push(`relay#${index + 1}:${Number(hop.hostId)}@${hopAddr}`);
-            return gostTunnelNode(
-              `relay-${r.id}-${Number(hop.seq)}`,
-              hopAddr,
-              gostTunnelTransportType(tunnel.mode),
-              tunnel,
-            );
-          }));
-          const validRelayNodes = relayNodes.filter(Boolean);
-          if (validRelayNodes.length !== tunnelRelayCandidates(tunnelHops).length) return null;
-          chainHops.push({
-            name: `hop-tunnel-${r.id}-relay-failover`,
-            selector: gostRelayFailoverHopMetadata,
-            nodes: validRelayNodes,
-          });
-        } else {
-          for (let i = 1; i < tunnelHops.length - 1; i++) {
-            const hop = tunnelHops[i] as any;
-            const hopDialHost = await getHopDialAddress(hop, tunnel);
-            if (!hopDialHost || !Number(hop.listenPort)) return null;
-            const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
-            routeParts.push(`hop#${Number(hop.hostId)}@${hopAddr}`);
-            chainHops.push({
-              name: `hop-tunnel-${r.id}-${Number(hop.seq)}`,
-              nodes: [gostTunnelNode(
-                `mhop-${r.id}-${Number(hop.seq)}`,
-                hopAddr,
-                gostTunnelTransportType(tunnel.mode),
-                tunnel,
-              )],
-            });
-          }
-        }
-        const exitHop = tunnelHops[tunnelHops.length - 1] as any;
-        const exitHost = await getHopDialAddress(exitHop, tunnel);
-        const exitNodes = await buildLoadBalancedExitNodes(r, tunnel, exitHost);
-        if (!exitHost || exitNodes.length === 0) return null;
-        chainHops.push({
-          name: `hop-tunnel-${r.id}-exit`,
-          ...(exitNodes.length > 1 ? { selector: gostExitSelector((tunnel as any).loadBalanceStrategy) } : {}),
-          nodes: exitNodes,
-        });
-        if (chainHops.length === 0) return null;
-        routeParts.push(`exit#${Number(exitHop.hostId)}@${exitNodes.map((node: any) => node.addr).join(",")}`);
-        const route = routeParts.join(" -> ");
-        const routeKey = `${tunnel.id}:${r.id}:${host.id}`;
-        if (tunnelRouteLogCache.get(routeKey) !== route) {
-          setBoundedMapValue(tunnelRouteLogCache, routeKey, route, AGENT_DYNAMIC_CACHE_MAX);
-          appendPanelLog("info", `[TunnelRoute] gost multi-hop tunnel=${tunnel.id} rule=${r.id} host=${host.id} proxyEntrySend=${proxyProtocolEnabled(r, "entrySend")} route=${route}`);
-        }
-        return { name: `chain-tunnel-${r.id}`, hops: chainHops };
+      const routeParts: string[] = [`entry#${Number(host.id)}:${Number((r as any).sourcePort)}`];
+      const chainHops = await buildRelayHops(r, tunnel, tunnelHops as any[], "", routeParts);
+      if (!chainHops) return null;
+      const exitHop = tunnelHops[tunnelHops.length - 1] as any;
+      const exitHost = await getHopDialAddress(exitHop, tunnel);
+      const exitNode = exitHost ? await buildPrimaryExitNode(r, tunnel, exitHost) : null;
+      if (!exitNode) return null;
+      chainHops.push({ name: `hop-tunnel-${r.id}-exit`, nodes: [exitNode] });
+      routeParts.push(`exit#${Number(exitHop.hostId)}@${String((exitNode as { addr?: string }).addr || "")}`);
+      const route = routeParts.join(" -> ");
+      const routeKey = `${tunnel.id}:${r.id}:${host.id}`;
+      if (tunnelRouteLogCache.get(routeKey) !== route) {
+        setBoundedMapValue(tunnelRouteLogCache, routeKey, route, AGENT_DYNAMIC_CACHE_MAX);
+        appendPanelLog("info", `[TunnelRoute] gost multi-hop tunnel=${tunnel.id} rule=${r.id} host=${host.id} proxyEntrySend=${proxyProtocolEnabled(r, "entrySend")} route=${route}`);
       }
-      const firstExitEndpoint = tunnelExitEndpointsForRule(r, tunnel)[0];
-      const chainTargetAddr = useMultiHopEntry
-        ? endpointHostPort("127.0.0.1", firstHop.listenPort)
-        : endpointHostPort(tunnelExitHost, firstExitEndpoint?.listenPort || 0);
-      const chainNodeName = useMultiHopEntry ? `mhop-entry-${r.id}` : `exit-${r.id}`;
-      const exitNodes = !useMultiHopEntry ? await buildLoadBalancedExitNodes(r, tunnel) : [];
-      return {
-        name: `chain-tunnel-${r.id}`,
-        hops: [{
-          name: `hop-tunnel-${r.id}`,
-          ...(exitNodes.length > 1 ? { selector: gostExitSelector((tunnel as any).loadBalanceStrategy) } : {}),
-          nodes: useMultiHopEntry ? [gostTunnelNode(
-            chainNodeName,
-            chainTargetAddr,
-            "tcp",
-            tunnel,
-          )] : exitNodes,
-        }],
-      };
+      return { name: `chain-tunnel-${r.id}`, hops: chainHops };
     }))).filter(Boolean);
   const gostChains = [...tunnelGostChains, ...balanceGostChains, ...egressGostChains];
   const gostManagedConfigs: any[] = [];

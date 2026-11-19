@@ -12,6 +12,8 @@
  * 老值 none（只用第一个出口）在界面上显示成主备：坏了自动换下一台，比原来只用第一台更好。
  */
 
+import { isAgentVersionAtLeast } from "./version";
+
 export const BALANCE_STRATEGIES = [
   "auto",
   "fallback",
@@ -254,14 +256,23 @@ export const FXP_TARGET_AWARE_VERSION = "2.2.142";
 export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
 
 /**
- * 入口机的 Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切（TCP 和 UDP），并报真实状态
- * （server/gostBalancePlan.ts、agent/failover_exit_group.go）。更老的入口照旧用 gost 自己的节点选择器。
- * 只有这一处：2.2.262 / 2.2.263 的 Agent 虽然有这个代理，但目标上限、探测节奏、UDP 访客地址、经出口复核都没有，
- * 面板那时也从没下发过（见 gostBalancePlan.ts 开头）。
+ * 统一调度要求的 Agent 版本：从这一版起，负载均衡都由 Agent 自己的调度器执行。
+ *
+ * GOST 链路的几台出口由入口机的本机代理挑、自己探、自己切（TCP 和 UDP），并报真实状态
+ * （server/gostBalancePlan.ts、agent/failover_exit_group.go）。**没有老路可退**：入口机的 Agent 更老时，面板只下发
+ * 主出口一台（单节点、没有选择器），链路和规则上标「需要升级 Agent」（server/tunnelBalanceAgent.ts）。以前 gost 自己的
+ * 节点选择器那条路（面板排节点顺序、摘节点、防绕过的兜底节点）已经整个删掉。
+ *
+ * 版本门槛只有这一处，判断只用下面的 agentSupportsUnifiedBalance。
  */
-export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.264";
+export const UNIFIED_BALANCE_AGENT_VERSION = "2.2.264";
 
-/** 本机代理最多替几台出口挑（Agent 的 failoverMaxTargets）；出口再多的链路照旧用 gost 的节点选择器。 */
+/** 这台主机的 Agent 能不能执行统一调度（版本不低于 UNIFIED_BALANCE_AGENT_VERSION；没报版本的算不能）。 */
+export function agentSupportsUnifiedBalance(agentVersion: unknown): boolean {
+  return isAgentVersionAtLeast(String(agentVersion ?? ""), UNIFIED_BALANCE_AGENT_VERSION);
+}
+
+/** 本机代理最多替几台出口挑（Agent 的 failoverMaxTargets）；超出的出口不下发（按顺序取前这么多台）。 */
 export const GOST_BALANCE_MAX_EXITS = 20;
 
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */

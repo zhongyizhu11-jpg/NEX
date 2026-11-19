@@ -57,6 +57,12 @@ UDP：一个访客一个会话，建会话时挑出口；出口判坏的那一�
 经出口复核只有 TCP 有（UDP 没有「被关」这个信号）。访客地址从 gost 给每个新会话先发的 PROXY v2 头里读
 （route_group_udp_visitor.go）。
 
+多跳链路（出口在中转后面，目标带 ViaRelay）：入口机连不到出口机，第 1 条做不了 —— 每台出口的本机 gost 端口挂的
+是「中转 → 这台出口」的链，健康只靠第 2、3 条：出口死了以后第一条撞上去的 TCP 连接约 3 秒后被关、无感换走，
+再约 3 秒复核完判坏；没有 TCP 流量（空闲、只转 UDP 的规则）时要等面板的提示。以前 gost 选择器那条路同样只在
+连接失败时才发现，这一点没有变差；想在多跳上也做到「几秒内本地摘掉」，得让出口机上有一个可以穿过隧道去问的
+探测端口，现在没有。
+
 判不出来的情况：出口进程卡死、内核还在接连接，而链路是不加密的 tcp / mtcp（握手不需要对端进程参与）——
 本机端口和出口机都「连得上」，连接挂着不回。tls / wss 的握手要对端进程回话，3 秒握手超时后就是第 2 条。
 */
@@ -188,7 +194,15 @@ func probeExitGroupTargets(protocol string, targets []failoverTarget, timeout ti
 		go func(i int, target failoverTarget) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			latency, ok := failoverProbeTargetWithin(protocol, target, timeout)
+			var latency int
+			var ok bool
+			if target.ViaRelay {
+				// 在中转后面的出口探不到：算通。延迟记 1 毫秒占位 —— 「延迟优先 / 自动」比的是它加上面板给的
+				// 出口→目标延迟；入口→中转→出口那一段几台出口基本共用，不知道也不影响谁排前面。
+				latency, ok = 1, true
+			} else {
+				latency, ok = failoverProbeTargetWithin(protocol, target, timeout)
+			}
 			if ok && i < len(throughFailed) && throughFailed[i] {
 				verdict, _ := failoverThroughProbe(target, exitRecoverWindow)
 				ok = verdict == exitThroughOK

@@ -2,7 +2,7 @@ import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { BALANCE_ANTI_FLAP, GOST_BALANCE_MAX_EXITS, type BalanceDetect } from "@shared/loadBalance";
 
 /*
-  GOST 隧道的出口组交给入口机的本机代理挑（Agent 2.2.264 起真正启用，GOST_BALANCE_PROXY_AGENT_VERSION）。
+  GOST 隧道的出口组交给入口机的本机代理挑（入口机的 Agent 要能执行统一调度：shared/loadBalance.ts 的 agentSupportsUnifiedBalance）。
 
   2.3.539 加过一版「GOST 由入口自己切」，可从来没生效：下发前有一句「入口要带目标就跳过」，而 GOST 的 relay
   隧道入口永远要带目标（出口拨哪儿是入口在 relay 请求里说的），所以每条规则都被跳过；就算不跳，每台出口的本机
@@ -28,6 +28,8 @@ export type GostBalanceExit = {
   /** 出口机的拨号地址和隧道监听端口：Agent 直接探它（入口到出口这一段） */
   dialHost: string;
   listenPort: number;
+  /** 多跳链路：出口在中转后面，入口机连不到它，不直接探（Agent 靠真实连接被关后的经出口复核和面板提示） */
+  viaRelay?: boolean;
 };
 
 export type GostBalanceSpecInput = {
@@ -126,6 +128,7 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         // 直接探出口机的隧道监听（入口到出口这一段）；出口到目标那一段由出口机探、经面板给提示
         probeIp: exit.dialHost,
         probePort: exit.listenPort,
+        ...(exit.viaRelay ? { viaRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
         ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
         ...(extra != null && extra > 0 ? { extraLatencyMs: Math.round(extra) } : {}),

@@ -172,6 +172,9 @@ func failoverSignature(spec failoverSpec) string {
 			// 同上：不带时签名不变。探法变了得进签名，在跑的代理才会原地换上新规格（样本照旧带过去）。
 			weight += "e"
 		}
+		if target.ViaRelay {
+			weight += "r"
+		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
 	return strings.Join(parts, "|")

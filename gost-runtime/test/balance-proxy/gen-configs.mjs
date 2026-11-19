@@ -36,7 +36,7 @@ const TUNNEL_ID = 1;
 const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
 const runtime = await import(url("server/dbRuntime.ts"));
 const schema = await import(url("server/dbSchema.ts"));
-const { GOST_BALANCE_PROXY_AGENT_VERSION } = await import(url("shared/loadBalance.ts"));
+const { UNIFIED_BALANCE_AGENT_VERSION } = await import(url("shared/loadBalance.ts"));
 await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
 await schema.ensureDatabaseSchema();
 const exec = (sql, params = []) => runtime.executeRaw(sql, params);
@@ -45,7 +45,7 @@ const now = Math.floor(Date.now() / 1000);
 await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
 const addHost = (host, name, mbps) => exec(
   'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "agentVersion", "runtimeVersion", "userId", "isOnline", "lastHeartbeat", "lineBandwidthMbps") VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)',
-  [host.id, name, host.ip, host.ip, "slave", host.token, GOST_BALANCE_PROXY_AGENT_VERSION, "3.2.6-nex6", now, mbps],
+  [host.id, name, host.ip, host.ip, "slave", host.token, UNIFIED_BALANCE_AGENT_VERSION, "3.2.6-nex6", now, mbps],
 );
 await addHost(ENTRY, "入口", 0);
 for (const [index, exit] of EXITS.entries()) await addHost(exit, `出口${index + 1}`, exit.mbps);
@@ -123,7 +123,7 @@ for (const scenario of scenarios) {
   const columns = { ...reset, ...scenario.tunnel };
   await exec(`UPDATE tunnels SET ${Object.keys(columns).map((key) => `"${key}" = ?`).join(", ")} WHERE id = ?`, [...Object.values(columns), TUNNEL_ID]);
   await exec('UPDATE forward_rules SET protocol = ? WHERE id = ?', [scenario.protocol || "both", RULE_ID]);
-  const entry = await beat(ENTRY.token, scenario.entryAgentVersion || GOST_BALANCE_PROXY_AGENT_VERSION);
+  const entry = await beat(ENTRY.token, scenario.entryAgentVersion || UNIFIED_BALANCE_AGENT_VERSION);
   /*
     面板只在配置内容变了的时候才重发 gost 配置：只换分配方式 / 手动指定时，入口机的 gost.json 一个字节不变
     （这正是交给本机代理的意义：切换不动 gost），所以这一轮心跳里没有它，Agent 盘上还是上一份。这里照着留上一份。
@@ -131,7 +131,7 @@ for (const scenario of scenarios) {
   lastEntryGost = entryRuntimeConfig(entry.configs) || lastEntryGost;
   const entryGostResent = !!entryRuntimeConfig(entry.configs);
   for (const exit of EXITS) {
-    const config = exitRuntimeConfig((await beat(exit.token, GOST_BALANCE_PROXY_AGENT_VERSION)).configs);
+    const config = exitRuntimeConfig((await beat(exit.token, UNIFIED_BALANCE_AGENT_VERSION)).configs);
     if (config) lastExitGost[String(exit.id)] = config;
   }
   const exits = { ...lastExitGost };

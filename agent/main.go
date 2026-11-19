@@ -548,6 +548,9 @@ type failoverTarget struct {
 	// 而不是零长度包 + ping。面板按对端 Agent 的版本给；填了探测地址时不带（照填的拨 TCP）。
 	// 行为参数，进签名；不带时签名逐字不变。
 	ProbeUdpEcho bool `json:"probeUdpEcho,omitempty"`
+	// 出口组里这台出口在中转后面（多跳链路，2.2.264）：入口机连不到它，没法直接探。不探（每轮算通），通不通看
+	// 真实连接「没回就被关」后的经出口复核和面板提示（failover_exit_group.go）。行为参数，进签名。
+	ViaRelay bool `json:"viaRelay,omitempty"`
 	// 面板随规格附带的运行时提示（failover_hints.go）。嵌入进来：JSON 里还是和上面这些字段平级，
 	// 代码里照样写 target.Down、target.LoadPct。
 	failoverTargetHints

@@ -50,7 +50,6 @@ test("出口上报后什么时候推入口：冷启动第一次就是连不上�
   const runtime = await import("./dbRuntime");
   const { ensureDatabaseSchema } = await import("./dbSchema");
   const health = await import("./exitTargetHealth");
-  const { DEFAULT_BALANCE_DETECT } = await import("../shared/loadBalance");
   // 先定好数据库类型再加载模块（表结构按它生成）。
   const harness = pushHarness((await import("./exitTargetPush")).ExitTargetPushDebouncer);
   health.resetExitTargetStates();
@@ -88,9 +87,6 @@ test("出口上报后什么时候推入口：冷启动第一次就是连不上�
     harness.advance(5000);
     const afterColdStart = pushCount();
 
-    // 下发那条路在正常的时候算过一次顺序（最快的是出口 4，不是排第一的出口 2）。
-    assert.equal(health.latencyOrderedExitHostIds(501, [2, 4], DEFAULT_BALANCE_DETECT, { nowMs: harness.now() })[0], 4);
-
     // --- C2：每台都连不上目标。过程中会推（摘掉的出口在变），都连不上之后再报多少次都不推。
     harness.advance(40_000);
     for (const hostId of [2, 3, 4]) await report(hostId, 501, true);
@@ -125,7 +121,7 @@ test("出口上报后什么时候推入口：冷启动第一次就是连不上�
     // --- C3：半小时没再报的清掉
     assert.ok(health.exitTargetMemorySizeForTest().states >= 6);
     health.pruneExitTargetMemory(harness.now() + 31 * 60_000, true);
-    assert.deepEqual(health.exitTargetMemorySizeForTest(), { states: 0, tunnels: 0, leaders: 0, seeds: 0, excluded: 0 });
+    assert.deepEqual(health.exitTargetMemorySizeForTest(), { states: 0, tunnels: 0, seeds: 0, excluded: 0 });
   } finally {
     health.setExitTargetPushDebouncerForTest(original);
     health.resetExitTargetStates();
