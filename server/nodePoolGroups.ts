@@ -1,11 +1,11 @@
 import * as db from "./db";
 import { queryRaw, executeRaw, quoteDbIdentifier } from "./dbRuntime";
 import { appendPanelLog } from "./_core/panelLogger";
-import { withKeyedTaskLock } from "./keyedTaskLock";
 import { getNodePool } from "./nodePools";
 import { memberEnabledIntent } from "../shared/memberSchedule";
 import type { ForwardGroupMemberInput } from "./repositories/forwardGroupRepository";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../shared/forwardGroup";
+import { withForwardGroupEditLock } from "./panelKeyedLock";
 
 const q = quoteDbIdentifier;
 
@@ -145,7 +145,7 @@ export async function syncGroupsFollowingPool(poolId: number, reason: string): P
   for (const row of rows) {
     try {
       // 和在组编辑框里改成员用同一把锁：别和手动编辑同时写这个组的成员
-      results.push(await withKeyedTaskLock(`forward-group:${Number(row.id)}`, () => syncGroupMembersFromPool(Number(row.id), reason)));
+      results.push(await withForwardGroupEditLock(Number(row.id), () => syncGroupMembersFromPool(Number(row.id), reason)));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendPanelLog("warn", `[NodePool] group=${row.id} sync from pool=${poolId} failed: ${message}`);

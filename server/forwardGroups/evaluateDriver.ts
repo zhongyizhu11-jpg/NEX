@@ -37,7 +37,6 @@ import {
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
 import { FORWARD_GROUP_AUTO_SWITCH_EVENT, FORWARD_GROUP_FLAP_WINDOW_MS, forwardGroupFlapHoldAt, forwardGroupFlapHoldLabel } from "../forwardGroupFlapHold";
-import { withKeyedTaskLock } from "../keyedTaskLock";
 import { dbBool } from "../repositories/repositoryUtils";
 import { HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE } from "../../shared/hostTrafficPolicy";
 import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
@@ -61,6 +60,7 @@ import { evaluateMemberPeerHealth } from "./health";
 import { agentHealthSampleIsCurrent, failoverAgentSelectionStillCurrent, memberAgentSelectionStillCurrent, resolveMemberAgentLiveness } from "./liveness";
 import { forwardGroupProbeTopology, invalidateForwardGroupProbeTopology } from "./probeTopology";
 import { syncForwardGroupRules } from "./ruleSync";
+import { withForwardGroupEvaluationLock } from "../panelKeyedLock";
 
 const FORWARD_GROUP_EVALUATION_DEBOUNCE_MS = 250;
 
@@ -983,7 +983,7 @@ async function runForwardGroupFailoverByIds(groupIds: number[], options: Forward
   const failures: Array<{ groupId: number; error: unknown }> = [];
   for (const groupId of ids) {
     try {
-      await withKeyedTaskLock(`forward-group-failover:${groupId}`, async () => {
+      await withForwardGroupEvaluationLock(groupId, async () => {
         const loaded = await loadForwardGroupForEvaluation(groupId, options);
         if (!loaded) return;
         await forwardGroupEvaluationScope.run(loaded.scope, () => runForwardGroupFailoverForGroups([loaded.group], options, { ddnsSettings }));

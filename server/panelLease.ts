@@ -56,6 +56,8 @@ export const PANEL_LEASE_RENEW_INTERVAL_MS = 10_000;
 export const PANEL_LEASE_FENCE_MS = 5_000;
 export const PANEL_BACKGROUND_LEASE = "background";
 export const PANEL_INSTANCE_LEASE_PREFIX = "instance:";
+/** 跨实例按 key 串行的锁行（server/panelKeyedLock.ts）；过期没放的由持有者顺手删掉。 */
+export const PANEL_KEYED_LOCK_ROW_PREFIX = "lock:";
 /** 实例登记过期多久后由持有者删掉（留着几分钟方便排查）。 */
 const INSTANCE_ROW_RETENTION_MS = 10 * 60_000;
 
@@ -385,6 +387,7 @@ export class PanelLease {
         .sort();
       if (acquired && this.tickCount % 30 === 1) {
         await this.store.prune(PANEL_INSTANCE_LEASE_PREFIX, INSTANCE_ROW_RETENTION_MS).catch(() => 0);
+        await this.store.prune(PANEL_KEYED_LOCK_ROW_PREFIX, INSTANCE_ROW_RETENTION_MS).catch(() => 0);
       }
       this.lastRenewedAt = startedAt;
       if (this.lastError) this.logger.info(`[PanelLease] renewed again instance=${this.instanceId}`);
