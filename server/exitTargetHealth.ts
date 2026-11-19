@@ -581,7 +581,7 @@ function exitTargetScore(state: ExitTargetState | undefined) {
 */
 const excludedMemoByRule = new Map<number, { key: string; at: number }>();
 const lastFlipAt = new Map<string, number>();
-export const EXIT_TARGET_FLIP_REPEAT_MS = 30_000;
+const EXIT_TARGET_FLIP_REPEAT_MS = 30_000;
 // 用到时才建：exitTargetPush → agentEvents 那一串模块会绕回来引用这个文件，模块加载时还拿不到这个类。
 let flipPushesInstance: ExitTargetPushDebouncer | null = null;
 function flipPushes() {
@@ -601,7 +601,7 @@ export function setExitTargetPushDebouncerForTest(debouncer: ExitTargetPushDebou
   面板跑得越久扫得越慢。半小时没再报过的（规则 / 链路 / 出口已经不在，或者不再走负载均衡）清掉；
   每分钟最多清一次。平时值（baselines）另有三天的期限，不在这里清。
 */
-export const EXIT_TARGET_FORGET_MS = 30 * 60_000;
+const EXIT_TARGET_FORGET_MS = 30 * 60_000;
 const EXIT_TARGET_PRUNE_EVERY_MS = 60_000;
 let lastPrunedAt = 0;
 
@@ -1006,7 +1006,7 @@ export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.no
 }
 
 /** 入口上报的真实状态 → 「流量没走主出口时，在用的是哪几台」。主出口在用（或都不能用）时 null。 */
-export function activeExitFromLive(live: LiveRuleReport) {
+function activeExitFromLive(live: LiveRuleReport) {
   const primary = live.exits[0];
   if (!primary) return null;
   const active = live.exits.filter((exit) => exit.state === "active" && exit.hostId > 0);
@@ -1039,25 +1039,6 @@ export type RuleExitTargetSummary = {
   bad: Array<{ hostId: number; hostName: string; reason: "down" | "unstable"; medianMs: number | null; jitterMs: number | null; lossPct: number | null }>;
   allBad: boolean;
 };
-
-/** 规则卡上那一句用：几台出口、哪几台有问题、是不是全都有问题。 */
-export function summarizeRuleExitTargets(ruleId: number, tunnel: TunnelRow | null | undefined, exitHostIds: readonly number[], nowMs = Date.now()): RuleExitTargetSummary | null {
-  if (!tunnelBalancesExits(tunnel) || exitHostIds.length < 2) return null;
-  const detect = tunnelBalanceDetect(tunnel);
-  const fresh = exitTargetStatesForRule(ruleId, nowMs).filter((state) => exitHostIds.includes(state.hostId));
-  if (fresh.length === 0) return null;
-  const bad = fresh
-    .filter((state) => state.down || exitTargetUnstable(state, detect))
-    .map((state) => ({
-      hostId: state.hostId,
-      hostName: state.hostName,
-      reason: (state.down ? "down" : "unstable") as "down" | "unstable",
-      medianMs: state.medianMs ?? state.latencyMs,
-      jitterMs: state.jitterMs,
-      lossPct: state.lossPct,
-    }));
-  return { total: exitHostIds.length, reporting: fresh.length, bad, allBad: bad.length > 0 && bad.length >= fresh.length && fresh.length >= exitHostIds.length };
-}
 
 /**
  * 给规则的流量 / 延迟汇总行补上「各台出口到目标」：exitTargetTotal（报上来的出口数，≥2 才有）、
@@ -1153,7 +1134,7 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
  * 规则卡上那一句话。没有问题返回 null。
  * gost：GOST 隧道只能把连不上的出口摘掉，抖动、丢包没法少分，只写出来。
  */
-export function describeRuleExitTargetSummary(summary: RuleExitTargetSummary | null, gost = false): string | null {
+function describeRuleExitTargetSummary(summary: RuleExitTargetSummary | null, gost = false): string | null {
   if (!summary || summary.bad.length === 0) return null;
   if (summary.allBad) return `${summary.total} 台出口都连不好目标：多半是目标本身的问题，换出口没用`;
   const parts = summary.bad.map((item) => {

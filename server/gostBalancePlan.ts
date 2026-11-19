@@ -121,7 +121,8 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         // 直接探出口机的隧道监听（入口到出口这一段）；出口到目标那一段由出口机探、经面板给提示
         probeIp: exit.dialHost,
         probePort: exit.listenPort,
-        ...(exit.viaRelay ? { viaRelay: true } : exit.probeRelay ? { probeRelay: true } : {}),
+        ...(exit.viaRelay ? { viaRelay: true } : {}),
+        ...(exit.probeRelay && !exit.viaRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
         ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
         ...(extra != null && extra > 0 ? { extraLatencyMs: Math.round(extra) } : {}),

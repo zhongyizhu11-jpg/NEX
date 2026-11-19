@@ -3466,7 +3466,7 @@ function exitManualWeightProps(members: MemberForm[], hostById: Map<number, any>
 
 /**
  * 「按权重」的出口组：把按线路带宽算出来的份数直接写给用户看（500M · 300M → 5:3）。
- * 算法和下发时同一个（shared/exitStrategy.ts 的 exitGroupWeights），这里看到的就是实际分法。
+ * 算法和下发时同一个（shared/loadBalance.ts 的 exitGroupWeights），这里看到的就是实际分法。
  */
 function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
   const enabled = members.filter((member) => member.isEnabled && Number(member.hostId || 0) > 0);

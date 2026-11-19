@@ -515,15 +515,6 @@ func (s *exitEndpointSelector) targetDownEverywhere() bool {
 	return level == lbcore.LevelPanic && s.targetDownOnAllLocked(candidates, now)
 }
 
-// targetLatencyLocked：到目标的延迟中位数（ms），没样本时 0。调用方持锁。
-func (s *exitEndpointSelector) targetLatencyLocked(index int) (median, jitter float64) {
-	if !s.endpointReportsTarget(index) {
-		return 0, 0
-	}
-	stats := s.target.health[index].stats()
-	return stats.median, stats.jitter
-}
-
 /* ───────────────────────── 主动探 ───────────────────────── */
 
 var fxpTargetSelectors = struct {

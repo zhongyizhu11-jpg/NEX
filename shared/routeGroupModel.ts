@@ -252,7 +252,6 @@ export type RouteGroupRule = {
   routePaths?: unknown;
   routeSwitchMode?: unknown;
   routeFailureThreshold?: unknown;
-  routeScoreMargin?: unknown;
   routeScoreHoldSeconds?: unknown;
   routePrewarmSeconds?: unknown;
   routeDelivery?: unknown;

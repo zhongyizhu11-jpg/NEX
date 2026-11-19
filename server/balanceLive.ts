@@ -65,7 +65,7 @@ export type LiveRuleReport = {
   at: number;
 };
 
-export const BALANCE_LIVE_STALE_MS = 35_000;
+const BALANCE_LIVE_STALE_MS = 35_000;
 const MAX_REPORTS = 20_000;
 
 const reports = new Map<string, LiveRuleReport>();
@@ -307,8 +307,4 @@ export function liveBalanceForTunnel(tunnelId: number, nowMs = Date.now()): Live
 /** 只给测试用 */
 export function resetBalanceLiveForTest() {
   reports.clear();
-}
-
-export function setBalanceLiveReportForTest(report: LiveRuleReport) {
-  reports.set(`${report.ruleId}:${report.entryHostId}`, report);
 }

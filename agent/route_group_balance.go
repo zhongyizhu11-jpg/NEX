@@ -30,10 +30,7 @@ lbcore/testdata/conformance 的用例卡住两边一致，这边由 lbcore_confo
 给人看的 0–100 分是同一个成本换算的（route_group.go 的 scoreLocked），不参与任何决定。
 */
 
-var (
-	routeSlowStartWindow = lbcore.DefaultSlowStart.Window
-	routeSlowStartMin    = lbcore.DefaultSlowStart.Floor
-)
+var routeSlowStartWindow = lbcore.DefaultSlowStart.Window
 
 func (p *failoverProxy) markSlowStartLocked(index int, now time.Time) {
 	if len(p.slowStartAt) != len(p.spec.Targets) {

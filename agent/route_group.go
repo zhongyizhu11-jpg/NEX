@@ -342,19 +342,11 @@ func (p *failoverProxy) healthyLocked(index int) bool {
 	return p.targetHealth[index] && !p.relayDown[index]
 }
 
-// statsLocked 调用方持有写锁；只拿读锁的地方用 statsReadLocked。
+// statsLocked 调用方持有写锁。
 func (p *failoverProxy) statsLocked(index int) *routeTargetStats {
 	p.ensureHealthStateLocked()
 	if index < 0 || index >= len(p.stats) {
 		return &routeTargetStats{}
-	}
-	return p.stats[index]
-}
-
-// statsReadLocked 读锁下用：不分配、不改代理的状态；没有就是 nil（summary / dialSummary 认 nil）。
-func (p *failoverProxy) statsReadLocked(index int) *routeTargetStats {
-	if index < 0 || index >= len(p.stats) {
-		return nil
 	}
 	return p.stats[index]
 }

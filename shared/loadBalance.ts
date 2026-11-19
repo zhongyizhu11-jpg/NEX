@@ -156,7 +156,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
 
 /** 抖动「少分」降到几分之一（FXP 的 fxpTargetReducedShare）。 */
-export const BALANCE_JITTER_REDUCED_SHARE = 0.25;
+const BALANCE_JITTER_REDUCED_SHARE = 0.25;
 /** 主备切过去至少用多久（GOST 出口组的 minHoldSeconds；一小时切 3 次以上放慢是 Agent 内置的抖动抑制）—— 不给调。 */
 export const BALANCE_MIN_HOLD_SECONDS = 60;
 
