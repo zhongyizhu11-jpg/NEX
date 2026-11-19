@@ -1,0 +1,83 @@
+[
+  {
+    "name": "weighted-60-30-10",
+    "about": "按权重 60:30:10 挑 1000 次：正好 600 / 300 / 100，而且是交错着来的（不是先连着给 a 六个）",
+    "strategy": "weighted",
+    "members": [
+      { "name": "a", "weight": 60 },
+      { "name": "b", "weight": 30 },
+      { "name": "c", "weight": 10 }
+    ],
+    "steps": [
+      {
+        "about": "一整圈 10 个",
+        "picks": 10,
+        "expect": {
+          "exact": ["a", "b", "a", "a", "b", "a", "c", "a", "b", "a"],
+          "counts": { "a": [6, 6], "b": [3, 3], "c": [1, 1] }
+        }
+      },
+      {
+        "about": "接着 990 个，合起来正好 1000",
+        "picks": 990,
+        "expect": { "counts": { "a": [594, 594], "b": [297, 297], "c": [99, 99] } }
+      }
+    ]
+  },
+  {
+    "name": "weighted-unset-weights-are-equal",
+    "about": "权重都没填：平均分",
+    "strategy": "weighted",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      { "picks": 300, "expect": { "counts": { "a": [100, 100], "b": [100, 100], "c": [100, 100] } } }
+    ]
+  },
+  {
+    "name": "weighted-skips-a-dead-member-without-payback",
+    "about": "坏了的成员这一轮不分，恢复后也不补发欠它的",
+    "strategy": "weighted",
+    "members": [
+      { "name": "a", "weight": 50 },
+      { "name": "b", "weight": 50 }
+    ],
+    "steps": [
+      { "set": { "b": "down" }, "picks": 100, "expect": { "counts": { "a": [100, 100] }, "never": ["b"] } },
+      {
+        "about": "b 回来（早就恢复了，不在慢启动里）：之后一人一半，b 不会连着拿 100 个把欠的补回来",
+        "set": { "b": "healthy" },
+        "picks": 100,
+        "expect": { "counts": { "a": [49, 51], "b": [49, 51] } }
+      }
+    ]
+  },
+  {
+    "name": "weighted-slow-start-ramp",
+    "about": "刚恢复的成员 60 秒里从 10% 慢慢加到满份",
+    "strategy": "weighted",
+    "members": [
+      { "name": "a", "weight": 10 },
+      { "name": "b", "weight": 10 }
+    ],
+    "steps": [
+      {
+        "about": "b 刚恢复 6 秒：一成",
+        "recovered": { "b": 6 },
+        "picks": 220,
+        "expect": { "counts": { "a": [196, 204], "b": [16, 24] } }
+      },
+      {
+        "about": "恢复 30 秒：五成，2:1",
+        "recovered": { "b": 30 },
+        "picks": 300,
+        "expect": { "counts": { "a": [194, 206], "b": [94, 106] } }
+      },
+      {
+        "about": "恢复满 60 秒：满份",
+        "recovered": { "b": 61 },
+        "picks": 200,
+        "expect": { "counts": { "a": [97, 103], "b": [97, 103] } }
+      }
+    ]
+  }
+]
