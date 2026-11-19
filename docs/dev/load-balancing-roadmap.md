@@ -81,4 +81,28 @@
 
 ## 实施记录
 
-（每个阶段完成后在这里记落点和验证方式。）
+### 阶段 1（2026-11-19，面板 2.3.540 / Agent 2.2.263 / FXP 2.2.146 / gost nex6）
+
+| 范围 | 落点 |
+|---|---|
+| G1 | `gost-runtime/nex-selector-noempty.patch`（过滤后为空返回全部；选不出节点时路由报错而不是直连；按规则故意直连的 bypass 不受影响）；回归 `gost-runtime/test/bypass-check/run.sh` |
+| GOST 权重 | `server/agentHeartbeatRoute.ts`：`metadata.weight` 写成字符串（数字被 gost 当成 1） |
+| A1–A14、E1、H1、H2 | `agent/failover_*.go`、`route_group*.go`、`failover_early_close.go`、`route_hop_probe.go`、`passive_rtt.go`、`fxp_endpoint_events.go` |
+| X1–X12、F13 | `forwardx-fxp/main.go`、`exit_load.go`、`target_health.go`、`endpoint_pool.go`、`selected_transport.go`、`udp_direct.go`，新增 `udp_ping.go`（UDP 探活包 3/4、访客地址包 5，老版本忽略）、`tcp_user_timeout_linux.go` |
+| A3、P3–P6、P9–P11、P14、C1–C3、P1 | `server/repositories/forwardGroupRepository.ts`、`forwardGroupFlapHold.ts`、`exitTargetPush.ts`、`tunnelExitPin.ts`、`landingPools.ts`、`routeGroupStats.ts`（限额提示） |
+| N1 | `server/agentHeartbeatNginx.ts`：`zone`、主备权重 10000/100/1、多出口 3 秒换下一台 |
+
+验证：tsc、lint 基线内、`pnpm test:all` 4650 项（4645 过 / 0 失败 / 5 跳过）、Agent 与 FXP `go test ./...` 全过、相关用例 `-race` 无竞争。
+
+本机网络命名空间实验室（1 入口 + 3 出口 + 1 中转 + 目标 + 访客，真实 Agent / FXP / gost）实测：
+
+| 场景 | 修之前（2.3.539） | 修之后 |
+|---|---|---|
+| GOST 三台出口全部拒绝连接，新开 12 条 TCP | 11 条由入口机直连目标 | 12 条全部失败，0 条到达目标；恢复后立即走出口，约 15 秒后三台均分 |
+| NEX V1 黑洞一台出口，新开 30 条 TCP | 9 条里 3 条挂住 | 0 失败，1 条等 6 秒后换出口，其余毫秒级；之后只在另两台间分 |
+| NEX V1 一条 UDP 会话，中途黑洞所在出口 | 一直无回包 | 约 16 秒后自动换到另一台出口 |
+| 线路组一条 UDP 会话，中途黑洞中转 | — | 约 3 秒后换到直连线路 |
+| NEX V3 黑洞一台出口，新开 30 条 TCP | — | 29 条成功、1 条失败、1 条等 3 秒 |
+| GOST 一条 UDP 会话，中途黑洞所在出口 | 一直无回包 | 仍然一直无回包（GOST 的 UDP 还在 gost 自己的选择器上，阶段 2 处理） |
+
+遗留到阶段 2：GOST 出口组交给入口 Agent（含 UDP）；NEX UDP 掉线发现从约 16 秒压到 5 秒以内；V3 多路复用下的状态帧超时；同一规则 TCP+UDP 时 UDP 单独被封发现不了；主出口换位 / 重新上线时规则仍会短暂显示未运行。
