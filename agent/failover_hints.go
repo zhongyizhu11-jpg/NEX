@@ -213,9 +213,11 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 			p.recordTargetEventLocked(i, "recovered", "relay recovered")
 			// 面板提示撤掉也是「刚恢复」（A11）：中转后面的落地刚起来，新连接一下子全涌过去和本机探测恢复时一样伤。
 			// TCP+UDP 规格的 UDP 那一侧一起慢启动。
-			now := time.Now()
-			p.markSlowStartLocked(i, now)
-			p.udpSide.markSlowStart(i, now)
+			if !p.spec.NoSlowStart {
+				now := time.Now()
+				p.markSlowStartLocked(i, now)
+				p.udpSide.markSlowStart(i, now)
+			}
 			if reason == "" {
 				reason = "relay recovered"
 			}

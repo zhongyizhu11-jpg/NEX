@@ -41,6 +41,10 @@ func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bo
 	if len(candidates) == 0 {
 		return failoverTarget{}, -1
 	}
+	// 出口组的手动指定：指定的那台能用就只走它，所有分法都一样（failover_exit_group.go）。
+	if pinned := p.exitPinPickLocked(candidates, udp); pinned >= 0 {
+		return p.spec.Targets[pinned], pinned
+	}
 	request := failoverPickRequest{candidates: candidates, hashKey: hashKey, exclude: exclude, udp: udp}
 	strategy := failoverStrategyFor(p.spec.Strategy)
 	// 这一次是给 UDP 会话挑：慢启动看 UDP 那一侧的恢复时刻（slowStartLocked）。整个挑选都在 p.mu 里。

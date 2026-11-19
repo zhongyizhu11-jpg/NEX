@@ -380,6 +380,13 @@ func (p *failoverProxy) markDialFailure(index int, reason string, startedAt time
 	if index < 0 || index >= len(p.spec.Targets) {
 		return
 	}
+	// 出口组拨的是本机的 gost 端口：拨不上是前面的 gost 没起来 / 在重载，每台出口都一样，不是哪台出口的错。
+	if err != nil && p.exitGroupLocked() {
+		if shouldLogAgentReport(fmt.Sprintf("failover-exit-local-dial:%d:%d", p.ruleID, p.sourcePort), time.Minute) {
+			logf("failover exit group: local runtime port not reachable (not counted against the exit) rule=%d source=%d index=%d: %v", p.ruleID, p.sourcePort, index, err)
+		}
+		return
+	}
 	now := time.Now()
 	stats := p.statsLocked(index)
 	stats.recordDial(false, 0, now, 0)

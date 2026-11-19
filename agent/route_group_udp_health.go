@@ -95,7 +95,8 @@ func (s *failoverUDPSide) carried(n int, from func(i int) (int, bool)) failoverU
 
 // 这份规格要不要把 UDP 那一侧分开判：只有 TCP+UDP。
 func (p *failoverProxy) udpSeparateLocked() bool {
-	return failoverProtocol(p.spec) == "both"
+	// 出口组不分侧：UDP 装在到出口的那条 TCP 连接里走，出口通不通只有一本账（failover_exit_group.go）。
+	return failoverProtocol(p.spec) == "both" && !p.exitGroupLocked()
 }
 
 // 这条出站此刻 UDP 能不能用：UDP 探测通，而且没被面板按「中转异常」标掉。不分侧的规格就是 healthyLocked。
@@ -230,7 +231,9 @@ func (p *failoverProxy) applyUDPProbeLocked(results []bool, latencies []int, now
 				side.health[i] = true
 				side.recoveredSince[i] = time.Time{}
 				// UDP 那一侧刚恢复：UDP 会话也慢慢加量（A11），不动 TCP 那一侧的份额。
-				side.markSlowStart(i, now)
+				if !p.spec.NoSlowStart {
+					side.markSlowStart(i, now)
+				}
 				logf("failover target udp recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
 			}
 			continue

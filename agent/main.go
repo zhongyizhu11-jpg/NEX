@@ -633,6 +633,13 @@ type failoverSpec struct {
 	// GOST 链路的负载均衡（2.2.262 起，面板 2.3.539）：这个代理替隧道入口在几台出口之间挑，每个目标是本机一个只走
 	// 某台出口的 gost 端口。带着它就把每台出口的真实状态报给面板（balance_report.go），HostIDs 和 Targets 一一对应。
 	BalanceReport *failoverBalanceReport `json:"balanceReport,omitempty"`
+	// 探测节奏（2.2.264 起，出口组的规格带）：多久探一轮、一次探测等多久。不带（0）就是老规矩 ——
+	// 间隔 = 「异常多久切」的一半（1–5 秒）、超时 2 秒。带了以后每轮从上一轮**开始**算间隔（固定节拍），
+	// 探得慢也不会把下一轮往后推：出口组要在「几次不通 × 间隔」内把坏出口摘掉（failover_exit_group.go）。
+	ProbeIntervalSeconds int `json:"probeIntervalSeconds,omitempty"`
+	ProbeTimeoutMs       int `json:"probeTimeoutMs,omitempty"`
+	// 刚恢复的目标不做慢启动（面板「检测与切换」里关了「刚恢复的慢慢加量」）。不带 = 照常慢启动。
+	NoSlowStart bool `json:"noSlowStart,omitempty"`
 }
 
 type failoverBalanceReport struct {
