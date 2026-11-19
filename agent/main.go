@@ -551,6 +551,9 @@ type failoverTarget struct {
 	// 出口组里这台出口在中转后面（多跳链路，2.2.264）：入口机连不到它，没法直接探。不探（每轮算通），通不通看
 	// 真实连接「没回就被关」后的经出口复核和面板提示（failover_exit_group.go）。行为参数，进签名。
 	ViaRelay bool `json:"viaRelay,omitempty"`
+	// 出口组里这台出口的隧道监听是不加密的 tcp / mtcp（2.2.264 起）：直接探出口机时连上以后再发一个坏请求，
+	// 等 gost 当场断开 —— 进程卡死、只有内核还在接连接的出口这样才判得出来（failoverProbeRelay）。行为参数，进签名。
+	ProbeRelay bool `json:"probeRelay,omitempty"`
 	// 面板随规格附带的运行时提示（failover_hints.go）。嵌入进来：JSON 里还是和上面这些字段平级，
 	// 代码里照样写 target.Down、target.LoadPct。
 	failoverTargetHints

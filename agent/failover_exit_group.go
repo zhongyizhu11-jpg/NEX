@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -61,8 +62,11 @@ UDP：一个访客一个会话，建会话时挑出口；出口判坏的那一�
 连接失败时才发现，这一点没有变差；想在多跳上也做到「几秒内本地摘掉」，得让出口机上有一个可以穿过隧道去问的
 探测端口，现在没有。
 
-判不出来的情况：出口进程卡死、内核还在接连接，而链路是不加密的 tcp / mtcp（握手不需要对端进程参与）——
-本机端口和出口机都「连得上」，连接挂着不回。tls / wss 的握手要对端进程回话，3 秒握手超时后就是第 2 条。
+出口进程卡死、内核还在接连接：链路是不加密的 tcp / mtcp 时 TCP 握手不需要对端进程参与，光连一下判不出来。
+这种出口的规格带 ProbeRelay，第 1 条的探测连上以后再发 8 个 0 字节、等 gost 当场断开（failoverProbeRelay）：
+活着的 gost 读到版本不对（relay 头第一个字节、mux 帧头第一个字节都必须是 1）立刻关，卡死的不读也不关 ——
+探测超时算不通，和黑洞一样摘掉。不碰目标、不建 relay 会话；gost 那边每次记一条错误日志，和以前光连一下就断
+（它记 EOF）一样多。tls / wss 的握手本来就要对端进程回话，真实连接 3 秒握手超时后就是第 2 条。
 */
 
 const (
@@ -198,6 +202,8 @@ func probeExitGroupTargets(protocol string, targets []failoverTarget, timeout ti
 				// 在中转后面的出口探不到：算通。延迟记 1 毫秒占位 —— 「延迟优先 / 自动」比的是它加上面板给的
 				// 出口→目标延迟；入口→中转→出口那一段几台出口基本共用，不知道也不影响谁排前面。
 				latency, ok = 1, true
+			} else if target.ProbeRelay {
+				latency, ok = failoverProbeRelay(target, timeout)
 			} else {
 				latency, ok = failoverProbeTargetWithin(protocol, target, timeout)
 			}
@@ -210,6 +216,44 @@ func probeExitGroupTargets(protocol string, targets []failoverTarget, timeout ti
 	}
 	wg.Wait()
 	return latencies, results
+}
+
+// exitRelayProbeRequest：发给出口机隧道监听的坏请求。relay 头（VER CMD FLEN）和 mux 帧头（VER CMD LEN SID）
+// 的第一个字节都是版本号、都必须是 1；8 个字节够两种头读满，gost 读完就断开，不会再等。
+var exitRelayProbeRequest = make([]byte, 8)
+
+/*
+failoverProbeRelay 直接探一台 tcp / mtcp 出口：连上出口机的隧道监听（延迟记这一段，连接本身也限 timeout），
+发 exitRelayProbeRequest，再等一个 timeout 看对端断开（或者回了什么）—— 都说明 gost 进程在读。连不上、超时都算不通。
+*/
+var failoverProbeRelay = func(target failoverTarget, timeout time.Duration) (int, bool) {
+	host, port := target.probeEndpoint()
+	started := time.Now()
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
+	if err != nil {
+		return 0, false
+	}
+	defer conn.Close()
+	latency := int(time.Since(started) / time.Millisecond)
+	if latency < 1 {
+		latency = 1
+	}
+	// 回话要再一个往返：从连上起再等一个 timeout（远的出口不会因为多了这一个往返被误判）。
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if _, err := conn.Write(exitRelayProbeRequest); err != nil {
+		return latency, false
+	}
+	buf := make([]byte, 16)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			return latency, true
+		}
+		if err != nil {
+			// 对端关了（EOF / RST）就是活着；超时是卡死。
+			return latency, !isNetTimeout(err)
+		}
+	}
 }
 
 /*

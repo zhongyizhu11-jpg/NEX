@@ -29,6 +29,11 @@ export type GostBalanceExit = {
   listenPort: number;
   /** 多跳链路：出口在中转后面，入口机连不到它，不直接探（Agent 靠真实连接被关后的经出口复核和面板提示） */
   viaRelay?: boolean;
+  /**
+   * 隧道是不加密的 tcp / mtcp：直接探出口机时连上以后再发一个坏请求、等 gost 当场断开（agent 的 failoverProbeRelay）。
+   * 这两种的 TCP 握手不需要对端进程参与，出口进程卡死时光连一下判不出来。
+   */
+  probeRelay?: boolean;
 };
 
 export type GostBalanceSpecInput = {
@@ -116,7 +121,7 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         // 直接探出口机的隧道监听（入口到出口这一段）；出口到目标那一段由出口机探、经面板给提示
         probeIp: exit.dialHost,
         probePort: exit.listenPort,
-        ...(exit.viaRelay ? { viaRelay: true } : {}),
+        ...(exit.viaRelay ? { viaRelay: true } : exit.probeRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
         ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
         ...(extra != null && extra > 0 ? { extraLatencyMs: Math.round(extra) } : {}),

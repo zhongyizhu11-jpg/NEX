@@ -180,6 +180,9 @@ func failoverSignature(spec failoverSpec) string {
 		if target.ViaRelay {
 			weight += "r"
 		}
+		if target.ProbeRelay {
+			weight += "p"
+		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
 	return strings.Join(parts, "|")

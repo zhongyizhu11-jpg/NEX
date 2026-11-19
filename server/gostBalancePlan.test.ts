@@ -114,6 +114,12 @@ test("规格：延迟优先原样下发、带「一样快」的门槛；多跳�
   assert.equal(buildGostBalanceProxySpec({ ...base, strategy: "latency", detect: { ...DEFAULT_BALANCE_DETECT, latencyMarginMs: 20 } }).latencyMarginMs, 20);
   const relayed = buildGostBalanceProxySpec({ ...base, exits: exits.map((exit) => ({ ...exit, viaRelay: true })) });
   assert.ok(relayed.targets.every((target) => target.viaRelay === true));
+  // tcp / mtcp 隧道：直接探出口机时等 gost 回话；在中转后面的探不到，不带
+  const plain = buildGostBalanceProxySpec({ ...base, exits: exits.map((exit) => ({ ...exit, probeRelay: true })) });
+  assert.ok(plain.targets.every((target) => target.probeRelay === true));
+  const plainRelayed = buildGostBalanceProxySpec({ ...base, exits: exits.map((exit) => ({ ...exit, probeRelay: true, viaRelay: true })) });
+  assert.ok(plainRelayed.targets.every((target) => !("probeRelay" in target)));
+  assert.ok(buildGostBalanceProxySpec(base).targets.every((target) => !("probeRelay" in target)));
   const many = Array.from({ length: 25 }, (_, index) => ({ hostId: 100 + index, localPort: 48000 + index, dialHost: `198.51.100.${index + 1}`, listenPort: 23000 + index }));
   const capped = buildGostBalanceProxySpec({ ...base, exits: many });
   assert.equal(capped.targets.length, GOST_BALANCE_MAX_EXITS);

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -502,5 +503,73 @@ func TestExitGroupSpecJSONFields(t *testing.T) {
 	}
 	if !spec.ProxyProtocolReceive || !spec.ProxyProtocolStrip {
 		t.Fatal("PROXY 头的两个开关没读到")
+	}
+}
+
+// 不加密的 tcp / mtcp 出口：进程卡死时内核照样接连接，光连一下判不出来。ProbeRelay 的探测发一个坏请求、等 gost 断开：
+// 活着的（读完就关）算通，卡死的（不读、不关；或者连 accept 都没有，连接停在内核的队列里）算不通。
+func TestExitGroupRelayProbeCatchesFrozenExit(t *testing.T) {
+	listen := func() net.Listener {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() })
+		return l
+	}
+	alive := listen()
+	go func() {
+		for {
+			conn, err := alive.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				// 像 gost 的 relay：读满 4 字节的头，版本不对就断开
+				buf := make([]byte, 4)
+				_, _ = io.ReadFull(conn, buf)
+				conn.Close()
+			}()
+		}
+	}()
+	// 卡死：监听着，但从不 accept —— 连接由内核完成握手、停在队列里
+	frozen := listen()
+	// 卡在读之前：accept 了但不读
+	stuck := listen()
+	held := make(chan net.Conn, 8)
+	go func() {
+		for {
+			conn, err := stuck.Accept()
+			if err != nil {
+				return
+			}
+			held <- conn
+		}
+	}()
+	t.Cleanup(func() {
+		for {
+			select {
+			case conn := <-held:
+				conn.Close()
+			default:
+				return
+			}
+		}
+	})
+	port := func(l net.Listener) int { return l.Addr().(*net.TCPAddr).Port }
+	targets := []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: 47100, ProbeIP: "127.0.0.1", ProbePort: port(alive), ProbeRelay: true},
+		{TargetIP: "127.0.0.1", TargetPort: 47101, ProbeIP: "127.0.0.1", ProbePort: port(frozen), ProbeRelay: true},
+		{TargetIP: "127.0.0.1", TargetPort: 47102, ProbeIP: "127.0.0.1", ProbePort: port(stuck), ProbeRelay: true},
+		// 不带 ProbeRelay 的照旧只看连不连得上：卡死的也算通（tls / wss 靠真实连接的握手超时）
+		{TargetIP: "127.0.0.1", TargetPort: 47103, ProbeIP: "127.0.0.1", ProbePort: port(frozen)},
+	}
+	started := time.Now()
+	_, results := probeExitGroupTargets("tcp", targets, 300*time.Millisecond, nil)
+	if !results[0] || results[1] || results[2] || !results[3] {
+		t.Fatalf("活着的通、卡死的不通、不带 ProbeRelay 的照旧：%v", results)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("一轮探测要在两个超时以内结束：%s", elapsed)
 	}
 }

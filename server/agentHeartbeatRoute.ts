@@ -3170,6 +3170,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const balanceHops = tunnelHopsByTunnelId.get(Number(tunnel.id)) || [];
       const viaRelay = balanceHops.length >= 3;
       const lastHopHost = viaRelay ? await getHopDialAddress(balanceHops[balanceHops.length - 1], tunnel) : "";
+      // 不加密的 tcp / mtcp：入口直接探出口机时还要等 gost 回话（进程卡死、只有内核在接连接也判得出来）
+      const transport = gostTunnelTransportType(tunnel.mode);
+      const probeRelay = transport === "tcp" || transport === "mtcp";
       const exits: GostBalancePlan["exits"] = [];
       for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel).slice(0, GOST_BALANCE_MAX_EXITS)) {
         const dialHost = endpoint.primary
@@ -3183,7 +3186,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           dialHost: String(dialHost),
           listenPort: Number(endpoint.listenPort),
           viaRelay,
-          node: gostTunnelNode(`exit-${rule.id}-${exitKey}`, endpointHostPort(dialHost, endpoint.listenPort), gostTunnelTransportType(tunnel.mode), tunnel, protocolPlan.chainConnector),
+          probeRelay,
+          node: gostTunnelNode(`exit-${rule.id}-${exitKey}`, endpointHostPort(dialHost, endpoint.listenPort), transport, tunnel, protocolPlan.chainConnector),
         });
       }
       if (exits.length < 2 || ports.length < exits.length || new Set(exits.map((exit) => exit.hostId)).size !== exits.length) continue;
