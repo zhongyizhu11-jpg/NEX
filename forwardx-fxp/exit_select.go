@@ -86,12 +86,24 @@ healthLocked：每台出口此刻的健康（lbcore.Health，按端点下标）�
 */
 func (s *exitEndpointSelector) healthLocked(now time.Time, udp bool, fallback bool) []lbcore.Health {
 	s.ensureBuffersLocked()
+	/*
+		UDP 会话：从没回过 UDP 探活包的出口（版本过旧 / UDP 一直不通）算软信号 —— 有验证过的就先用验证过的，
+		摘除有上限，不会因此没出口可用。只在真有一台验证过、UDP 通的出口时才这么算（F5）：全都没验证过时（这一版刚上线、
+		对端都还没升级）个个都是软信号，摘除上限一卡，一半出口白白分不到 UDP 新会话，又没有更好的可选。
+	*/
+	preferVerified := false
+	if udp {
+		for _, state := range s.states {
+			if state.udpVerifiedUp() {
+				preferVerified = true
+				break
+			}
+		}
+	}
 	for i, state := range s.states {
 		ok, cooling := state.reachable(udp, now)
 		health := lbcore.Health{Dead: !ok, Cooling: cooling}
-		// UDP 会话：从没回过 UDP 探活包的出口（版本过旧 / UDP 一直不通）算软信号 —— 有验证过的就先用验证过的，
-		// 摘除有上限，不会因此没出口可用。
-		if udp && ok && state.udpUnverifiedNow() {
+		if preferVerified && ok && state.udpUnverifiedNow() {
 			health.Soft = true
 		}
 		if ok && s.endpointReportsTarget(i) {

@@ -859,6 +859,13 @@ func (s *fxpEndpointState) udpSessionClosed() {
 	s.mu.Unlock()
 }
 
+// udpVerifiedUp：对端回过 UDP 探活包，而且 UDP 那一侧此刻是通的。
+func (s *fxpEndpointState) udpVerifiedUp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.udpPongSeen && !s.udp.down
+}
+
 // udpUnverifiedNow：有 UDP 规则在用这个端点，可它从没回过 UDP 探活包（问过至少两轮）。
 func (s *fxpEndpointState) udpUnverifiedNow() bool {
 	s.mu.Lock()
