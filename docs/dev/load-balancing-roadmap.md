@@ -201,9 +201,9 @@
 
 | 范围 | 落点 |
 |---|---|
-| P15 多实例：只有一个实例跑后台任务 | `server/panelLease.ts`：表 `panel_leases`（name 主键、holder、expiresAt、updatedAt，毫秒）。带条件的 UPDATE（自己拿着或已过期）+ 主键冲突即放弃的 INSERT，三种库上原子；TTL 30 秒、每 10 秒续，持有者只信到「续约开始 + TTL − 5 秒」，续不上先自己停手；正常退出放掉；接手最迟 TTL + 一个续约间隔（40 秒）。每个实例另续一行 `instance:<id>` 作登记。哪些任务只由持有者跑的表在文件开头 |
+| P15 多实例：只有一个实例跑后台任务 | `server/panelLease.ts`：表 `panel_leases`（name 上一个唯一索引、holder、expiresAt、updatedAt，毫秒，按数据库的时钟）。带条件的 UPDATE（自己拿着或已过期，过期按库的时钟判断）+ 唯一索引冲突即放弃的 INSERT，三种库上原子；TTL 30 秒、约每 10 秒续（慢的续约之后按有效期提前续，有效期到点马上报丢失），持有者只信到「续约开始 + TTL − 5 秒」，续不上先自己停手；正常退出放掉；接手最迟 TTL + 一个续约间隔（40 秒）。每个实例另续一行 `instance:<id>` 作登记。哪些任务只由持有者跑的表在文件开头 |
 | 定时任务 | `scheduler.ts` 里写共享状态的任务都带 `shouldRun: leaseHolderOnly`（`scheduledTask.ts` 原有的放行条件）；状态页采样、异地备份、解锁排期、用户流量日历史、流量异常检测、Telegram 轮询同样；自测超时清扫（逐行条件更新）、更新检查、连接池、SQLite optimize 每个实例照跑 |
-| 非持有者上的评估 | `server/panelWorkRequests.ts`：表 `panel_work_requests`，非持有者写「哪个组、带什么选项」（同一件事只留一行），持有者每 2 秒按 requestedAt 条件删、取走执行；`forwardGroups/evaluateDriver.ts` 的 `runForwardGroupFailoverByIds` 在非持有者上直接转过去，发布队列跑之前丢了租约的同样 |
+| 非持有者上的评估 | `server/panelWorkRequests.ts`：表 `panel_work_requests`，非持有者写「哪个组、带什么选项」、收到的外部观察结果（同一件事只留一行，时刻按库的时钟），持有者每 2 秒先认领、处理成功后按 requestedAt 条件删，失败按 2 秒起翻倍（最多 1 分钟）退避重试，放了 10 分钟没跑成的丢掉；`forwardGroups/evaluateDriver.ts` 的 `runForwardGroupFailoverByIds` 在非持有者上直接转过去，发布队列跑之前丢了租约的同样 |
 | 在线状态跨实例 | 非持有者不把主机写成离线、不发上下线通知（`hostStatusNotifier.ts`）；有别的实例时 `server/agentPresenceElsewhere.ts` 每 10 秒读 `hosts.lastHeartbeat`（连着 Agent 的实例约每 90 秒写一次），`agentFastLiveness.ts` 只认比本进程看到的更晚的时刻：沉默期限按库里的时刻放宽到 200 秒，判了离线后库里出现更晚的时刻就当它回来了。Agent 连在本实例上时仍是 90 秒 |
 | 落地池直连域名 | 只由持有者写（`landingPools.ts` 的 `refreshLandingDns`），非持有者保存池时不写，持有者一分钟一轮补上 |
 | 接手 | 中途拿到租约时给转发组一段就绪宽限（上一任内存里的存活状态带不过来）并补一轮巡检 |
