@@ -9,6 +9,7 @@ import {
   balanceSwitchWithinSeconds,
   describeBalanceDetectShort,
   describeBalanceEffect,
+  nginxBalanceBasicSupportNote,
   normalizeBalanceDetect,
   normalizeBalanceStrategy,
   serializeBalanceDetect,
@@ -65,5 +66,10 @@ test("实际效果那句话跟着设置变", () => {
   assert.match(text, /抖动超过 30ms 持续 30 秒，就把它降到 4 分之 1/);
   const ignore = describeBalanceEffect({ strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, jitterAction: "ignore" } });
   assert.doesNotMatch(ignore, /抖动超过/);
-  assert.match(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT, gost: true }), /GOST 隧道/);
+  // GOST 隧道和 NEX 隧道一样由入口自己探、自己切：不再有「GOST 不能当场换出口」那句
+  assert.doesNotMatch(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT }), /GOST/);
+  // Nginx 隧道不经统一调度：界面上另写一句「基础支持」
+  assert.match(String(nginxBalanceBasicSupportNote("nginx_stream")), /^基础支持：/);
+  assert.equal(nginxBalanceBasicSupportNote("tls"), null);
+  assert.equal(nginxBalanceBasicSupportNote("forwardx"), null);
 });

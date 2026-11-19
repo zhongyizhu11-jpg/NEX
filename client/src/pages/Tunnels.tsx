@@ -175,6 +175,7 @@ import {
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
 import { tunnelExitPinUnsupportedReason } from "@shared/tunnelExitPin";
+import { nginxBalanceBasicSupportNote } from "@shared/loadBalance";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
@@ -5547,7 +5548,10 @@ function TunnelsContent() {
                   ) : null}
                 </div>
               ) : null}
-              {canManagePin && pinUnsupported ? <p className="text-meta text-muted-foreground">{pinUnsupported}</p> : null}
+              {/* Nginx 隧道不经统一调度：一句「基础支持」把差别写清楚（这句里已经说了不能手动指定，下面那句不再重复） */}
+              {nginxBalanceBasicSupportNote(tunnel.mode) ? (
+                <p className="text-meta leading-5 text-muted-foreground" data-balance-basic="">{nginxBalanceBasicSupportNote(tunnel.mode)}</p>
+              ) : canManagePin && pinUnsupported ? <p className="text-meta text-muted-foreground">{pinUnsupported}</p> : null}
               <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
                 {exits.map((exit, index) => {
                   const host = hostLookup.get(exit.hostId);

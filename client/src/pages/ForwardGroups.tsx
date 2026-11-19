@@ -3381,14 +3381,14 @@ function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
 
 /**
  * 「按负载」：NEX 隧道里入口按每台出口的实时流量、连接数、握手延迟和线路带宽挑最闲的；
- * GOST 看不到实时负载，按带宽加权轮流；nginx 用 least_conn。这里把带宽写出来，没填的点名。
+ * GOST 隧道由入口机 Agent 的本机代理挑「挂着的连接数 ÷ 份数」最小的；nginx（基础支持）用 least_conn。这里把带宽写出来，没填的点名。
  */
 function exitLoadHint(members: MemberForm[], hostById: Map<number, any>) {
   const hosts = members
     .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
     .map((member) => hostById.get(Number(member.hostId)))
     .filter(Boolean);
-  const base = "NEX 隧道按每台出口的实时流量、连接数、延迟和线路带宽挑最闲的；刚恢复的出口 1 分钟内慢慢加量。";
+  const base = "NEX 隧道按每台出口的实时流量、连接数、延迟和线路带宽挑最闲的，GOST 隧道按每台挂着的连接数 ÷ 线路带宽挑最闲的；刚恢复的出口 1 分钟内慢慢加量。Nginx 隧道是基础支持：连接数最少的优先。";
   if (hosts.length < 2) return `${base}至少要两台出口。`;
   const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
   const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));

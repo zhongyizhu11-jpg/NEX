@@ -286,10 +286,10 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     和出口组无关）；串联中转一台一跳。有中转的地址解析不出来返回 null（整条链不生成）。suffix 给跳和节点的名字
     加后缀：每台出口各有一条链时名字不能撞。
   */
-  const buildRelayHops = async (r: any, tunnel: any, tunnelHops: any[], suffix: string, routeParts?: string[]) => {
-    const hops: any[] = [];
+  const buildRelayHops = async (r: { id?: number | null }, tunnel: HeartbeatRow, tunnelHops: HeartbeatRow[], suffix: string, routeParts?: string[]) => {
+    const hops: Array<Record<string, unknown>> = [];
     if (isTunnelRelayFailover(tunnel, tunnelHops)) {
-      const relayNodes = await Promise.all(tunnelRelayCandidates(tunnelHops).map(async (hop: any, index: number) => {
+      const relayNodes = await Promise.all(tunnelRelayCandidates(tunnelHops).map(async (hop: HeartbeatRow, index: number) => {
         const hopDialHost = await getHopDialAddress(hop, tunnel);
         if (!hopDialHost || !Number(hop.listenPort)) return null;
         const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
@@ -302,7 +302,7 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
       return hops;
     }
     for (let i = 1; i < tunnelHops.length - 1; i++) {
-      const hop = tunnelHops[i] as any;
+      const hop = tunnelHops[i];
       const hopDialHost = await getHopDialAddress(hop, tunnel);
       if (!hopDialHost || !Number(hop.listenPort)) return null;
       const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
@@ -318,14 +318,14 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
   for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown; protocol?: string | null; tunnelId?: number | null }>) {
     const balance = gostBalancePlans.get(Number(r?.id || 0));
     if (!balance || !runtimeBool(r.isEnabled)) continue;
-    const tunnel = tunnelById.get(Number(r.tunnelId)) as any;
-    const tunnelHops = tunnel ? tunnelHopsByTunnelId.get(Number(tunnel.id)) as any[] | undefined : undefined;
-    const multiHop = Array.isArray(tunnelHops) && tunnelHops.length >= 3;
+    const tunnel = tunnelById.get(Number(r.tunnelId)) as HeartbeatRow | undefined;
+    const tunnelHops = tunnel ? tunnelHopsByTunnelId.get(Number(tunnel.id)) as HeartbeatRow[] | undefined : undefined;
+    const multiHop = !!tunnel && Array.isArray(tunnelHops) && tunnelHops.length >= 3;
     // 并联中转：一台中转拨不通，这条本机连接换下一台中转重拨（出口还是这一台）
-    const relayRetries = multiHop && tunnelRelayUsesParallelRelays(tunnel, tunnelHops) ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0;
+    const relayRetries = multiHop && tunnelRelayUsesParallelRelays(tunnel, tunnelHops) ? tunnelRelayCandidates(tunnelHops!).length - 1 : 0;
     for (const exit of balance.exits) {
       const chainName = `chain-tunnel-${r.id}-x${exit.hostId}`;
-      const relayHops = multiHop ? await buildRelayHops(r, tunnel, tunnelHops as any[], `-x${exit.hostId}`) : [];
+      const relayHops = multiHop ? await buildRelayHops(r, tunnel!, tunnelHops!, `-x${exit.hostId}`) : [];
       // 中转解析不出来：这台出口的本机端口照样听着，只是链是空的会直连 —— 不能留。不生成服务，代理拨不上本机端口，
       // 不算出口的账，流量走不通（和不走代理时整条链不生成一样）。
       if (!relayHops) continue;

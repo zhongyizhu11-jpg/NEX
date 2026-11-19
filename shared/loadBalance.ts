@@ -29,7 +29,7 @@ export type BalanceStrategy = (typeof BALANCE_STRATEGIES)[number];
 
 /*
   2.3.539（用户：「自动包含综合，其他方式单选，各自独立」）：最上面一个「自动」（综合看延迟、抖动、负载和带宽），
-  其余各自独立，放在「其他方式」里单选。每种方式在 NEX 隧道（入口 FXP）和 GOST 链路（入口本机代理）上都是真的那样分，
+  其余各自独立，放在「其他方式」里单选。八种方式在 NEX 隧道（入口 FXP）和 GOST 链路（入口机 Agent 的本机代理）上都是真的那样分，
   坏了的出口所有方式都会自动避开。
 */
 export const BALANCE_COMMON_STRATEGIES: readonly BalanceStrategy[] = ["auto"];
@@ -217,7 +217,8 @@ function ratioText(weights: readonly number[]) {
 
 /**
  * 「实际效果」那一句：改了数字就跟着变。
- * dns：转发组 / 入口组；gost：GOST 隧道（不能当场换出口，约 5～10 秒自动摘掉）。
+ * dns：转发组 / 入口组（靠改解析）。NEX 隧道（入口的 FXP）和 GOST 隧道（入口机 Agent 的本机代理）都是入口自己探、
+ * 自己切，这句话对两种都成立；Nginx 隧道不经统一调度，界面上另写一句「基础支持」（nginxBalanceBasicSupportNote）。
  */
 export function describeBalanceEffect(input: {
   strategy: unknown;
@@ -225,13 +226,11 @@ export function describeBalanceEffect(input: {
   weights?: readonly number[];
   memberNames?: readonly string[];
   dns?: boolean;
-  gost?: boolean;
 }) {
   const { detect } = input;
   const strategy = normalizeBalanceStrategy(input.strategy);
   const parts: string[] = [];
   parts.push(`每 ${detect.intervalSeconds} 秒探一次，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内${input.dns ? "改解析" : "切走"}`);
-  if (input.gost && !input.dns) parts.push("GOST 隧道不能在一条连接里当场换出口，连不上目标的出口约 5～10 秒内自动摘掉");
   if (strategy === "weighted") {
     const ratio = ratioText(input.weights || []);
     const names = (input.memberNames || []).filter(Boolean);
@@ -270,6 +269,16 @@ export const UNIFIED_BALANCE_AGENT_VERSION = "2.2.264";
 /** 这台主机的 Agent 能不能执行统一调度（版本不低于 UNIFIED_BALANCE_AGENT_VERSION；没报版本的算不能）。 */
 export function agentSupportsUnifiedBalance(agentVersion: unknown): boolean {
   return isAgentVersionAtLeast(String(agentVersion ?? ""), UNIFIED_BALANCE_AGENT_VERSION);
+}
+
+/**
+ * Nginx 隧道的负载均衡是「基础支持」：出口由入口机的 nginx upstream 自己分，不经 Agent 的统一调度。
+ * 链路的负载均衡弹窗里原样写出来（和 NEX / GOST 差在哪、哪些设置对它不起作用）。不是 Nginx 隧道返回 null。
+ */
+export function nginxBalanceBasicSupportNote(mode: unknown): string | null {
+  return String(mode ?? "").trim().toLowerCase() === "nginx_stream"
+    ? "基础支持：Nginx 隧道的出口由入口机的 nginx 自己分，不经统一调度。它只看出口机连不连得上，不看出口到目标通不通；「自动」「延迟优先」在它上面是「连接数最少 + 线路带宽」；检测灵敏度、手动指定出口对它不起作用。"
+    : null;
 }
 
 /** 本机代理最多替几台出口挑（Agent 的 failoverMaxTargets）；超出的出口不下发（按顺序取前这么多台）。 */
