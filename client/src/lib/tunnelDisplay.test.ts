@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getTunnelExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "./tunnelDisplay";
+import { exitUdpText, getTunnelExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "./tunnelDisplay";
 
 const hosts = [
   { id: 1, name: "广州 01" },
@@ -80,4 +80,12 @@ test("uses the aggregate result when one multi-exit branch fails", () => {
   assert.equal(tunnelTestIndicatesTimeout({ status: "success", details }), false);
   assert.equal(tunnelTestIndicatesTimeout({ status: "failed", details }), true);
   assert.equal(tunnelTestIndicatesTimeout({ details }), false);
+});
+
+test("UDP side of a balanced exit: down / unverified / ok, counted when rules differ, empty without UDP rules", () => {
+  assert.equal(exitUdpText({ udpOk: 0, udpDown: 0, udpUnverified: 0, rules: 2 }), "");
+  assert.equal(exitUdpText({ udpOk: 1, udpDown: 0, udpUnverified: 0, rules: 1 }), "UDP 通");
+  assert.equal(exitUdpText({ udpOk: 0, udpDown: 1, udpUnverified: 0, rules: 1 }), "UDP 不通，UDP 新会话不走它");
+  assert.equal(exitUdpText({ udpOk: 1, udpDown: 1, udpUnverified: 0, rules: 2 }), "1 条规则 UDP 不通，UDP 新会话不走它");
+  assert.equal(exitUdpText({ udpOk: 0, udpDown: 0, udpUnverified: 1, rules: 1 }), "UDP 未验证（跟着 TCP 判断）");
 });

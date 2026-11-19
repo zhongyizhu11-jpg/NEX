@@ -96,3 +96,16 @@ export function tunnelTestIndicatesTimeout(input: {
   if (details.length > 0) return !details.some((detail) => detail.success === true);
   return input.latestLatencyIsTimeout === true;
 }
+
+/**
+ * 一台出口 UDP 那一侧的说法（入口真实上报、规则转 UDP 时才有）：不通 / 没验证过 / 通。没有 UDP 规则返回空串。
+ * 几条规则不一样时写条数。
+ */
+export function exitUdpText(item: { udpOk: number; udpDown: number; udpUnverified: number; rules: number }) {
+  const total = item.udpOk + item.udpDown + item.udpUnverified;
+  if (total === 0) return "";
+  const count = (value: number) => (item.rules > 1 && value < total ? `${value} 条规则 ` : "");
+  if (item.udpDown > 0) return `${count(item.udpDown)}UDP 不通，UDP 新会话不走它`;
+  if (item.udpUnverified > 0) return `${count(item.udpUnverified)}UDP 未验证（跟着 TCP 判断）`;
+  return "UDP 通";
+}
