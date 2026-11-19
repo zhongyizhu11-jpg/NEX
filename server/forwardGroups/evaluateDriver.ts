@@ -244,8 +244,8 @@ export async function scheduleForwardGroupsForHostHealthChange(hostId: number) {
   按子规则的探测和国内检测、外部观察判。后半段（故障 / 恢复计时、写回成员行）在 evaluateMemberHealth。
 */
 async function memberHealthVerdict(
-  member: any,
-  group: any,
+  member: LooseRow,
+  group: LooseRow,
   input: {
     db: Awaited<ReturnType<typeof getDb>>;
     now: Date;
@@ -587,7 +587,7 @@ async function runForwardGroupFailoverForGroups(
 }
 
 /** 一个组一轮（runForwardGroupFailoverForGroups 的循环体）：按组模式走入口组 / 出口组 / 主备组。 */
-async function runOneForwardGroupFailover(group: any, options: ForwardGroupFailoverOptions, ddnsSettings: any) {
+async function runOneForwardGroupFailover(group: LooseRow, options: ForwardGroupFailoverOptions, ddnsSettings: DdnsSettings) {
   const db = await getDb();
   if (!dbBool(group?.isEnabled)) return;
   const mode = forwardGroupModeOf(group);
@@ -777,10 +777,10 @@ async function runOneForwardGroupFailover(group: any, options: ForwardGroupFailo
 
 /** 还没有规则在用的主备组：挑第一个能用的成员发布（或者只写建议入口），不评估子规则的探测。 */
 async function syncFailoverGroupWithoutRules(
-  group: any,
+  group: LooseRow,
   options: ForwardGroupFailoverOptions,
-  ddnsSettings: any,
-  members: any[],
+  ddnsSettings: DdnsSettings,
+  members: LooseRow[],
   recordType: ForwardGroupRecordType,
   lineCtx: ReturnType<typeof prepareForwardGroupDdnsLines>,
   chinaHealthExpiryAt: number | null,

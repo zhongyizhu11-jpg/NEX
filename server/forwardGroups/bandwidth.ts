@@ -14,14 +14,14 @@ export async function memberThroughputMbps(members: AggregationMemberRow[]) {
     .filter((hostId) => Number.isInteger(hostId) && hostId > 0)));
   if (hostIds.length === 0) return new Map<number, number>();
   const snapshots = await getLatestHostMetricSnapshots(hostIds).catch(() => []);
-  return hostThroughputMbpsFromSnapshots(snapshots as any[]);
+  return hostThroughputMbpsFromSnapshots(snapshots as Parameters<typeof hostThroughputMbpsFromSnapshots>[0]);
 }
 
 /** 成员上没填「上行 Mbps」时，用主机上的「线路带宽」（一台机器只填一处）。 */
 export async function withHostLineBandwidth<T extends { hostId: number; bandwidthMbps?: number | null }>(members: T[]): Promise<T[]> {
   const missing = Array.from(new Set(members.filter((member) => !(Number(member.bandwidthMbps) > 0) && member.hostId > 0).map((member) => member.hostId)));
   if (missing.length === 0) return members;
-  const rows = await getHostsByIds(missing).catch(() => []) as any[];
+  const rows = await getHostsByIds(missing).catch(() => []) as Array<{ id: unknown; lineBandwidthMbps?: unknown }>;
   const lineById = new Map(rows.map((row) => [Number(row.id), Math.max(0, Number(row.lineBandwidthMbps) || 0)]));
   return members.map((member) => (Number(member.bandwidthMbps) > 0 || !lineById.get(member.hostId)
     ? member
