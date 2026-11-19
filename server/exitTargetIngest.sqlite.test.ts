@@ -66,7 +66,7 @@ test("出口上报后什么时候推入口：冷启动第一次就是连不上�
     // 链路 1：GOST（tls），延迟优先，出口 2（主）、3、4。规则 501、502 走它。
     await exec(`INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", secret, "loadBalanceEnabled", "loadBalanceStrategy", "isEnabled", "isRunning") VALUES (1, 'gost', 1, 2, 'tls', 40001, 1, 's', 1, 'latency', 1, 1)`);
     await exec(`INSERT INTO tunnel_exit_nodes ("tunnelId", seq, "hostId", "listenPort", "isEnabled") VALUES (1, 1, 3, 40002, 1), (1, 2, 4, 40003, 1)`);
-    for (const id of [501, 502]) {
+    for (const id of [501, 502, 503]) {
       await exec(`INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "tunnelId", "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning") VALUES (?, 1, 'r', 'gost', 'tcp', 1, ?, '203.0.113.9', 443, 1, 1, 1)`, [id, 30000 + id]);
     }
     const report = (hostId: number, ruleId: number, down: boolean, medianMs = 20) => health.ingestExitTargetReports({
@@ -117,6 +117,33 @@ test("出口上报后什么时候推入口：冷启动第一次就是连不上�
     assert.ok(pushCount() - beforeFlap <= 4, `30 秒内的反复翻转要合并，实际推了 ${pushCount() - beforeFlap} 次`);
     harness.advance(60_000);
     assert.ok(harness.pushes[harness.pushes.length - 1].at - firstFlapAt <= 40_000, "最后的状态（恢复）在翻转停下来约 30 秒内推到");
+
+    // --- 旧的「连不上」（实验室，Agent 2.2.264）：三台一起断、Agent 都退避到 60 秒一次；恢复后先探到的那台一报
+    // 「通了」，另外两台手里还是故障期间那份「连不上」—— 以前当场把它们摘掉、推入口。规则 503。
+    const reportAged = (hostId: number, down: boolean, ageMs: number, intervalMs: number) => health.ingestExitTargetReports({
+      hostId,
+      hostName: `H${hostId}`,
+      nowMs: harness.now(),
+      results: [{ ruleId: 503, down, medianMs: down ? null : 20, latencyMs: down ? null : 20, jitterMs: 1, lossPct: down ? 100 : 0, samples: 30, ageMs, intervalMs }],
+    });
+    for (const hostId of [2, 3, 4]) await reportAged(hostId, false, 0, 2000);
+    harness.advance(5000);
+    for (const hostId of [2, 3, 4]) await reportAged(hostId, true, 0, 4000);
+    harness.advance(60_000);
+    for (const hostId of [2, 3, 4]) await reportAged(hostId, true, 20_000, 60_000);
+    harness.advance(5000);
+    const beforeRecover = pushCount();
+    await reportAged(2, false, 0, 2000);
+    harness.advance(1000);
+    await reportAged(3, true, 40_000, 60_000);
+    harness.advance(5000);
+    assert.equal(health.exitTargetExcludedHostIds(503, [2, 3, 4], harness.now()).size, 0, "3、4 的「连不上」是故障期间探的：当不知道，不摘");
+    assert.equal(pushCount(), beforeRecover, "摘掉的出口没变：不推");
+    // 出口 4 在「都连不上」结束之后又探了一次，还是连不上：这份是新的，摘它、马上推
+    harness.advance(10_000);
+    await reportAged(4, true, 1000, 60_000);
+    assert.deepEqual([...health.exitTargetExcludedHostIds(503, [2, 3, 4], harness.now())], [4]);
+    assert.equal(pushCount(), beforeRecover + 1, "新探出来的连不上：马上推");
 
     // --- C3：半小时没再报的清掉
     assert.ok(health.exitTargetMemorySizeForTest().states >= 6);

@@ -157,7 +157,7 @@ import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrate
 import { agentSupportsUnifiedBalance, balanceDetectForRuntime, exitGroupCapacities, exitGroupWeights, FXP_BALANCE_REPORT_VERSION, GOST_BALANCE_MAX_EXITS, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { planGostBalanceRules, type GostBalanceRulePlan } from "./gostBalancePlan";
 import { isAgentVersionAtLeast } from "@shared/version";
-import { exitTargetExcludedHostIds, exitTargetProbeSpec, exitTargetStatesForRule, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
+import { exitTargetExcludedHostIds, exitTargetProbeSpec, exitTargetUsableStatesForRule, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
 import {
   getMimicLifecycleRevisionSignature,
   latestConfigRevision,
@@ -3171,7 +3171,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       transportOf: (tunnel) => gostTunnelTransportType((tunnel as { mode?: string | null }).mode),
       buildNode: (name, addr, transport, tunnel, connector) => gostTunnelNode(name, addr, transport as ReturnType<typeof gostTunnelTransportType>, tunnel, connector as never),
       endpointAddr: (hostValue, port) => endpointHostPort(hostValue, port),
-      exitTargetStates: (ruleId) => exitTargetStatesForRule(ruleId),
+      // 旧的「连不上」（全局故障刚过、Agent 还在退避里没再探）当不知道，见 exitTargetDownStale
+      exitTargetStates: (ruleId) => exitTargetUsableStatesForRule(ruleId),
       exitTargetExcludedHostIds: (ruleId, hostIds) => exitTargetExcludedHostIds(ruleId, hostIds),
       // 份数和 FXP 用的同一个来源：按权重先看手填的份数，再看线路带宽；按访客固定按线路带宽加权（FXP 那边也是）。
       weightsFor: async (strategy, hostIds, tunnel) => (strategy === "ip_hash"

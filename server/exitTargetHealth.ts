@@ -27,6 +27,10 @@ import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from ".
 */
 
 export const EXIT_TARGET_STALE_MS = 90_000;
+/** 老 Agent（不报 intervalMs）连不上以后最久多久探一次：最长退避 60 秒 + 10% 抖动。 */
+export const EXIT_TARGET_LEGACY_MAX_INTERVAL_MS = 66_000;
+/** 「连不上」多旧算旧：超过「两倍探测间隔 + 这么多」。要盖住 Agent 30 秒一次的全量（不翻转时只有它带新的 ageMs）。 */
+export const EXIT_TARGET_PROBE_SLACK_MS = 40_000;
 const UNSTABLE_LOSS_PCT = 10;
 
 export type ExitTargetReport = {
@@ -41,6 +45,12 @@ export type ExitTargetReport = {
   minMs?: number | null;
   source?: string | null;
   conns?: number | null;
+  /**
+   * 2.2.264 之后的 Agent 起：这条结论是多久前探出来的（毫秒）、现在多久探一次（含连不上以后的退避）。面板拿它判断
+   * 「连不上」是不是已经旧了（exitTargetDownStale）。老 Agent 不报。
+   */
+  ageMs?: number | null;
+  intervalMs?: number | null;
 };
 
 export type ExitTargetState = {
@@ -68,6 +78,14 @@ export type ExitTargetState = {
    * 不带这个字段（undefined）= 调用方没记持续时间，只按这一次的数判断。
    */
   jitterSince?: number | null;
+  /**
+   * 现在这条结论（通 / 不通）最晚是什么时候探出来的（面板的时刻）。Agent 报了 ageMs 就是「收到的时刻 − ageMs」；
+   * 老 Agent：翻转那一份是刚探的，全量那几份只知道「最多一个最长退避之前探过」（EXIT_TARGET_LEGACY_MAX_INTERVAL_MS）。
+   * 不带（测试手搭的）当成 at。
+   */
+  probedAt?: number;
+  /** Agent 现在多久探一次（含退避，毫秒）；null / 不带 = 老 Agent，不知道 */
+  probeIntervalMs?: number | null;
 };
 
 /*
@@ -264,6 +282,7 @@ function finiteOrNull(value: unknown) {
 /** 只给测试用 */
 export function resetExitTargetStates() {
   statesByRule.clear();
+  allDownByRule.clear();
   tunnelMetaById.clear();
   excludedMemoByRule.clear();
   lastFlipAt.clear();
@@ -427,6 +446,12 @@ export async function ingestExitTargetReports(input: {
       source: report.source === "traffic" ? "traffic" : report.source === "probe" ? "probe" : null,
       conns: finiteOrNull(report.conns),
     };
+    const ageMs = finiteOrNull(report.ageMs);
+    const intervalMs = finiteOrNull(report.intervalMs);
+    next.probeIntervalMs = intervalMs != null && intervalMs > 0 ? intervalMs : null;
+    if (ageMs != null) next.probedAt = nowMs - Math.min(ageMs, EXIT_TARGET_FORGET_MS);
+    else if (!previous || previous.down !== next.down) next.probedAt = previous ? nowMs : nowMs - EXIT_TARGET_LEGACY_MAX_INTERVAL_MS;
+    else next.probedAt = Math.max(previous.probedAt ?? previous.at, nowMs - EXIT_TARGET_LEGACY_MAX_INTERVAL_MS);
     const baseline = exitTargetBaseline(Number(rule.id), hostId);
     next.jitterSince = exitTargetJittery(next, detect, baseline) ? (previous?.jitterSince ?? nowMs) : null;
     next.unstable = exitTargetUnstable(next, detect, baseline);
@@ -444,6 +469,8 @@ export async function ingestExitTargetReports(input: {
     if (String(tunnel.mode || "").toLowerCase() === "forwardx") continue;
     const ruleId = Number(rule.id);
     const exitIds = Array.from(exitHostsByTunnel.get(Number(tunnel.id)) || []).filter((id) => id > 0);
+    // 「每台都连不上」刚结束：记下时刻，在这之前探出来的「连不上」从此算旧的（exitTargetDownStale）
+    noteExitTargetAllDown(ruleId, exitIds, nowMs);
     /*
       要不要让入口重新拿配置，看「下发出去的东西变没变」，不看「这台出口翻没翻」（C2 / C3）：
         · 摘掉的出口变了（exitTargetExcludedHostIds 的结果）。每台都连不上时一台都不摘，这时候各台再怎么
@@ -615,6 +642,7 @@ export function pruneExitTargetMemory(nowMs = Date.now(), force = false) {
   for (const [ruleId, memo] of excludedMemoByRule) if (gone(memo.at)) excludedMemoByRule.delete(ruleId);
   for (const [key, at] of lastFlipAt) if (gone(at)) lastFlipAt.delete(key);
   for (const [key, at] of baselineSeedTried) if (gone(at)) baselineSeedTried.delete(key);
+  for (const [ruleId, memo] of allDownByRule) if (gone(memo.at)) allDownByRule.delete(ruleId);
   flipPushesInstance?.prune(EXIT_TARGET_FORGET_MS);
 }
 
@@ -967,7 +995,7 @@ export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.no
   if (live && live.tunnelId === Number(tunnelId)) return activeExitFromLive(live);
   const meta = tunnelMetaById.get(Number(tunnelId));
   if (!meta || meta.order.length < 2 || !tunnelBalancesExits(meta.tunnel)) return null;
-  const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
+  const fresh = new Map(exitTargetUsableStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
   const primaryHostId = meta.order[0];
   // 主出口没报快速探测（Agent 老），它的普通探测又在超时：当它连不上
   if (!fresh.has(primaryHostId) && options.primaryTimeout) {
@@ -1021,12 +1049,50 @@ function activeExitFromLive(live: LiveRuleReport) {
   };
 }
 
+/*
+  旧的「连不上」不拿来摘出口（实验室实测，Agent 2.2.264、GOST 三出口）：三台出口一起断了一阵（都在 Agent 的退避里，
+  最长一分钟才探一次），恢复后先探到的那台一报「通了」，另外两台手里还是故障时那份「连不上」—— 面板当场把这两台
+  好好的出口摘掉，半分钟后它们各自探到了才放回。
+  算旧（当不知道，不摘）的两种：
+    a. 这条规则「每台出口都连不上」结束之后，还没再探过的（探的时刻早于结束的时刻）：那份结论是故障期间的；
+    b. 离探出来已经超过「两倍探测间隔（含退避）+ EXIT_TARGET_PROBE_SLACK_MS」：Agent 那边早该又探过了，没报新的
+       就说明这份不可信（老 Agent 不报间隔，按最长退避算）。
+  「每台都连不上」= 报上来的出口里没有一台是通的、而且至少两台不通（只有一台报过算不上「都」）。
+*/
+const allDownByRule = new Map<number, { down: boolean; endedAt: number; at: number }>();
+
+/** 收到一份报告后更新「这条规则是不是每台出口都连不上」；从「是」变成「不是」的那一刻记下来。返回是不是刚结束。 */
+export function noteExitTargetAllDown(ruleId: number, exitHostIds: readonly number[], nowMs = Date.now()) {
+  const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
+  const reported = exitHostIds.map((hostId) => fresh.get(Number(hostId))).filter((state): state is ExitTargetState => !!state);
+  const down = !reported.some((state) => !state.down) && reported.filter((state) => state.down).length >= 2;
+  const previous = allDownByRule.get(Number(ruleId));
+  const ended = !!previous?.down && !down;
+  allDownByRule.set(Number(ruleId), { down, endedAt: ended ? nowMs : previous?.endedAt ?? 0, at: nowMs });
+  return ended;
+}
+
+/** 这份「连不上」是不是旧的（见上）。通的那份不在这里判。 */
+export function exitTargetDownStale(state: Pick<ExitTargetState, "down" | "at" | "probedAt" | "probeIntervalMs">, nowMs = Date.now(), allDownEndedAt = 0) {
+  if (!state.down) return false;
+  const probedAt = state.probedAt ?? state.at;
+  if (allDownEndedAt > 0 && probedAt < allDownEndedAt) return true;
+  const interval = state.probeIntervalMs != null && state.probeIntervalMs > 0 ? state.probeIntervalMs : EXIT_TARGET_LEGACY_MAX_INTERVAL_MS;
+  return nowMs - probedAt > 2 * interval + EXIT_TARGET_PROBE_SLACK_MS;
+}
+
+/** 一条规则各台出口到目标的情况，拿来摘出口 / 估「现在走哪台」用的：新鲜的，旧的「连不上」去掉（当不知道）。 */
+export function exitTargetUsableStatesForRule(ruleId: number, nowMs = Date.now()): ExitTargetState[] {
+  const endedAt = allDownByRule.get(Number(ruleId))?.endedAt ?? 0;
+  return exitTargetStatesForRule(ruleId, nowMs).filter((state) => !exitTargetDownStale(state, nowMs, endedAt));
+}
+
 /**
- * GOST 隧道这条规则该摘掉哪几台出口：新鲜的、报「连不上」的。全都连不上（或剩下的没一台确认能通）时
- * 一台都不摘 —— 那是目标本身的问题，摘光等于直接断服。
+ * GOST 隧道这条规则该摘掉哪几台出口：新鲜的、报「连不上」的（旧的「连不上」不算，见 exitTargetDownStale）。
+ * 全都连不上（或剩下的没一台确认能通）时一台都不摘 —— 那是目标本身的问题，摘光等于直接断服。
  */
 export function exitTargetExcludedHostIds(ruleId: number, exitHostIds: readonly number[], nowMs = Date.now()): Set<number> {
-  const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
+  const fresh = new Map(exitTargetUsableStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
   const down = exitHostIds.filter((hostId) => fresh.get(Number(hostId))?.down === true);
   if (down.length === 0 || down.length >= exitHostIds.length) return new Set();
   const remainingKnownGood = exitHostIds.some((hostId) => !down.includes(hostId) && fresh.get(Number(hostId))?.down === false);

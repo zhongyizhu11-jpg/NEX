@@ -1461,7 +1461,7 @@ agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Respon
     const numberOrNull = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : null);
     const results = raw.slice(0, 2048).flatMap((item) => {
       if (!item || typeof item !== "object") return [];
-      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; minMs?: unknown; source?: unknown; conns?: unknown };
+      const record = item as { ruleId?: unknown; down?: unknown; latencyMs?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; minMs?: unknown; source?: unknown; conns?: unknown; ageMs?: unknown; intervalMs?: unknown };
       const ruleId = Number(record.ruleId);
       if (!Number.isInteger(ruleId) || ruleId <= 0 || typeof record.down !== "boolean") return [];
       return [{
@@ -1477,6 +1477,9 @@ agentRouter.post("/api/agent/route-hop-probes", async (req: Request, res: Respon
         minMs: numberOrNull(record.minMs),
         source: record.source === "traffic" || record.source === "probe" ? record.source : null,
         conns: numberOrNull(record.conns),
+        // 2.2.264 之后的 Agent 起：这条结论多久前探的、现在多久探一次（含退避）—— 面板据此不拿旧的「连不上」摘出口
+        ageMs: numberOrNull(record.ageMs),
+        intervalMs: numberOrNull(record.intervalMs),
       }];
     });
     const hostName = String((host as { name?: unknown }).name || "");

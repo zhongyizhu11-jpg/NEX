@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_BALANCE_DETECT } from "../shared/loadBalance";
 import {
+  EXIT_TARGET_LEGACY_MAX_INTERVAL_MS,
+  EXIT_TARGET_PROBE_SLACK_MS,
   EXIT_TARGET_STALE_MS,
+  exitTargetDownStale,
   exitTargetExcludedHostIds,
+  noteExitTargetAllDown,
   exitTargetProbeSpec,
   exitTargetSummaryForTunnel,
   exitTargetUnstable,
@@ -73,6 +77,56 @@ test("GOST 摘出口：只摘连不上的；全都连不上、或剩下的没一
   resetExitTargetStates();
   setExitTargetStateForTest(state({ hostId: 1, down: true }));
   assert.equal(exitTargetExcludedHostIds(7, [1, 2]).size, 0, "另一台没报过（不知道能不能通）时不摘");
+});
+
+test("旧的「连不上」不摘出口（a）：每台都连不上结束以后、还没再探过的当不知道（实验室：恢复后好好的出口被摘掉）", () => {
+  resetExitTargetStates();
+  const t0 = Date.now() - 60_000;
+  // 三台一起断（都在 Agent 的退避里，60 秒一次）
+  for (const hostId of [1, 2, 3]) {
+    setExitTargetStateForTest(state({ hostId, down: true, at: t0, probedAt: t0, probeIntervalMs: 60_000 }));
+    noteExitTargetAllDown(7, [1, 2, 3], t0);
+  }
+  assert.equal(exitTargetExcludedHostIds(7, [1, 2, 3], t0).size, 0, "都连不上：一台不摘");
+  // 30 秒后出口 1 先探到恢复；2、3 的全量照旧报「连不上」，结论还是故障期间探的
+  const t1 = t0 + 30_000;
+  setExitTargetStateForTest(state({ hostId: 1, at: t1, probedAt: t1, probeIntervalMs: 2000 }));
+  assert.equal(noteExitTargetAllDown(7, [1, 2, 3], t1), true, "「每台都连不上」到这里结束");
+  setExitTargetStateForTest(state({ hostId: 3, down: true, at: t1 + 1000, probedAt: t0 + 5000, probeIntervalMs: 60_000 }));
+  assert.equal(noteExitTargetAllDown(7, [1, 2, 3], t1 + 1000), false);
+  assert.equal(exitTargetExcludedHostIds(7, [1, 2, 3], t1 + 2000).size, 0, "2、3 的「连不上」是故障期间的：当不知道，不摘（以前当场摘掉 2、3）");
+  // 出口 2 恢复之后真的又断了（新探出来的）：摘它；出口 3 还是旧的：不摘
+  const t2 = t1 + 20_000;
+  setExitTargetStateForTest(state({ hostId: 2, down: true, at: t2, probedAt: t2, probeIntervalMs: 4000 }));
+  assert.deepEqual([...exitTargetExcludedHostIds(7, [1, 2, 3], t2)], [2]);
+  // 出口 3 再探一次还是连不上（探的时刻在结束之后）：摘
+  setExitTargetStateForTest(state({ hostId: 3, down: true, at: t2 + 1000, probedAt: t2 + 500, probeIntervalMs: 60_000 }));
+  assert.deepEqual([...exitTargetExcludedHostIds(7, [1, 2, 3], t2 + 1000)].sort(), [2, 3]);
+});
+
+test("旧的「连不上」不摘出口（b）：离探出来超过两倍探测间隔（含退避）+ 余量的当不知道", () => {
+  const now = Date.now();
+  const down = { down: true, at: now };
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 30_000, probeIntervalMs: 4000 }, now), false, "30 秒一次的全量之间：还算新");
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 2 * 4000 - EXIT_TARGET_PROBE_SLACK_MS - 1, probeIntervalMs: 4000 }, now), true);
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 150_000, probeIntervalMs: 60_000 }, now), false, "退避到 60 秒的：两倍 + 余量以内还算新");
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 2 * EXIT_TARGET_LEGACY_MAX_INTERVAL_MS - EXIT_TARGET_PROBE_SLACK_MS - 1 }, now), true, "老 Agent 按最长退避算");
+  assert.equal(exitTargetDownStale({ down: false, at: now, probedAt: now - 600_000, probeIntervalMs: 2000 }, now), false, "只管「连不上」");
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 1000, probeIntervalMs: 2000 }, now, now - 500), true, "探的时刻早于「都连不上」结束");
+  resetExitTargetStates();
+  setExitTargetStateForTest(state({ hostId: 1, down: true, probedAt: now - 200_000, probeIntervalMs: 4000 }));
+  setExitTargetStateForTest(state({ hostId: 2 }));
+  assert.equal(exitTargetExcludedHostIds(7, [1, 2], now).size, 0);
+});
+
+test("只有一台报过「连不上」算不上「每台都连不上」", () => {
+  resetExitTargetStates();
+  const now = Date.now();
+  setExitTargetStateForTest(state({ hostId: 1, down: true, probedAt: now - 1000 }));
+  noteExitTargetAllDown(7, [1, 2, 3], now);
+  setExitTargetStateForTest(state({ hostId: 2 }));
+  assert.equal(noteExitTargetAllDown(7, [1, 2, 3], now + 1000), false);
+  assert.deepEqual([...exitTargetExcludedHostIds(7, [1, 2, 3], now + 1000)], [1]);
 });
 
 test("过期（90 秒没报）的状态当不知道", () => {
