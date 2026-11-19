@@ -764,7 +764,7 @@ type MemberAgentLiveness = {
   lastRestoredAt: number | null;
   /** 只看 Agent 到面板通不通（不含流量暂停）：外部观察「面板连不上，访客可达」用。 */
   agentOnline: boolean;
-  /** 这台机器最近一次到面板的时刻（毫秒，0 = 没见过）和多久不来算离线：就绪宽限用。 */
+  /** 这台机器最近一次到面板的时刻（毫秒，0 = 没见过）和多久不来算离线（0 = 不参与就绪宽限）：就绪宽限用。 */
   lastSeenAt: number;
   offlineThresholdMs: number;
   signature: string;
@@ -826,7 +826,9 @@ async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()): Prom
     lastRestoredAt: Number(fastState?.lastRestoredAt || 0) || null,
     agentOnline,
     lastSeenAt: Math.max(0, lastSeenAt, authenticatedAt),
-    offlineThresholdMs: fastState ? AGENT_FAST_LIVENESS_SILENCE_MS : HOST_ONLINE_TTL_MS,
+    // 只有带快速存活上报的主机（这一版要求的 Agent 都带）才有「内存里的存活状态重启后不作数」的问题；
+    // 没有这份状态的（从没连过面板的机器）不用等，阈值是 0。
+    offlineThresholdMs: fastState ? AGENT_FAST_LIVENESS_SILENCE_MS : 0,
     signature: [
       hostId,
       available ? 1 : 0,
@@ -2651,6 +2653,7 @@ export async function getForwardGroupChinaHealthProbesForHost(hostId: number) {
         groupId: Number(group.id),
         memberId: Number(member.id),
         fromHostId: Number(entryHostId),
+        groupMode: forwardGroupModeOf(group) === "entry" ? "entry" : "failover",
         targetIp: target.host,
         targetPort: target.port,
         method: healthMethod,
@@ -6501,6 +6504,8 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
   let peerObservedCount = 0;
   // 这一轮因为健康变化自动拿掉 / 加回的成员：发布成功后各记一条 auto-switch（抖动抑制按它计数）。
   const autoChanges: Array<{ memberId: number; kind: "removed" | "added" }> = [];
+  // 健康、但还在等恢复观察 / 被抖动抑制压着的成员：解析里一个健康的都没有时不等了，直接加回（逃生，见循环后面）。
+  const heldHealthy: Array<{ member: any; value: string }> = [];
   let autoSwitchTimesByMember: Map<number, number[]> | null = null;
   const flapHoldUntilFor = async (memberId: number) => {
     // 人工操作不受抖动抑制限制（和主备组一样）。
@@ -6675,6 +6680,7 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
 
     if (decision.holdReason === "recovering") recoveringCount += 1;
     if (decision.holdReason === "flap") flapHeldCount += 1;
+    if (decision.holdReason) heldHealthy.push({ member, value });
     if (decision.recheckAt) pendingHealthExpiryCandidates.push(decision.recheckAt);
     if (include) includeMember(member, value);
     else if (!excluded.includes(value)) excluded.push(value);
@@ -6692,6 +6698,22 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     });
     // 分线路时每条线路各取一个 CNAME，得把所有成员都评估完。
     if (recordType === "CNAME" && include && !lines) break;
+  }
+  /*
+    逃生：这一轮解析里一个成员都留不下（全挂），而有成员已经恢复健康、只是还在等观察时间或被抖动抑制压着 ——
+    不等了，直接把它们加回来。恢复观察和抖动抑制是防「好了又坏」来回改解析的，前提是解析里还有别的入口能用；
+    宁可多改一次，也不能让域名只指着一批坏的入口（主备组同理：当前成员不可用时换人不受这两样限制）。
+  */
+  if (values.length === 0 && heldHealthy.length > 0) {
+    for (const held of heldHealthy) {
+      includeMember(held.member, held.value);
+      const index = excluded.indexOf(held.value);
+      if (index >= 0) excluded.splice(index, 1);
+      autoChanges.push({ memberId: Number(held.member.id), kind: "added" });
+      if (recordType === "CNAME" && !lines) break;
+    }
+    recoveringCount = 0;
+    flapHeldCount = 0;
   }
   const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
     members: healthWindows,
@@ -7088,7 +7110,7 @@ async function holdForwardGroupForReadiness(group: any, options: ForwardGroupFai
   const readyAt = forwardGroupPanelReadyAt();
   if (!(readyAt > 0) || options.manual || options.forcePriority) return false;
   const now = Date.now();
-  if (now >= readyAt + Math.max(HOST_ONLINE_TTL_MS, AGENT_FAST_LIVENESS_SILENCE_MS)) return false;
+  if (now >= readyAt + AGENT_FAST_LIVENESS_SILENCE_MS) return false;
   if (!String(group?.lastDdnsValue || "").trim()) return false;
   const hostsToWait: Array<{ hostId: number; lastSeenAt: number; offlineThresholdMs: number }> = [];
   for (const member of sortedMembers(group, true) as any[]) {

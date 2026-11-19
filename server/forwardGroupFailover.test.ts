@@ -503,15 +503,17 @@ test("forward group switches after its configured heartbeat failure window", () 
         'UPDATE "forward_group_members" SET "healthStatus" = \'unhealthy\', "lastCheckedAt" = ?, "failureSince" = ?, "healthySince" = NULL',
         [now, now - 61],
       );
+      const requestCountBeforeAllDown = requests.length;
       await forwardGroups.runForwardGroupFailover(20);
       entryState = (await runtime.queryRaw(
-        'SELECT "activeMemberId", "lastDdnsValue", "lastStatus" FROM "forward_groups" WHERE "id" = 20',
+        'SELECT "activeMemberId", "lastDdnsValue", "lastStatus", "lastMessage" FROM "forward_groups" WHERE "id" = 20',
       ))[0];
+      // 全挂：保留上一轮发布的整组（以前缩成第一条），服务商那边一个请求都不发。
       assert.equal(Number(entryState.activeMemberId), 201);
-      assert.equal(entryState.lastDdnsValue, "198.51.100.10");
+      assert.equal(entryState.lastDdnsValue, "198.51.100.10,198.51.100.20");
       assert.equal(entryState.lastStatus, "down");
-      assert.equal(requests.at(-1).action, "replace");
-      assert.deepEqual(requests.at(-1).values, ["198.51.100.10"]);
+      assert.match(entryState.lastMessage, /保留上一轮发布的 2 条解析/);
+      assert.equal(requests.length, requestCountBeforeAllDown, "an all-down entry group must keep the whole previous record set untouched");
 
       await runtime.executeRaw('UPDATE "hosts" SET "lastHeartbeat" = ?', [now - 75]);
       await forwardGroups.runForwardGroupFailover(10, { forceSync: true });
@@ -530,6 +532,10 @@ test("forward group switches after its configured heartbeat failure window", () 
         'UPDATE "forward_group_members" SET "healthStatus" = \'healthy\', "lastCheckedAt" = ?, "failureSince" = NULL, "healthySince" = ? WHERE "groupId" = 20',
         [now, now - 121],
       );
+      // 下面看的是「服务商失败一次后重试」：先让解析里只剩一台，第二台恢复满了观察时间，这一轮要加回来。
+      // 前面几步已经让成员自动进出过几次，抖动抑制的计数清掉，免得它把这次加回压住。
+      await runtime.executeRaw('UPDATE "forward_groups" SET "lastDdnsValue" = ? WHERE "id" = 20', ["198.51.100.10"]);
+      await runtime.executeRaw('DELETE FROM "forward_group_events" WHERE "groupId" = 20 AND "type" = \'auto-switch\'');
       webhookFailuresRemaining = 1;
       const entryRetryRequestStart = requests.length;
       forwardGroups.scheduleForwardGroupFailover([20]);
