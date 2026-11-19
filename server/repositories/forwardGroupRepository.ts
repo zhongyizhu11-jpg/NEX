@@ -1008,7 +1008,11 @@ async function refreshControlledTunnelRuntime(
   看到自己「没就绪」会带着新规格再下发一次，都不停转发。所以这里不动 tunnels.isRunning、不重置规则，
   只把入口和中转的就绪状态清掉并通知各台来拉配置。出口机的就绪状态留着，免得被连带重装。
 */
-async function pushControlledTunnelConfig(tunnel: any, reason: string, extraHostIds: number[] = []) {
+async function pushControlledTunnelConfig(
+  tunnel: { id?: unknown; entryHostId?: unknown; exitHostId?: unknown; entryGroupId?: unknown } | null | undefined,
+  reason: string,
+  extraHostIds: number[] = [],
+) {
   const tunnelId = Number(tunnel?.id || 0);
   if (!Number.isFinite(tunnelId) || tunnelId <= 0) return;
   const entryHostIds = new Set<number>();
@@ -1018,13 +1022,13 @@ async function pushControlledTunnelConfig(tunnel: any, reason: string, extraHost
   const exitHostIds = new Set<number>();
   const primaryExitHostId = Number(tunnel?.exitHostId || 0);
   if (primaryExitHostId > 0) exitHostIds.add(primaryExitHostId);
-  for (const node of await getTunnelExitNodes(tunnelId).catch(() => []) as any[]) {
+  for (const node of await getTunnelExitNodes(tunnelId).catch(() => []) as Array<{ hostId?: unknown }>) {
     const hostId = Number(node?.hostId || 0);
     if (hostId > 0) exitHostIds.add(hostId);
   }
   // 中转（多跳里除了出口的那几跳）和入口一样要重新拿规格。
   const relayHostIds = new Set<number>();
-  for (const hop of await getTunnelHops(tunnelId).catch(() => []) as any[]) {
+  for (const hop of await getTunnelHops(tunnelId).catch(() => []) as Array<{ hostId?: unknown }>) {
     const hostId = Number(hop?.hostId || 0);
     if (hostId > 0 && !exitHostIds.has(hostId)) relayHostIds.add(hostId);
   }
@@ -5019,7 +5023,13 @@ async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, inpu
   这个名字上别人手动加的记录、别的服务商上的记录一律不动；自动解析关着的组面板从没替它写过，也不动。
   清不掉不拦删除：记面板日志，让人去服务商那边手动清。停用组不清（恢复时还要用）。
 */
-export async function clearForwardGroupPublishedDdns(group: any) {
+export async function clearForwardGroupPublishedDdns(group: ForwardGroupDdnsTarget & {
+  groupMode?: unknown;
+  lastDdnsAt?: unknown;
+  lastDdnsValue?: unknown;
+  ddnsLineState?: unknown;
+} | null | undefined) {
+  if (!group) return;
   const groupId = Number(group?.id || 0);
   const mode = forwardGroupModeOf(group);
   const domain = String(group?.domain || "").trim();

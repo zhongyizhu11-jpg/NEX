@@ -34,6 +34,7 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { tunnelExitPinUnsupportedReason } from "../../shared/tunnelExitPin";
 import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { noteTunnelRunningRestored } from "../agentHeartbeatGate";
@@ -757,6 +758,9 @@ export async function updateForwardRuleRuntimeOptionsByTunnel(tunnelId: number, 
       的就绪状态（tunnelRuntimeStatus），和这一列无关，任何时候都不用清整条链路。
   入口掉线、唯一的出口掉线、出口全掉线：照旧清。
 */
+type ExitPinNodeRow = { hostId?: number | null; isEnabled?: unknown };
+type ExitPinHopRow = { hostId?: number | null };
+
 async function tunnelsKeptRunningWithoutExit(hostId: number, options: { offline?: boolean }) {
   const rows = await queryRaw<{ id: number; entryHostId?: number | null; exitHostId?: number | null; entryGroupId?: number | null; loadBalanceEnabled?: unknown }>(
     `SELECT ${quoteIdentifier("id")}, ${quoteIdentifier("entryHostId")}, ${quoteIdentifier("exitHostId")}, ${quoteIdentifier("entryGroupId")}, ${quoteIdentifier("loadBalanceEnabled")}
@@ -771,13 +775,13 @@ async function tunnelsKeptRunningWithoutExit(hostId: number, options: { offline?
     if (!dbBool(tunnel.loadBalanceEnabled) || Number(tunnel.entryHostId || 0) === hostId) continue;
     const primaryExitHostId = Number(tunnel.exitHostId || 0);
     if (primaryExitHostId === hostId && !options.offline) continue;
-    const [nodes, hops] = await Promise.all([getTunnelExitNodes(tunnelId), getTunnelHops(tunnelId)]);
-    const exitHostIds = new Set<number>([primaryExitHostId, ...(nodes as any[])
+    const [nodes, hops]: [ExitPinNodeRow[], ExitPinHopRow[]] = await Promise.all([getTunnelExitNodes(tunnelId), getTunnelHops(tunnelId)]);
+    const exitHostIds = new Set<number>([primaryExitHostId, ...nodes
       .filter((node) => dbBool(node?.isEnabled, true))
       .map((node) => Number(node?.hostId || 0))].filter((value) => value > 0));
     if (!exitHostIds.has(hostId)) continue;
     // 在中转的位置上（多跳里除了出口的那几跳）：少了它走不通。
-    if ((hops as any[]).some((hop) => Number(hop?.hostId || 0) === hostId && Number(hop?.hostId || 0) !== primaryExitHostId)) continue;
+    if (hops.some((hop) => Number(hop?.hostId || 0) === hostId && Number(hop?.hostId || 0) !== primaryExitHostId)) continue;
     const entryGroupId = Number(tunnel.entryGroupId || 0);
     if (entryGroupId > 0) {
       const entryMembers = await queryRaw<{ id: number }>(
@@ -2870,11 +2874,43 @@ export async function syncTunnelExitGroupEndpoints(
       } else if (endpointsChanged || loadBalanceChanged) {
         await reconcileTunnelRuleExitMappings(tunnelId);
       }
+      // 指定的那台被去掉 / 停用了、或者只剩一台出口：指定作废。
+      if (await clearStaleTunnelExitPin(tunnelId)) refreshedTunnel = { ...refreshedTunnel, balancePinHostId: null };
       return { tunnel: refreshedTunnel, changed, reprovision, previousHostIds, nextHostIds };
     } finally {
       releaseHostPortReservations(heldReservations);
     }
   });
+}
+
+/*
+  手动指定的出口（balancePinHostId）什么时候作废（C1）：指定的那台已经不是这条链路能用的出口了 ——
+  从出口里去掉了、被停用了、负载均衡关了，或者链路改成了指定不了的形态（Nginx、带中转的 NEX）。
+  以前从来不清：那台后来又被加回来、或者换成别的链路结构时，一个早就没人记得的指定突然又生效，
+  界面上也一直挂着「已指定走 xxx」。改出口、改出口组成员、关负载均衡之后都叫它一次。
+*/
+export async function clearStaleTunnelExitPin(tunnelId: number): Promise<boolean> {
+  const tunnel = await getTunnelById(Number(tunnelId)) as {
+    balancePinHostId?: number | null;
+    exitHostId?: number | null;
+    loadBalanceEnabled?: unknown;
+    loadBalanceStrategy?: string | null;
+    mode?: string | null;
+  } | null | undefined;
+  const pinHostId = Number(tunnel?.balancePinHostId || 0);
+  if (!tunnel || pinHostId <= 0) return false;
+  const [nodes, hops]: [ExitPinNodeRow[], ExitPinHopRow[]] = await Promise.all([getTunnelExitNodes(Number(tunnelId)), getTunnelHops(Number(tunnelId))]);
+  const exitHostIds = [Number(tunnel.exitHostId || 0), ...nodes
+    .filter((node) => dbBool(node?.isEnabled, true))
+    .map((node) => Number(node?.hostId || 0))];
+  const usable = dbBool(tunnel.loadBalanceEnabled)
+    && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+    && exitHostIds.includes(pinHostId)
+    && !tunnelExitPinUnsupportedReason(tunnel, hops.length);
+  if (usable) return false;
+  await updateTunnel(Number(tunnelId), { balancePinHostId: null });
+  appendPanelLog("info", `[Tunnel] exit pin cleared tunnel=${tunnelId} host=${pinHostId}: no longer a usable exit of this tunnel`);
+  return true;
 }
 
 export async function clearTunnelExitNodes(tunnelId: number) {
