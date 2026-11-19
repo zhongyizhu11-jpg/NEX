@@ -279,7 +279,7 @@ export const forwardGroupsRouter = router({
         ctx.user.role === "admin" ? undefined : ctx.user.id,
       );
       // 外部观察的现状（别的机器看每个成员通不通）只给管理员看：里面有别的主机的名字。
-      const observedItems = accessScope ? visibleItems : await db.attachForwardGroupPeerHealth(visibleItems as any[]);
+      const observedItems: typeof visibleItems = accessScope ? visibleItems : await db.attachForwardGroupPeerHealth(visibleItems);
       const items = observedItems.map((group: any) => ({
         ...group,
         trafficSummary: trafficByGroupId.get(Number(group.id)),

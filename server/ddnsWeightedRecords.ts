@@ -62,7 +62,7 @@ type Deps = {
 };
 
 const defaultDeps: Deps = {
-  tencent: (settings) => (action, payload) => tencentCloudRequest(settings, action, payload as Record<string, any>),
+  tencent: (settings) => (action, payload) => tencentCloudRequest(settings, action, payload),
   aliyun: (settings) => (action, params) => aliyunRequest(settings, action, params),
   huawei: (settings) => (method, path, query, body) => huaweicloudRequest(settings, method, path, query, body),
 };

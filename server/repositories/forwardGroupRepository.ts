@@ -571,14 +571,17 @@ type ForwardGroupFailoverOptions = {
   「按成员取主机」「按规则取最新探测」的辅助函数先看这里，没有才去查库（P7：以前每个成员各查几次）。
   不在评估里调用这些辅助函数（保存校验、别的模块）时没有作用域，照旧逐个查。
 */
+/** 组 / 成员 / 主机 / 规则行在这个文件里都是宽松的查询结果（和 LineGroupRow 一个说法）；新代码用这个名字，不再添新的 any。 */
+type LooseRow = ReturnType<typeof sortedMembers>[number];
+
 type ForwardGroupEvaluationRules = {
-  childRulesByMemberId: Map<number, any[]>;
+  childRulesByMemberId: Map<number, LooseRow[]>;
   enabledTemplateIds: Set<number>;
-  latestTcpingByRuleId: Map<number, any>;
+  latestTcpingByRuleId: Map<number, LooseRow>;
 };
 type ForwardGroupEvaluationScope = {
-  hostById: Map<number, any | null>;
-  tunnelById: Map<number, any | null>;
+  hostById: Map<number, LooseRow | null>;
+  tunnelById: Map<number, LooseRow | null>;
   rules: ForwardGroupEvaluationRules | null;
   deferPublish: boolean;
   /** 这一轮碰到了要写服务商的地方但没写（deferPublish）：评估完把组交给发布队列。 */
@@ -2006,7 +2009,7 @@ function emptyForwardGroupProbeTopologyForHost(): ForwardGroupProbeTopologyForHo
 }
 
 /** 外部观察的参照目标：开了国内检测就用它的目标，否则用默认的 TCPing 目标。观察点连得上它才算「自己网络没问题」。 */
-function peerReferenceTarget(group: any): ForwardGroupPeerGroupTopology["reference"] {
+function peerReferenceTarget(group: LooseRow): ForwardGroupPeerGroupTopology["reference"] {
   const method = dbBool(group?.chinaHealthCheckEnabled) ? normalizeForwardGroupHealthCheckMethod(group.chinaHealthCheckMethod) : "tcp";
   try {
     const target = normalizeChinaHealthTarget(dbBool(group?.chinaHealthCheckEnabled) ? group.chinaHealthCheckTarget : "", method);
@@ -2080,19 +2083,19 @@ async function buildForwardGroupProbeTopologySnapshot(): Promise<ForwardGroupPro
     tunnelEntryHostById.set(Number(tunnel.id), Number(tunnel.entryHostId || 0));
   }
 
-  const membersByGroupId = new Map<number, any[]>();
-  for (const member of memberRows as any[]) {
+  const membersByGroupId = new Map<number, LooseRow[]>();
+  for (const member of memberRows as LooseRow[]) {
     const id = Number(member.groupId || 0);
     const members = membersByGroupId.get(id) || [];
     members.push(member);
     membersByGroupId.set(id, members);
   }
-  const groups = (groupRows as any[]).map((group) => ({
+  const groups = (groupRows as LooseRow[]).map((group) => ({
     ...group,
     groupMode: forwardGroupModeOf(group),
     members: membersByGroupId.get(Number(group.id)) || [],
   }));
-  const groupById = new Map<number, any>();
+  const groupById = new Map<number, LooseRow>();
   for (const group of groups) groupById.set(Number(group.id), group);
 
   // 外部观察只对「成员不止一台、或者指定了观察主机」的主备组 / 入口组有意义。
@@ -2123,7 +2126,7 @@ async function buildForwardGroupProbeTopologySnapshot(): Promise<ForwardGroupPro
     }).from(hosts).where(inArray(hosts.id, hostIds))
     : [];
   const hostById = new Map<number, any>();
-  for (const host of hostRows as any[]) {
+  for (const host of hostRows as LooseRow[]) {
     hostById.set(Number(host.id), host);
     snapshot.hostNameById.set(Number(host.id), String(host.name || `主机${host.id}`));
   }
@@ -2213,8 +2216,8 @@ async function buildForwardGroupProbeTopologySnapshot(): Promise<ForwardGroupPro
 async function buildForwardGroupPeerTopology(
   snapshot: ForwardGroupProbeTopologySnapshot,
   input: {
-    peerGroups: any[];
-    hostById: Map<number, any>;
+    peerGroups: LooseRow[];
+    hostById: Map<number, LooseRow>;
     tunnelEntryHostById: Map<number, number>;
     forHost: (hostId: number) => ForwardGroupProbeTopologyForHost;
   },
@@ -2232,9 +2235,9 @@ async function buildForwardGroupPeerTopology(
       .where(and(eq(tunnels.isEnabled, true), inArray(tunnels.entryGroupId, entryGroupIds)))
     : [];
   const entryGroupByDependentId = new Map<number, number>();
-  for (const row of dependentRows as any[]) entryGroupByDependentId.set(Number(row.id), Number(row.entryGroupId || 0));
+  for (const row of dependentRows as LooseRow[]) entryGroupByDependentId.set(Number(row.id), Number(row.entryGroupId || 0));
   const entryGroupByTunnelId = new Map<number, number>();
-  for (const row of entryTunnelRows as any[]) entryGroupByTunnelId.set(Number(row.id), Number(row.entryGroupId || 0));
+  for (const row of entryTunnelRows as LooseRow[]) entryGroupByTunnelId.set(Number(row.id), Number(row.entryGroupId || 0));
 
   const ruleGroupIds = [...failoverGroupIds, ...entryGroupByDependentId.keys()];
   const ruleTunnelIds = [...entryGroupByTunnelId.keys()];
@@ -2270,7 +2273,7 @@ async function buildForwardGroupPeerTopology(
     else map.set(key, [listener]);
   };
   const failoverGroupIdSet = new Set(failoverGroupIds);
-  for (const rule of ruleRows as any[]) {
+  for (const rule of ruleRows as LooseRow[]) {
     const port = Number(rule.sourcePort || 0);
     if (port <= 0 || Number(rule.tlsInboundId || 0) > 0) continue;
     const listener = { port, protocol: rule.protocol };
@@ -2290,7 +2293,7 @@ async function buildForwardGroupPeerTopology(
     const mode = forwardGroupModeOf(group);
     const recordType = normalizeForwardGroupRecordType(group.recordType);
     const targets: PeerTargetMember[] = [];
-    for (const member of sortedMembers(group, true) as any[]) {
+    for (const member of sortedMembers(group, true) as LooseRow[]) {
       if (mode === "entry" && member.memberType !== "host") continue;
       const hostId = member.memberType === "host"
         ? Number(member.hostId || 0)
@@ -2464,7 +2467,7 @@ function memberPeerHealth(
  * 评估里用：算出成员的外部观察结论，并把要跨重启保留的那点状态（是否判了不可用、谁连通过它）写回成员行
  * （只在变了的时候写）。没安排观察点返回 null，成员行里的旧状态清掉。
  */
-async function evaluateMemberPeerHealth(group: any, member: any, agentOnline: boolean, now: number) {
+async function evaluateMemberPeerHealth(group: LooseRow, member: LooseRow, agentOnline: boolean, now: number) {
   const snapshot = await forwardGroupProbeTopology.get();
   const groupId = Number(group.id);
   const memberId = Number(member.id);
@@ -2486,7 +2489,7 @@ async function evaluateMemberPeerHealth(group: any, member: any, agentOnline: bo
     : { down: false, reachedBy: [] });
   if (nextStored !== serializeStoredExternalHealth(stored) || (!nextStored && member.externalHealth)) {
     const db = await getDb();
-    await db.update(forwardGroupMembers).set({ externalHealth: nextStored } as any).where(eq(forwardGroupMembers.id, memberId));
+    await db.update(forwardGroupMembers).set({ externalHealth: nextStored } as LooseRow).where(eq(forwardGroupMembers.id, memberId));
     member.externalHealth = nextStored;
   }
   return health;
@@ -2554,7 +2557,7 @@ export async function ingestForwardGroupPeerReports(hostIdValue: unknown, report
  * 给组列表 / 详情的成员挂上外部观察的现状（peerHealth）：自己报告的健康在 healthStatus，这里是别的机器看到的。
  * 只读内存；拓扑缓存过期时会重建一次。没安排观察点的成员是 null。
  */
-export async function attachForwardGroupPeerHealth<T extends { id?: unknown; groupMode?: unknown; members?: any[] | null; failoverSeconds?: unknown }>(groups: T[]): Promise<T[]> {
+export async function attachForwardGroupPeerHealth<T extends { id?: unknown; groupMode?: unknown; members?: LooseRow[] | null; failoverSeconds?: unknown }>(groups: T[]): Promise<T[]> {
   if (!groups.some((group) => supportsChinaHealthMode(forwardGroupModeOf(group)))) return groups;
   const snapshot = await forwardGroupProbeTopology.get().catch(() => null);
   if (!snapshot) return groups;
@@ -2683,9 +2686,9 @@ export async function updateForwardGroupMemberChinaHealth(input: {
     window = verified;
     mode = forwardGroupModeOf({ groupMode: verified.groupMode });
   } else {
-    const group = await getForwardGroupById(Number(input.groupId)) as any;
+    const group = await getForwardGroupById(Number(input.groupId)) as LooseRow;
     if (!group || !dbBool(group.chinaHealthCheckEnabled) || !supportsChinaHealthMode(forwardGroupModeOf(group))) return false;
-    const member = (group.members || []).find((item: any) => Number(item.id) === Number(input.memberId));
+    const member = (group.members || []).find((item: LooseRow) => Number(item.id) === Number(input.memberId));
     if (!member) return false;
     const entryHostId = await memberEntryHostId(member);
     if (Number(entryHostId) !== Number(input.hostId)) return false;
@@ -2725,7 +2728,7 @@ export async function updateForwardGroupMemberChinaHealth(input: {
     chinaHealthCheckedAt: decisionNow,
     ...decisionWindowPatch,
     updatedAt: decisionNow,
-  } as any).where(eq(forwardGroupMembers.id, memberId));
+  } as LooseRow).where(eq(forwardGroupMembers.id, memberId));
   scheduleForwardGroupFailover([Number(input.groupId)]);
   return true;
 }
@@ -2890,9 +2893,9 @@ export async function updateForwardGroupMemberAgentHealth(input: {
   if (verified) {
     window = verified;
   } else {
-    const group = await getForwardGroupById(Number(input.groupId)) as any;
+    const group = await getForwardGroupById(Number(input.groupId)) as LooseRow;
     if (!group || forwardGroupModeOf(group) !== "entry" || dbBool(group.chinaHealthCheckEnabled)) return false;
-    const member = (group.members || []).find((item: any) => Number(item.id) === Number(input.memberId));
+    const member = (group.members || []).find((item: LooseRow) => Number(item.id) === Number(input.memberId));
     if (!member || member.memberType !== "host" || Number(member.hostId || 0) !== Number(input.hostId)) return false;
     window = group;
   }
@@ -5482,13 +5485,13 @@ export async function scheduleForwardGroupsForHostHealthChange(hostId: number) {
  */
 async function latestTcpingByRuleIds(ruleIds: number[]) {
   const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
-  const latest = new Map<number, any>();
+  const latest = new Map<number, LooseRow>();
   if (ids.length === 0) return latest;
   await flushPendingWrites("tcping_stats");
   const table = quoteIdentifier("tcping_stats");
   const ruleId = quoteIdentifier("ruleId");
   const recordedAt = quoteIdentifier("recordedAt");
-  const rows = await queryRaw<any>(
+  const rows = await queryRaw<LooseRow>(
     `SELECT t.* FROM ${table} t JOIN (SELECT ${ruleId} AS ${quoteIdentifier("latestRuleId")}, MAX(${recordedAt}) AS ${quoteIdentifier("latestAt")} FROM ${table} WHERE ${ruleId} IN (${ids.map(() => "?").join(", ")}) GROUP BY ${ruleId}) m ON m.${quoteIdentifier("latestRuleId")} = t.${ruleId} AND m.${quoteIdentifier("latestAt")} = t.${recordedAt}`,
     ids,
   );
@@ -5501,7 +5504,7 @@ async function latestTcpingByRuleIds(ruleIds: number[]) {
 }
 
 /** 主备组这一轮评估要用的子规则状态：成员的子规则、哪些模板启用着、每条在跑的子规则最新的探测，三次查询读完。 */
-async function loadForwardGroupEvaluationRules(members: any[]): Promise<ForwardGroupEvaluationRules> {
+async function loadForwardGroupEvaluationRules(members: LooseRow[]): Promise<ForwardGroupEvaluationRules> {
   const db = await getDb();
   const memberIds = members.map((member) => Number(member?.id || 0)).filter((id) => id > 0);
   const childRows = memberIds.length > 0
@@ -5510,9 +5513,9 @@ async function loadForwardGroupEvaluationRules(members: any[]): Promise<ForwardG
       sql`COALESCE(${forwardRules.pendingDelete}, ${sqlBool(false)}) = ${sqlBool(false)}`,
     )).orderBy(desc(forwardRules.createdAt))
     : [];
-  const childRulesByMemberId = new Map<number, any[]>(memberIds.map((id) => [id, []]));
-  for (const rule of childRows as any[]) childRulesByMemberId.get(Number(rule.forwardGroupMemberId || 0))?.push(rule);
-  const templateRuleIds = Array.from(new Set((childRows as any[])
+  const childRulesByMemberId = new Map<number, LooseRow[]>(memberIds.map((id) => [id, []]));
+  for (const rule of childRows as LooseRow[]) childRulesByMemberId.get(Number(rule.forwardGroupMemberId || 0))?.push(rule);
+  const templateRuleIds = Array.from(new Set((childRows as LooseRow[])
     .map((rule) => Number(rule.forwardGroupRuleId || 0))
     .filter((id) => Number.isInteger(id) && id > 0)));
   const templateRows = templateRuleIds.length > 0
@@ -5521,11 +5524,11 @@ async function loadForwardGroupEvaluationRules(members: any[]): Promise<ForwardG
       .from(forwardRules)
       .where(inArray(forwardRules.id, templateRuleIds))
     : [];
-  const enabledTemplateIds = new Set((templateRows as any[])
+  const enabledTemplateIds = new Set((templateRows as LooseRow[])
     .filter((rule) => dbBool(rule.isEnabled) && !dbBool(rule.pendingDelete))
     .map((rule) => Number(rule.id || 0))
     .filter((id) => id > 0));
-  const probedRuleIds = (childRows as any[])
+  const probedRuleIds = (childRows as LooseRow[])
     .filter((rule) => enabledTemplateIds.has(Number(rule.forwardGroupRuleId || 0)) && dbBool(rule.isEnabled) && dbBool(rule.isRunning))
     .map((rule) => Number(rule.id));
   return { childRulesByMemberId, enabledTemplateIds, latestTcpingByRuleId: await latestTcpingByRuleIds(probedRuleIds) };
@@ -5586,8 +5589,8 @@ async function evaluateMemberHealth(member: any, group: any) {
     if (scopedRules) {
       enabledTemplateIds = scopedRules.enabledTemplateIds;
     } else {
-      const templateRuleIds = Array.from(new Set((childRules as any[])
-        .map((rule: any) => Number(rule.forwardGroupRuleId || 0))
+      const templateRuleIds = Array.from(new Set((childRules as LooseRow[])
+        .map((rule: LooseRow) => Number(rule.forwardGroupRuleId || 0))
         .filter((id: number) => Number.isInteger(id) && id > 0)));
       const templateRows = templateRuleIds.length > 0
         ? await db
@@ -5599,9 +5602,9 @@ async function evaluateMemberHealth(member: any, group: any) {
           .from(forwardRules)
           .where(inArray(forwardRules.id, templateRuleIds))
         : [];
-      enabledTemplateIds = new Set((templateRows as any[])
-        .filter((rule: any) => dbBool(rule.isEnabled) && !dbBool(rule.pendingDelete))
-        .map((rule: any) => Number(rule.id || 0))
+      enabledTemplateIds = new Set((templateRows as LooseRow[])
+        .filter((rule: LooseRow) => dbBool(rule.isEnabled) && !dbBool(rule.pendingDelete))
+        .map((rule: LooseRow) => Number(rule.id || 0))
         .filter((id: number) => id > 0));
     }
     const activeChildRules = (childRules as any[])
@@ -6505,7 +6508,7 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
   // 这一轮因为健康变化自动拿掉 / 加回的成员：发布成功后各记一条 auto-switch（抖动抑制按它计数）。
   const autoChanges: Array<{ memberId: number; kind: "removed" | "added" }> = [];
   // 健康、但还在等恢复观察 / 被抖动抑制压着的成员：解析里一个健康的都没有时不等了，直接加回（逃生，见循环后面）。
-  const heldHealthy: Array<{ member: any; value: string }> = [];
+  const heldHealthy: Array<{ member: LooseRow; value: string }> = [];
   let autoSwitchTimesByMember: Map<number, number[]> | null = null;
   const flapHoldUntilFor = async (memberId: number) => {
     // 人工操作不受抖动抑制限制（和主备组一样）。
@@ -7117,14 +7120,14 @@ type ForwardGroupFailoverContext = {
   只管「已经发布过解析」的组（没发布过就没有可抢的）；人工操作（保存组、调顺序、立即同步）不受限制。
   返回 true = 这一轮已经处理完（挂起）。
 */
-async function holdForwardGroupForReadiness(group: any, options: ForwardGroupFailoverOptions) {
+async function holdForwardGroupForReadiness(group: LooseRow, options: ForwardGroupFailoverOptions) {
   const readyAt = forwardGroupPanelReadyAt();
   if (!(readyAt > 0) || options.manual || options.forcePriority) return false;
   const now = Date.now();
   if (now >= readyAt + AGENT_FAST_LIVENESS_SILENCE_MS) return false;
   if (!String(group?.lastDdnsValue || "").trim()) return false;
   const hostsToWait: Array<{ hostId: number; lastSeenAt: number; offlineThresholdMs: number }> = [];
-  for (const member of sortedMembers(group, true) as any[]) {
+  for (const member of sortedMembers(group, true) as LooseRow[]) {
     const liveness = await resolveMemberAgentLiveness(member, now);
     if (liveness.hostId > 0) hostsToWait.push({ hostId: liveness.hostId, lastSeenAt: liveness.lastSeenAt, offlineThresholdMs: liveness.offlineThresholdMs });
   }
@@ -7459,7 +7462,7 @@ async function loadForwardGroupForEvaluation(groupId: number, options: ForwardGr
     .select()
     .from(forwardGroupMembers)
     .where(eq(forwardGroupMembers.groupId, groupId))
-    .orderBy(asc(forwardGroupMembers.priority)) as any[];
+    .orderBy(asc(forwardGroupMembers.priority)) as LooseRow[];
   const scope: ForwardGroupEvaluationScope = {
     hostById: new Map(),
     tunnelById: new Map(),
@@ -7473,14 +7476,14 @@ async function loadForwardGroupForEvaluation(groupId: number, options: ForwardGr
     .filter((id) => id > 0)));
   for (const id of tunnelIds) scope.tunnelById.set(id, null);
   if (tunnelIds.length > 0) {
-    for (const tunnel of await db.select().from(tunnels).where(inArray(tunnels.id, tunnelIds)) as any[]) scope.tunnelById.set(Number(tunnel.id), tunnel);
+    for (const tunnel of await db.select().from(tunnels).where(inArray(tunnels.id, tunnelIds)) as LooseRow[]) scope.tunnelById.set(Number(tunnel.id), tunnel);
   }
-  const hostIdOf = (member: any) => (member?.memberType === "host"
+  const hostIdOf = (member: LooseRow) => (member?.memberType === "host"
     ? Number(member?.hostId || 0)
     : Number(scope.tunnelById.get(Number(member?.tunnelId || 0))?.entryHostId || 0));
   const hostIds = Array.from(new Set(memberRows.map(hostIdOf).filter((id) => id > 0)));
   for (const id of hostIds) scope.hostById.set(id, null);
-  for (const host of await getHostsByIds(hostIds) as any[]) scope.hostById.set(Number(host.id), host);
+  for (const host of await getHostsByIds(hostIds) as LooseRow[]) scope.hostById.set(Number(host.id), host);
   const recordType = normalizeForwardGroupRecordType(group.recordType);
   const members = memberRows.map((member) => {
     const host = scope.hostById.get(hostIdOf(member));

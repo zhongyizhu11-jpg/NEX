@@ -69,7 +69,7 @@ export function poolMemberPlan(existing: readonly any[], poolHostIds: readonly n
 */
 
 /** 这个组按这批机器同步后放不放得下。放不下返回给人看的一句话，放得下返回 null。纯函数。 */
-export function poolGroupCapacityIssue(existing: readonly any[], poolHostIds: readonly number[], groupLabel: string): string | null {
+export function poolGroupCapacityIssue(existing: Parameters<typeof poolMemberPlan>[0], poolHostIds: readonly number[], groupLabel: string): string | null {
   const plan = poolMemberPlan(existing, poolHostIds);
   if (plan.members.length <= MAX_FORWARD_GROUP_MEMBERS) return null;
   const others = plan.members.filter((member) => member.memberType !== "host").length;
@@ -77,15 +77,18 @@ export function poolGroupCapacityIssue(existing: readonly any[], poolHostIds: re
   return `「${groupLabel}」跟着这个节点池，组最多 ${MAX_FORWARD_GROUP_MEMBERS} 个成员${others > 0 ? `（其中 ${others} 个是不归池管的隧道成员）` : ""}，池里有 ${poolHostIds.length} 台机器放不下：把池减到 ${room} 台以内，或者先让这个组不再跟着节点池`;
 }
 
-function groupLabelOf(group: any) {
+type GroupLabelRow = { id?: unknown; name?: unknown; domain?: unknown };
+type MemberRow = Parameters<typeof poolMemberPlan>[0][number] & { groupId?: unknown };
+
+function groupLabelOf(group: GroupLabelRow) {
   return String(group?.domain || group?.name || `组 #${group?.id}`).trim();
 }
 
 /** 保存节点池之前调：跟着它的组里有放不下这批机器的就抛错（池不保存）。新建的池没有组跟着，不用查。 */
 export async function assertPoolFitsFollowingGroups(poolId: number, hostIds: readonly number[]) {
-  const groups = await queryRaw<any>(`SELECT ${q("id")}, ${q("name")}, ${q("domain")} FROM ${q("forward_groups")} WHERE ${q("poolId")} = ?`, [Number(poolId)]);
+  const groups = await queryRaw<GroupLabelRow>(`SELECT ${q("id")}, ${q("name")}, ${q("domain")} FROM ${q("forward_groups")} WHERE ${q("poolId")} = ?`, [Number(poolId)]);
   if (groups.length === 0) return;
-  const members = await queryRaw<any>(
+  const members = await queryRaw<MemberRow>(
     `SELECT * FROM ${q("forward_group_members")} WHERE ${q("groupId")} IN (${groups.map(() => "?").join(", ")})`,
     groups.map((group) => Number(group.id)),
   );
@@ -121,7 +124,7 @@ export async function setGroupPool(groupId: number, poolId: number | null): Prom
     const pool = await getNodePool(poolId);
     if (!pool) throw new Error("节点池不存在");
     if (pool.hostIds.length === 0) throw new Error("节点池是空的：先往池里加机器");
-    const existing = await queryRaw<any>(`SELECT * FROM ${q("forward_group_members")} WHERE ${q("groupId")} = ?`, [Number(groupId)]);
+    const existing = await queryRaw<MemberRow>(`SELECT * FROM ${q("forward_group_members")} WHERE ${q("groupId")} = ?`, [Number(groupId)]);
     const issue = poolGroupCapacityIssue(existing, pool.hostIds, groupLabelOf(group));
     if (issue) throw new Error(issue);
     // 池的主人改池就会改组的成员（同步时不再查主机权限），所以只能跟着组主人自己的池或管理员的池
