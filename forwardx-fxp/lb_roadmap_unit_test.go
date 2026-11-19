@@ -204,7 +204,8 @@ func TestTunnelConnectionsHaveAUserTimeout(t *testing.T) {
 	}
 }
 
-// F13：「出口连不上 / 恢复」两行日志带 index=，Agent 的正则（agent/fxp_endpoint_events.go）才认得出。
+// F13：「出口连不上 / 恢复」两行日志能被 Agent 的正则（agent/fxp_endpoint_events.go 的 fxpEndpointLogPattern）认出来；
+// index= 是给人看的（这个端点在出口列表里排第几），正则有没有它都认。格式串抄在 agent/testdata/fxp_endpoint_log_sample.txt。
 func TestEndpointHealthLogsCarryTheIndex(t *testing.T) {
 	resetFXPEndpointRegistry()
 	selector := newExitEndpointSelector(
@@ -218,8 +219,8 @@ func TestEndpointHealthLogsCarryTheIndex(t *testing.T) {
 	selector.markFailure(1, errTestEndpointDown)
 	selector.markHealthy(1)
 	log.SetOutput(previous)
-	// Agent 现行的正则。
-	pattern := regexp.MustCompile(`exit endpoint (unhealthy|recovered) index=[0-9]+ endpoint=([^[:space:]]+)(?: reason=(.*))?`)
+	// Agent 现行的正则（agent/fxp_endpoint_events.go）。
+	pattern := regexp.MustCompile(`exit endpoint (unhealthy|recovered)(?: index=[0-9]+)? endpoint=([^[:space:]]+)(?: retryIn=[^[:space:]]+)?(?: reason=(.*))?`)
 	matches := pattern.FindAllStringSubmatch(captured.String(), -1)
 	if len(matches) != 2 || matches[0][1] != "unhealthy" || matches[1][1] != "recovered" || matches[0][2] != "198.51.100.7:30052" {
 		t.Fatalf("两行日志应该都能被 Agent 的正则认出来：%q", captured.String())

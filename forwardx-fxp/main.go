@@ -571,8 +571,9 @@ activateUDP 在一个 UDP 直连运行时启动时调用（入口的 UDP 监听�
 也盯着这些端点（路线图 X3）。
 
 以前只有 TCP 运行时会探测。纯 UDP 的规则、中转的 UDP 选择器没有任何健康信号：出口机没了，新会话照样
-挑它，直到有一条同隧道的 TCP 规则碰巧把它判坏。怎么探见 endpoint_pool.go 的 watchUDP：
-新出口回 UDP 探活包；老出口不认识，退回去探它的 TCP 端口（确认过它有 TCP 监听才算数）。
+挑它，直到有一条同隧道的 TCP 规则碰巧把它判坏。怎么探见 endpoint_pool.go 的 watchUDP：发 UDP 探活包，
+对端回过就以它为准；从没回过（版本过旧、UDP 一直不通）就不拿「没回」判它坏，UDP 跟着 TCP 那一侧的结论走，
+问过两轮还不回标成「没验证过」报给面板。
 不预热 TCP 连接池，也不派「出口连得上目标吗」的 TCP 探测 —— UDP 规则的目标是 UDP 的。
 */
 func (s *exitEndpointSelector) activateUDP(cfg config) func() {
