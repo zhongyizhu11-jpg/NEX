@@ -99,17 +99,27 @@ const script = String.raw`
   offset += 15 * 60_000;
   assert.equal(await store.prune("instance:", 60_000) >= 1, true);
 
-  // 待办：同一件事覆盖写只留一行，取走时执行一次
+  // 待办：同一件事覆盖写只留一行，取走时执行一次；失败的退避重试，成功了才删
   const seen = [];
-  work.registerPanelWorkHandler("probe", (key, payload) => { seen.push([key, payload]); });
-  await work.requestPanelWork("probe", 12, { manual: true }, 1000);
-  await work.requestPanelWork("probe", 12, { forceSync: true }, 2000);
-  await work.requestPanelWork("probe", "abc", null, 3000);
+  let failOnce = true;
+  work.registerPanelWorkHandler("probe", (key, payload) => {
+    if (key === "abc" && failOnce) { failOnce = false; throw new Error("busy"); }
+    seen.push([key, payload]);
+  });
+  await work.requestPanelWork("probe", 12, { manual: true });
+  await work.requestPanelWork("probe", 12, { forceSync: true });
+  await work.requestPanelWork("probe", "abc", null);
   const rows = await runtime.queryRaw('SELECT COUNT(*) AS n FROM ' + runtime.quoteDbIdentifier("panel_work_requests"));
   assert.equal(Number(rows[0].n), 2);
-  assert.equal(await work.drainPanelWorkRequests({ now: 4000 }), 2);
+  assert.equal(await work.drainPanelWorkRequests(), 1);
+  assert.deepEqual(seen, [["12", { forceSync: true }]]);
+  assert.equal(await work.drainPanelWorkRequests(), 0, "退避期间不重跑");
+  work.setPanelWorkClockOffsetForTests(3_000);
+  assert.equal(await work.drainPanelWorkRequests(), 1);
   assert.deepEqual(seen, [["12", { forceSync: true }], ["abc", null]]);
-  assert.equal(await work.drainPanelWorkRequests({ now: 5000 }), 0);
+  assert.equal(await work.drainPanelWorkRequests(), 0);
+  const left = await runtime.queryRaw('SELECT COUNT(*) AS n FROM ' + runtime.quoteDbIdentifier("panel_work_requests"));
+  assert.equal(Number(left[0].n), 0);
   console.log("ok " + runtime.getDatabaseKind());
   process.exit(0);
 `;
