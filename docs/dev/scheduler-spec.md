@@ -57,7 +57,7 @@
 |---|---|---|---|---|
 | 自动 `auto` | `Auto`：上面的自动成本取最小，P2C | 延迟填 PeakEWMA 读数（时间常数 `DefaultPeakDecay` 10 s；两次样本之间停在最近一个样本上、不往 0 落，`latency.go`；线路组喂「探测耗时 + 下游延迟」整链的数） | 每条新连接挑 | 每个新会话挑 |
 | 主备 `fallback` | 不走 `Pick`。线路组：`activeIndex` 状态机（§5）；FXP：每次 `First`；GOST 出口组：同线路组 | 切过去至少 `minHoldSeconds`（GOST 出口组 60 s，`BALANCE_MIN_HOLD_SECONDS`，`shared/loadBalance.ts:161`） | 新连接走在用的那条 | 同；TCP+UDP 规格的 UDP 那一侧另判 |
-| 按访客固定 `ip_hash` | `Rendezvous`：加权 rendezvous（FNV-1a + 终混）+ 有界负载 | `DefaultHashLoadFactor` 1.25（`rendezvous.go:68`）；FXP 叠加连接按会话固定用不设上限的（`LoadFactor: -1`）；不乘慢启动；不知道访客时按轮流 | 访客 = PROXY 头里的地址（gost 先发的头；SNI 分流器在 GOST 负载均衡规则上发 v2 头，`server/tlsInboundRuntime.ts` 的 `visitorHeaderRuleIds`） | 访客 = 每个新会话第一个只有 v2 头的包（`agent/route_group_udp_visitor.go`）；FXP 用 UDP 访客地址包（类型 5，`forwardx-fxp/udp_ping.go:38`） |
+| 按访客固定 `ip_hash` | `Rendezvous`：加权 rendezvous（FNV-1a + 终混），**不设负载上限** | 访客的成员能用就一直是它，压了多少都不挪（出口 IP 不变是这个分法的意义；以前带 1.25 倍的有界负载，一个访客自己开十几条连接就换了出口）；有界负载仍可选（`RendezvousOptions.LoadFactor > 0`，`DefaultHashLoadFactor` 1.25），没有分配方式默认开；FXP 叠加连接按会话固定也是不设上限的；不乘慢启动；不知道访客时按轮流 | 访客 = PROXY 头里的地址（gost 先发的头；SNI 分流器在 GOST 负载均衡规则上发 v2 头，`server/tlsInboundRuntime.ts` 的 `visitorHeaderRuleIds`） | 访客 = 每个新会话第一个只有 v2 头的包（`agent/route_group_udp_visitor.go`）；FXP 用 UDP 访客地址包（类型 5，`forwardx-fxp/udp_ping.go:38`） |
 | 延迟优先 `latency` | `NearSet.Select`（`latency.go:113`）圈出「一样快」的一组，组里 `Auto` | 门槛：线路组 `DefaultLatencyMargin` 50 ms（`latency.go:91`）；GOST / NEX 出口组用「检测与切换」里的 `latencyMarginMs`（默认 50）；进组至少留 `DefaultNearHold` 1 分钟（`latency.go:94`），出组不等；比的是普通平均延迟 + 抖动 | 同自动 | 同自动 |
 | 按负载 `least_load` | `LeastLoad`：负载那一半成本，P2C | 线路组 `Utilisation` = 面板给的沿途主机负载；FXP `Utilisation` = 流量 ÷ 线路带宽（`exit_select.go:164`，只在配了线路带宽时），`Weight` = 线路带宽（有一台不知道就都一样大，`exitGroupCapacities`）；GOST `Weight` = 线路带宽份数（`exitGroupWeights`） | 在途 + 活动连接 | 活动会话一起算 |
 | 按权重 `weighted` | `SmoothWRR.Pick`（`wrr.go:22`），随机起步 | 权重：线路组每条路径的权重；出口组手填份数，否则线路带宽 | | |
@@ -137,9 +137,15 @@
 1. 直接探出口机的隧道监听（`probeExitGroupTargets`，`agent/failover_exit_group.go:188`）。tcp / mtcp 隧道带 `probeRelay`：
    连上后发 8 个 0 字节、等 gost 断开（`failoverProbeRelay`，`:229`），进程卡死也判得出来。多跳（`viaRelay`）不探，每轮算通。
 2. 真实连接「本机 gost 端口拨通、出口一个字节没回就被关」→ 当场换下一台重发（`failover_early_close.go`），并经出口复核
-   （等 4 s，`exitConfirmWindow`，`failover_exit_group.go`）：又被关、而别的能用的出口经出口照样开着就当场判坏；别的也全被关
-   （目标自己会关不说话的连接）谁都不判、5 min 里不再拿这个信号判，没有别的可比也不判（`exitCloseIsOwnFault`）。之后恢复要经出口
-   连着探通 2 次（`exitThroughRecoverOKs`，每次同样等满 4 s：多跳 / 出口到目标黑洞时 gost 要 3 s 才关本机连接）再过恢复门槛。
+   （最多等 4 s，`exitConfirmWindow`，`failover_exit_group.go` 的 `exitConfirmFault`）：拿别的能用的出口比的那几条和经它的这条
+   **同时**开；这条在 c 时刻被关、别的到 c + 1 s（`exitCompareGrace`）还开着（或回了数据）就当场判坏；别的也差不多同时被关
+   （目标自己会关不说话的连接）谁都不判、5 min 里不再拿这个信号判，没有别的可比也不判；1 min 内比出过「别的照样开着」就只探这一台。
+   出口到目标被拒约 1 s 判坏；多跳上出口死了，撞上的连接约 3 s 被关 + 复核 3 s + 1 s ≈ 第一条连接后 7 s 判坏。
+   之后恢复要经出口连着探通 2 次（`exitThroughRecoverOKs`，每次同样等满 4 s：多跳 / 出口到目标黑洞时 gost 要 3 s 才关本机连接）
+   再过恢复门槛：第一次探通就从那次探测开始时计恢复、紧接着探第二次、够了当场放回（`recheckExitThrough`），
+   到目标恢复后最多一轮间隔 + 2 × 4 s ≈ 10 s 放回；中间直接探失败过，那之前发起的经出口探测作废（`exitThroughGen`）。
+   复核时同时直接探一次出口机（多跳的不探）：出口机本身也连不上（进程死掉时 gost 拨它被拒，复核约 1 s 就判坏、比每轮
+   的直接探测先到）是机器的问题，按直接探测恢复，不要求经出口（`confirmExitEarlyClose`）。
 3. 面板提示：出口机探规则目标的结果（`server/exitTargetHealth.ts` 的 `exitTargetExcludedHostIds`：有别的已知好的才摘）→ `Down`；
    出口到目标的中位数 → `ExtraLatencyMs`。
 

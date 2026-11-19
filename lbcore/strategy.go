@@ -11,7 +11,7 @@ import "time"
 	weighted     按权重：平滑加权轮询（wrr.go）
 	round_robin  轮流（wrr.go）
 	random       随机（wrr.go）
-	ip_hash      按访客固定：加权 rendezvous 哈希 + 有界负载（rendezvous.go）
+	ip_hash      按访客固定：加权 rendezvous 哈希，不设负载上限（rendezvous.go）
 	fallback     主备：一次只用一个（tier.go 的 First）。它不在候选里「分」，所以不走 Pick ——
 	             出口组每次用 First 现挑；线路组有自己的「现在走哪条」状态机（粘性、切回、时段表）。
 
@@ -64,7 +64,7 @@ type State struct {
 type Options struct {
 	// Near：延迟优先的门槛和驻留。
 	Near NearPolicy
-	// HashLoadFactor：按访客固定的有界负载上限（0 = 1.25，负数 = 不设上限）。
+	// HashLoadFactor：按访客固定的有界负载上限倍数（≤ 0 = 不设上限，默认；> 0 才设，见 rendezvous.go）。
 	HashLoadFactor float64
 	// Scratch：按访客固定用的临时区（按成员下标，长度 ≥ 成员数）。不给就现分配。
 	Scratch []float64

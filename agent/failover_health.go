@@ -122,10 +122,7 @@ func (p *failoverProxy) checkHealth() {
 	failureThreshold := p.spec.FailureThreshold
 	protocol := failoverProtocol(p.spec)
 	specSignature := failoverSignature(p.spec)
-	probeTimeout := failoverProbeDefaultTimeout
-	if p.spec.ProbeTimeoutMs > 0 {
-		probeTimeout = time.Duration(p.spec.ProbeTimeoutMs) * time.Millisecond
-	}
+	probeTimeout := p.probeTimeoutLocked()
 	// 带探测节奏的规格（固定节拍）：「持续够久」那道门槛留余量（fixedTickGatePercent；真实 gost 上实测不留的话
 	// 进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
 	fixedTick := p.spec.ProbeIntervalSeconds > 0
@@ -188,25 +185,13 @@ func (p *failoverProxy) checkHealth() {
 		if i >= len(p.spec.Targets) {
 			break
 		}
-		target := p.spec.Targets[i]
 		if ok {
 			p.failureSince[i] = time.Time{}
 			if !p.targetHealth[i] {
 				if p.recoveredSince[i].IsZero() {
 					p.recoveredSince[i] = now
 				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) && p.exitThroughRecoveredLocked(i) {
-					p.targetHealth[i] = true
-					p.recoveredSince[i] = time.Time{}
-					if i < len(p.exitThroughFailed) {
-						p.exitThroughFailed[i], p.exitThroughOKs[i] = false, 0
-					}
-					if !p.spec.NoSlowStart {
-						p.markSlowStartLocked(i, now)
-					}
-					// 恢复了：拨号那本账也从头来，不然恢复前攒的失败会让它再拨坏一次就又被判坏。
-					p.statsLocked(i).dialFailures = 0
-					logf("failover target recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
-					p.recordTargetEventLocked(i, "recovered", "health check")
+					p.readmitLocked(i, now)
 				}
 			} else {
 				p.recoveredSince[i] = time.Time{}
@@ -226,6 +211,44 @@ func (p *failoverProxy) checkHealth() {
 		}
 	}
 	p.updateFallbackActiveLocked("health check")
+}
+
+/*
+readmitLocked 把判坏的路径放回（TCP 那一侧 / 不分侧的主健康）：两处放回都走这里 —— 探测（checkHealth）和出口组
+经出口探通够次数（recheckExitThrough）。重新选路由调用方做。调用方持有 p.mu、下标有效。
+*/
+func (p *failoverProxy) readmitLocked(i int, now time.Time) {
+	target := p.spec.Targets[i]
+	p.targetHealth[i] = true
+	p.recoveredSince[i] = time.Time{}
+	if i < len(p.exitThroughFailed) {
+		p.exitThroughFailed[i], p.exitThroughOKs[i] = false, 0
+	}
+	if !p.spec.NoSlowStart {
+		p.markSlowStartLocked(i, now)
+	}
+	// 恢复了：拨号那本账也从头来，不然恢复前攒的失败会让它再拨坏一次就又被判坏。
+	p.statsLocked(i).dialFailures = 0
+	logf("failover target recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
+	p.recordTargetEventLocked(i, "recovered", "health check")
+}
+
+// probeTimeoutLocked 一次直接探测的超时：规格给了 ProbeTimeoutMs 就用它。调用方持有 p.mu（读锁就行）。
+func (p *failoverProxy) probeTimeoutLocked() time.Duration {
+	if p.spec.ProbeTimeoutMs > 0 {
+		return time.Duration(p.spec.ProbeTimeoutMs) * time.Millisecond
+	}
+	return failoverProbeDefaultTimeout
+}
+
+// recoverGateReachedLocked 「连着通了 elapsed」够不够 RecoverSeconds（固定节拍的规格留 fixedTickGatePercent 的余量，
+// 和 checkHealth 里那道门槛一样）。调用方持有 p.mu。
+func (p *failoverProxy) recoverGateReachedLocked(elapsed time.Duration) bool {
+	gate := time.Duration(p.spec.RecoverSeconds) * time.Second
+	if p.spec.ProbeIntervalSeconds > 0 {
+		gate = gate * fixedTickGatePercent / 100
+	}
+	return elapsed >= gate
 }
 
 /*

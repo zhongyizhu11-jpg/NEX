@@ -144,7 +144,7 @@ func TestLoadIsTrackedPerLoopbackPort(t *testing.T) {
 	}
 }
 
-func TestIPHashBoundedLoadPerLoopbackPort(t *testing.T) {
+func TestIPHashFollowsCapacityPerLoopbackPort(t *testing.T) {
 	resetFXPEndpointRegistry()
 	selector := newExitEndpointSelector(
 		[]exitEndpoint{{Host: "127.0.0.1", Port: 30012, CapacityMbps: 100}},
