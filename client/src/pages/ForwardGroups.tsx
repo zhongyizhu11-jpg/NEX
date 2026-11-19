@@ -1365,9 +1365,15 @@ export function ForwardGroupsContent({
           : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_44px_52px_36px]"
         : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_52px_36px]";
   const ddnsLinesQuery = trpc.forwardGroups.ddnsLines.useQuery({ domain: null }, {
-    // 入口组还要从这里知道现在的服务商能不能按记录权重发布（「按权重解析」不支持时置灰）
-    enabled: showDialog && (showLineColumn || form.groupMode === "entry"),
+    enabled: showDialog && showLineColumn,
     staleTime: 10 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  // 入口组「按权重解析」：现在的服务商不支持时置灰并写明原因
+  const ddnsWeightSupportQuery = trpc.forwardGroups.ddnsWeightSupport.useQuery(undefined, {
+    enabled: showDialog && form.groupMode === "entry" && form.bandwidthAggregationEnabled,
+    staleTime: 60_000,
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -2816,7 +2822,7 @@ export function ForwardGroupsContent({
                         ) : null}
                         {(() => {
                           // 按权重解析：把上面算出来的份额写成 DNS 服务商的记录权重，解析时真的按比例返回。
-                          const weightSupport = ddnsLinesQuery.data?.weightSupport;
+                          const weightSupport = ddnsWeightSupportQuery.data;
                           const typeReason = ddnsWeightRecordTypeSupported(form.recordType) ? null : "CNAME 一个名字只能有一条记录，没有按比例一说，用不了按权重解析";
                           const disabledReason = typeReason || (weightSupport && !weightSupport.supported ? weightSupport.reason : null);
                           return (

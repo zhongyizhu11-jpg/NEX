@@ -388,15 +388,16 @@ export const forwardGroupsRouter = router({
     .input(z.object({ domain: z.string().trim().max(253).nullable().optional() }))
     .query(async ({ input }) => {
       try {
-        // 顺带告诉界面现在的服务商能不能按记录权重发布（入口组「按权重解析」不支持时置灰并说明原因）。
-        const [lines, settings] = await Promise.all([listDdnsLinesForGroups(input.domain), getDdnsSettings()]);
-        return { ...lines, weightSupport: ddnsWeightSupport(settings) };
+        return await listDdnsLinesForGroups(input.domain);
       } catch (error) {
         if (error instanceof DnspodRecordsError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
         if (error instanceof DdnsProviderError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
         throw error;
       }
     }),
+
+  /** 现在的 DDNS 服务商能不能按记录权重发布（入口组「按权重解析」不支持时界面置灰并写明原因）。 */
+  ddnsWeightSupport: adminProcedure.query(async () => ddnsWeightSupport(await getDdnsSettings())),
 
   events: adminProcedure
     .input(z.object({ groupId: z.number(), limit: z.number().int().min(1).max(200).default(50) }))
