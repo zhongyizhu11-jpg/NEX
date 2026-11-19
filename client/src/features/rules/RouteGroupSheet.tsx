@@ -1,4 +1,5 @@
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
+import { balanceStrategyHint, normalizeBalanceStrategy } from "@shared/loadBalance";
 import { Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -15,10 +16,10 @@ import type { NetworkHealth } from "@shared/networkHealth";
 import {
   ROUTE_DEST_SPREAD_LABELS,
   ROUTE_EVENT_KIND_LABELS,
-  ROUTE_MODE_INFO,
   normalizeRouteEventKind,
   routeLineName,
   routeModeHint,
+  routeStrategyLabel,
   type RouteDestSpread,
   type RouteEndpoint,
   type RouteGroupPolicy,
@@ -30,7 +31,7 @@ import type { RouteBoardEntry, RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, SentenceRow } from "./RoutePolicySheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
-import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
+import { routeLineSubtitle } from "./routeLineText";
 import { useRouteLineEditor } from "./RouteLineInlineEditor";
 import type { LineRuleRow } from "./routeLineOptions";
 
@@ -201,7 +202,9 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone }: Rou
   const now = nowMs ?? Date.now();
   const report = describeRoutePolicyReport(policy, { nowMs: now, timeZone });
   const weighted = policy.mode === "weighted";
-  const modeInfo = ROUTE_MODE_INFO[policy.mode];
+  // 8 种分配方式的名字 + 一句话（同时分的说分法那句，主备说首选哪条那句）
+  const spread = normalizeBalanceStrategy(policy.strategy);
+  const strategyText = `${routeStrategyLabel(policy)}：${weighted && spread ? balanceStrategyHint(spread, policy.perSession) : routeModeHint(policy.mode, policy.perSession)}`;
 
   return (
     <div className="flex min-w-0 flex-col gap-[var(--fx-space-5)]">
@@ -233,7 +236,7 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone }: Rou
           header="调度计划"
           footer={weighted ? undefined : "从上往下，先对上的那一条说了算。它指的那条挂了，照样往下找 —— 选路和健康检查是两件事。"}
         >
-          <SentenceRow label="策略" detail={`${modeInfo.template} · ${modeInfo.label}：${routeModeHint(policy.mode, policy.perSession)}`} />
+          <SentenceRow label="策略" detail={strategyText} />
           {(() => {
             // 「多落地」（2.3.501）：一次走一条线路时，选了多落地一起分的线路在这里列出来
             const delivery = status?.delivery;
@@ -357,7 +360,7 @@ export function RouteGroupSheet({
   const status = (statusQuery.data as RouteStatus | null | undefined) ?? null;
   const events = (eventsQuery.data as RouteEvent[] | undefined) ?? [];
   const mode = shown?.policy.mode ?? "failover";
-  const modeLabel = ROUTE_LINE_MODE_LABEL[mode] || ROUTE_LINE_MODE_LABEL.failover;
+  const modeLabel = shown ? routeStrategyLabel(shown.policy) : routeStrategyLabel({ mode });
   // 手动换线路：点线路的状态胶囊「切到这条」= 人工指定（按权重分的没有「走哪条」，不给）
   const lineSwitch: RouteLineSwitch | undefined = shown && canEdit && onPin && onUnpin && shown.policy.mode !== "weighted"
     ? {
@@ -395,7 +398,7 @@ export function RouteGroupSheet({
                 </LineChipButton>
               ) : null}
             </div>
-            <DialogDescription className="truncate text-[12.5px]">{routeLineSubtitle(status, mode)}</DialogDescription>
+            <DialogDescription className="truncate text-[12.5px]">{routeLineSubtitle(status, shown?.policy ?? { mode })}</DialogDescription>
           </DialogHeader>
           {!status ? (
             <p className="px-1 text-[12.5px] text-muted-foreground">在读线路状态…</p>

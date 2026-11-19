@@ -116,9 +116,9 @@ import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CS
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
-import { hostBandwidthHintMbps } from "@shared/linkWeights";
-import { BalanceDetectPanel, BalanceStrategySelect, BalanceSummaryLine } from "@/features/links/LoadBalanceFields";
-import { type BalanceDetect, type BalanceStrategy, DEFAULT_BALANCE_DETECT, exitGroupWeights, normalizeBalanceDetect, normalizeBalanceStrategy, normalizeExitGroupStrategy, UNIFIED_BALANCE_AGENT_VERSION } from "@shared/loadBalance";
+import { LoadBalanceFields } from "@/features/links/LoadBalanceFields";
+import { exitManualWeights, exitStrategyNote } from "@/lib/exitGroupBalance";
+import { type BalanceDetect, type BalanceStrategy, BALANCE_DEFAULT_STRATEGY, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeBalanceStrategy, normalizeExitGroupStrategy, UNIFIED_BALANCE_AGENT_VERSION } from "@shared/loadBalance";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -238,8 +238,8 @@ type GroupForm = {
 const makeDefaultForm = (): GroupForm => ({
   name: "",
   groupMode: "failover",
-  // 新建出口组不预选分配方式（用户要求「新建自己选」），下拉框里「自动」标着推荐。
-  exitStrategy: null,
+  // 新建出口组直接是「自动 · 推荐」+「均衡」：什么都不用改就能用（2026-11 界面统一）
+  exitStrategy: BALANCE_DEFAULT_STRATEGY,
   balanceDetect: { ...DEFAULT_BALANCE_DETECT },
   entryGroupId: null,
   groupType: "host",
@@ -1618,9 +1618,6 @@ export function ForwardGroupsContent({
     if (supportsSwitchNotify && form.telegramSwitchNotifyEnabled && telegramSettingsLoaded && !telegramReady) {
       return toast.error("请先在系统设置中配置并启用 Telegram 机器人");
     }
-    if (isExitGroup && !form.exitStrategy) {
-      return toast.error("请选择分配方式（不知道选哪个就用「自动」）");
-    }
     const payload = {
       ...form,
       name: form.name.trim(),
@@ -2611,30 +2608,14 @@ export function ForwardGroupsContent({
             </div>
 
             {form.groupMode === "exit" && (
-              <div className="space-y-3">
-                <FormField className="space-y-2 rounded-xl border border-border/60 bg-muted/15 p-3">
-                  <Label>分配方式</Label>
-                  <BalanceStrategySelect
-                    value={form.exitStrategy}
-                    onChange={(exitStrategy) => setForm({ ...form, exitStrategy })}
-                  />
-                  <BalanceSummaryLine
-                    strategy={form.exitStrategy}
-                    detect={form.balanceDetect}
-                    extra={form.exitStrategy === "weighted"
-                      ? exitWeightHint(form.members, hostById)
-                      : form.exitStrategy === "least_load" || form.exitStrategy === "auto"
-                        ? exitLoadHint(form.members, hostById)
-                        : undefined}
-                  />
-                </FormField>
-                <BalanceDetectPanel
-                  value={form.balanceDetect}
-                  onChange={(balanceDetect) => setForm({ ...form, balanceDetect })}
+                <LoadBalanceFields
                   strategy={form.exitStrategy}
-                  {...exitManualWeightProps(form.members, hostById)}
+                  onStrategyChange={(exitStrategy) => setForm({ ...form, exitStrategy })}
+                  detect={form.balanceDetect}
+                  onDetectChange={(balanceDetect) => setForm({ ...form, balanceDetect })}
+                  note={exitStrategyNote(form.exitStrategy, form.members, hostById)}
+                  {...exitManualWeights(form.members, hostById)}
                 />
-              </div>
             )}
 
             {(form.groupMode === "failover" || form.groupMode === "entry") && (
@@ -3452,54 +3433,3 @@ export default function ForwardGroupsPage() {
     </DashboardLayout>
   );
 }
-
-/** 「实际效果」那句话用：每台都手填了权重时，把份数和名字带过去（「新连接按 5 : 3 分给 A、B」）。 */
-function exitManualWeightProps(members: MemberForm[], hostById: Map<number, any>) {
-  const enabled = members.filter((member) => member.isEnabled && Number(member.hostId || 0) > 0);
-  const weights = enabled.map((member) => Math.floor(Number(member.aggregationWeight) || 0));
-  if (enabled.length < 2 || !weights.every((weight) => weight > 0)) return {};
-  return {
-    weights,
-    memberNames: enabled.map((member) => String(hostById.get(Number(member.hostId))?.name || `主机 ${member.hostId}`)),
-  };
-}
-
-/**
- * 「按权重」的出口组：把按线路带宽算出来的份数直接写给用户看（500M · 300M → 5:3）。
- * 算法和下发时同一个（shared/loadBalance.ts 的 exitGroupWeights），这里看到的就是实际分法。
- */
-function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
-  const enabled = members.filter((member) => member.isEnabled && Number(member.hostId || 0) > 0);
-  const hosts = enabled
-    .map((member) => hostById.get(Number(member.hostId)))
-    .filter(Boolean);
-  if (hosts.length < 2) return "按每台出口的线路带宽分新连接，带宽大的多分。至少要两台出口。";
-  // 每台都手填了权重：按填的分（和下发时 server 的 exitManualWeights 同一个规则）
-  const manual = enabled.map((member) => Math.floor(Number(member.aggregationWeight) || 0));
-  if (manual.every((weight) => weight > 0)) return `按填的权重分：${manual.join(" : ")}。`;
-  if (manual.some((weight) => weight > 0)) return "有的出口没填权重：要全部填了才按填的分，现在按线路带宽算。";
-  const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
-  const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
-  if (unknown.length > 0) return `${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在按平均分。`;
-  const weights = exitGroupWeights("weighted", bandwidths);
-  const sizes = bandwidths.map((value) => `${value}M`).join(" · ");
-  return weights ? `按线路带宽分新连接：${sizes} → ${weights.join(":")}。` : `几台带宽一样（${sizes}），等于轮流。`;
-}
-
-/**
- * 「按负载」：NEX 隧道里入口按每台出口的实时流量、连接数、握手延迟和线路带宽挑最闲的；
- * GOST 隧道由入口机 Agent 的本机代理挑「挂着的连接数 ÷ 份数」最小的；nginx（基础支持）用 least_conn。这里把带宽写出来，没填的点名。
- */
-function exitLoadHint(members: MemberForm[], hostById: Map<number, any>) {
-  const hosts = members
-    .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
-    .map((member) => hostById.get(Number(member.hostId)))
-    .filter(Boolean);
-  const base = "NEX 隧道按每台出口的实时流量、连接数、延迟和线路带宽挑最闲的，GOST 隧道按每台挂着的连接数 ÷ 线路带宽挑最闲的；刚恢复的出口 1 分钟内慢慢加量。Nginx 隧道是基础支持：连接数最少的优先。";
-  if (hosts.length < 2) return `${base}至少要两台出口。`;
-  const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
-  const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
-  if (unknown.length > 0) return `${base}${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在当一样大。`;
-  return `${base}线路带宽：${hosts.map((host: any, index: number) => `${String(host.name || host.id)} ${bandwidths[index]}M`).join(" · ")}。`;
-}
-

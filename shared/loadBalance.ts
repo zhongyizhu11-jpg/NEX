@@ -32,18 +32,28 @@ export const BALANCE_COMMON_STRATEGIES: readonly BalanceStrategy[] = ["auto"];
 export const BALANCE_CUSTOM_STRATEGIES: readonly BalanceStrategy[] = ["latency", "fallback", "ip_hash", "least_load", "weighted", "round_robin", "random"];
 
 /*
-  每种方式一句话，说的是代码真实的做法（Agent 和 FXP 共用的 lbcore）。坏了的所有方式都会避开，这里不重复。
+  每种方式一句话（全站唯一一份：出口组、链路负载均衡、线路组都显示这一句），说的是代码真实的做法（Agent 和 FXP 共用的
+  lbcore）。量词用「个」，出口（台）和线路（条）都读得通；坏了的所有方式都会避开，这里不重复。
 */
 export const BALANCE_STRATEGY_LABELS: Record<BalanceStrategy, { label: string; hint: string }> = {
-  auto: { label: "自动", hint: "延迟、抖动、丢包、正在走的连接和带宽占用合成一个数，新连接给最划算的那台；刚变慢、变忙的立刻少分" },
-  fallback: { label: "主备", hint: "按顺序只用第一台，坏了换下一台，好了再切回来" },
-  ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一台（那台坏了才换），适合要保持登录的服务" },
-  latency: { label: "延迟优先", hint: "只在最快的那几台里分：比最快的慢不到设定的毫秒数算一样快，慢出这么多的不分" },
-  least_load: { label: "按负载", hint: "新连接给现在最闲的那台：看连接数，填了线路带宽的还看流量占了带宽几成" },
-  weighted: { label: "按权重", hint: "按每台的权重分，例如 5 : 3 : 2" },
-  round_robin: { label: "轮流", hint: "新连接一台一台轮着走" },
-  random: { label: "随机", hint: "新连接随机挑一台能用的" },
+  auto: { label: "自动", hint: "看延迟、抖动、丢包和忙闲，新连接给当下最合适的那个；变慢、变忙的马上少分" },
+  fallback: { label: "主备", hint: "先用第一个，连不上才换下一个，恢复稳定后切回" },
+  ip_hash: { label: "按访客固定", hint: "同一个访客一直走同一个，它坏了才换；适合要保持登录的服务" },
+  latency: { label: "延迟优先", hint: "只在最快的几个里分，比最快的慢出门槛（默认 50 ms）的不分" },
+  least_load: { label: "按负载", hint: "新连接给现在最闲的那个（看连接数，填了带宽的还看流量）" },
+  weighted: { label: "按权重", hint: "按设定的比例分，例如 5 : 3 : 2；没填的按线路带宽" },
+  round_robin: { label: "轮流", hint: "新连接一个一个轮着走" },
+  random: { label: "随机", hint: "新连接随机挑一个能用的" },
 };
+
+/** 新建出口组 / 线路组默认的分配方式：自动（推荐），用户不用选也能用。 */
+export const BALANCE_DEFAULT_STRATEGY: BalanceStrategy = "auto";
+
+/** 那一句说明；perSession：只转 UDP 时说「新会话」。 */
+export function balanceStrategyHint(strategy: BalanceStrategy, perSession = false) {
+  const hint = BALANCE_STRATEGY_LABELS[strategy].hint;
+  return perSession ? hint.replaceAll("新连接", "新会话").replace("连接数", "会话数") : hint;
+}
 
 /** 存的值 → 统一的分配方式。老的 none 当主备；least_conn 是更老的「按负载」；认不出的返回 null（界面上算没选）。 */
 export function normalizeBalanceStrategy(value: unknown): BalanceStrategy | null {
@@ -212,14 +222,6 @@ export function balanceSwitchWithinSeconds(detect: BalanceDetect) {
   return Math.max(1, Math.ceil(detect.intervalSeconds * (detect.failThreshold + 0.5)));
 }
 
-/** 折叠时那一行：「每 2 秒探一次 · 2 次不通算坏 · 抖动超过 30ms 少分」。 */
-export function describeBalanceDetectShort(detect: BalanceDetect) {
-  const jitter = detect.jitterAction === "ignore"
-    ? "不看抖动"
-    : `抖动超过 ${detect.jitterMs}ms ${BALANCE_JITTER_ACTION_LABELS[detect.jitterAction]}`;
-  return `每 ${detect.intervalSeconds} 秒探一次 · ${detect.failThreshold} 次不通算坏 · ${jitter}`;
-}
-
 function ratioText(weights: readonly number[]) {
   const usable = weights.map((weight) => Math.max(0, Math.round(Number(weight) || 0)));
   return usable.every((weight) => weight > 0) ? usable.join(" : ") : "";
@@ -288,7 +290,7 @@ export function agentSupportsUnifiedBalance(agentVersion: unknown): boolean {
  */
 export function nginxBalanceBasicSupportNote(mode: unknown): string | null {
   return String(mode ?? "").trim().toLowerCase() === "nginx_stream"
-    ? "基础支持：Nginx 隧道的出口由入口机的 nginx 自己分，不经统一调度。它只看出口机连不连得上，不看出口到目标通不通；「自动」「延迟优先」在它上面是「连接数最少 + 线路带宽」；检测灵敏度、手动指定出口对它不起作用。"
+    ? "基础支持：出口由入口机的 nginx 自己分，只看出口机连不连得上，不看到目标通不通；检测灵敏度和手动指定对它不起作用。"
     : null;
 }
 

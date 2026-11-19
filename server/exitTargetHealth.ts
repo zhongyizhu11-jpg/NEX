@@ -541,6 +541,10 @@ export type ExitTargetExitSummary = {
   udpUnverified: number;
   /** 出口机的 FXP 版本过旧（不回 UDP 探活包）：弹窗写「对端版本过旧」 */
   peerOutdated: boolean;
+  /** 连不上 / 不稳是哪一段的问题（入口真实上报才有）：exit = 入口连不上这台出口机，target = 出口到目标不行 */
+  reason?: "target" | "exit" | null;
+  /** 新连接分给它的比例（0–1，各条规则的平均；入口真实上报、这段时间有新连接时才有） */
+  share?: number | null;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -838,6 +842,7 @@ function exitTargetSummaryFromLive(
   const perExit = new Map(ids.map((hostId) => [hostId, {
     rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
     baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
+    reason: null as "target" | "exit" | null, shares: [] as number[],
   }]));
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
   const hows = new Map<string, number>();
@@ -855,6 +860,9 @@ function exitTargetSummaryFromLive(
       if (exit.state === "down" && !allDown) entry.down += 1;
       else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
       if (exit.state === "active") entry.activeRules += 1;
+      if (exit.state === "active" && exit.share != null) entry.shares.push(exit.share);
+      // 出口机本身连不上比到目标不行更要紧：有一条规则报 exit 就写 exit
+      if ((exit.state === "down" || exit.state === "unstable") && exit.reason && entry.reason !== "exit") entry.reason = exit.reason;
       entry.picks += exit.picks;
       if (exit.udpState === "ok") entry.udpOk += 1;
       else if (exit.udpState === "down") entry.udpDown += 1;
@@ -926,6 +934,8 @@ function exitTargetSummaryFromLive(
         udpDown: entry.udpDown,
         udpUnverified: entry.udpUnverified,
         peerOutdated: entry.peerOutdated,
+        reason: entry.reason,
+        share: entry.shares.length > 0 ? entry.shares.reduce((sum, value) => sum + value, 0) / entry.shares.length : null,
       };
     }),
     targetIssues,
@@ -1036,7 +1046,7 @@ export function exitTargetExcludedHostIds(ruleId: number, exitHostIds: readonly 
 export type RuleExitTargetSummary = {
   total: number;
   reporting: number;
-  bad: Array<{ hostId: number; hostName: string; reason: "down" | "unstable"; medianMs: number | null; jitterMs: number | null; lossPct: number | null }>;
+  bad: Array<{ hostId: number; hostName: string; reason: "down" | "unstable"; medianMs: number | null; jitterMs: number | null; lossPct: number | null; exitUnreachable?: boolean }>;
   allBad: boolean;
 };
 
@@ -1065,6 +1075,7 @@ function ruleExitTargetFieldsFromLive(live: LiveRuleReport): RuleExitTargetField
       medianMs: exit.medianMs,
       jitterMs: exit.jitterMs,
       lossPct: exit.lossPct,
+      exitUnreachable: exit.reason === "exit",
     }));
   const total = live.exits.length;
   // 出口机本身连不上（不是到目标的问题）也算坏；全坏了才说「目标的问题」—— 要都是到目标不行才这么说
@@ -1138,7 +1149,7 @@ function describeRuleExitTargetSummary(summary: RuleExitTargetSummary | null, go
   if (!summary || summary.bad.length === 0) return null;
   if (summary.allBad) return `${summary.total} 台出口都连不好目标：多半是目标本身的问题，换出口没用`;
   const parts = summary.bad.map((item) => {
-    if (item.reason === "down") return `${item.hostName} 连不上目标，已切走`;
+    if (item.reason === "down") return item.exitUnreachable ? `连不上 ${item.hostName} 这台出口机，已切走` : `${item.hostName} 连不上目标，已切走`;
     const detail = item.lossPct && item.lossPct >= UNSTABLE_LOSS_PCT ? `丢包 ${Math.round(item.lossPct)}%` : `抖动 ${Math.round(item.jitterMs ?? 0)}ms`;
     return gost ? `${item.hostName} 到目标${detail}` : `${item.hostName} 到目标${detail}，已少分`;
   });

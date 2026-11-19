@@ -2,23 +2,23 @@
   线路组在界面上的说法：模式、分法、切换方式、备用怎么候着、事件的名字，切换原因和
   路径问题怎么翻成人话。shared/routeGroup.ts 统一再导出。
 */
-import { BALANCE_STRATEGY_LABELS } from "./loadBalance";
+import { BALANCE_STRATEGY_LABELS, normalizeBalanceStrategy } from "./loadBalance";
 import type {
   RouteDelivery,
   RouteDestSpread,
   RouteEventKind,
   RouteMode,
-  RouteSpread,
   RouteSwitchMode,
 } from "./routeGroupModel";
 
 export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; hint: string }> = {
-  one: { label: "主备", hint: "几个落地里只用一个，按上面「怎么切」挑，坏了换下一个" },
-  least_load: { label: "按负载分", hint: "这条线路在用时，新连接给现在连接最少的那个落地" },
-  round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
-  random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },
-  ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一个落地，适合要保持登录的服务" },
-  auto: { label: BALANCE_STRATEGY_LABELS.auto.label, hint: "这条线路在用时，延迟、丢包和落地主机的负载合成一个数，新连接给最划算的那个落地" },
+  // 名字和一句话都用统一的那份（BALANCE_STRATEGY_LABELS），这里只说「在几个落地之间」
+  one: { label: BALANCE_STRATEGY_LABELS.fallback.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.fallback.hint}` },
+  least_load: { label: BALANCE_STRATEGY_LABELS.least_load.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.least_load.hint}` },
+  round_robin: { label: BALANCE_STRATEGY_LABELS.round_robin.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.round_robin.hint}` },
+  random: { label: BALANCE_STRATEGY_LABELS.random.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.random.hint}` },
+  ip_hash: { label: BALANCE_STRATEGY_LABELS.ip_hash.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.ip_hash.hint}` },
+  auto: { label: BALANCE_STRATEGY_LABELS.auto.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.auto.hint}` },
 };
 
 /** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
@@ -67,6 +67,29 @@ export function routeModeHint(mode: RouteMode, perSession = false): string {
   return (perSession && ROUTE_MODE_SESSION_HINTS[mode]) || ROUTE_MODE_INFO[mode].hint;
 }
 
+/** 主备时「首选哪条」（编辑框里那几格同一套说法）。 */
+export const ROUTE_PREFER_LABELS: Record<RouteMode, string> = {
+  failover: "按顺序",
+  smart: "最快的",
+  scheduled: "按时段",
+  hybrid: "按时段 · 择优",
+  manual: "手动指定",
+  weighted: "",
+};
+
+/**
+ * 线路组是 8 种分配方式（shared/loadBalance.ts）里的哪一种：同时分的说分法（「自动」「轮流」），其余是主备，
+ * 后面跟首选哪条（「主备 · 最快的」）。short：只要方式名。
+ */
+export function routeStrategyLabel(policy: { mode: RouteMode; spread?: string | null; strategy?: string | null }, short = false): string {
+  if (policy.mode === "weighted") {
+    const spread = normalizeBalanceStrategy(policy.spread ?? policy.strategy) ?? "weighted";
+    return BALANCE_STRATEGY_LABELS[spread].label;
+  }
+  const main = BALANCE_STRATEGY_LABELS.fallback.label;
+  return short || policy.mode === "failover" ? main : `${main} · ${ROUTE_PREFER_LABELS[policy.mode]}`;
+}
+
 /** 徽标上的两个字：「主备 · 主线路」「定时 · 晚高峰线路」。 */
 export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
   failover: "主备",
@@ -78,16 +101,6 @@ export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
 };
 
 // 名字和出口组的分配方式同一套（shared/loadBalance.ts），算法也是同一份（lbcore），只是这里说的是「路径」。
-export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: string }> = {
-  weighted: { label: BALANCE_STRATEGY_LABELS.weighted.label, hint: "新连接按每条路径的权重分配" },
-  least_load: { label: BALANCE_STRATEGY_LABELS.least_load.label, hint: "新连接给现在挂着连接最少的那条（按权重折算、沿途主机越忙算得越满），长连接多时比按权重更均匀" },
-  round_robin: { label: BALANCE_STRATEGY_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
-  random: { label: BALANCE_STRATEGY_LABELS.random.label, hint: "新连接随机挑一条能用的" },
-  ip_hash: { label: BALANCE_STRATEGY_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条（那条坏了才换），适合要保持登录的服务" },
-  auto: { label: BALANCE_STRATEGY_LABELS.auto.label, hint: "整链延迟、抖动、丢包、建连失败、沿途主机负载和这条上已有的连接合成一个数，新连接给最划算的那条；刚变慢、变忙的立刻少分" },
-  latency: { label: BALANCE_STRATEGY_LABELS.latency.label, hint: "只在整链最快的那几条里分：比最快的慢不到 50ms 算一样快，慢出这么多的不分" },
-};
-
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {
   smooth: { label: "平滑切换", hint: "旧连接留在原线路，新连接走新线路，基本无感（推荐）" },
   fast: { label: "快速切换", hint: "线路挂了就断开它上面的旧连接，让客户端马上重连到新线路；计划和择优切换仍然平滑" },
@@ -98,16 +111,6 @@ export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hi
   纯 UDP 没有连接：Agent 按会话（同一个来源地址发来的包）挑路径，切换时丢的是会话映射，
   下一个包重新挑一条。选项还是那几个，只是说法换成「会话」。
 */
-export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
-  weighted: "新会话按每条路径的权重分配",
-  least_load: "新会话给现在连接最少的那条（按权重折算）",
-  round_robin: "新会话轮流走每一条",
-  random: "新会话随机挑一条能用的",
-  ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",
-  auto: "整链延迟、抖动、丢包、沿途主机负载和这条上已有的会话合成一个数，新会话给最划算的那条",
-  latency: "只在整链最快的那几条里分：比最快的慢不到 50ms 算一样快，慢出这么多的不分",
-};
-
 export const ROUTE_SWITCH_MODE_SESSION_HINTS: Record<RouteSwitchMode, string> = {
   smooth: "已有的会话留在原路径，新会话走新路径，基本无感（推荐）",
   fast: "路径挂了就丢掉它上面的会话，下一个包改走新路径；计划和择优切换仍然平滑",

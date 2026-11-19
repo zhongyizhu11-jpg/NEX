@@ -1,4 +1,5 @@
 import { Fragment, useState, type ReactNode } from "react";
+import { BALANCE_STATE_WORDS } from "@/lib/balanceState";
 import { ChevronDown, Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
@@ -54,7 +55,7 @@ import {
     大数字    整条链此刻多少毫秒 + 坏了几秒内切走
     分层图    入口 → 隧道 / 中转 → 落地（RouteLineDiagram.tsx）
     线路      能改的时候就是编辑器本身（2.3.498 起没有单独的「编辑线路组」框，RouteLineInlineEditor.tsx），
-              每条线路后面照样是使用中 / 待命 / 不通 ×N 和立刻生效的暂停；只能看的时候一行一条（划掉的是坏了的）
+              每条线路后面照样是在用 / 备用 / 连不上 ×N 和立刻生效的暂停；只能看的时候一行一条（划掉的是坏了的）
     连接      客户端 → 入口 → … → 落地，每段最近 10 分钟的成功率，坏的那段标红写原因；
               下面一行：最近切换、异常明细（展开原来那份详细面板）；暂停在线路列表每一行上
 
@@ -89,8 +90,8 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
 // ---------------------------------------------------------------- 线路
 
 /**
- * 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命；人工指定了这条，后面带「指定」。
- * 指定了、通着、机器还没切过来：「切换中」—— 以前写「待命 · 指定」，看着像指定了也不走（为什么没切在调度计划里写）。
+ * 一条线路此刻的状态胶囊：已暂停 / 在用 / 连不上 ×N（或原因）/ 备用；人工指定了这条：已指定。
+ * 指定了、通着、机器还没切过来：「已指定 · 切换中」（为什么没切在调度计划里写）。
  */
 /** 面板给的「当成挂了」提示（server/routeDrill）：Agent 原样报回来时是 relay down: drill。 */
 export function isRouteDrillReason(reason: unknown) {
@@ -98,13 +99,15 @@ export function isRouteDrillReason(reason: unknown) {
 }
 
 function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone; text: string; dot?: boolean } {
-  const tag = pinned ? " · 指定" : "";
+  // 状态词和出口的一样（lib/balanceState.ts）：在用 / 备用 / 连不上 / 已指定
+  const words = BALANCE_STATE_WORDS;
   if (group.paused) return { tone: "gray", text: "已暂停" };
-  if (group.active) return { tone: "ok", text: `使用中${tag}`, dot: true };
+  if (group.active) return pinned ? { tone: "acc", text: words.pinned, dot: true } : { tone: "ok", text: words.active, dot: true };
+  const tag = pinned ? ` · ${words.pinned}` : "";
   if (group.allDown && isRouteDrillReason(group.reason)) return { tone: "warn", text: `演练中${tag}` };
-  if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通"}${tag}` };
-  if (pinned) return { tone: "acc", text: "切换中 · 指定" };
-  return { tone: "gray", text: "待命" };
+  if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `${words.down} ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : words.down}${tag}` };
+  if (pinned) return { tone: "acc", text: `${words.pinned} · 切换中` };
+  return { tone: "gray", text: words.standby };
 }
 
 /**

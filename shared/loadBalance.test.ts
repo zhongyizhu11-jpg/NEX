@@ -6,7 +6,8 @@ import {
   BALANCE_STRATEGIES,
   DEFAULT_BALANCE_DETECT,
   balanceSwitchWithinSeconds,
-  describeBalanceDetectShort,
+  balanceStrategyHint,
+  BALANCE_STRATEGY_LABELS,
   describeBalanceEffect,
   nginxBalanceBasicSupportNote,
   normalizeBalanceDetect,
@@ -48,7 +49,6 @@ test("和默认一样存 null（以后改默认跟着走），不一样存 JSON"
 
 test("默认参数：每 2 秒探一次、2 次不通算坏，约 5 秒内切走", () => {
   assert.equal(balanceSwitchWithinSeconds(DEFAULT_BALANCE_DETECT), 5);
-  assert.equal(describeBalanceDetectShort(DEFAULT_BALANCE_DETECT), "每 2 秒探一次 · 2 次不通算坏 · 抖动超过 30ms 少分");
 });
 
 test("实际效果那句话跟着设置变", () => {
@@ -64,4 +64,12 @@ test("实际效果那句话跟着设置变", () => {
   assert.match(String(nginxBalanceBasicSupportNote("nginx_stream")), /^基础支持：/);
   assert.equal(nginxBalanceBasicSupportNote("tls"), null);
   assert.equal(nginxBalanceBasicSupportNote("forwardx"), null);
+});
+
+test("每种方式一句话：主备说清先用谁、什么时候换、什么时候切回；只转 UDP 时说新会话", () => {
+  assert.equal(BALANCE_STRATEGY_LABELS.fallback.hint, "先用第一个，连不上才换下一个，恢复稳定后切回");
+  assert.equal(balanceStrategyHint("round_robin"), "新连接一个一个轮着走");
+  assert.equal(balanceStrategyHint("round_robin", true), "新会话一个一个轮着走");
+  assert.match(balanceStrategyHint("least_load", true), /会话数/);
+  for (const strategy of BALANCE_STRATEGIES) assert.ok(BALANCE_STRATEGY_LABELS[strategy].hint.length <= 48, strategy);
 });

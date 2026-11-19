@@ -11,10 +11,10 @@ import { toast } from "sonner";
 import { routeGroupOf, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
 import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
-import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLandingName, routeLineGroups } from "./routeLineText";
+import { chainLatency, routeLandingName, routeLineGroups } from "./routeLineText";
 import { LineBig, LineCard, LineChip, LineLandingName, LinePill, formatLineMs, type LineTone } from "@/features/lines/LineUi";
 import { formatBytes } from "@shared/formatBytes";
-import { normalizeRouteDelivery } from "@shared/routeGroup";
+import { normalizeRouteDelivery, routeStrategyLabel } from "@shared/routeGroup";
 import type { ForwardGroupOptionRow, HostOptionRow, LineRuleRow } from "./routeLineOptions";
 
 /*
@@ -67,7 +67,7 @@ function LineCompactCard({ name, owner, status, info, onOpen }: { name: string; 
   const delivery = normalizeRouteDelivery(status.delivery);
   const mainCount = status.paths.filter((path) => (typeof path.tier === "number" ? path.tier : path.index) === 0).length;
   const chips = [
-    ROUTE_LINE_MODE_LABEL[status.policy.mode] || "主备顺序",
+    routeStrategyLabel(status.policy),
     delivery === "hot" ? "切换不断连" : delivery === "aggregate" ? (mainCount > 1 ? `聚合 ${mainCount} 条` : "聚合（只有 1 条）") : delivery === "replicate" ? "复制双发" : null,
     info.entryPool?.dns ? "DNS 入口池" : null,
     info.trafficBytes > 0 ? formatBytes(info.trafficBytes) : null,

@@ -172,13 +172,12 @@ import { expandForPreview, type RouteLinePool, type RouteLineTunnel } from "@/fe
 import { newRouteLine, routeLinesForEditor } from "@shared/routeLines";
 import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf, routeNodeOptionLabel, routeNodeOptionsOf } from "@/features/rules/routeLineOptions";
 import { RuleLineGroupField } from "@/features/rules/RuleLineGroupField";
-import { ROUTE_LINE_MODE_LABEL } from "@/features/rules/routeLineText";
 import { docsUrl } from "@/lib/docsLinks";
 import { ROUTE_MODE_HINTS, type RuleRouteTab } from "@/features/rules/routeModeHints";
 import { isAggregateLinkTunnel } from "@shared/aggregateLink";
 import { describeRoutePolicy, pinUntilSeconds } from "@shared/routePolicy";
 import {
-  ROUTE_MODE_SHORT,
+  routeStrategyLabel,
   newRouteGroupDraft,
   routeGroupForwardTypeSupported,
   routeGroupOf,
@@ -4485,7 +4484,7 @@ function RulesContent() {
   const routeGroupSectionVisible = !mainBackupBlock || form.failoverEnabled;
   const routeGroupSummary = form.failoverEnabled && form.routeGroup
     // 和框里的摘要、线路详情一个说法：几条线路（不是展开出来的几条路径）、按什么切
-    ? `已开启 · ${form.routeGroup.lines?.length || form.routeGroup.paths.length} 条线路 · ${ROUTE_LINE_MODE_LABEL[form.routeGroup.policy.mode] || ROUTE_LINE_MODE_LABEL.failover}`
+    ? `已开启 · ${form.routeGroup.lines?.length || form.routeGroup.paths.length} 条线路 · ${routeStrategyLabel(form.routeGroup.policy)}`
     : mainBackupBlock ? "用不了" : "未开启";
   const kernelForwardWarning = useMemo(() => buildKernelForwardWarning({
     rule: form,
@@ -7639,7 +7638,7 @@ function RulesContent() {
       entryTitle,
       failoverCount: routeGroup ? routeGroup.paths.length : 0,
       failoverEnabled: !!routeGroup,
-      routeLabel: routeGroup ? ROUTE_MODE_SHORT[routeGroup.policy.mode] : "",
+      routeLabel: routeGroup ? routeStrategyLabel(routeGroup.policy, true) : "",
     };
   };
 
