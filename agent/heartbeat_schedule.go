@@ -408,7 +408,8 @@ func scheduleAgentTCPing(cfg Config, force bool) bool {
 func capForwardGroupHealthProbeInterval(interval time.Duration, probes []forwardGroupProbe) time.Duration {
 	for _, probe := range probes {
 		probeType := strings.ToLower(strings.TrimSpace(probe.ProbeType))
-		if probeType != "china" && probeType != "entry" {
+		// 外部观察（peer，2.2.264 起）和国内检测一样按组的故障 / 恢复时间收紧间隔。
+		if probeType != "china" && probeType != "entry" && !isForwardGroupPeerProbeType(probeType) {
 			continue
 		}
 		interval = capForwardGroupHealthSpecInterval(interval, &forwardGroupHealthSpec{

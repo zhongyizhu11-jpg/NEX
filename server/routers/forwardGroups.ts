@@ -66,6 +66,8 @@ const memberSchema = z.object({
 });
 
 import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
+import { getDdnsSettings } from "../ddns";
+import { ddnsWeightSupport } from "../ddnsWeightedRecords";
 
 const forwardGroupQueryCache = createQueryCache(300);
 
@@ -122,6 +124,11 @@ const baseSchema = z.object({
   bandwidthAggregationSlots: z.number().int().min(1).max(MAX_AGGREGATION_RECORD_SLOTS).optional().default(8),
   bandwidthAggregationMinMembers: z.number().int().min(1).max(5).optional().default(1),
   ddnsLineFallback: z.enum(DDNS_LINE_FALLBACK_MODES).optional().default("default"),
+  // 外部观察（别的机器探成员对外的入口端口）和额外指定的观察主机；入口组按服务商记录权重发布。
+  // 都没传（老客户端、脚本）= 新建时外部观察开、其余关，编辑时保持原样。
+  peerProbeEnabled: z.boolean().optional(),
+  peerObserverHostIds: z.array(z.number().int().positive()).max(8).optional(),
+  ddnsWeightEnabled: z.boolean().optional(),
   autoFailback: z.boolean().default(true),
   isEnabled: z.boolean().default(true),
   // 端口转发挂了入口组时可以没有自己的成员，下限由 service 按形态判
@@ -271,7 +278,9 @@ export const forwardGroupsRouter = router({
         visibleItems.map((group: any) => Number(group.id)),
         ctx.user.role === "admin" ? undefined : ctx.user.id,
       );
-      const items = visibleItems.map((group: any) => ({
+      // 外部观察的现状（别的机器看每个成员通不通）只给管理员看：里面有别的主机的名字。
+      const observedItems = accessScope ? visibleItems : await db.attachForwardGroupPeerHealth(visibleItems as any[]);
+      const items = observedItems.map((group: any) => ({
         ...group,
         trafficSummary: trafficByGroupId.get(Number(group.id)),
       }));
@@ -379,7 +388,9 @@ export const forwardGroupsRouter = router({
     .input(z.object({ domain: z.string().trim().max(253).nullable().optional() }))
     .query(async ({ input }) => {
       try {
-        return await listDdnsLinesForGroups(input.domain);
+        // 顺带告诉界面现在的服务商能不能按记录权重发布（入口组「按权重解析」不支持时置灰并说明原因）。
+        const [lines, settings] = await Promise.all([listDdnsLinesForGroups(input.domain), getDdnsSettings()]);
+        return { ...lines, weightSupport: ddnsWeightSupport(settings) };
       } catch (error) {
         if (error instanceof DnspodRecordsError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
         if (error instanceof DdnsProviderError) throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
