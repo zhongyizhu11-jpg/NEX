@@ -267,8 +267,8 @@ type fakeExitThrough struct {
 	verdicts map[int]exitThroughVerdict
 	// 复核时直接探出口机：按本机端口给「出口机连不上」；没给的算连得上
 	machineDown map[int]bool
-	calls    map[int]int
-	windows  []time.Duration
+	calls       map[int]int
+	windows     []time.Duration
 }
 
 func installFakeExitThrough(t *testing.T) *fakeExitThrough {
