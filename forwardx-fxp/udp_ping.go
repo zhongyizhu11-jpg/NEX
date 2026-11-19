@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,12 +63,28 @@ func setFXPUDPPingHook(hook func(host string, port int, cfg config) error) {
 	fxpUDPPingHook.Store(&hook)
 }
 
-// fxpUDPPing 向 host:port 发一轮 UDP 探活，等对端的应答。nil 表示对端回了。
+/*
+fxpUDPPing 向 host:port 发一轮 UDP 探活，等对端的应答。nil 表示对端回了。
+
+地址和数据走同一套解析（resolveHopAddress：IP 原样用、方括号里的 IPv6 去掉括号、域名走带缓存的解析，DNS 挂了旧地址
+接着用 5 分钟）。以前这里自己 JoinHostPort + 系统解析器：配成 [2001:db8::1] 的出口永远收不到应答，DNS 抖一下数据照常在走、
+探活却判 UDP 不通（F4）。
+
+一轮最多 fxpUDPPingWait：每隔 fxpUDPPingWait ÷ fxpUDPPingAttempts 发一个，等到下一个该发的时候（最后一个等到这一轮结束）。
+*/
 func fxpUDPPing(host string, port int, cfg config) error {
 	if hook := fxpUDPPingHook.Load(); hook != nil {
 		return (*hook)(host, port, cfg)
 	}
-	conn, err := net.DialTimeout("udp", net.JoinHostPort(host, strconv.Itoa(port)), fxpUDPPingWait)
+	address, err := resolveHopAddress(host, port)
+	if err != nil {
+		return err
+	}
+	remote, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialUDP("udp", nil, remote)
 	if err != nil {
 		return err
 	}
@@ -97,41 +112,38 @@ func fxpUDPPing(host string, port int, cfg config) error {
 		if err != nil {
 			return err
 		}
-		// 这一个包等到下一个包该发的时候；最后一个等到这一轮结束。
 		deadline := roundEnds
 		if attempt < fxpUDPPingAttempts-1 {
 			deadline = time.Now().Add(fxpUDPPingWait / fxpUDPPingAttempts)
 		}
-		if _, err := conn.Write(wire); err != nil {
-			// 对端端口没人听时这里（或下面的读）会拿到 ICMP 带回来的拒绝。
-			lastErr = err
-			if wait := time.Until(deadline); wait > 0 {
-				time.Sleep(wait)
+		// 对端端口没人听时写（或读）会拿到 ICMP 带回来的拒绝。
+		if _, lastErr = conn.Write(wire); lastErr == nil {
+			var answered bool
+			if answered, lastErr = awaitFXPUDPPong(conn, reply, deadline, cfg, sessionID, nonce); answered {
+				return nil
 			}
-			continue
 		}
-		for {
-			_ = conn.SetReadDeadline(deadline)
-			n, err := conn.Read(reply)
-			if err != nil {
-				lastErr = err
-				var netErr net.Error
-				if !errors.As(err, &netErr) || !netErr.Timeout() {
-					// 不是等超时（比如 ICMP 拒绝）：别空转，等到该发下一个的时候。
-					if wait := time.Until(deadline); wait > 0 {
-						time.Sleep(wait)
-					}
-				}
-				break
-			}
-			packet, err := openFXPUDPPacket(reply[:n], cfg.TunnelID, cfg.Key)
-			if err != nil || packet.packetType != fxpUDPTypePong || packet.sessionID != sessionID || !bytes.Equal(packet.payload, nonce) {
-				continue
-			}
-			return nil
+		// 没等满就出错了（写失败、ICMP 拒绝）：别空转，等到该发下一个的时候。
+		if wait := time.Until(deadline); wait > 0 {
+			time.Sleep(wait)
 		}
 	}
 	return lastErr
+}
+
+// awaitFXPUDPPong 读到 deadline，等这一轮的应答（别的包跳过）。没等到时返回读出的错误（超时，或者 ICMP 拒绝之类）。
+func awaitFXPUDPPong(conn *net.UDPConn, reply []byte, deadline time.Time, cfg config, sessionID uint64, nonce []byte) (bool, error) {
+	_ = conn.SetReadDeadline(deadline)
+	for {
+		n, err := conn.Read(reply)
+		if err != nil {
+			return false, err
+		}
+		packet, err := openFXPUDPPacket(reply[:n], cfg.TunnelID, cfg.Key)
+		if err == nil && packet.packetType == fxpUDPTypePong && packet.sessionID == sessionID && bytes.Equal(packet.payload, nonce) {
+			return true, nil
+		}
+	}
 }
 
 // answerFXPUDPPing：出口 / 中转的 UDP 读循环收到探活包时调。认证过、时间新鲜就原样回一个应答。
@@ -213,11 +225,7 @@ func (h *udpClientHints) accept(raw []byte, cfg config, now time.Time) {
 		h.hints = map[udpRuleSessionKey]udpClientHint{}
 	}
 	if len(h.hints) >= fxpUDPClientHintMax {
-		for key, hint := range h.hints {
-			if now.Sub(hint.at) > fxpUDPClientHintTTL {
-				delete(h.hints, key)
-			}
-		}
+		h.expireLocked(now)
 		if len(h.hints) >= fxpUDPClientHintMax {
 			return
 		}
@@ -229,6 +237,10 @@ func (h *udpClientHints) accept(raw []byte, cfg config, now time.Time) {
 func (h *udpClientHints) expire(now time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.expireLocked(now)
+}
+
+func (h *udpClientHints) expireLocked(now time.Time) {
 	for key, hint := range h.hints {
 		if now.Sub(hint.at) > fxpUDPClientHintTTL {
 			delete(h.hints, key)
