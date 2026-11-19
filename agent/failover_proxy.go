@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 type failoverProxy struct {
@@ -23,6 +25,10 @@ type failoverProxy struct {
 	// 之后 routeSlowStartWindow 内按比例慢慢加量（route_group_balance.go）。
 	wrrCurrent  []int
 	slowStartAt []time.Time
+	// lbNear：「延迟优先」里哪几条算「一样快」的状态（lbcore.NearSet，route_group_balance.go）。
+	lbNear lbcore.NearSet
+	// lbQuality：每条路径算好的探测抖动（探测窗口没变就不重算，route_group_balance.go）。
+	lbQuality []routeQualityCache
 	// 在途：已经挑中、还在拨的连接数（A8，route_group_balance.go）。inflightGen 每换一次规格加一，
 	// 旧下标发出去的在途不再退到新下标上。
 	inflight    []int
@@ -186,7 +192,7 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	}
 	spec.Protocol = failoverProtocol(spec)
 	switch strings.TrimSpace(spec.Strategy) {
-	case "round_robin", "random", "ip_hash", "weighted", "least_load", "auto", "fallback":
+	case "round_robin", "random", "ip_hash", "weighted", "least_load", "auto", "latency", "fallback":
 		spec.Strategy = strings.TrimSpace(spec.Strategy)
 	default:
 		spec.Strategy = "fallback"
@@ -427,6 +433,7 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 		activeSince:     time.Now(),
 		flapWarmupUntil: time.Now().Add(flapWarmup),
 		rng:             newFailoverRand(ruleID, sourcePort),
+		roundRobinNext:  randomSpreadStart(ruleID, sourcePort),
 		ln:              ln,
 		udp:             udpConn,
 		done:            make(chan struct{}),

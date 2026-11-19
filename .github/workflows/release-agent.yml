@@ -81,6 +81,7 @@ jobs:
         if: steps.ci.outputs.passed != 'true'
         shell: bash
         run: |
+          (cd lbcore && go test ./... && go vet ./...)
           (cd agent && go test ./... && go vet ./...)
           (cd forwardx-fxp && go test ./... && go vet ./...)
 

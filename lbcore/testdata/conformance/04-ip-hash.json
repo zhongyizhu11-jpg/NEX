@@ -1,0 +1,100 @@
+[
+  {
+    "name": "ip-hash-stable-when-a-member-leaves-and-returns",
+    "about": "按访客固定：一个成员走了，只有原来落在它上面的访客换；它回来，那些访客又回到它上面",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      {
+        "about": "300 个访客，三个成员大致各 100；每个访客落在哪和 lbcore.Rendezvous 算的一样",
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "save": "before",
+        "expect": { "counts": { "a": [70, 130], "b": [70, 130], "c": [70, 130] }, "reference": true }
+      },
+      {
+        "about": "同一个访客再来，还是同一个成员",
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "sameAs": "before" }
+      },
+      {
+        "about": "c 挂了：只有 c 上的访客换",
+        "set": { "c": "down" },
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "never": ["c"], "movedOnlyFrom": { "saved": "before", "members": ["c"] } }
+      },
+      {
+        "about": "c 回来：所有人回到原来的成员上",
+        "set": { "c": "healthy" },
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "sameAs": "before" }
+      },
+      {
+        "about": "刚恢复的成员在慢启动里：按访客固定不看慢启动，访客不会被挪走再挪回来",
+        "recovered": { "c": 3 },
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "sameAs": "before" }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-follows-weight",
+    "about": "按访客固定也按分量分：900:100 的两个成员，访客大约九比一（哈希没搅过时所有人都落在 900 那个上）",
+    "strategy": "ip_hash",
+    "members": [
+      { "name": "a", "weight": 900 },
+      { "name": "b", "weight": 100 }
+    ],
+    "steps": [
+      {
+        "keys": { "pattern": "203.0.113.%d", "count": 1000 },
+        "expect": { "counts": { "a": [860, 940], "b": [60, 140] }, "reference": true }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-bounded-load-under-skewed-keys",
+    "about": "按访客固定 + 有界负载：一个大访客（一整栋楼共用一个出口地址）占了一半连接。没有上限的话这 150 条全压在一个成员上；有上限，任何成员都不超过它该分的 1.25 倍",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      {
+        "about": "150 条来自同一个访客，一直挂着：三个成员各该分 50，谁也不超过 63（50 × 1.25 向上取整）",
+        "keys": { "list": ["203.0.113.250"], "repeat": 150 },
+        "mode": "hold",
+        "expect": { "counts": { "a": [24, 63], "b": [24, 63], "c": [24, 63] } }
+      },
+      {
+        "about": "再来 150 个各不相同的访客：一共 300 条，每个该分 100，谁也不超过 125",
+        "keys": { "pattern": "198.51.100.%d", "count": 150 },
+        "mode": "hold",
+        "expect": { "totals": { "a": [50, 125], "b": [50, 125], "c": [50, 125] } }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-bounded-load-by-weight",
+    "about": "有界负载按分量算：分量 3:1，400 条全来自一个访客。大的那个该分 300、最多 375；小的该分 100、最多 125",
+    "strategy": "ip_hash",
+    "members": [
+      { "name": "a", "weight": 3 },
+      { "name": "b", "weight": 1 }
+    ],
+    "steps": [
+      {
+        "keys": { "list": ["203.0.113.9"], "repeat": 400 },
+        "mode": "hold",
+        "expect": { "counts": { "a": [275, 375], "b": [25, 125] } }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-first-connections-stay-together",
+    "about": "会话少的时候上限向上取整：同一个访客的头两条连接落在同一个成员上",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }],
+    "steps": [
+      { "keys": { "list": ["192.0.2.77"] }, "mode": "hold", "save": "first", "expect": {} },
+      { "keys": { "list": ["192.0.2.77"] }, "mode": "hold", "expect": { "sameAs": "first" } }
+    ]
+  }
+]

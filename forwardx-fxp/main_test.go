@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -166,6 +168,8 @@ func TestExitSelectorStrategies(t *testing.T) {
 		t.Fatal("expected ip hash endpoint")
 	}
 	for i := 0; i < 10; i++ {
+		// 上一条退掉再挑（不留在途）：这里看的是哈希稳不稳，不是有界负载（那个另有用例）。
+		ipHash.unpick(firstIndex)
 		next, nextIndex, nextOK := ipHash.pick(nil, "203.0.113.9")
 		if !nextOK || nextIndex != firstIndex || next != first {
 			t.Fatalf("ip hash selection changed: first=%+v/%d next=%+v/%d", first, firstIndex, next, nextIndex)
@@ -1296,43 +1300,107 @@ func TestFxpWireContextRemainsStable(t *testing.T) {
 	}
 }
 
+/*
+测试用的端口从哪来（阶段 2 改的）。
+
+以前是「监听 :0 拿到一个端口、关掉、把端口号交给被测的代码去监听」。:0 给的端口在系统的临时端口范围里
+（Linux 默认 32768–60999），而本进程里往外拨的连接（上一个用例留下的端点探测、连接池补连接，每隔一两秒就拨一次）
+的源端口也从这个范围里挑。关掉到重新监听之间有个空档：
+
+  - 有一条往外拨的连接正好拿这个端口当源端口：被测的监听起不来（地址已占用，runExit 的错误又没人看），
+    用例等不到端口，或者连到别的东西上；
+  - waitForTCP 往这个还没人听的端口拨，内核又正好挑了同一个端口当源端口：回环上自己连上自己，
+    用例以为端口起来了，其实没人在听。
+
+TestMultipathEntryToExitHandlesManyConcurrentSessions 六次整包测试里红过一次，就是这个空档（一次要 5 个端口）。
+被测的入口 / 出口 / 中转都是按端口号自己监听的，没有「把监听器传进去」的口子，所以换个办法堵住空档：
+端口从临时端口范围**之外**挑（范围下限以下），往外拨的连接永远不会拿它当源端口，也就不会被抢、不会自连。
+按进程号错开起点，同时跑的几个测试进程不撞。
+*/
+var testPortCursor atomic.Uint32
+
+func testPortRange() (low, high int) {
+	low, high = 20000, 30000
+	if data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range"); err == nil {
+		fields := strings.Fields(string(data))
+		if len(fields) == 2 {
+			if ephemeralLow, err := strconv.Atoi(fields[0]); err == nil && ephemeralLow < high {
+				// 临时端口范围压到了这一段：退到它下面去。
+				high = ephemeralLow
+				if low = high - 10000; low < 2000 {
+					low = 2000
+				}
+			}
+		}
+	}
+	return low, high
+}
+
+// reserveTestPort 找一个现在 TCP / UDP（按要求）都没人用的端口。
+func reserveTestPort(t *testing.T, tcp, udp bool) int {
+	t.Helper()
+	low, high := testPortRange()
+	if high-low < 100 {
+		t.Fatalf("临时端口范围之外没有可用的端口段：%d–%d", low, high)
+	}
+	span := uint32(high - low)
+	for i := 0; i < 2000; i++ {
+		port := low + int((uint32(os.Getpid())*7919+testPortCursor.Add(1))%span)
+		if tcp {
+			ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			if err != nil {
+				continue
+			}
+			_ = ln.Close()
+		}
+		if udp {
+			conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port})
+			if err != nil {
+				continue
+			}
+			_ = conn.Close()
+		}
+		return port
+	}
+	t.Fatal("could not find a free test port")
+	return 0
+}
+
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	return reserveTestPort(t, true, false)
 }
 
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	return conn.LocalAddr().(*net.UDPAddr).Port
+	return reserveTestPort(t, false, true)
 }
 
 func freeTCPUDPPort(t *testing.T) int {
 	t.Helper()
-	for i := 0; i < 100; i++ {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		port := ln.Addr().(*net.TCPAddr).Port
-		_ = ln.Close()
-		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port})
-		if err == nil {
-			_ = conn.Close()
-			return port
+	return reserveTestPort(t, true, true)
+}
+
+// 端口不能落在临时端口范围里，而且连着要的几个互不相同。
+func TestFreePortsAvoidTheEphemeralRange(t *testing.T) {
+	ephemeralLow, ephemeralHigh := 32768, 60999
+	if data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range"); err == nil {
+		if fields := strings.Fields(string(data)); len(fields) == 2 {
+			ephemeralLow, _ = strconv.Atoi(fields[0])
+			ephemeralHigh, _ = strconv.Atoi(fields[1])
 		}
 	}
-	t.Fatal("could not find a port free for tcp and udp")
-	return 0
+	seen := map[int]bool{}
+	for i := 0; i < 60; i++ {
+		port := []func(*testing.T) int{freeTCPPort, freeUDPPort, freeTCPUDPPort}[i%3](t)
+		if port >= ephemeralLow && port <= ephemeralHigh {
+			t.Fatalf("端口 %d 在临时端口范围 %d–%d 里：往外拨的连接可能拿它当源端口", port, ephemeralLow, ephemeralHigh)
+		}
+		if seen[port] {
+			t.Fatalf("连着要的端口重了：%d", port)
+		}
+		seen[port] = true
+	}
 }
 
 func udpRoundTrip(t *testing.T, client *net.UDPConn, payload []byte) []byte {

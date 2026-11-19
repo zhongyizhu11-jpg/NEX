@@ -111,9 +111,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # lbcore：Agent 和 FXP 共用的挑选算法（各自的 go.mod 里 replace 到 ../lbcore），自己也跑一遍。
         module:
           - agent
           - forwardx-fxp
+          - lbcore
     defaults:
       run:
         working-directory: ${{ matrix.module }}

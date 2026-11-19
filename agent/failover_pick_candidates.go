@@ -1,25 +1,26 @@
 package main
 
+import "github.com/zhongyizhu11-jpg/NEX/lbcore"
+
 // 选路第 1 段：候选（见 failover_pick.go）。
 
 /*
 pickCandidatesLocked：先只要能用的；一条都没有时退回「不健康但没被管理上排除」的（不分层），让连接去碰碰运气。
 
-兜底不含被面板按暂停 / 维护 / 流量停机标掉的路径（adminExcludedLocked，A5）：以前退回的是**全部**，
-别的路径一挂，流量就走到用户明明暂停了的那条、正在维护的那台机器上。探着不通、中转断了、主机离线这些
-健康类的照旧留在兜底里 —— 判断可能是错的，试一下比直接拒绝强。全都被排除时返回空：TCP 连接直接关，
-UDP 包丢掉。
+「在哪些路径里挑」的规矩是 lbcore.Candidates（和 NEX 隧道的出口组同一个）：这边每条路径只有两个信号 ——
+连不上（探测 / 中转提示判成不能用）和管理上排除（暂停 / 维护 / 流量停机，adminExcludedLocked，A5）。
+还有能用的就只在能用的里挑（分层规格再只留最优一层）；一条能用的都没有时在没被排除的里摊开；
+全都被排除时返回空：TCP 连接直接关，UDP 包丢掉。
 */
 func (p *failoverProxy) pickCandidatesLocked(exclude map[int]bool, udp bool) []int {
-	candidates := p.candidateIndicesForLocked(exclude, true, udp)
-	if len(candidates) == 0 {
-		all := p.candidateIndicesForLocked(exclude, false, udp)
-		candidates = all[:0]
-		for _, index := range all {
-			if !p.adminExcludedLocked(index) {
-				candidates = append(candidates, index)
-			}
-		}
+	health := make([]lbcore.Health, len(p.spec.Targets))
+	for i := range p.spec.Targets {
+		health[i] = lbcore.Health{Excluded: p.adminExcludedLocked(i), Dead: !p.usableLocked(i, udp)}
+	}
+	candidates, level := lbcore.Candidates(nil, health, exclude, lbcore.EjectPolicy{})
+	if level == lbcore.LevelNormal {
+		// 有能用的：分层规格只留还有能用路径的最优一层。
+		return p.candidateIndicesForLocked(exclude, true, udp)
 	}
 	return candidates
 }

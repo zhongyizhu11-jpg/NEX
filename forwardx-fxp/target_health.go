@@ -10,6 +10,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 /*
@@ -32,7 +34,7 @@ import (
   4. 主动探。这条规则最近有人用、或者有出口正坏着，就按「多久探一次」让每台出口连一下目标
      （targetProbe：连上就回话、就关，不转发）。真实连接本身也是样本，刚有样本的不再额外探。
 
-防来回漂：一小时里一台出口中断超过 3 次（一次中断 = 坏一次 + 好一次），下一次恢复要坏满 5 分钟才算；
+防来回漂：一小时里一台出口中断超过 3 次，下一次恢复要坏满 5 分钟才算；
 主备里排在前面的那台恢复后也要稳 5 分钟才切回去；刚恢复的 1 分钟里慢慢加量。
 
 目标本身挂了（每台出口到它都不通）时不再挨个出口重放：一条连接只试一台、轮着来（targetDownEverywhere）。
@@ -204,8 +206,8 @@ type targetHealth struct {
 	unstable      bool
 	unstableSince time.Time // 指标超过门槛的起点（还没满「持续多久」时也记着）
 	stableSince   time.Time // 指标回到门槛以下的起点
-	// flips：最近一小时里「好 → 坏」「坏 → 好」各记一次，一次中断就是一对（见 flapping）。
-	flips []time.Time
+	// outages：最近一小时里每次「好 → 坏」的时刻，抖动抑制按它数（见 flapDamper）。
+	outages []time.Time
 
 	lastSampleAt time.Time
 	probing      bool
@@ -283,26 +285,23 @@ func (h *targetHealth) windowFloor() float64 {
 // fxpTargetRetransmitMs：连目标拖到这么久才连上，多半是握手包丢了、系统 1 秒后重发的那一次。
 const fxpTargetRetransmitMs = 900.0
 
-func (h *targetHealth) flip(now time.Time) {
-	h.flips = append(h.flips, now)
-	kept := h.flips[:0]
-	for _, at := range h.flips {
-		if now.Sub(at) <= fxpTargetFlapWindow {
-			kept = append(kept, at)
-		}
-	}
-	h.flips = kept
+/*
+抖动抑制（lbcore.FlapDamper，和线路组同一套计数）：一小时里中断超过 fxpTargetFlapLimit 次，下一次恢复要坏满
+5 分钟才算，「稳回来」也要稳够 5 分钟。上限就是 5 分钟、不翻倍：它压的是「恢复」，压太久等于把一台好出口长期排除在外。
+
+记的是中断（好 → 坏）。以前「不稳」「稳回来」也各记一次翻转：一次 20 秒的中断被数成 4 次（坏、好、不稳、稳），
+这台出口直接进「抖动放慢」（路线图 X9）。「不稳」是另一回事（按抖动 / 丢包少分），不算中断。
+*/
+var fxpTargetFlapPolicy = lbcore.FlapPolicy{Window: fxpTargetFlapWindow, Threshold: fxpTargetFlapLimit + 1, Base: fxpTargetFlapHold, Max: fxpTargetFlapHold}
+
+func (h *targetHealth) flapDamper() lbcore.FlapDamper {
+	return lbcore.FlapDamper{Policy: fxpTargetFlapPolicy, Events: h.outages}
 }
 
-/*
-flapping：一小时里中断超过 fxpTargetFlapLimit 次（一次中断 = 坏一次 + 好一次 = 两条记录）。
-
-以前「不稳」「稳回来」也各记一次翻转：一次 20 秒的中断被数成 4 次（坏、好、不稳、稳），刚好超过 3，
-这台出口直接进「抖动放慢」，下一次恢复要坏满 5 分钟才算（路线图 X9）。「不稳」是另一回事（按抖动 / 丢包
-少分），不算好坏翻转。
-*/
-func (h *targetHealth) flapping() bool {
-	return len(h.flips) > 2*fxpTargetFlapLimit
+// flapping：这台出口到目标此刻是不是在来回断（一小时里中断超过 fxpTargetFlapLimit 次）。
+func (h *targetHealth) flapping(now time.Time) bool {
+	damper := h.flapDamper()
+	return damper.Flapping(now)
 }
 
 // keepRecent：窗口里只留最近 keep 个样本。
@@ -343,10 +342,10 @@ func (h *targetHealth) observe(ok bool, ms float64, now time.Time, d balanceDete
 	if ok {
 		h.consecOK++
 		h.consecFail = 0
-		if h.down && h.consecOK >= d.recover && (!h.flapping() || now.Sub(h.downAt) >= fxpTargetFlapHold) {
+		damper := h.flapDamper()
+		if h.down && h.consecOK >= d.recover && !damper.Holding(now, h.downAt, 0, false) {
 			h.down = false
 			h.upAt = now
-			h.flip(now)
 			change = "recovered"
 			/*
 				刚恢复：窗口里只留让它恢复的那几次成功。中断期间那几次失败留在 30 个样本的窗口里，丢包率要过
@@ -364,7 +363,9 @@ func (h *targetHealth) observe(ok bool, ms float64, now time.Time, d balanceDete
 		if !h.down && h.consecFail >= d.fail {
 			h.down = true
 			h.downAt = now
-			h.flip(now)
+			damper := h.flapDamper()
+			damper.Note(now)
+			h.outages = damper.Events
 			change = "down"
 		}
 	}
@@ -398,8 +399,9 @@ func (h *targetHealth) observe(ok bool, ms float64, now time.Time, d balanceDete
 			h.stableSince = now
 		}
 		hold := d.jitterHold
-		if h.flapping() && hold < fxpTargetFlapHold {
-			hold = fxpTargetFlapHold
+		damper := h.flapDamper()
+		if flap := damper.Hold(now); flap > hold {
+			hold = flap
 		}
 		if h.unstable && now.Sub(h.stableSince) >= hold {
 			h.unstable = false
@@ -474,97 +476,6 @@ func (s *exitEndpointSelector) observeTarget(index int, ok bool, elapsed time.Du
 	}
 }
 
-// targetFactorsLocked：每个候选这次该按几成算（0 = 这次别给它），按端点下标排。全被排除时返回 nil —— 那是目标
-// 本身有问题，换哪台都一样，照原来的办法挑（不然等于直接断服）。调用方持锁。
-// 返回的是选择器自己的临时区（下一次调用就覆盖），只有候选的那几格有意义。
-func (s *exitEndpointSelector) targetFactorsLocked(candidates []int, now time.Time) []float64 {
-	if !s.targetAware() || len(candidates) < 2 {
-		return nil
-	}
-	s.ensureBuffersLocked()
-	d := s.target.detect
-	factors, medians := s.factorBuf, s.medianBuf
-	best := 0.0
-	usable := 0
-	for _, index := range candidates {
-		medians[index] = 0
-		if !s.target.supported[index] {
-			factors[index] = 1
-			usable++
-			continue
-		}
-		health := s.target.health[index]
-		if health.down {
-			factors[index] = 0
-			continue
-		}
-		factor := 1.0
-		if health.unstable {
-			switch d.action {
-			case "switch":
-				factor = 0
-			case "reduce":
-				factor = fxpTargetReducedShare
-			}
-		}
-		if d.slowStart && !health.upAt.IsZero() {
-			if since := now.Sub(health.upAt); since < fxpTargetSlowStartWindow {
-				factor *= math.Max(0.1, float64(since)/float64(fxpTargetSlowStartWindow))
-			}
-		}
-		factors[index] = factor
-		if factor > 0 {
-			usable++
-		}
-		if stats := health.stats(); stats.median > 0 {
-			medians[index] = stats.median
-			if best == 0 || stats.median < best {
-				best = stats.median
-			}
-		}
-	}
-	if usable == 0 {
-		// 「切走」把剩下的都切光了：退一步，只排除真坏的。
-		for _, index := range candidates {
-			if s.target.supported[index] && !s.target.health[index].down {
-				factors[index] = fxpTargetReducedShare
-				usable++
-			}
-		}
-		if usable == 0 {
-			return nil
-		}
-	}
-	// 自动 / 延迟优先：比最快的那台慢出门槛的少分一半。
-	if s.strategy == "auto" || s.strategy == "latency" {
-		for _, index := range candidates {
-			if median := medians[index]; median > 0 && factors[index] > 0 && best > 0 && median-best > d.margin {
-				factors[index] *= 0.5
-			}
-		}
-	}
-	return factors
-}
-
-// filterByFactorLocked：候选里这次有份的那几台（都没份就原样返回）。调用方持锁；返回的可能是选择器的临时区。
-func (s *exitEndpointSelector) filterByFactorLocked(candidates []int, factors []float64) []int {
-	if factors == nil {
-		return candidates
-	}
-	s.ensureBuffersLocked()
-	kept := s.filterBuf[:0]
-	for _, index := range candidates {
-		if factors[index] > 0 {
-			kept = append(kept, index)
-		}
-	}
-	s.filterBuf = kept
-	if len(kept) == 0 {
-		return candidates
-	}
-	return kept
-}
-
 // fxpTargetDownFresh：「到目标不通」的结论多久之内算新鲜。坏着的出口最慢 60 秒探一次（targetProbeInterval），
 // 超过这么久没有新样本说明探测停了，不拿旧结论去拦用户的连接。
 const fxpTargetDownFresh = 90 * time.Second
@@ -600,26 +511,8 @@ func (s *exitEndpointSelector) targetDownEverywhere() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	return s.targetDownOnAllLocked(s.candidatesLocked(nil, s.tiersLocked(now)), now)
-}
-
-// fallbackUsableLocked：主备时这一台能不能当「当前这台」。坏了、不稳（动作不是「不管」）、
-// 刚恢复还没稳够 5 分钟的，后面还有好的就先跳过。调用方持锁。
-func (s *exitEndpointSelector) fallbackUsableLocked(index int, now time.Time) bool {
-	if !s.endpointReportsTarget(index) {
-		return true
-	}
-	health := s.target.health[index]
-	if health.down {
-		return false
-	}
-	if health.unstable && s.target.detect.action != "ignore" {
-		return false
-	}
-	if !health.upAt.IsZero() && now.Sub(health.upAt) < fxpTargetFailbackStable {
-		return false
-	}
-	return true
+	candidates, level := s.candidatesLocked(nil, now, false)
+	return level == lbcore.LevelPanic && s.targetDownOnAllLocked(candidates, now)
 }
 
 // targetLatencyLocked：到目标的延迟中位数（ms），没样本时 0。调用方持锁。

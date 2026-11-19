@@ -1,11 +1,41 @@
 package main
 
 import (
+	mathrand "math/rand"
 	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
+
+// 真的同时到的一批连接（各在各的协程里挑）：挑中和记在途必须在同一把锁里，不然后来的看不见前面的，又压到同一条上。
+func TestRouteLeastLoadConcurrentBurstIsSpread(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		p := balanceTestProxy("least_load", 50, 30, 20)
+		p.ensureHealthStateLocked()
+		counts := make([]int32, 3)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < 100; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, index, _ := p.pickReserved("", nil, false)
+				atomic.AddInt32(&counts[index], 1)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if counts[0] < 48 || counts[0] > 52 || counts[1] < 28 || counts[1] > 32 || counts[2] < 18 || counts[2] > 22 {
+			t.Fatalf("第 %d 轮：100 条同时到的连接应该按 50:30:20 分，实际 %v", round+1, counts)
+		}
+	}
+}
 
 func balanceTestProxy(strategy string, weights ...int) *failoverProxy {
 	targets := make([]failoverTarget, len(weights))
@@ -128,6 +158,90 @@ func TestRouteSlowStartAfterRecovery(t *testing.T) {
 	}
 	if p.slowStartLocked(1, time.Now().Add(routeSlowStartWindow)) != 1 {
 		t.Fatal("窗口过了应该满份")
+	}
+}
+
+// 别的测试文件里直接按某一种分法挑一条用的（产品代码都从 spreadPickLocked 进）。调用方持有 p.mu。
+func (p *failoverProxy) weightedPickLocked(candidates []int) int {
+	return p.spreadPickLocked(lbcore.StrategyWeighted, candidates, "")
+}
+
+func (p *failoverProxy) rendezvousPickLocked(candidates []int, key string) int {
+	return p.spreadPickLocked(lbcore.StrategyIPHash, candidates, key)
+}
+
+// 按访客固定带有界负载（和出口组同一个实现）：一个访客自己占了大头时，超过「该分的 × 1.25」的连接落到别的路径上；
+// 头两条连接总在同一条上。
+func TestRouteIPHashBoundedLoad(t *testing.T) {
+	p := balanceTestProxy("ip_hash", 1, 1)
+	p.ensureHealthStateLocked()
+	_, home := p.pickTargetForKey("203.0.113.7", nil)
+	autoHoldConn(t, p, home)
+	if _, second := p.pickTargetForKey("203.0.113.7", nil); second != home {
+		t.Fatal("同一个访客的第二条连接换了路径")
+	}
+	for i := 0; i < 9; i++ {
+		autoHoldConn(t, p, home)
+	}
+	if _, index := p.pickTargetForKey("203.0.113.7", nil); index == home {
+		t.Fatal("一条已经压了 10 条、另一条空着，还往满的那条放")
+	}
+	// 不知道访客是谁：轮流，不把所有人钉在同一条上。
+	q := balanceTestProxy("ip_hash", 1, 1)
+	q.ensureHealthStateLocked()
+	_, first := q.pickTargetForKey("", nil)
+	if _, second := q.pickTargetForKey("", nil); second == first {
+		t.Fatal("没有访客地址时应该轮流")
+	}
+}
+
+// 延迟优先（和出口组同一个实现）：只在和最快的差不到 50ms 的几条里分。
+func TestRouteLatencyStrategyUsesTheNearSet(t *testing.T) {
+	spec := normalizeFailoverSpec(failoverSpec{Strategy: "latency", Targets: []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: 1, Weight: 1}, {TargetIP: "127.0.0.2", TargetPort: 2, Weight: 1}, {TargetIP: "127.0.0.3", TargetPort: 3, Weight: 1},
+	}})
+	if spec.Strategy != "latency" {
+		t.Fatalf("latency 被规整成了 %q", spec.Strategy)
+	}
+	p := &failoverProxy{spec: spec}
+	p.ensureHealthStateLocked()
+	at := time.Now()
+	for i, ms := range []int{20, 50, 300} {
+		p.stats[i].recordProbe(true, ms, at)
+	}
+	counts := map[int]int{}
+	for i := 0; i < 60; i++ {
+		_, index, _ := p.pickReserved("", nil, false)
+		counts[index]++
+	}
+	if counts[2] != 0 || counts[0] == 0 || counts[1] == 0 {
+		t.Fatalf("慢出门槛的那条不分，另外两条都分：%v", counts)
+	}
+}
+
+// 起步位置随机（路线图 X4）：不同的线路组，按权重的第一条连接不都落在同一条路径上；份额不变。
+func TestRouteWeightedStartsAtARandomPhase(t *testing.T) {
+	firsts := map[int]bool{}
+	for seed := int64(1); seed <= 40; seed++ {
+		p := balanceTestProxy("weighted", 5, 3)
+		p.rng = mathrand.New(mathrand.NewSource(seed))
+		counts := map[int]int{}
+		for i := 0; i < 80; i++ {
+			_, index := p.pickTargetForKey("", nil)
+			if i == 0 {
+				firsts[index] = true
+			}
+			counts[index]++
+		}
+		if counts[0] != 50 || counts[1] != 30 {
+			t.Fatalf("起步位置不该改变份额：%v", counts)
+		}
+	}
+	if len(firsts) < 2 {
+		t.Fatal("40 个线路组的第一条连接全落在同一条路径上")
+	}
+	if a, b := randomSpreadStart(1, 2), randomSpreadStart(1, 2); a < 0 || b < 0 {
+		t.Fatal("轮转的随机初值不能是负数")
 	}
 }
 

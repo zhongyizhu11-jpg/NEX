@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 func (p *failoverProxy) resetFastestLocked() {
@@ -98,6 +100,9 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 轮流领先时，每一次切换都各自合规，合起来却是来回漂 —— honk 把这叫 switchFlap。对付它
 不能再加一道单次门槛，得看频率：切得越勤，下一次等得越久。三次起 5 分钟，之后每多一次
 翻一倍，最多一小时。人工指定不算（人说了算），当前线路挂了的逃生也不受它限制。
+
+计数和翻倍是 lbcore.FlapDamper（NEX 隧道出口组「出口到目标来回断」用的是同一个，参数不同）；
+这里只是把账记在代理身上（autoSwitchTimes、flapWarmupUntil）。
 */
 const flapHoldWindow = time.Hour
 
@@ -116,38 +121,29 @@ flapWarmup：线路刚在这台机器上起来的头一分半钟里，自动切�
 */
 const flapWarmup = 90 * time.Second
 
+var routeFlapPolicy = lbcore.FlapPolicy{Window: flapHoldWindow, Threshold: flapHoldSwitches, Base: flapHoldBase, Max: flapHoldMax}
+
+func (p *failoverProxy) flapDamperLocked() lbcore.FlapDamper {
+	return lbcore.FlapDamper{Policy: routeFlapPolicy, WarmupUntil: p.flapWarmupUntil, Events: p.autoSwitchTimes}
+}
+
+// 记一次自动切换（预热期里的不记）。
 func (p *failoverProxy) noteAutoSwitchLocked(at time.Time) {
-	kept := p.autoSwitchTimes[:0]
-	for _, t := range p.autoSwitchTimes {
-		if at.Sub(t) < flapHoldWindow {
-			kept = append(kept, t)
-		}
-	}
-	p.autoSwitchTimes = append(kept, at)
+	damper := p.flapDamperLocked()
+	damper.Note(at)
+	p.autoSwitchTimes = damper.Events
 }
 
 // 一小时内自动切了几次。
 func (p *failoverProxy) recentAutoSwitchesLocked(now time.Time) int {
-	count := 0
-	for _, t := range p.autoSwitchTimes {
-		if now.Sub(t) < flapHoldWindow {
-			count++
-		}
-	}
-	return count
+	damper := p.flapDamperLocked()
+	return damper.Count(now)
 }
 
 // 抖动抑制要求的驻留；没在抖是 0。
 func (p *failoverProxy) flapHoldLocked(now time.Time) time.Duration {
-	count := p.recentAutoSwitchesLocked(now)
-	if count < flapHoldSwitches {
-		return 0
-	}
-	hold := flapHoldBase << uint(count-flapHoldSwitches)
-	if hold > flapHoldMax || hold <= 0 {
-		hold = flapHoldMax
-	}
-	return hold
+	damper := p.flapDamperLocked()
+	return damper.Hold(now)
 }
 
 // 刚切过去，还在最短驻留时间里（配置的最短驻留和抖动抑制取长的那个）。

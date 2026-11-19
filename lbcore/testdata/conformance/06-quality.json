@@ -1,0 +1,54 @@
+[
+  {
+    "name": "auto-higher-loss-gets-a-lower-share",
+    "about": "自动：丢包越多分得越少。同样的延迟，b 丢包 10%（成本 × 2）、c 丢包 30%（× 4）：一下子来 140 条，大约 80 / 40 / 20",
+    "strategy": "auto",
+    "members": [
+      { "name": "a", "latencyMs": 20 },
+      { "name": "b", "latencyMs": 20, "lossPct": 10 },
+      { "name": "c", "latencyMs": 20, "lossPct": 30 }
+    ],
+    "steps": [
+      { "picks": 140, "mode": "burst", "expect": { "counts": { "a": [74, 86], "b": [34, 46], "c": [14, 26] } } }
+    ]
+  },
+  {
+    "name": "auto-utilisation-95-percent-gets-under-a-tenth",
+    "about": "自动：一个成员利用率 95%（跑满了），另外两个还有余量 —— 它只留 5% 的余量，一下子来 200 条它拿不到一成",
+    "strategy": "auto",
+    "members": [
+      { "name": "a", "latencyMs": 20, "utilisation": 0.95 },
+      { "name": "b", "latencyMs": 20 },
+      { "name": "c", "latencyMs": 20, "utilisation": 0.2 }
+    ],
+    "steps": [
+      { "picks": 200, "mode": "burst", "expect": { "counts": { "a": [1, 19], "b": [90, 125], "c": [70, 100] } } },
+      {
+        "about": "a 闲下来了：回到和别人差不多",
+        "quality": { "a": {}, "c": {} },
+        "picks": 300,
+        "mode": "burst",
+        "expect": { "totals": { "a": [150, 180], "b": [150, 180], "c": [150, 180] } }
+      }
+    ]
+  },
+  {
+    "name": "least-load-sees-utilisation-but-not-loss",
+    "about": "按负载：利用率是负载，照算；丢包不是，不看",
+    "strategy": "least_load",
+    "members": [
+      { "name": "a", "utilisation": 0.5 },
+      { "name": "b", "lossPct": 30 }
+    ],
+    "steps": [{ "picks": 90, "mode": "burst", "expect": { "counts": { "a": [28, 32], "b": [58, 62] } } }]
+  },
+  {
+    "name": "auto-unknown-inputs-are-neutral",
+    "about": "自动：什么都没量到的成员（延迟、丢包、利用率都不知道）和一个量过、一切正常的成员一样对待",
+    "strategy": "auto",
+    "members": [{ "name": "a", "latencyMs": 25 }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      { "picks": 150, "mode": "burst", "expect": { "counts": { "a": [49, 51], "b": [49, 51], "c": [49, 51] } } }
+    ]
+  }
+]

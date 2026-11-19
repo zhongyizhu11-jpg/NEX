@@ -50,6 +50,11 @@ type balanceExitReport struct {
 	JitterMs float64 `json:"jitterMs,omitempty"`
 	LossPct  float64 `json:"lossPct,omitempty"`
 	Samples  int     `json:"samples,omitempty"`
+	// UDPState：这台出口的 UDP 那一侧（只有 UDP 规则在用它时才有）。ok 探活在回；down 探活连着没回，UDP 新会话不给它；
+	// unverified 从没回过探活包 —— 对端版本过旧（或者 UDP 一直不通），UDP 的健康只能跟着 TCP 探测走。
+	UDPState string `json:"udpState,omitempty"`
+	// PeerOutdated：对端版本过旧（现在只有一种情况：不回 UDP 探活包）。面板据此写「对端版本过旧」。
+	PeerOutdated bool `json:"peerOutdated,omitempty"`
 }
 
 type balanceEvent struct {
@@ -73,15 +78,13 @@ type balanceRuleReport struct {
 // balanceSnapshotLocked：这条规则此刻每台出口的状态（不含比例）。调用方持锁。
 func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExitReport {
 	exits := make([]balanceExitReport, len(s.endpoints))
-	tiers := make([]int, len(s.states))
-	for i, state := range s.states {
-		tiers[i] = state.tier(now)
-	}
 	for i, endpoint := range s.endpoints {
 		item := balanceExitReport{HostID: endpoint.HostID, Host: endpoint.Host, Port: endpoint.Port, State: "standby", Share: -1}
 		if !s.states[i].isHealthy() {
 			item.State, item.Reason = "down", "exit"
 		}
+		item.UDPState = s.states[i].udpReportState()
+		item.PeerOutdated = item.UDPState == "unverified"
 		if s.endpointReportsTarget(i) {
 			health := s.target.health[i]
 			stats := health.stats()
@@ -103,14 +106,13 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 	// 现在会挑谁（没有新连接时用它当 active）
 	if s.strategy == "fallback" {
 		// 主备：实际会挑的那台就是「在用」，哪怕它到目标不稳 / 刚恢复（前面的都连不上时就是它在扛，路线图 X1）。
-		if index, ok := s.fallbackChoiceLocked(nil, tiers, now); ok && exits[index].State != "down" {
+		if index, ok := s.fallbackChoiceLocked(nil, now, false); ok && exits[index].State != "down" {
 			exits[index].State = "active"
 		}
 		return exits
 	}
-	candidates := s.candidatesLocked(nil, tiers)
-	factors := s.targetFactorsLocked(candidates, now)
-	for _, index := range s.filterByFactorLocked(candidates, factors) {
+	candidates, _ := s.candidatesLocked(nil, now, false)
+	for _, index := range candidates {
 		if exits[index].State == "standby" {
 			exits[index].State = "active"
 		}

@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -27,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 	"lukechampine.com/blake3"
 )
 
@@ -245,13 +245,9 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.146"
-	fxpFallbackRetry              = 5 * time.Second
-	// A node that stays down is re-probed on a growing delay, because probing a
-	// peer that accepts but never answers costs a whole handshake timeout.
-	fxpFallbackRetryMax = 2 * time.Minute
-	fxpFallbackDial     = 3 * time.Second
-	fxpShutdownDrain    = 5 * time.Second
+	fxpRuntimeVersion             = "2.2.147"
+	fxpFallbackDial               = 3 * time.Second
+	fxpShutdownDrain              = 5 * time.Second
 
 	// Exit and relay ports are reachable by other nodes and must remain bounded
 	// even when user-facing access limits are disabled. The active limits are
@@ -348,29 +344,27 @@ type exitEndpointSelector struct {
 	states   []*fxpEndpointState
 	strategy string
 	next     int
-	// current 是 weighted 策略的平滑加权轮询计数（nginx 那套）：权重 5:3 时排成
+	// current 是 weighted 策略的平滑加权轮询计数（lbcore.SmoothWRR）：权重 5:3 时排成
 	// 交错的序列，而不是先连着给 5 个、再连着给 3 个。
-	current []int
-	// loads 是每个端点所在主机的实时负载（exit_load.go），capacities 是每个端点的分量。
+	current lbcore.SmoothWRR
+	// near：「延迟优先」里哪几台算「一样快」的状态（lbcore.NearSet）。
+	near lbcore.NearSet
+	// loads 是每个端点所在主机的实时负载（exit_load.go），capacities 是每个端点的分量，
+	// weights 是「按权重」用的权重（没填的当 1）。
 	loads      []*fxpHostLoad
 	capacities []float64
+	weights    []float64
 	// hashAddrs：每个端点的「主机:端口」，按访客固定算哈希用（构造时拼好，挑选时不再拼字符串）。
 	hashAddrs []string
 	mu        sync.Mutex
 	// downNext：目标全挂时「只试一台、轮着来」轮到第几台（见 chooseLocked）。
 	downNext int
-	// 下面几块是挑选路径上反复用的临时区（ensureBuffersLocked），都按端点下标排，只在 mu 里用。
-	tierBuf   []int
+	// 下面几块是挑选路径上反复用的临时区（ensureBuffersLocked，exit_select.go），都按端点下标排，只在 mu 里用。
+	healthBuf []lbcore.Health
+	members   []lbcore.Member
 	candBuf   []int
-	filterBuf []int
-	stickyBuf []int
 	nearBuf   []int
-	factorBuf []float64
-	medianBuf []float64
 	scoreBuf  []float64
-	latBuf    []float64
-	costBuf   []float64
-	snapBuf   []fxpHostLoadSnapshot
 	// random 是 random / least_load 策略用的随机数来源；nil 用 crypto/rand。测试里换成固定种子。
 	random func() (uint64, error)
 	// target：每台出口到这条规则目标的健康（target_health.go）。只有几台出口、而且有出口会回报结果时才有。
@@ -384,21 +378,6 @@ func (s *exitEndpointSelector) randomValue() (uint64, error) {
 		return s.random()
 	}
 	return randomUint64()
-}
-
-// fallbackRetryDelay backs off a repeatedly failing endpoint.
-//
-// 重新探一次挂掉的出口不是免费的：连得上但不回话的对端，一次探测要等满整个
-// 握手超时。固定 5 秒去探，等于把大部分时间都花在探一个死节点上。
-func fallbackRetryDelay(failures int) time.Duration {
-	delay := fxpFallbackRetry
-	for i := 1; i < failures && delay < fxpFallbackRetryMax; i++ {
-		delay *= 2
-	}
-	if delay > fxpFallbackRetryMax {
-		delay = fxpFallbackRetryMax
-	}
-	return delay
 }
 
 func newConnGate(maxConnections, maxIPs int) *connGate {
@@ -498,7 +477,12 @@ func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strate
 	states := make([]*fxpEndpointState, len(endpoints))
 	loads := make([]*fxpHostLoad, len(endpoints))
 	hashAddrs := make([]string, len(endpoints))
+	weights := make([]float64, len(endpoints))
 	for i, endpoint := range endpoints {
+		weights[i] = 1
+		if endpoint.Weight > 0 {
+			weights[i] = float64(endpoint.Weight)
+		}
 		states[i] = fxpEndpointStateFor(endpoint)
 		states[i].noteIndex(i)
 		// 负载记在哪一份上见 endpointLoadKey：V2 下出口都是 127.0.0.1:端口，不能只按主机名（路线图 X2）。
@@ -510,84 +494,15 @@ func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strate
 		endpoints:  endpoints,
 		states:     states,
 		strategy:   normalizeExitStrategy(strategy),
-		current:    make([]int, len(endpoints)),
+		current:    make(lbcore.SmoothWRR, len(endpoints)),
 		loads:      loads,
 		capacities: endpointCapacities(endpoints),
+		weights:    weights,
 		hashAddrs:  hashAddrs,
 		target:     newTargetAwareness(endpoints, detectConfig),
 	}
 	selector.randomizeStartLocked()
 	return selector
-}
-
-/*
-randomizeStartLocked：轮询从哪一台起步、平滑加权轮到第几步，每个选择器随机定（路线图 X4）。
-
-以前每条规则都从第一台起步。入口上几百条规则一起启动（重启、重载）时，每条规则的第一条连接都落在
-同一台出口上；连接少的规则（一两条长连接）更是永远只用第一台。加权同理：先把序列空转随机步，
-一整圈里各台的份额不变，只是起点不同。只在构造时调，还没有别人拿得到这个选择器。
-*/
-func (s *exitEndpointSelector) randomizeStartLocked() {
-	if len(s.endpoints) < 2 {
-		return
-	}
-	value, err := randomUint64()
-	if err != nil {
-		return
-	}
-	s.next = int(value % uint64(len(s.endpoints)))
-	if s.strategy != "weighted" {
-		return
-	}
-	total := 0
-	all := make([]int, len(s.endpoints))
-	for i, endpoint := range s.endpoints {
-		all[i] = i
-		weight := endpoint.Weight
-		if weight <= 0 {
-			weight = 1
-		}
-		total += weight
-	}
-	if total > 4096 {
-		total = 4096
-	}
-	for steps := int((value >> 20) % uint64(total)); steps > 0; steps-- {
-		s.advanceWeighted(all)
-	}
-}
-
-// advanceWeighted：平滑加权轮询按原始权重走一步（不看慢启动、健康折算），只用来定起步位置。
-func (s *exitEndpointSelector) advanceWeighted(candidates []int) int {
-	total, best := 0, -1
-	for _, index := range candidates {
-		weight := s.endpoints[index].Weight
-		if weight <= 0 {
-			weight = 1
-		}
-		weight *= 10
-		total += weight
-		s.current[index] += weight
-		if best < 0 || s.current[index] > s.current[best] {
-			best = index
-		}
-	}
-	s.current[best] -= total
-	return best
-}
-
-// prewarmTargetsLocked：现在会用到哪几台（预热用）。只看，不动轮询 / 加权的状态，也不算一次挑选。调用方持锁。
-func (s *exitEndpointSelector) prewarmTargetsLocked(now time.Time) []int {
-	tiers := s.tiersLocked(now)
-	if s.strategy == "fallback" {
-		if index, ok := s.fallbackChoiceLocked(nil, tiers, now); ok {
-			return []int{index}
-		}
-		return nil
-	}
-	candidates := s.candidatesLocked(nil, tiers)
-	factors := s.targetFactorsLocked(candidates, now)
-	return append([]int(nil), s.filterByFactorLocked(candidates, factors)...)
 }
 
 // activate 在一个 TCP 运行时启动时调用：马上给现在会用到的端点预热连接池，
@@ -716,6 +631,16 @@ func (s *exitEndpointSelector) count() int {
 }
 
 func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...string) (exitEndpoint, int, bool) {
+	return s.pickFor(false, excluded, selectionKeys...)
+}
+
+// pickUDP 给一条 UDP 会话挑出口：出口本身连不连得上看 UDP 那一侧（会回 UDP 探活包的出口单独记，
+// 见 endpoint_pool.go 的 reachable），其余和 pick 一样。
+func (s *exitEndpointSelector) pickUDP(excluded map[int]bool, selectionKeys ...string) (exitEndpoint, int, bool) {
+	return s.pickFor(true, excluded, selectionKeys...)
+}
+
+func (s *exitEndpointSelector) pickFor(udp bool, excluded map[int]bool, selectionKeys ...string) (exitEndpoint, int, bool) {
 	if s == nil {
 		return exitEndpoint{}, -1, false
 	}
@@ -729,7 +654,7 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 		return exitEndpoint{}, -1, false
 	}
 	now := time.Now()
-	index, ok := s.chooseLocked(excluded, selectionKey, now)
+	index, ok := s.chooseLocked(excluded, selectionKey, now, udp)
 	if !ok {
 		return exitEndpoint{}, -1, false
 	}
@@ -745,277 +670,6 @@ func (s *exitEndpointSelector) unpick(index int) {
 		return
 	}
 	s.loads[index].unpick(time.Now())
-}
-
-// ensureBuffersLocked：挑选路径上反复用的几块临时区（每个选择器一份，都在规则锁里用）。
-// 以前每次挑选都新分配分档表、候选表、折算表、负载快照……目标感知打开后一次挑选 59 次分配（路线图 X12）。
-func (s *exitEndpointSelector) ensureBuffersLocked() {
-	n := len(s.endpoints)
-	if len(s.tierBuf) == n {
-		return
-	}
-	s.tierBuf = make([]int, n)
-	s.candBuf = make([]int, 0, n)
-	s.filterBuf = make([]int, 0, n)
-	s.stickyBuf = make([]int, 0, n)
-	s.nearBuf = make([]int, 0, n)
-	s.factorBuf = make([]float64, n)
-	s.medianBuf = make([]float64, n)
-	s.scoreBuf = make([]float64, n)
-	s.latBuf = make([]float64, n)
-	s.costBuf = make([]float64, n)
-	s.snapBuf = make([]fxpHostLoadSnapshot, n)
-}
-
-// tiersLocked：每个端点现在在哪一档（1 健康，2 挂过但冷却到期，3 其余）。调用方持锁。
-func (s *exitEndpointSelector) tiersLocked(now time.Time) []int {
-	s.ensureBuffersLocked()
-	for i, state := range s.states {
-		s.tierBuf[i] = state.tier(now)
-	}
-	return s.tierBuf
-}
-
-// chooseLocked：这一条新会话给谁。不计数、不动负载（pick 负责）。调用方持锁。
-func (s *exitEndpointSelector) chooseLocked(excluded map[int]bool, selectionKey string, now time.Time) (int, bool) {
-	tiers := s.tiersLocked(now)
-	// 分三档挑，而不是「够格/不够格」两档：
-	//
-	//	1. 确认健康的（含从没失败过的）
-	//	2. 挂过、但冷却已经到期的
-	//	3. 剩下的全部 —— 一个都不剩时总得选一个，否则等于直接断服
-	//
-	// 为什么要把第 2 档单独分出来：重新探一个「连得上但不回话」的出口，要等满
-	// 一整个握手超时。以前它和第 1 档混在一起，于是每过一个冷却窗口就有一条
-	// 用户连接被派去探那个死节点，卡满十几秒（实测）。分开之后，只要还有健康
-	// 的，用户就走健康的；死节点由后台探测去认领。
-	//
-	// 但第 2 档不能干脆去掉：没有任何探测可用的路（老出口、只开了 UDP）上，
-	// 真把它去掉，一次 DNS 抖动就能把那条规则的出口永久停用。
-	candidates := s.candidatesLocked(excluded, tiers)
-	if len(candidates) == 0 {
-		return -1, false
-	}
-	// 目标本身挂了（能用的出口到目标全都不通，而且是刚测的）：换哪台都一样，只试一台，轮着来 ——
-	// 轮着是为了每台都有机会最先发现目标回来了（路线图 X8）。
-	if s.targetDownOnAllLocked(candidates, now) {
-		index := candidates[s.downNext%len(candidates)]
-		s.downNext = (s.downNext + 1) % 1000000
-		return index, true
-	}
-	if s.strategy == "fallback" {
-		return s.fallbackChoiceLocked(excluded, tiers, now)
-	}
-	factors := s.targetFactorsLocked(candidates, now)
-	if s.strategy == "random" {
-		if index, ok := s.pickRandomWeighted(candidates, factors); ok {
-			return index, true
-		}
-	}
-	if s.strategy == "ip_hash" && selectionKey != "" {
-		// 按访客固定看重「别换」：只躲开坏了的（和「切走」的不稳的），少分的照旧固定。
-		sticky := candidates
-		if factors != nil {
-			sticky = s.stickyBuf[:0]
-			for _, index := range candidates {
-				if factors[index] > 0 && !(s.endpointReportsTarget(index) && s.target.health[index].unstable && s.target.detect.action == "switch") {
-					sticky = append(sticky, index)
-				}
-			}
-			s.stickyBuf = sticky
-			if len(sticky) == 0 {
-				sticky = candidates
-			}
-		}
-		return s.pickRendezvous(sticky, selectionKey, now), true
-	}
-	usable := s.filterByFactorLocked(candidates, factors)
-	switch s.strategy {
-	case "weighted":
-		return s.pickWeighted(usable, now, factors), true
-	case "least_load":
-		return s.pickLeastLoad(usable, now, factors, false), true
-	case "auto":
-		return s.pickLeastLoad(usable, now, factors, true), true
-	case "latency":
-		return s.pickLowestLatency(usable, now, factors), true
-	}
-	// 轮流：轮到的那台按它的几成收（少分的四次里收一次），没收就看下一台。
-	for attempt := 0; attempt < len(usable)*4; attempt++ {
-		index := usable[s.next%len(usable)]
-		s.next = (s.next + 1) % 1000000
-		if factors == nil || factors[index] >= 1 || s.acceptShare(factors[index]) {
-			return index, true
-		}
-	}
-	index := usable[s.next%len(usable)]
-	s.next = (s.next + 1) % 1000000
-	return index, true
-}
-
-/*
-fallbackChoiceLocked：主备现在该走哪台（pick 和上报「在用的是谁」共用，不计数）。调用方持锁。
-
-按下面的顺序找第一台，同一档里按配置的先后：
-
- 0. 出口本身连得上，到目标也稳（没坏、没「不稳」、恢复满 5 分钟）
- 1. 出口本身连得上，到目标只是不稳 / 刚恢复不满 5 分钟
- 2. 出口本身连得上，但到目标不通（多半是目标自己的问题）
- 3. 出口本身连不上、冷却已经到期（值得用一条连接去试）
- 4. 剩下的 —— 总得给一台
-
-以前先按出口分档、同一档里再看目标，而「到目标稳不稳」排在「出口连不连得上」前面：主出口本身连不上
-（握手失败、还在冷却里）、备用只是不稳或刚恢复时，挑中的还是主出口，新连接全撞在死出口上；UDP 新会话
-没有重放，直接终身钉死（路线图 X1）。出口本身连不上的，只要还有一台连得上就不挑。
-*/
-func (s *exitEndpointSelector) fallbackChoiceLocked(excluded map[int]bool, tiers []int, now time.Time) (int, bool) {
-	best, bestRank := -1, 0
-	for i := range s.endpoints {
-		if excluded != nil && excluded[i] {
-			continue
-		}
-		rank := 4
-		switch tiers[i] {
-		case 1:
-			switch {
-			case s.fallbackUsableLocked(i, now):
-				rank = 0
-			case !s.target.health[i].down:
-				rank = 1
-			default:
-				rank = 2
-			}
-		case 2:
-			rank = 3
-		}
-		if best < 0 || rank < bestRank {
-			best, bestRank = i, rank
-		}
-	}
-	return best, best >= 0
-}
-
-// acceptShare：按几成的概率收下。调用方持锁。
-func (s *exitEndpointSelector) acceptShare(share float64) bool {
-	if share >= 1 {
-		return true
-	}
-	if share <= 0 {
-		return false
-	}
-	value, err := s.randomValue()
-	if err != nil {
-		return true
-	}
-	return float64(value%1_000_000)/1_000_000 < share
-}
-
-// pickRandomWeighted：随机挑一台，少分的按它的几成算。调用方持锁。
-func (s *exitEndpointSelector) pickRandomWeighted(candidates []int, factors []float64) (int, bool) {
-	usable := s.filterByFactorLocked(candidates, factors)
-	total := 0.0
-	for _, index := range usable {
-		total += factorOf(factors, index)
-	}
-	value, err := s.randomValue()
-	if err != nil || total <= 0 {
-		return 0, false
-	}
-	target := float64(value%1_000_000) / 1_000_000 * total
-	for _, index := range usable {
-		target -= factorOf(factors, index)
-		if target < 0 {
-			return index, true
-		}
-	}
-	return usable[len(usable)-1], true
-}
-
-// factorOf：factors 是按端点下标排的「这次按几成算」；nil 表示都按一份算。
-func factorOf(factors []float64, index int) float64 {
-	if factors == nil || index < 0 || index >= len(factors) {
-		return 1
-	}
-	return factors[index]
-}
-
-// candidatesLocked：最好的那一档里没被排除的出口（档位见 chooseLocked 里的说明）。调用方持锁。
-// 返回的切片是选择器自己的临时区，下一次调用就会被覆盖。
-func (s *exitEndpointSelector) candidatesLocked(excluded map[int]bool, tiers []int) []int {
-	s.ensureBuffersLocked()
-	candidates := s.candBuf[:0]
-	for wanted := 1; wanted <= 3 && len(candidates) == 0; wanted++ {
-		for i := range s.endpoints {
-			if excluded != nil && excluded[i] {
-				continue
-			}
-			if wanted == 3 || tiers[i] == wanted {
-				candidates = append(candidates, i)
-			}
-		}
-	}
-	s.candBuf = candidates
-	return candidates
-}
-
-// pickSessionAffinity：叠加（多路径）连接的各条腿走不同的中继，每台中继都要替自己那条腿挑出口。
-// 各挑各的（轮询计数、负载都是本机视角）会把同一个会话的腿分到不同出口上 —— 出口各自只收到一部分
-// 分片，拼不回来，连接卡住直到超时重置。这里按会话 id 做纯 rendezvous 哈希（只看容量，不看本机负载），
-// 每台中继拿到的出口列表一样，同一个会话就落在同一台出口上；不同会话仍按容量分散到各台出口。
-// 主备（fallback）本来各台中继就挑同一个，照旧。调用方不持锁。
-func (s *exitEndpointSelector) pickSessionAffinity(excluded map[int]bool, sessionID string) (exitEndpoint, int, bool) {
-	if s == nil {
-		return exitEndpoint{}, -1, false
-	}
-	if s.strategy == "fallback" || strings.TrimSpace(sessionID) == "" {
-		return s.pick(excluded, sessionID)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.endpoints) == 0 {
-		return exitEndpoint{}, -1, false
-	}
-	now := time.Now()
-	candidates := s.candidatesLocked(excluded, s.tiersLocked(now))
-	if len(candidates) == 0 {
-		return exitEndpoint{}, -1, false
-	}
-	best, bestScore := candidates[0], math.Inf(-1)
-	for _, index := range candidates {
-		if score := s.rendezvousScore(index, sessionID); score > bestScore {
-			best, bestScore = index, score
-		}
-	}
-	s.countPickLocked(best)
-	s.loads[best].notePick(now)
-	return s.endpoints[best], best, true
-}
-
-// pickWeighted 是平滑加权轮询：每个候选的计数加上自己的权重，挑最大的，再把它减去总权重。
-// 只在候选里算：坏了的出口这一轮不加计数，恢复后也不会一口气补发欠它的连接。调用方持锁。
-// 刚从挂掉恢复的出口在 60 秒里按比例慢慢加到满份（exit_load.go 的慢启动）：权重统一乘 10 再乘系数，
-// 不在慢启动里的时候序列和不乘一模一样。
-func (s *exitEndpointSelector) pickWeighted(candidates []int, now time.Time, factors []float64) int {
-	if len(s.current) != len(s.endpoints) {
-		s.current = make([]int, len(s.endpoints))
-	}
-	total, best := 0, -1
-	for _, index := range candidates {
-		weight := s.endpoints[index].Weight
-		if weight <= 0 {
-			weight = 1
-		}
-		if index < len(s.loads) {
-			weight = int(math.Max(1, math.Round(float64(weight)*10*s.loads[index].snapshot(now).slowStart*factorOf(factors, index))))
-		}
-		total += weight
-		s.current[index] += weight
-		if best < 0 || s.current[index] > s.current[best] {
-			best = index
-		}
-	}
-	s.current[best] -= total
-	return best
 }
 
 // observeLatency 记一次到这个端点的握手耗时，「按负载」用它把慢的出口往后放。
@@ -1038,18 +692,20 @@ func (s *exitEndpointSelector) markHealthy(index int) {
 	if s == nil || index < 0 || index >= len(s.states) {
 		return
 	}
-	s.states[index].noteTCPSeen()
 	s.states[index].markHealthy()
 }
 
-// hasHealthyAlternative：除了 index 这台，还有没有别的出口本身是健康的（UDP 会话换出口前先问一句，
-// 没有就不折腾 —— 换来换去还是它）。
-func (s *exitEndpointSelector) hasHealthyAlternative(index int) bool {
+// hasReachableAlternative：除了 index 这台，还有没有别的出口本身连得上（UDP 会话换出口前先问一句，
+// 没有就不折腾 —— 换来换去还是它）。udp 为 true 看 UDP 那一侧。
+func (s *exitEndpointSelector) hasReachableAlternative(index int, udp bool, now time.Time) bool {
 	if s == nil {
 		return false
 	}
 	for i, state := range s.states {
-		if i != index && state.isHealthy() {
+		if i == index {
+			continue
+		}
+		if ok, _ := state.reachable(udp, now); ok {
 			return true
 		}
 	}
@@ -3280,6 +2936,16 @@ func (c *secureConn) appendSealedFrameLocked(dst []byte, plain []byte) []byte {
 // 有效，和 readFrame 一样。
 func (c *secureConn) readFrames(dst [][]byte, max int) ([][]byte, error) {
 	if c.logical {
+		if !c.firstFrameDeadline.IsZero() {
+			/*
+				V3 的连接也要这道截止时间（阶段 2）。以前只有 V1 的加密帧那条路设了，V3 走到这里直接读，没有截止时间：
+				出口握手正常、之后不回「连上目标没有」（出口黑洞了，而手里这条预热连接 / 复用会话看起来还活着）时，
+				这条连接永远等下去，客户端只能自己超时 —— 实验室里 V3 黑洞一台出口时 30 条里失败的那一条。
+				conn 是内层连接（不复用），或者复用会话里的一个逻辑流：逻辑流的读超时是它自己的
+				（v3.Stream.SetReadDeadline），不碰物理连接，同一会话里别的流不受影响。
+			*/
+			_ = c.conn.SetReadDeadline(c.firstFrameDeadline)
+		}
 		frame, err := c.readLogicalFrame()
 		if err != nil {
 			return dst, err

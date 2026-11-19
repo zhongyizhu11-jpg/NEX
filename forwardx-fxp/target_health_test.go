@@ -33,13 +33,13 @@ func TestEntryMovesAConnectionToAnotherExitWhenTheTargetIsUnreachable(t *testing
 	brokenPort := freeTCPUDPPort(t)
 	goodPort := freeTCPUDPPort(t)
 	entryPort := freeTCPUDPPort(t)
-	exitTargetDialHook = func(listenPort int, _ helloFrame) error {
+	setExitTargetDialHook(func(listenPort int, _ helloFrame) error {
 		if listenPort == brokenPort {
 			return errors.New("simulated: no route to target")
 		}
 		return nil
-	}
-	defer func() { exitTargetDialHook = nil }()
+	})
+	defer setExitTargetDialHook(nil)
 
 	done := make(chan struct{})
 	defer close(done)
@@ -305,8 +305,8 @@ func TestTargetProbeReportsReachability(t *testing.T) {
 	if err != nil || !status.OK {
 		t.Fatalf("目标开着，探测应该说通：status=%+v err=%v", status, err)
 	}
-	exitTargetDialHook = func(int, helloFrame) error { return errors.New("simulated: refused") }
-	defer func() { exitTargetDialHook = nil }()
+	setExitTargetDialHook(func(int, helloFrame) error { return errors.New("simulated: refused") })
+	defer setExitTargetDialHook(nil)
 	status, err = probeEndpointTarget(fxpEndpointStateFor(endpoint), endpoint, cfg)
 	if err != nil || status.OK {
 		t.Fatalf("出口连不上目标，探测应该说不通：status=%+v err=%v", status, err)

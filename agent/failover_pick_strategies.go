@@ -1,13 +1,19 @@
 package main
 
-import "strconv"
+import "github.com/zhongyizhu11-jpg/NEX/lbcore"
 
 /*
-选路第 2 段：按策略挑（见 failover_pick.go）。每种「新连接怎么分」一个函数，候选由第 1 段给（非空）。
+选路第 2 段：按策略挑（见 failover_pick.go）。候选由第 1 段给（非空）。
 
-要算一算的几种（按权重的平滑加权轮询、按负载、按访客固定的加权 rendezvous、自动的有效权重和随机挑两条）
-算法本身在 route_group_balance.go，这里只是把它们接到候选上。加一种分法：写一个函数，在 failoverStrategies
-里登记一行。
+八种分配方式的名字和算法都在 lbcore（和 NEX 隧道的出口组是同一套，见 lbcore/strategy.go）：
+
+	auto / least_load / latency / weighted / round_robin / random / ip_hash
+	    在候选里「分」—— 都走 strategySpreadLocked → spreadPickLocked（route_group_balance.go）→ lbcore.Pick。
+	fallback
+	    主备：一次只用一条。「现在走哪条」是这边自己的状态机（activeIndex：粘性、切回、择优、时段表、人工指定，
+	    failover_selection.go）；这里只负责在走的那条用不了时换哪条。
+
+加一种分法：在 lbcore 里加，这里的表里登记一行。
 */
 
 type failoverStrategy struct {
@@ -19,13 +25,14 @@ type failoverStrategy struct {
 }
 
 var failoverStrategies = map[string]failoverStrategy{
-	"fallback":    {pick: (*failoverProxy).strategyFallbackLocked, spreadWithinLine: true},
-	"weighted":    {pick: (*failoverProxy).strategyWeightedLocked},
-	"least_load":  {pick: (*failoverProxy).strategyLeastLoadLocked},
-	"auto":        {pick: (*failoverProxy).strategyAutoLocked},
-	"round_robin": {pick: (*failoverProxy).strategyRoundRobinLocked},
-	"random":      {pick: (*failoverProxy).strategyRandomLocked},
-	"ip_hash":     {pick: (*failoverProxy).strategyIPHashLocked},
+	lbcore.StrategyFallback:   {pick: (*failoverProxy).strategyFallbackLocked, spreadWithinLine: true},
+	lbcore.StrategyWeighted:   {pick: (*failoverProxy).strategySpreadLocked},
+	lbcore.StrategyLeastLoad:  {pick: (*failoverProxy).strategySpreadLocked},
+	lbcore.StrategyAuto:       {pick: (*failoverProxy).strategySpreadLocked},
+	lbcore.StrategyLatency:    {pick: (*failoverProxy).strategySpreadLocked},
+	lbcore.StrategyRoundRobin: {pick: (*failoverProxy).strategySpreadLocked},
+	lbcore.StrategyRandom:     {pick: (*failoverProxy).strategySpreadLocked},
+	lbcore.StrategyIPHash:     {pick: (*failoverProxy).strategySpreadLocked},
 }
 
 // 认不出的策略按主备（规格规整时已经把认不出的改成 fallback 了，这里再兜一次底）。
@@ -33,7 +40,7 @@ func failoverStrategyFor(name string) failoverStrategy {
 	if strategy, ok := failoverStrategies[name]; ok {
 		return strategy
 	}
-	return failoverStrategies["fallback"]
+	return failoverStrategies[lbcore.StrategyFallback]
 }
 
 // 主备：在走的那条能用就走它。TCP+UDP 规格的 UDP 会话按 UDP 那一侧另挑（route_group_udp_health.go）。
@@ -54,41 +61,7 @@ func (p *failoverProxy) strategyFallbackLocked(request failoverPickRequest) int 
 	return p.activeIndex
 }
 
-// 按权重：平滑加权轮询（weightedPickLocked）。
-func (p *failoverProxy) strategyWeightedLocked(request failoverPickRequest) int {
-	return p.weightedPickLocked(request.candidates)
-}
-
-// 按负载：(活动连接 + 1) ÷ 分量最小的（leastLoadPickLocked）。
-func (p *failoverProxy) strategyLeastLoadLocked(request failoverPickRequest) int {
-	return p.leastLoadPickLocked(request.candidates)
-}
-
-// 自动：按延迟和沿途负载算有效权重，随机挑两条取更好的（autoPickLocked）。
-func (p *failoverProxy) strategyAutoLocked(request failoverPickRequest) int {
-	return p.autoPickLocked(request.candidates)
-}
-
-// 轮流：候选里按轮转计数挑，计数每次加一。
-func (p *failoverProxy) strategyRoundRobinLocked(request failoverPickRequest) int {
-	index := request.candidates[p.roundRobinNext%len(request.candidates)]
-	p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
-	return index
-}
-
-// 随机：候选里随机一条。
-func (p *failoverProxy) strategyRandomLocked(request failoverPickRequest) int {
-	if p.rng == nil {
-		p.rng = newFailoverRand(p.ruleID, p.sourcePort)
-	}
-	return request.candidates[p.rng.Intn(len(request.candidates))]
-}
-
-// 按访客固定：加权 rendezvous 哈希（rendezvousPickLocked）。没有访客地址时按监听端口算，所有连接落在同一条上。
-func (p *failoverProxy) strategyIPHashLocked(request failoverPickRequest) int {
-	key := request.hashKey
-	if key == "" {
-		key = strconv.Itoa(p.sourcePort)
-	}
-	return p.rendezvousPickLocked(request.candidates, key)
+// 在候选里分：按规格里的分配方式交给 lbcore。
+func (p *failoverProxy) strategySpreadLocked(request failoverPickRequest) int {
+	return p.spreadPickLocked(p.spec.Strategy, request.candidates, request.hashKey)
 }

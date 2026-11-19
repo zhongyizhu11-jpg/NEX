@@ -512,7 +512,10 @@ func (p *v3SessionPool) openAt(host string, port int, cfg config) (net.Conn, *se
 					retries++
 					continue
 				}
-				return nil, nil, false, err
+				// 连着几条会话都是刚选中就死：这是这台出口的事，不是本机的上限。会话的错误可能是 net.ErrClosed
+				//（别的协程刚把它当过期的关了），原样报出去会被当成「换端点也没用」，整条业务连接直接失败、
+				// 不换出口（阶段 2）。包一层，让选择器接着试下一台。
+				return nil, nil, false, &v3SessionUnusableError{cause: err}
 			}
 			return stream, newV3SecureConn(stream, shaper, nil), !dialed, nil
 		}
@@ -542,6 +545,30 @@ func (p *v3SessionPool) openAt(host string, port int, cfg config) (net.Conn, *se
 			return nil, nil, false, err
 		}
 		// 回到正常的挑选流程：同时在等的业务连接可以共用这条刚认证好的会话。
+	}
+}
+
+// v3SessionUnusableError：这个端点上的物理会话接连不可用。故意不 Unwrap：里面的 net.ErrClosed 之类不该让
+// v3EndpointFailureIsRetryable 把它当成本地错误。
+type v3SessionUnusableError struct{ cause error }
+
+func (e *v3SessionUnusableError) Error() string {
+	return "v3: sessions to this endpoint keep failing: " + e.cause.Error()
+}
+
+// retire 把这个端点名下的物理会话都标成「不再接新流」（Drain）：已经在跑的流照常跑完，下一条业务连接会拨一条新的
+// 物理会话 —— 新拨的要做完握手，出口真死了当场就知道。入口发现出口「握手正常、之后不回话」时调。
+func (p *v3SessionPool) retire(host string, port int, cfg config) {
+	key := v3PoolKey(host, port, cfg)
+	p.mu.Lock()
+	var sessions []*v3.Session
+	if bucket := p.buckets[key]; bucket != nil {
+		sessions = append(sessions, bucket.sessions...)
+		bucket.sessions = bucket.sessions[:0]
+	}
+	p.mu.Unlock()
+	for _, session := range sessions {
+		session.Drain()
 	}
 }
 

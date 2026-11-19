@@ -33,6 +33,11 @@ func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (
 func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bool, udp bool) (failoverTarget, int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.pickLocked(hashKey, exclude, udp)
+}
+
+// pickLocked：三段挑选本身。调用方持有 p.mu。
+func (p *failoverProxy) pickLocked(hashKey string, exclude map[int]bool, udp bool) (failoverTarget, int) {
 	p.ensureHealthStateLocked()
 	if len(p.spec.Targets) == 0 {
 		return failoverTarget{}, -1
@@ -44,11 +49,6 @@ func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bo
 	// 出口组的手动指定：指定的那台能用就只走它，所有分法都一样（failover_exit_group.go）。
 	if pinned := p.exitPinPickLocked(candidates, udp); pinned >= 0 {
 		return p.spec.Targets[pinned], pinned
-	}
-	// 出口组的按访客固定用自己的哈希（exitRendezvousPickLocked 说明了为什么不能用线路组那一个）。
-	if p.exitGroupLocked() && p.spec.Strategy == "ip_hash" {
-		index := p.exitRendezvousPickLocked(candidates, hashKey)
-		return p.spec.Targets[index], index
 	}
 	request := failoverPickRequest{candidates: candidates, hashKey: hashKey, exclude: exclude, udp: udp}
 	strategy := failoverStrategyFor(p.spec.Strategy)
@@ -70,11 +70,14 @@ pickReserved 挑一条路径并当场记一笔「在途」（A8）。
 只给真要去拨的调用方用；pickTarget / pickTargetForKey 不记在途（测试、探查用，没有人替它们退）。
 */
 func (p *failoverProxy) pickReserved(hashKey string, exclude map[int]bool, udp bool) (failoverTarget, int, failoverReservation) {
-	target, index := p.pickTargetForKeyProto(hashKey, exclude, udp)
+	// 挑和记在同一把锁里：分两次拿锁的话，同时到的另一条连接可以插在中间，看不见这一笔在途。
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	target, index := p.pickLocked(hashKey, exclude, udp)
 	if index < 0 {
 		return target, index, failoverReservation{}
 	}
-	return target, index, p.reserve(index)
+	return target, index, p.reserveLocked(index)
 }
 
 // 一次挑选的输入：第 1 段给出的候选（非空），和调用方带来的访客、排除、协议。

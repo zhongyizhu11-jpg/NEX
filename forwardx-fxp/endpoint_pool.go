@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 /*
@@ -42,16 +45,53 @@ const (
 	fxpEndpointTick = time.Second
 	// 被盯着的健康端点，这么久没有任何东西证明它活着，就主动探一次。
 	fxpHealthyProbeEvery = 10 * time.Second
-	// 挂过的端点要连续这么多次探测成功才算恢复（回切保护），两次之间隔 fxpRecoverProbeGap。
+	// 下面三个是探测参数的默认值，规则带了「检测与切换」时按规则的来（fxpProbeTuning）：
+	// 挂过的端点要连续这么多次探测成功才算恢复（回切保护），两次之间隔 fxpRecoverProbeGap；
+	// 健康端点探测连续失败 fxpSuspectProbes 次才判死，一次抖动不切线路。
 	fxpRecoverProbes   = 3
-	fxpRecoverProbeGap = 5 * time.Second
-	// 健康端点探测连续失败这么多次才判死，一次抖动不切线路。
-	fxpSuspectProbes = 2
-	// 只有 UDP 规则盯着的端点，这么久发一轮 UDP 探活（udp_ping.go）。
-	fxpUDPProbeEvery = 5 * time.Second
-	// 还不知道对端认不认（UDP 探活包 / TCP 监听）的时候，隔这么久试一次。
-	fxpSoftProbeEvery = 30 * time.Second
+	fxpRecoverProbeGap = 2 * time.Second
+	fxpSuspectProbes   = 2
+	// UDP 探活（udp_ping.go）多久一轮：端点上挂着 UDP 会话时 fxpUDPProbeActiveEvery，闲着的 fxpUDPProbeEvery。
+	fxpUDPProbeEvery       = 5 * time.Second
+	fxpUDPProbeActiveEvery = time.Second
+	// 对端从没回过 UDP 探活包（版本过旧，或者 UDP 一直不通）时，隔这么久再问一次。
+	fxpUDPUnverifiedProbeEvery = 30 * time.Second
+	// 问过这么多轮都没回过，就当它「没验证过」：打一条日志、报给面板，UDP 新会话优先给验证过的出口。
+	fxpUDPUnverifiedRounds = 2
 )
+
+/*
+fxpProbeTuning：出口本身通不通的探测参数。默认值见上面的常量；规则带了「检测与切换」（balanceDetectConfig，
+面板的灵敏 / 均衡 / 稳定就是它的几组取值）时，用规则的「几次不通算坏」「恢复要连续通几次」「多久探一次」。
+端点状态是整个进程共享的，几条规则给的不一样时以最后登记的为准（同一条隧道上的规则用的是同一组）。
+*/
+type fxpProbeTuning struct {
+	fail       int
+	recover    int
+	recoverGap time.Duration
+}
+
+func defaultFXPProbeTuning() fxpProbeTuning {
+	return fxpProbeTuning{fail: fxpSuspectProbes, recover: fxpRecoverProbes, recoverGap: fxpRecoverProbeGap}
+}
+
+func fxpProbeTuningFor(cfg config) fxpProbeTuning {
+	tuning := defaultFXPProbeTuning()
+	if cfg.BalanceDetect == nil {
+		return tuning
+	}
+	detect := resolveBalanceDetect(cfg.BalanceDetect)
+	tuning.fail, tuning.recover, tuning.recoverGap = detect.fail, detect.recover, detect.interval
+	return tuning
+}
+
+/*
+出口本身来回断的抖动抑制（lbcore.FlapDamper，和线路组、「出口到目标」是同一套计数）：一小时里断了 4 次起，
+下一次恢复要从断开算起坏满 30 秒才算，每多断一次翻一倍，最多 5 分钟。恢复本身很快（连着 3 次探通、间隔 2 秒），
+不压的话一台每隔十几秒断一下的出口会被反复放回来，每次都带走一批新连接。别的出口都连不上时不受它限制
+（lbcore.Candidates 的恐慌：连不上的也会被用）。
+*/
+var fxpEndpointFlapPolicy = lbcore.FlapPolicy{Window: time.Hour, Threshold: 4, Base: 30 * time.Second, Max: 5 * time.Minute}
 
 type fxpEndpointID struct {
 	host string
@@ -92,15 +132,31 @@ type fxpEndpointState struct {
 	indexKnown bool
 	// load：这个端点的负载记在哪一份上（exit_load.go）。
 	load *fxpHostLoad
-	// tcpSeen：到它的 TCP 握手成功过（它有 TCP 监听）。tcpProbedAt：上一次派 TCP 探测的时刻。
-	tcpSeen     bool
-	tcpProbedAt time.Time
-	// UDP 直连的探活（watchUDP）：有几个 UDP 运行时在盯、对端的 UDP 端口、回没回过探活包。
-	udpWatchers int
-	udpPort     int
-	udpPongSeen bool
-	udpProbing  bool
-	udpProbedAt time.Time
+	// tuning：探测参数（fxpProbeTuning）。downAt / outages：最近一次判坏的时刻、最近一小时判坏的时刻（抖动抑制）。
+	tuning  fxpProbeTuning
+	downAt  time.Time
+	outages []time.Time
+	/*
+		UDP 那一侧（阶段 2 起单独记）：有几个 UDP 运行时在盯、对端的 UDP 端口、挂着几条 UDP 会话。
+		udpPongSeen 对端回过探活包 —— 回过之后 UDP 通不通就以探活为准（udpDown），和 TCP 那一侧各判各的：
+		只有 UDP 被拦的出口，TCP 照常用、UDP 新会话不给它；反过来也一样。udpConfirmedAt / udpMissAt 是最近一次
+		收到应答 / 一轮没等到应答的时刻（UDP 会话据此判断「我没回包」是出口的事还是应用协议本来就单向）。
+	*/
+	udpWatchers    int
+	udpPort        int
+	udpSessions    int
+	udpPongSeen    bool
+	udpProbing     bool
+	udpProbedAt    time.Time
+	udpRounds      int
+	udpDown        bool
+	udpSuspect     int
+	udpSuccesses   int
+	udpDownAt      time.Time
+	udpRetryAfter  time.Time
+	udpConfirmedAt time.Time
+	udpMissAt      time.Time
+	udpUnverified  bool
 
 	idle         []pooledSecureConn
 	dialing      int
@@ -124,7 +180,7 @@ func fxpEndpointStateFor(endpoint exitEndpoint) *fxpEndpointState {
 	fxpEndpoints.mu.Lock()
 	state := fxpEndpoints.states[id]
 	if state == nil {
-		state = &fxpEndpointState{id: id, healthy: true}
+		state = &fxpEndpointState{id: id, healthy: true, tuning: defaultFXPProbeTuning()}
 		fxpEndpoints.states[id] = state
 	}
 	fxpEndpoints.mu.Unlock()
@@ -176,44 +232,6 @@ func (s *fxpEndpointState) isHealthy() bool {
 	return s.healthy
 }
 
-// tier 给选择器分档：1 健康，2 挂过但冷却到期，3 其余。
-func (s *fxpEndpointState) tier(now time.Time) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	switch {
-	case s.healthy:
-		return 1
-	case s.retryAfter.IsZero() || !now.Before(s.retryAfter):
-		return 2
-	default:
-		return 3
-	}
-}
-
-func (s *fxpEndpointState) markFailure(err error) {
-	s.mu.Lock()
-	wasHealthy := s.healthy
-	s.healthy = false
-	s.failures++
-	s.successes = 0
-	s.suspect = 0
-	s.resolveFailed = false
-	delay := fallbackRetryDelay(s.failures)
-	s.retryAfter = time.Now().Add(delay)
-	// 死掉的端点，池里那些连接多半也是死的，别再发给用户。
-	idle := s.idle
-	s.idle = nil
-	index := s.index
-	s.mu.Unlock()
-	for _, pooled := range idle {
-		_ = pooled.conn.Close()
-	}
-	if wasHealthy {
-		// index 是这个端点在出口列表里的位置（Agent 按这行日志记出口事件，格式里要有 index=）。
-		log.Printf("exit endpoint unhealthy index=%d endpoint=%s retryIn=%s reason=%v", index, s.label(), delay, err)
-	}
-}
-
 // markResolveFailure：地址解析不出来。和别的失败一样记，但记下「是解析造成的」—— 只有这种失败，
 // 之后解析成功才能把它清掉（resolveSucceeded）。
 func (s *fxpEndpointState) markResolveFailure(err error) {
@@ -262,13 +280,6 @@ func (s *fxpEndpointState) hostLoad() *fxpHostLoad {
 	return load
 }
 
-// noteTCPSeen：到这个端点的 TCP 握手成功过，说明它有 TCP 监听 —— 之后 TCP 探测不通才能算它挂了（见 watchUDP）。
-func (s *fxpEndpointState) noteTCPSeen() {
-	s.mu.Lock()
-	s.tcpSeen = true
-	s.mu.Unlock()
-}
-
 // markHealthy 是用户流量走通了：立刻算健康。
 func (s *fxpEndpointState) markHealthy() {
 	s.mu.Lock()
@@ -297,40 +308,6 @@ func (s *fxpEndpointState) confirmedHealthy(now time.Time, within time.Duration)
 	return s.healthy && !s.confirmedAt.IsZero() && now.Sub(s.confirmedAt) <= within
 }
 
-// probeSucceeded 是后台探测走通了。挂过的端点要连着几次都通才放回去：
-// 抖动的节点一通就切回去、再断再切，每次都让一批新连接卡在它身上。
-func (s *fxpEndpointState) probeSucceeded() {
-	s.mu.Lock()
-	s.confirmedAt = time.Now()
-	s.suspect = 0
-	if s.healthy {
-		s.mu.Unlock()
-		return
-	}
-	s.successes++
-	if s.successes < fxpRecoverProbes {
-		s.retryAfter = time.Now().Add(fxpRecoverProbeGap)
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-	s.markHealthy()
-}
-
-// probeFailed 是后台探测失败。健康的端点要连着失败几次才判死，一次丢包不切线路。
-func (s *fxpEndpointState) probeFailed(err error) {
-	s.mu.Lock()
-	if s.healthy {
-		s.suspect++
-		if s.suspect < fxpSuspectProbes {
-			s.mu.Unlock()
-			return
-		}
-	}
-	s.mu.Unlock()
-	s.markFailure(err)
-}
-
 func (s *fxpEndpointState) claimProbe(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -345,105 +322,6 @@ func (s *fxpEndpointState) releaseProbe() {
 	s.mu.Lock()
 	s.probing = false
 	s.mu.Unlock()
-}
-
-// runProbe 在后台完整握一次手、发一个 probe hello 就关。对端认得 probe，
-// 不会去连目标，也不会把它当成出错的会话记日志。
-func (s *fxpEndpointState) runProbe(cfg config) {
-	s.runTCPProbe(cfg, false)
-}
-
-// runTCPProbe：soft 表示「不确定对端有没有 TCP 监听」（只有 UDP 规则在用它、TCP 握手从没成功过）：
-// 通了照常算，不通不下结论 —— 只开 UDP 的老出口不能因为 TCP 端口没人听就被判死。
-func (s *fxpEndpointState) runTCPProbe(cfg config, soft bool) {
-	defer s.releaseProbe()
-	started := time.Now()
-	conn, sec, err := dialSecureTCPFresh(s.id.host, s.id.port, cfg)
-	if err == nil {
-		// 探测的握手耗时也算进延迟：闲着的出口没有用户连接，靠它保持样本新鲜。
-		s.hostLoad().observeLatency(time.Since(started), time.Now())
-		err = writeSecureFramesWithDeadline(sec, fxpProbeHello)
-		_ = conn.Close()
-	}
-	if err != nil {
-		if !soft {
-			s.probeFailed(err)
-		}
-		return
-	}
-	s.noteTCPSeen()
-	s.probeSucceeded()
-}
-
-/*
-watchUDP 让维护循环替 UDP 直连盯着这个端点（路线图 X3）。udpPort 是对端收 UDP 直连的端口。
-
-UDP 直连没有握手，以前也就没有探测：纯 UDP 的规则、中转的 UDP 选择器，出口机没了也照样往上发。现在：
-
- 1. UDP 探活（udp_ping.go）：发一个认证过的探活包，新版出口 / 中转原样回一个。只要回过一次，
-    之后就以它为准：连着两轮不回算挂，挂了之后连着三轮回了算恢复（和 TCP 探测同一套计数）。
- 2. 对端是老版本，不认识探活包（直接丢，不回）：退回去探它的 TCP 端口。同一条隧道同时开着 TCP 时
-    出口上有监听，探得到；TCP 握手从没成功过的（出口只开了 UDP）不下「挂了」的结论，和以前一样没有信号。
-
-同一个端点还有 TCP 规则在用（watch）时只走 TCP 探测：出口机挂了两边都不通，TCP 那套已经在盯。
-*/
-func (s *fxpEndpointState) watchUDP(cfg config, udpPort int) func() {
-	s.mu.Lock()
-	s.noteDialConfigLocked(cfg)
-	s.udpWatchers++
-	if udpPort > 0 {
-		s.udpPort = udpPort
-	}
-	s.mu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.mu.Lock()
-			if s.udpWatchers > 0 {
-				s.udpWatchers--
-			}
-			s.mu.Unlock()
-		})
-	}
-}
-
-// runUDPProbe 在后台发一轮 UDP 探活。
-func (s *fxpEndpointState) runUDPProbe(cfg config, udpPort int) {
-	err := fxpUDPPing(s.id.host, udpPort, cfg)
-	s.mu.Lock()
-	s.udpProbing = false
-	s.udpProbedAt = time.Now()
-	answeredBefore := s.udpPongSeen
-	if err == nil {
-		s.udpPongSeen = true
-	}
-	s.mu.Unlock()
-	if err == nil {
-		s.probeSucceeded()
-		return
-	}
-	// 从没回过探活包的（老版本）不下结论，交给 TCP 探测。
-	if answeredBefore {
-		s.probeFailed(err)
-	}
-}
-
-// watch 让维护循环主动探测这个端点（有备选时才有意义）。返回的函数撤销。
-func (s *fxpEndpointState) watch(cfg config) func() {
-	s.mu.Lock()
-	s.noteDialConfigLocked(cfg)
-	s.watchers++
-	s.mu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.mu.Lock()
-			if s.watchers > 0 {
-				s.watchers--
-			}
-			s.mu.Unlock()
-		})
-	}
 }
 
 // prewarm 让池子现在就开始预热，第一条用户连接不必自己握手。
@@ -590,7 +468,6 @@ func (s *fxpEndpointState) fillOne(cfg config) {
 	s.fillRetryAt = time.Time{}
 	s.confirmedAt = now
 	s.suspect = 0
-	s.tcpSeen = true
 	if !s.healthy || len(s.idle) >= fxpPoolMaxSize {
 		s.mu.Unlock()
 		_ = conn.Close()
@@ -638,42 +515,38 @@ func (s *fxpEndpointState) maintain(now time.Time) {
 	}
 	s.idle = kept
 	load := s.load
-	// 只有 UDP 规则在盯它：先靠 UDP 探活；对端没回过探活包（老版本）时再加上 TCP 探测，
-	// 而且 TCP 握手从没成功过就不拿探测失败下结论（见 watchUDP）。
-	udpOnly := s.watchers == 0 && s.udpWatchers > 0
-	tcpProbing := s.watchers > 0 || (udpOnly && !s.udpPongSeen)
-	softTCP := udpOnly && !s.tcpSeen
+	// TCP 那一侧：有 TCP 运行时在盯才探。
 	probe := false
-	if tcpProbing && s.dialCfgKnown && !s.probing {
+	if s.watchers > 0 && s.dialCfgKnown && !s.probing {
 		switch {
-		case softTCP:
-			// 不知道对端有没有 TCP 监听：隔久一点试一次，通了才开始按它判断。
-			probe = now.Sub(s.tcpProbedAt) >= fxpSoftProbeEvery
 		case !s.healthy:
 			probe = !s.retryAfter.IsZero() && !now.Before(s.retryAfter)
 		case s.suspect > 0:
 			probe = true
 		default:
 			// 延迟样本旧了也探（路线图 X10）：「多久没确认」会被池子补连接清掉，不能只看它。
-			probe = now.Sub(s.confirmedAt) >= fxpHealthyProbeEvery || (s.watchers > 0 && load.latencyProbeDue(now))
+			probe = now.Sub(s.confirmedAt) >= fxpHealthyProbeEvery || load.latencyProbeDue(now)
 		}
 	}
 	if probe {
 		s.probing = true
-		s.tcpProbedAt = now
 	}
+	// UDP 那一侧：有 UDP 运行时在盯就探，和 TCP 各探各的（见 watchUDP）。
 	udpProbe := false
-	if udpOnly && s.dialCfgKnown && !s.udpProbing && s.udpPort > 0 {
+	if s.udpWatchers > 0 && s.dialCfgKnown && !s.udpProbing && s.udpPort > 0 {
+		since := now.Sub(s.udpProbedAt)
 		switch {
 		case !s.udpPongSeen:
-			// 还不知道对端认不认探活包：隔一阵问一次。
-			udpProbe = now.Sub(s.udpProbedAt) >= fxpSoftProbeEvery
-		case !s.healthy:
-			udpProbe = !s.retryAfter.IsZero() && !now.Before(s.retryAfter)
-		case s.suspect > 0:
+			// 对端还没回过探活包：头几轮照常问，一直不回就隔久一点再问（它升级了、UDP 放行了就能发现）。
+			udpProbe = s.udpProbedAt.IsZero() || since >= fxpUDPUnverifiedProbeEvery || (s.udpRounds < fxpUDPUnverifiedRounds && since >= s.tuning.recoverGap)
+		case s.udpDown:
+			udpProbe = !now.Before(s.udpRetryAfter)
+		case s.udpSuspect > 0:
 			udpProbe = true
+		case s.udpSessions > 0:
+			udpProbe = since >= fxpUDPProbeActiveEvery
 		default:
-			udpProbe = now.Sub(s.udpProbedAt) >= fxpUDPProbeEvery
+			udpProbe = since >= fxpUDPProbeEvery
 		}
 	}
 	if udpProbe {
@@ -689,9 +562,365 @@ func (s *fxpEndpointState) maintain(now time.Time) {
 		s.ensureFill()
 	}
 	if probe {
-		go s.runTCPProbe(cfg, softTCP)
+		go s.runProbe(cfg)
 	}
 	if udpProbe {
 		go s.runUDPProbe(cfg, udpPort)
 	}
+}
+
+// ---- 健康：TCP 那一侧 ----
+
+/*
+reachable：这个端点此刻连不连得上（挑出口用）。cooling：连不上，而且还在等下一次探测（刚判的；主备全挂时
+先试等够了的，见 lbcore.First）。
+
+udp 为 true 是给 UDP 会话问的：对端回过 UDP 探活包，就以探活为准（udpDown）；从没回过（版本过旧，或者 UDP 一直
+不通）就没有 UDP 自己的结论，按 TCP 那一侧的来 —— 没有信号时不乱判，但会被标成「没验证过」（udpUnverifiedNow）。
+*/
+func (s *fxpEndpointState) reachable(udp bool, now time.Time) (ok bool, cooling bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if udp && s.udpPongSeen {
+		if !s.udpDown {
+			return true, false
+		}
+		return false, now.Before(s.udpRetryAfter)
+	}
+	if s.healthy {
+		return true, false
+	}
+	return false, !s.retryAfter.IsZero() && now.Before(s.retryAfter)
+}
+
+func (s *fxpEndpointState) markFailure(err error) {
+	now := time.Now()
+	s.mu.Lock()
+	wasHealthy := s.healthy
+	s.healthy = false
+	s.failures++
+	s.successes = 0
+	s.suspect = 0
+	s.resolveFailed = false
+	/*
+		多久之后再探：固定的 recoverGap（默认 2 秒），不再越探越慢（阶段 2）。以前每多失败一次翻一倍、最长 2 分钟，
+		出口恢复之后要等退避到期才探第一下，实验室里恢复了 20 秒的出口 9 条新连接一条都没分到。
+		当初放慢是因为探测压在用户连接上、一次要等满握手超时；现在探测都在后台协程里，等多久只是那个协程的事。
+		来回断的出口由抖动抑制管（fxpEndpointFlapPolicy），不靠探得慢。
+	*/
+	delay := s.tuning.recoverGap
+	s.retryAfter = now.Add(delay)
+	if wasHealthy {
+		s.downAt = now
+		damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
+		damper.Note(now)
+		s.outages = damper.Events
+	}
+	// 死掉的端点，池里那些连接多半也是死的，别再发给用户。
+	idle := s.idle
+	s.idle = nil
+	index := s.index
+	s.mu.Unlock()
+	for _, pooled := range idle {
+		_ = pooled.conn.Close()
+	}
+	if wasHealthy {
+		// index 是这个端点在出口列表里的位置（Agent 按这行日志记出口事件，格式里要有 index=）。
+		log.Printf("exit endpoint unhealthy index=%d endpoint=%s retryIn=%s reason=%v", index, s.label(), delay, err)
+	}
+}
+
+// probeSucceeded 是后台探测走通了。挂过的端点要连着几次都通才放回去：
+// 抖动的节点一通就切回去、再断再切，每次都让一批新连接卡在它身上。来回断的还要坏满抖动抑制要求的时长。
+func (s *fxpEndpointState) probeSucceeded() {
+	now := time.Now()
+	s.mu.Lock()
+	s.confirmedAt = now
+	s.suspect = 0
+	if s.healthy {
+		s.mu.Unlock()
+		return
+	}
+	s.successes++
+	damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
+	if s.successes < s.tuning.recover || damper.Holding(now, s.downAt, 0, false) {
+		s.retryAfter = now.Add(s.tuning.recoverGap)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.markHealthy()
+}
+
+// probeFailed 是后台探测失败。健康的端点要连着失败几次才判死，一次丢包不切线路。
+func (s *fxpEndpointState) probeFailed(err error) {
+	s.mu.Lock()
+	if s.healthy {
+		s.suspect++
+		if s.suspect < s.tuning.fail {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.mu.Unlock()
+	s.markFailure(err)
+}
+
+// runProbe 在后台完整握一次手、发一个 probe hello 就关。对端认得 probe，
+// 不会去连目标，也不会把它当成出错的会话记日志。
+//
+// 端点还连不上、而且有人盯着它时，这个协程接着探：每隔 recoverGap 发起一次（从上一次发起算，探测本身花掉的时间
+// 不另外等），直到它恢复或者没人盯了。不交回维护循环去等下一个 1 秒的节拍 —— 那样三次探测之间各多等不到一秒，
+// 出口恢复到重新接连接要 9 秒上下，贴着 10 秒的线。
+func (s *fxpEndpointState) runProbe(cfg config) {
+	defer s.releaseProbe()
+	for {
+		started := time.Now()
+		conn, sec, err := dialEndpointProbe(s.id.host, s.id.port, cfg)
+		if err == nil {
+			// 探测的握手耗时也算进延迟：闲着的出口没有用户连接，靠它保持样本新鲜。
+			s.hostLoad().observeLatency(time.Since(started), time.Now())
+			err = writeSecureFramesWithDeadline(sec, fxpProbeHello)
+			_ = conn.Close()
+		}
+		if err != nil {
+			s.probeFailed(err)
+		} else {
+			s.probeSucceeded()
+		}
+		s.mu.Lock()
+		again, gap := !s.healthy && s.watchers > 0, s.tuning.recoverGap
+		s.mu.Unlock()
+		if !again {
+			return
+		}
+		if wait := gap - time.Since(started); wait > 0 {
+			time.Sleep(wait)
+		}
+	}
+}
+
+/*
+dialEndpointProbe：探测用的拨号。和 dialSecureTCPFresh 一样现拨、握完手，只是握手确认最多等 fxpPipelinedAckFast
+（4 秒），不等满 10 秒：对端接了连接却不回话（进程卡住、回程黑洞）时，一次探测卡 10 秒，出口恢复的那一刻
+正好有一次探测卡在半路的话，要多等这 10 秒才轮到下一次。V3 的握手超时在它自己的拨号里，照旧。
+*/
+func dialEndpointProbe(host string, port int, cfg config) (net.Conn, *secureConn, error) {
+	if v3Enabled(cfg) {
+		return dialV3Fresh(host, port, cfg)
+	}
+	conn, err := dialNextHop(host, port, secureDialTimeout(cfg), cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	sec, err := newPipelinedClientSecureConn(conn, cfg, fxpWireCurrent)
+	if err == nil {
+		sec.ackTimeout = fxpPipelinedAckFast
+		err = sec.consumeHandshakeAck()
+	}
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	return conn, sec, nil
+}
+
+// watch 让维护循环主动探测这个端点的 TCP 那一侧（有备选时才有意义）。返回的函数撤销。
+func (s *fxpEndpointState) watch(cfg config) func() {
+	s.mu.Lock()
+	s.noteDialConfigLocked(cfg)
+	s.tuning = fxpProbeTuningFor(cfg)
+	s.watchers++
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if s.watchers > 0 {
+				s.watchers--
+			}
+			s.mu.Unlock()
+		})
+	}
+}
+
+// ---- 健康：UDP 那一侧 ----
+
+/*
+watchUDP 让维护循环替 UDP 直连盯着这个端点（路线图 X3，阶段 2 改成和 TCP 各判各的）。udpPort 是对端收 UDP 直连的端口。
+
+UDP 直连没有握手，靠 UDP 探活（udp_ping.go）：发一个认证过的探活包，出口 / 中转原样回一个。
+
+  - 多久一轮：端点上挂着 UDP 会话时每秒一轮，闲着的每 5 秒一轮。一轮最多发 3 个包、等 1 秒，丢一两个包不算没回。
+  - 连着 2 轮没回（「几次不通算坏」）判成 UDP 不通；第一轮没回就紧接着发第二轮，不等下一个节拍 ——
+    挂着会话的出口从断掉到判坏约 3 秒，会话当场换出口（udp_direct.go 的 repickReason）。
+  - 判坏之后每 2 秒一轮，连着 3 轮回了才算恢复（来回断的另有抖动抑制）；恢复后 60 秒慢慢加量。
+  - 和 TCP 那一侧各判各的：同一条规则 TCP+UDP 都开时，只有 UDP 被拦的出口 TCP 照常用、UDP 新会话不给它
+    （以前这种规则只跑 TCP 探测，UDP 单独被封发现不了）。
+
+对端从没回过探活包（版本过旧 —— 这一版要求各台都升级；或者 UDP 从一开始就不通）：没有信号，不判它坏，
+UDP 按 TCP 那一侧的结论走；问过两轮还不回就打一条日志、报给面板（「对端版本过旧」），UDP 新会话优先给验证过的出口。
+以前这种情况悄悄退回去探它的 TCP 端口，看不出来。
+*/
+func (s *fxpEndpointState) watchUDP(cfg config, udpPort int) func() {
+	s.mu.Lock()
+	s.noteDialConfigLocked(cfg)
+	s.tuning = fxpProbeTuningFor(cfg)
+	s.udpWatchers++
+	if udpPort > 0 {
+		s.udpPort = udpPort
+	}
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if s.udpWatchers > 0 {
+				s.udpWatchers--
+			}
+			s.mu.Unlock()
+		})
+	}
+}
+
+// udpSessionOpened / udpSessionClosed：一条 UDP 会话挂到这个端点上 / 结束了。挂着会话的端点探得勤。
+func (s *fxpEndpointState) udpSessionOpened() {
+	s.mu.Lock()
+	s.udpSessions++
+	s.mu.Unlock()
+}
+
+func (s *fxpEndpointState) udpSessionClosed() {
+	s.mu.Lock()
+	if s.udpSessions > 0 {
+		s.udpSessions--
+	}
+	s.mu.Unlock()
+}
+
+// udpUnverifiedNow：有 UDP 规则在用这个端点，可它从没回过 UDP 探活包（问过至少两轮）。
+func (s *fxpEndpointState) udpUnverifiedNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.udpWatchers > 0 && s.udpUnverified
+}
+
+/*
+udpSilenceConfirmed：一条 UDP 会话从 since 起一直没收到回包 —— 这是不是出口的事？
+
+是：对端会回探活包，可是 since 之后有一轮探活没等到应答，而且 since 之后一次应答都没收到。
+不是：since 之后收到过应答（出口好好的，是应用协议本来就单向，不能因为没回包换出口），或者还没来得及探。
+verified 为 false 表示对端从没回过探活包，这个问题答不了。
+*/
+func (s *fxpEndpointState) udpSilenceConfirmed(since time.Time) (confirmed bool, verified bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.udpPongSeen {
+		return false, false
+	}
+	return s.udpMissAt.After(since) && !s.udpConfirmedAt.After(since), true
+}
+
+// runUDPProbe 在后台发 UDP 探活：一轮没回而且还没到判坏的次数，紧接着再发一轮；判坏之后（还有人盯着时）
+// 每隔 recoverGap 发起一轮，直到恢复 —— 和 runProbe 一样不交回维护循环去等节拍。
+func (s *fxpEndpointState) runUDPProbe(cfg config, udpPort int) {
+	for {
+		started := time.Now()
+		err := fxpUDPPing(s.id.host, udpPort, cfg)
+		again, gap := s.udpProbeResult(err)
+		if !again {
+			return
+		}
+		if wait := gap - time.Since(started); wait > 0 {
+			time.Sleep(wait)
+		}
+	}
+}
+
+// udpProbeResult 记一轮 UDP 探活的结果，返回要不要这个协程接着探、以及两轮发起之间隔多久（0 = 紧接着）。
+func (s *fxpEndpointState) udpProbeResult(err error) (again bool, gap time.Duration) {
+	now := time.Now()
+	var logLine string
+	recovered := false
+	s.mu.Lock()
+	s.udpProbedAt = now
+	s.udpRounds++
+	switch {
+	case err == nil:
+		wasUnverified := s.udpUnverified
+		s.udpPongSeen, s.udpUnverified = true, false
+		s.udpConfirmedAt = now
+		s.udpSuspect = 0
+		if wasUnverified {
+			logLine = fmt.Sprintf("exit endpoint answers udp pings now index=%d endpoint=%s", s.index, s.label())
+		}
+		if s.udpDown {
+			s.udpSuccesses++
+			damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
+			if s.udpSuccesses >= s.tuning.recover && !damper.Holding(now, s.udpDownAt, 0, false) {
+				s.udpDown = false
+				recovered = true
+				logLine = fmt.Sprintf("exit endpoint udp recovered index=%d endpoint=%s", s.index, s.label())
+			} else {
+				s.udpRetryAfter = now.Add(s.tuning.recoverGap)
+			}
+		}
+	case !s.udpPongSeen:
+		// 从没回过：没有结论。问够了轮数就标成「没验证过」，说一次。
+		if s.udpRounds >= fxpUDPUnverifiedRounds && !s.udpUnverified {
+			s.udpUnverified = true
+			logLine = fmt.Sprintf("exit endpoint never answered a udp ping index=%d endpoint=%s: peer runs an outdated FXP or UDP is blocked; UDP health follows the TCP probe", s.index, s.label())
+		}
+	default:
+		s.udpMissAt = now
+		s.udpSuccesses = 0
+		if s.udpDown {
+			s.udpRetryAfter = now.Add(s.tuning.recoverGap)
+			break
+		}
+		s.udpSuspect++
+		if s.udpSuspect < s.tuning.fail {
+			again = true
+			break
+		}
+		s.udpDown, s.udpDownAt, s.udpSuspect = true, now, 0
+		s.udpRetryAfter = now.Add(s.tuning.recoverGap)
+		damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
+		damper.Note(now)
+		s.outages = damper.Events
+		logLine = fmt.Sprintf("exit endpoint udp unreachable index=%d endpoint=%s reason=%v", s.index, s.label(), err)
+	}
+	if !again && s.udpDown && s.udpWatchers > 0 {
+		// 还不通、还有人盯着：这个协程接着探。
+		again, gap = true, s.tuning.recoverGap
+	}
+	if !again {
+		s.udpProbing = false
+	}
+	s.mu.Unlock()
+	if logLine != "" {
+		log.Print(logLine)
+	}
+	if recovered {
+		// 刚恢复的出口慢慢加量（exit_load.go）。
+		s.hostLoad().markRecovered(now)
+	}
+	return again, gap
+}
+
+// udpReportState：报给面板的 UDP 那一侧状态（没有 UDP 规则在用它时是空的）。
+func (s *fxpEndpointState) udpReportState() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.udpWatchers == 0:
+		return ""
+	case s.udpUnverified:
+		return "unverified"
+	case !s.udpPongSeen:
+		return ""
+	case s.udpDown:
+		return "down"
+	}
+	return "ok"
 }

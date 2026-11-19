@@ -1,0 +1,154 @@
+[
+  {
+    "name": "least-load-burst-500-300-200",
+    "about": "按负载、分量 500:300:200，一下子来 100 条（谁都还没拨通）：挑中就记一笔在途，按 5:3:2 分，不会全压到同一个上",
+    "strategy": "least_load",
+    "members": [
+      { "name": "a", "weight": 500 },
+      { "name": "b", "weight": 300 },
+      { "name": "c", "weight": 200 }
+    ],
+    "steps": [
+      {
+        "picks": 100,
+        "mode": "burst",
+        "expect": { "counts": { "a": [49, 51], "b": [29, 31], "c": [19, 21] } }
+      }
+    ]
+  },
+  {
+    "name": "least-load-held-connections",
+    "about": "按负载、分量 2:1:1，连上了一直挂着的 40 条：20 / 10 / 10",
+    "strategy": "least_load",
+    "members": [
+      { "name": "a", "weight": 2 },
+      { "name": "b", "weight": 1 },
+      { "name": "c", "weight": 1 }
+    ],
+    "steps": [
+      { "picks": 40, "mode": "hold", "expect": { "counts": { "a": [19, 21], "b": [9, 11], "c": [9, 11] } } }
+    ]
+  },
+  {
+    "name": "least-load-ties-rotate",
+    "about": "成本一样（都闲着）时轮着来，不总落在第一个上",
+    "strategy": "least_load",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [{ "picks": 6, "expect": { "exact": ["a", "b", "c", "a", "b", "c"] } }]
+  },
+  {
+    "name": "least-load-ignores-latency",
+    "about": "按负载不看延迟：一个 20ms 一个 200ms，照样一人一半",
+    "strategy": "least_load",
+    "members": [
+      { "name": "a", "latencyMs": 20 },
+      { "name": "b", "latencyMs": 200 }
+    ],
+    "steps": [{ "picks": 100, "mode": "burst", "expect": { "counts": { "a": [50, 50], "b": [50, 50] } } }]
+  },
+  {
+    "name": "least-load-power-of-two-choices",
+    "about": "候选多于 3 个：随机抽两个比成本。5 个一样大的成员，一下子来 500 条，各分到 100 上下",
+    "strategy": "least_load",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }, { "name": "d" }, { "name": "e" }],
+    "steps": [
+      {
+        "picks": 500,
+        "mode": "burst",
+        "expect": { "counts": { "a": [88, 112], "b": [88, 112], "c": [88, 112], "d": [88, 112], "e": [88, 112] } }
+      }
+    ]
+  },
+  {
+    "name": "least-load-slow-start",
+    "about": "按负载：刚恢复的成员分量按一成算，一下子来 110 条它只拿十来条，不会因为「它最闲」全涌过去",
+    "strategy": "least_load",
+    "members": [{ "name": "a" }, { "name": "b" }],
+    "steps": [
+      {
+        "recovered": { "b": 6 },
+        "picks": 110,
+        "mode": "burst",
+        "expect": { "counts": { "a": [96, 102], "b": [8, 14] } }
+      }
+    ]
+  },
+  {
+    "name": "auto-without-latency-is-least-load",
+    "about": "自动：还没量出延迟时就是按负载，按分量分",
+    "strategy": "auto",
+    "members": [
+      { "name": "a", "weight": 500 },
+      { "name": "b", "weight": 300 },
+      { "name": "c", "weight": 200 }
+    ],
+    "steps": [
+      { "picks": 100, "mode": "burst", "expect": { "counts": { "a": [49, 51], "b": [29, 31], "c": [19, 21] } } }
+    ]
+  },
+  {
+    "name": "auto-cost-is-latency-times-load",
+    "about": "自动：成本 = 延迟 × (在途 + 活动 + 1) ÷ 分量。20ms 对 60ms，一下子来 100 条：3 比 1 —— 慢的少分，但不饿死",
+    "strategy": "auto",
+    "members": [
+      { "name": "a", "latencyMs": 20 },
+      { "name": "b", "latencyMs": 60 }
+    ],
+    "steps": [{ "picks": 100, "mode": "burst", "expect": { "counts": { "a": [73, 77], "b": [23, 27] } } }]
+  },
+  {
+    "name": "auto-unknown-latency-is-not-punished",
+    "about": "自动：还没量出延迟的成员按最快的那个算 —— 不罚它，也不把连接都给它",
+    "strategy": "auto",
+    "members": [{ "name": "a", "latencyMs": 30 }, { "name": "b" }],
+    "steps": [{ "picks": 100, "mode": "burst", "expect": { "counts": { "a": [49, 51], "b": [49, 51] } } }]
+  },
+  {
+    "name": "auto-peak-ewma-avoids-a-latency-spike",
+    "about": "自动（P2C + peak EWMA）：一个成员的延迟突然飙高，几条连接之内它的份额掉到一成以下；尖峰随时间落回去，它又分得到，不会饿死",
+    "strategy": "auto",
+    "members": [{ "name": "a" }, { "name": "b" }],
+    "steps": [
+      {
+        "about": "两个都是 20ms：一人一半",
+        "latency": { "a": [[10, 20], [5, 20], [0, 20]], "b": [[10, 20], [5, 20], [0, 20]] },
+        "picks": 40,
+        "mode": "burst",
+        "expect": { "counts": { "a": [18, 22], "b": [18, 22] } }
+      },
+      {
+        "about": "b 刚量到一次 2000ms：读数立刻跳上去，接下来 40 条里它最多拿 3 条（不到一成）",
+        "latency": { "a": [[10, 20], [5, 20], [0, 20]], "b": [[10, 20], [5, 20], [0, 2000]] },
+        "picks": 40,
+        "mode": "burst",
+        "expect": { "counts": { "a": [37, 40], "b": [0, 3] } }
+      },
+      {
+        "about": "尖峰过去 60 秒，这期间没人用 b、它没有新样本；a 一直有。b 的读数自己落回来了，又分得到连接",
+        "latency": { "a": [[10, 20], [5, 20], [0, 20]], "b": [[70, 20], [65, 20], [60, 2000]] },
+        "picks": 40,
+        "mode": "burst",
+        "expect": { "counts": { "b": [12, 40] } }
+      }
+    ]
+  },
+  {
+    "name": "latency-near-set",
+    "about": "延迟优先：只在和最快的差不到 50ms 的那一组里分（组里用自动的成本：20ms 对 60ms 是 3 比 1）；慢出门槛的不分",
+    "strategy": "latency",
+    "members": [
+      { "name": "a", "latencyMs": 20 },
+      { "name": "b", "latencyMs": 60 },
+      { "name": "c", "latencyMs": 200 }
+    ],
+    "steps": [
+      { "picks": 100, "mode": "burst", "expect": { "counts": { "a": [73, 77], "b": [23, 27] }, "never": ["c"] } },
+      {
+        "about": "快的两个都挂了：慢的也得用",
+        "set": { "a": "down", "b": "down" },
+        "picks": 10,
+        "expect": { "counts": { "c": [10, 10] } }
+      }
+    ]
+  }
+]
