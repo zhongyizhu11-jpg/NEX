@@ -7,7 +7,8 @@ import { panelHasOtherLiveInstances } from "./panelLease";
   多实例部署时「别的面板实例看到过这台 Agent」的来源：每 10 秒读一次 hosts.lastHeartbeat（连着那台 Agent 的实例
   大约每 90 秒写一次），交给快速存活判断（agentFastLiveness.ts）：
     · 本进程的沉默期限到了、库里显示别的实例最近还见过它 → 先不判离线，按库里的时刻再等；
-    · 本进程已经判了离线、库里出现比判离线更晚的时刻 → 当它回来了（它换连到了别的实例）。
+    · 本进程已经判了离线、库里出现比判离线更晚的时刻 → 当它回来了（它换连到了别的实例）；
+    · 本进程从没登记过的主机（启动后才加的，Agent 只连别的实例）→ 按库里的时刻和版本号登记成在线。
   只看比本进程自己看到的更晚的时刻（本进程写进库的那些不算），所以 Agent 连在本实例上时，掉线照样 90 秒判出来。
   只有一个实例时不读库、不参与（panelHasOtherLiveInstances 为 false）。
 */
@@ -34,8 +35,8 @@ export async function refreshAgentPresenceElsewhere(now = Date.now()) {
   try {
     const q = quoteIdentifier;
     const sinceSeconds = Math.floor((now - AGENT_FAST_LIVENESS_ELSEWHERE_SILENCE_MS - AGENT_PRESENCE_ELSEWHERE_REFRESH_MS) / 1000);
-    const rows = await queryRaw<{ id: unknown; lastHeartbeat: unknown }>(
-      `SELECT ${q("id")}, ${q("lastHeartbeat")} FROM ${q("hosts")} WHERE ${q("lastHeartbeat")} >= ?`,
+    const rows = await queryRaw<{ id: unknown; lastHeartbeat: unknown; agentVersion: unknown }>(
+      `SELECT ${q("id")}, ${q("lastHeartbeat")}, ${q("agentVersion")} FROM ${q("hosts")} WHERE ${q("lastHeartbeat")} >= ?`,
       [sinceSeconds],
     );
     lastSeenByHost.clear();
@@ -45,7 +46,8 @@ export async function refreshAgentPresenceElsewhere(now = Date.now()) {
       if (!Number.isInteger(hostId) || hostId <= 0 || !Number.isFinite(seconds) || seconds <= 0) continue;
       const seenAt = Math.min(seconds * 1000, now);
       lastSeenByHost.set(hostId, seenAt);
-      agentFastLivenessTracker.observeElsewhereActivity(hostId, seenAt);
+      // 本进程没登记过的（启动后新加、Agent 只连别的实例）按版本号登记，不然转发组评估里它一直算离线。
+      agentFastLivenessTracker.observeElsewhereActivity(hostId, seenAt, row.agentVersion);
     }
     return rows.length;
   } finally {

@@ -155,13 +155,16 @@ export class AgentFastLivenessTracker {
   /**
    * 库里显示别的实例在 seenAt 见过这台：没判离线的只记下时刻；已经判了离线、而这个时刻晚于判离线的时刻，
    * 就当它回来了（发 activity-restored，带 elsewhere）。比本进程自己看到的还早的不算（那是本进程写进库的）。
+   * 本进程从没登记过的主机（本实例启动后才加的、Agent 只连别的实例）：给了 agentVersion 而且支持快速存活、
+   * 时刻还在 elsewhere 沉默期内，就按库里的时刻登记成在线（以前不登记，转发组评估里它一直算离线）。
+   * 第一次登记不发事件：它没有「恢复」，发了会多一条「主机上线」通知。
    */
-  observeElsewhereActivity(hostIdValue: unknown, seenAtValue: unknown) {
+  observeElsewhereActivity(hostIdValue: unknown, seenAtValue: unknown, agentVersion?: unknown) {
     const hostId = positiveHostId(hostIdValue);
     if (!hostId) return false;
     const state = this.hosts.get(hostId);
-    if (!state) return false;
     const now = this.now();
+    if (!state) return this.registerSeenElsewhere(hostId, normalizedTimestamp(seenAtValue, now), agentVersion, now);
     const seenAt = normalizedTimestamp(seenAtValue, now);
     if (seenAt === null || seenAt <= (state.lastSeenAt ?? 0) + ELSEWHERE_MIN_LEAD_MS) return false;
     state.lastSeenElsewhereAt = Math.max(state.lastSeenElsewhereAt ?? 0, seenAt);
@@ -177,6 +180,29 @@ export class AgentFastLivenessTracker {
     state.lastRestoredAt = now;
     this.arm(state);
     this.emit("activity-restored", state, { elsewhere: true });
+    return true;
+  }
+
+  private registerSeenElsewhere(hostId: number, seenAt: number | null, agentVersionValue: unknown, now: number) {
+    const agentVersion = String(agentVersionValue ?? "").trim();
+    if (seenAt === null || !supportsAgentFastLiveness(agentVersion)) return false;
+    if (now - seenAt >= this.elsewhereSilenceMs) return false;
+    const state: MutableAgentFastLivenessState = {
+      hostId,
+      agentVersion,
+      transitionEpoch: 0,
+      lastSeenAt: null,
+      deadlineAt: Math.min(seenAt + this.elsewhereSilenceMs, now + this.silenceMs),
+      offlineAt: null,
+      lastOfflineAt: null,
+      lastRestoredAt: null,
+      confirmedOffline: false,
+      lastSeenElsewhereAt: seenAt,
+      timerGeneration: 1,
+      timer: null,
+    };
+    this.hosts.set(hostId, state);
+    this.arm(state);
     return true;
   }
 
