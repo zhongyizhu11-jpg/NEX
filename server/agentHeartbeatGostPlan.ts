@@ -272,16 +272,6 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     }
   }
   /*
-    GOST 链路负载均衡：每台出口一个本机 gost 端口（只听 127.0.0.1，TCP、UDP 同一个号），各挂一条只走那台出口的
-    单节点链；本机代理拨它们。
-      · forwarder 是出口该拨的目标（和不走代理时入口服务的一样）：relay 隧道里「出口拨哪儿」是入口在请求里说的，
-        没有它出口不知道往哪儿拨（2.3.539 那一版就缺这个）。
-      · 链里只有一个节点、没有选择器：gost 的「节点全被摘掉 → 路由为空 → 入口机直连目标」那条路在这里不存在。
-        拨不通出口就是把本机这条连接关掉，代理当场换下一台。
-      · dialTimeout 3 秒：出口被黑洞时 3 秒后关本机连接（代理的「连上就被关」保护期是 8 秒，够它换路重发）。
-      · 限速、计数只在前面那个公网端口上算一次，这里不挂。
-  */
-  /*
     多跳链路从入口到最后一台中转的那几跳（不含出口那一跳）。并联中转是一跳、几台中转按顺序用（中转的故障切换，
     和出口组无关）；串联中转一台一跳。有中转的地址解析不出来返回 null（整条链不生成）。suffix 给跳和节点的名字
     加后缀：每台出口各有一条链时名字不能撞。
@@ -314,6 +304,16 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     }
     return hops;
   };
+  /*
+    GOST 链路负载均衡：每台出口一个本机 gost 端口（只听 127.0.0.1，TCP、UDP 同一个号），各挂一条只走那台出口的
+    链（多跳链路是「中转 → 那台出口」）；本机代理拨它们。
+      · forwarder 是出口该拨的目标（和不走代理时入口服务的一样）：relay 隧道里「出口拨哪儿」是入口在请求里说的，
+        没有它出口不知道往哪儿拨（2.3.539 那一版就缺这个）。
+      · 出口那一跳只有一个节点、没有选择器：gost 的「节点全被摘掉 → 路由为空 → 入口机直连目标」那条路在这里不存在。
+        拨不通出口就是把本机这条连接关掉，代理当场换下一台。
+      · dialTimeout 3 秒：出口被黑洞时 3 秒后关本机连接（代理的「连上就被关」保护期是 8 秒，够它换路重发）。
+      · 限速、计数只在前面那个公网端口上算一次，这里不挂。
+  */
   const balanceGostChains: Array<Record<string, unknown>> = [];
   for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown; protocol?: string | null; tunnelId?: number | null }>) {
     const balance = gostBalancePlans.get(Number(r?.id || 0));

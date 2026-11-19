@@ -867,7 +867,13 @@ function exitTargetSummaryFromLive(
     if (pinned) how = `手动指定：只走 ${names(active.map((exit) => exit.hostId))}`;
     else if (active.length === 1) how = `${label}：走 ${active[0].hostName}${restText}`;
     else if (totalPicks >= 10) {
-      how = `${label}：${active.map((exit) => `${exit.hostName} ${Math.round((exit.picks / totalPicks) * 100)}%`).join("、")}${restText}`;
+      /*
+        比例优先用入口报的 share（最近这段时间新连接分给谁）：GOST 的 picks 是代理起来以后的累计数，拿它算出来的是
+        「一直以来」的比例，刚换过分配方式、刚摘过一台时和现在对不上。FXP 的 picks 就是这段时间的，两种算法结果一样。
+      */
+      const shareTotal = active.every((exit) => exit.share != null) ? active.reduce((sum, exit) => sum + Number(exit.share), 0) : 0;
+      const percent = (exit: (typeof active)[number]) => Math.round((shareTotal > 0 ? Number(exit.share) / shareTotal : exit.picks / totalPicks) * 100);
+      how = `${label}：${active.map((exit) => `${exit.hostName} ${percent(exit)}%`).join("、")}${restText}`;
     } else how = `${label}：分给 ${names(active.map((exit) => exit.hostId))}${restText}`;
     hows.set(how, (hows.get(how) || 0) + 1);
   }

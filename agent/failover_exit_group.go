@@ -13,7 +13,8 @@ import (
 
 /*
 出口组：GOST 隧道的几台出口，由入口机的这个代理挑（Agent 2.2.264 起真正启用，面板 shared/loadBalance.ts 的
-GOST_BALANCE_PROXY_AGENT_VERSION；2.2.262 加的那一版面板侧从没下发过）。
+UNIFIED_BALANCE_AGENT_VERSION；2.2.262 加的那一版面板侧从没下发过）。没有老路可退：gost 自己的节点选择器那条路
+面板已经删掉，入口机的 Agent 更老时面板只下发主出口一台。
 
 数据怎么走：
 
