@@ -47,3 +47,30 @@ test("标题行的「N/M 正常」：停用的不数，等检测的写出来，�
   assert.equal(summarizeGroupLive(inUse, [members[2]]), null, "全在等检测时不下结论");
   assert.equal(summarizeGroupLive(inUse, [members[0], members[0]])?.tone, "ok");
 });
+
+test("外部观察：自己报告和别人看到的分开说", () => {
+  const entry = { groupMode: "entry", isEnabled: true, peerProbe: { active: true, outdatedHosts: [] } };
+  const online = { host: { isOnline: true } };
+  const peer = (patch: Record<string, unknown>) => ({ state: "reachable", down: false, reachableWhileAgentOffline: false, reachableCount: 2, usableCount: 2, assignedCount: 2, label: "外部观察 2/2 可达", ...patch });
+  // 都正常：点还是绿的，悬停里两样都有
+  assert.deepEqual(describeMemberLive(entry, { ...online, peerHealth: peer({}) }), { tone: "healthy", note: null, title: "自己报告：主机在线；外部观察 2/2 可达" });
+  // 自己报告正常，外部连不上：观察期是黄的，判定之后是红的
+  const failing = describeMemberLive(entry, { ...online, peerHealth: peer({ state: "failing", reachableCount: 0, label: "外部观察 0/2 可达" }) })!;
+  assert.equal(failing.tone, "degraded");
+  assert.equal(failing.note, "外部不通");
+  const down = describeMemberLive(entry, { ...online, peerHealth: peer({ state: "down", down: true, reachableCount: 0, label: "外部观察 0/2 可达" }) })!;
+  assert.equal(down.tone, "down");
+  assert.match(down.title, /自己报告：主机在线；外部观察 0\/2 可达/);
+  // 面板连不上它，但访客可达：黄点，不是「离线」
+  const offlineButReachable = describeMemberLive(entry, { host: { isOnline: false }, peerHealth: peer({ reachableWhileAgentOffline: true, reachableCount: 1, label: "外部观察 1/2 可达" }) })!;
+  assert.equal(offlineButReachable.tone, "degraded");
+  assert.equal(offlineButReachable.note, "面板连不上");
+  // 面板连不上、外部也连不上：照旧是离线
+  assert.equal(describeMemberLive(entry, { host: { isOnline: false }, peerHealth: peer({ reachableCount: 0, label: "外部观察 0/2 可达" }) })?.note, "离线");
+  // 没有可用的观察点：只看自己的报告，并说明
+  assert.equal(describeMemberLive(entry, { ...online, peerHealth: null })?.title, "自己报告：主机在线；没有可用的观察点，只看成员自己的报告");
+  // 不带 peerProbe 的组（普通用户的视图、别的组类型）一个字都不变
+  assert.deepEqual(describeMemberLive({ groupMode: "entry", isEnabled: true }, online), { tone: "healthy", note: null, title: "主机在线" });
+  const summary = summarizeGroupLive(entry, [{ ...online, peerHealth: peer({}) }, { ...online, peerHealth: peer({ state: "failing" }) }])!;
+  assert.equal(summary.title, "启用的 2 个成员里：1 个部分不通");
+});
