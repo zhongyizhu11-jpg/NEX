@@ -30,6 +30,8 @@ const EXITS = [
   { id: 22, ip: "127.0.0.12", token: "tok-exit-2", port: EXIT_PORT_BASE + 1, mbps: 300 },
   { id: 23, ip: "127.0.0.13", token: "tok-exit-3", port: EXIT_PORT_BASE + 2, mbps: 200 },
 ];
+// 多跳场景里的中转
+const RELAY = { id: 30, ip: "127.0.0.14", token: "tok-relay", port: Number(process.env.RELAY_PORT || EXIT_PORT_BASE + 9) };
 const RULE_ID = 1;
 const TUNNEL_ID = 1;
 
@@ -49,6 +51,7 @@ const addHost = (host, name, mbps) => exec(
 );
 await addHost(ENTRY, "入口", 0);
 for (const [index, exit] of EXITS.entries()) await addHost(exit, `出口${index + 1}`, exit.mbps);
+await addHost(RELAY, "中转", 0);
 await exec(
   'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", "isEnabled", "loadBalanceEnabled", "loadBalanceStrategy") VALUES (?, ?, ?, ?, ?, ?, 1, 1, 1, ?)',
   [TUNNEL_ID, "GOST 出口组", ENTRY.id, EXITS[0].id, TUNNEL_MODE, EXITS[0].port, "round_robin"],
@@ -99,6 +102,8 @@ async function beat(token, agentVersion) {
 
 // 入口机上那份共享运行时的配置：里面有这条规则公网端口的那一份
 const entryRuntimeConfig = (configs) => Object.values(configs).find((config) => (config.services || []).some((service) => String(service.name || "").startsWith(`fwx-${RULE_ID}-`))) || null;
+// 中转机上那份隧道运行时的配置（多跳的中继监听）
+const relayRuntimeConfig = (configs) => Object.values(configs).find((config) => (config.services || []).some((service) => String(service.name || "").startsWith("fwx-mhop-"))) || null;
 // 出口机上那份隧道运行时的配置
 const exitRuntimeConfig = (configs) => Object.values(configs).find((config) => (config.services || []).some((service) => String(service.name || "").startsWith("fwx-tunnel-exit-"))) || null;
 
@@ -111,7 +116,10 @@ const scenarios = [
   { name: "sensitive", tunnel: { loadBalanceStrategy: "round_robin", balanceDetect: JSON.stringify({ intervalSeconds: 1, failThreshold: 2, recoverThreshold: 3 }) } },
   { name: "tcp-only", tunnel: { loadBalanceStrategy: "round_robin" }, protocol: "tcp" },
   { name: "udp-only", tunnel: { loadBalanceStrategy: "round_robin" }, protocol: "udp" },
+  // 入口机的 Agent 还不能执行统一调度：只下发主出口一台（没有老路可退）
   { name: "old-agent", tunnel: { loadBalanceStrategy: "round_robin" }, entryAgentVersion: "2.2.263" },
+  // 多跳：入口 → 中转 → 三台出口。每台出口的本机端口挂「中转 → 那台出口」的链
+  { name: "multihop", tunnel: { loadBalanceStrategy: "round_robin" }, relay: true },
 ];
 const reset = { balancePinHostId: null, proxyProtocolSend: 0, proxyProtocolReceive: 0, proxyProtocolVersion: 1, balanceDetect: null };
 const only = (process.env.SCENARIOS || "").split(",").map((item) => item.trim()).filter(Boolean);
@@ -123,6 +131,12 @@ for (const scenario of scenarios) {
   const columns = { ...reset, ...scenario.tunnel };
   await exec(`UPDATE tunnels SET ${Object.keys(columns).map((key) => `"${key}" = ?`).join(", ")} WHERE id = ?`, [...Object.values(columns), TUNNEL_ID]);
   await exec('UPDATE forward_rules SET protocol = ? WHERE id = ?', [scenario.protocol || "both", RULE_ID]);
+  await exec('DELETE FROM tunnel_hops WHERE "tunnelId" = ?', [TUNNEL_ID]);
+  if (scenario.relay) {
+    for (const [seq, hop] of [[0, { id: ENTRY.id, port: 0 }], [1, RELAY], [2, EXITS[0]]]) {
+      await exec('INSERT INTO tunnel_hops ("tunnelId", seq, "hostId", "listenPort") VALUES (?, ?, ?, ?)', [TUNNEL_ID, seq, hop.id, hop.port]);
+    }
+  }
   const entry = await beat(ENTRY.token, scenario.entryAgentVersion || UNIFIED_BALANCE_AGENT_VERSION);
   /*
     面板只在配置内容变了的时候才重发 gost 配置：只换分配方式 / 手动指定时，入口机的 gost.json 一个字节不变
@@ -135,6 +149,7 @@ for (const scenario of scenarios) {
     if (config) lastExitGost[String(exit.id)] = config;
   }
   const exits = { ...lastExitGost };
+  const relayGost = scenario.relay ? relayRuntimeConfig((await beat(RELAY.token, UNIFIED_BALANCE_AGENT_VERSION)).configs) : null;
   const bundle = {
     scenario: scenario.name,
     ruleId: RULE_ID,
@@ -147,11 +162,14 @@ for (const scenario of scenarios) {
     entryGostResent,
     failover: entry.failover[String(RULE_ID)] || null,
     exitGost: exits,
+    relay: scenario.relay ? { hostId: RELAY.id, ip: RELAY.ip, port: RELAY.port } : null,
+    relayGost,
   };
   const directory = path.join(OUT, scenario.name);
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "bundle.json"), JSON.stringify(bundle, null, 2));
   summary[scenario.name] = { balanced: !!bundle.failover?.spec?.balanceReport, strategy: bundle.failover?.spec?.strategy || null };
+  if (scenario.relay && !relayGost) throw new Error("多跳场景没取到中转机的配置");
 }
 fs.writeFileSync(path.join(OUT, "summary.json"), JSON.stringify(summary, null, 2));
 console.log(JSON.stringify(summary));

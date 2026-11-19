@@ -54,6 +54,9 @@ type e2eBundle struct {
 		Spec       failoverSpec `json:"spec"`
 	} `json:"failover"`
 	ExitGost map[string]json.RawMessage `json:"exitGost"`
+	// 多跳场景：入口和出口之间的中转
+	Relay     *e2eExit        `json:"relay"`
+	RelayGost json.RawMessage `json:"relayGost"`
 }
 
 // ---- 目标 ----
@@ -173,13 +176,6 @@ func (target *e2eTarget) snapshot() map[string]int {
 	return out
 }
 
-// 入口机自己拨到目标的次数（绕过隧道）。
-func (target *e2eTarget) direct() int {
-	target.mu.Lock()
-	defer target.mu.Unlock()
-	return target.peers["tcp 127.0.0.1"] + target.peers["udp 127.0.0.1"]
-}
-
 // ---- 实验台 ----
 
 type e2eLab struct {
@@ -228,8 +224,13 @@ func newE2ELab(t *testing.T, scenario string) *e2eLab {
 	t.Cleanup(func() { persistentFailoverDir = oldPersistentDir })
 	lab.target = startE2ETarget(t, bundle.TargetPort)
 	for _, exit := range bundle.Exits {
-		lab.writeExitConfig(exit)
+		lab.writeExitConfig(exit, bundle.ExitGost[fmt.Sprint(exit.HostID)])
 		lab.startGost(lab.exitName(exit))
+	}
+	if bundle.Relay != nil {
+		// 中转也绑自己的地址往外拨：目标看到它就是中转绕过出口直连了
+		lab.writeExitConfig(e2eExit{HostID: bundle.Relay.HostID, IP: bundle.Relay.IP, Port: bundle.Relay.Port}, bundle.RelayGost)
+		lab.startGost(lab.exitName(*bundle.Relay))
 	}
 	lab.configs["entry"] = lab.writeConfig("entry", bundle.EntryGost)
 	lab.startGost("entry")
@@ -265,8 +266,7 @@ func (lab *e2eLab) writeConfig(name string, raw json.RawMessage) string {
 }
 
 // 出口的配置原样用面板生成的，只加一项：往外拨时绑自己的地址（目标靠它认是哪台出口）。
-func (lab *e2eLab) writeExitConfig(exit e2eExit) {
-	raw := lab.bundle.ExitGost[fmt.Sprint(exit.HostID)]
+func (lab *e2eLab) writeExitConfig(exit e2eExit, raw json.RawMessage) {
 	var config map[string]any
 	if err := json.Unmarshal(raw, &config); err != nil || config == nil {
 		lab.t.Fatalf("出口 %d 的隧道配置没取到: %v", exit.HostID, err)
@@ -365,10 +365,14 @@ func (lab *e2eLab) exitIndexByIP(ip string) int {
 	return -1
 }
 
+// 目标只许看到出口的地址：看到入口机（127.0.0.1）或中转的地址，就是有人绕过出口直连了目标。
 func (lab *e2eLab) noDirect() {
 	lab.t.Helper()
-	if direct := lab.target.direct(); direct != 0 {
-		lab.t.Fatalf("目标收到了入口机直接拨来的 %d 条（绕过了隧道）：%v", direct, lab.target.snapshot())
+	for peer, count := range lab.target.snapshot() {
+		fields := strings.Fields(peer)
+		if len(fields) != 2 || lab.exitIndexByIP(fields[1]) < 0 {
+			lab.t.Fatalf("目标收到了不是出口拨来的 %d 条（%s，绕过了隧道）：%v", count, peer, lab.target.snapshot())
+		}
 	}
 }
 
@@ -964,6 +968,76 @@ func TestBalanceProxyE2E(t *testing.T) {
 			}
 			lab.noDirect()
 		})
+	})
+
+	t.Run("多跳（入口 → 中转 → 三台出口）", func(t *testing.T) {
+		lab := newE2ELab(t, "multihop")
+		exits := lab.bundle.Exits
+		for i, target := range lab.bundle.Failover.Spec.Targets {
+			if !target.ViaRelay {
+				t.Fatalf("多跳的第 %d 条目标应当带 viaRelay（入口机探不到出口）", i)
+			}
+		}
+		tcp := lab.tcpSpread(30, 10)
+		udp, _ := lab.udpSpread(30)
+		t.Logf("多跳 轮流：TCP %s | UDP %s", e2eCounts(tcp, exits), e2eCounts(udp, exits))
+		for _, exit := range exits {
+			if tcp[exit.IP] != 10 || udp[exit.IP] != 10 {
+				t.Fatalf("轮流应当均分")
+			}
+		}
+		lab.noDirect()
+		if !e2eIptables() {
+			return
+		}
+		// 出口在中转后面：入口机探不到它。黑洞以后靠真实连接「被关 → 换走 → 经出口复核」发现
+		victim := 2
+		undo := lab.blackhole(exits[victim])
+		time.Sleep(3 * time.Second)
+		if !lab.healthy(victim) {
+			t.Fatalf("没有流量时入口机不会知道中转后面的出口坏了")
+		}
+		firstHit := time.Now()
+		failed, slowest := 0, time.Duration(0)
+		during := map[string]int{}
+		for !(!lab.healthy(victim) && time.Since(firstHit) > 2*time.Second) && time.Since(firstHit) < 20*time.Second {
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+			for i := 0; i < 3; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					reply, err := lab.tcpOnce(e2eVisitor(i), "", 12*time.Second)
+					mu.Lock()
+					defer mu.Unlock()
+					if err != nil {
+						failed++
+						return
+					}
+					during[reply.exitIP]++
+					if reply.elapsed > slowest {
+						slowest = reply.elapsed
+					}
+				}(i)
+			}
+			wg.Wait()
+		}
+		downAfter := time.Since(firstHit)
+		t.Logf("多跳 黑洞一台出口：没有流量的 3 秒里照常算好的；有流量后失败 %d 条，最慢一条 %s（撞上它的约 3 秒后被中转关掉、换走），分布 %s；第一条连接后 %s 内判坏",
+			failed, slowest.Round(10*time.Millisecond), e2eCounts(during, exits), downAfter.Round(100*time.Millisecond))
+		if failed != 0 || during[exits[victim].IP] != 0 {
+			t.Fatalf("多跳：出口黑洞期间连接应当全部被换到别的出口")
+		}
+		if lab.healthy(victim) {
+			t.Fatalf("多跳：坏出口没有被判坏")
+		}
+		if downAfter > 12*time.Second {
+			t.Fatalf("多跳：判坏用了 %s", downAfter)
+		}
+		undo()
+		recovered := lab.waitFor("多跳：出口恢复", 20*time.Second, func() bool { return lab.healthy(victim) })
+		t.Logf("多跳：出口回来后 %s 放回", recovered.Round(10*time.Millisecond))
+		lab.noDirect()
 	})
 
 	t.Run("只有 TCP / 只有 UDP 的规则", func(t *testing.T) {

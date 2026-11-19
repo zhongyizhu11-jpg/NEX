@@ -519,6 +519,9 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
           tunnelId: Number(tunnel.id),
           secretSeed: tunnelSecretSeed(tunnel),
         }),
+        // 中转拨下一跳最多等 3 秒：下一跳（出口）被黑洞时尽快把这条连接关掉，入口机的本机代理才能及时换出口
+        // （它的「连上就被关」保护期是 8 秒；不写的话是运行时默认的长超时，换路来不及）。
+        metadata: { dialTimeout: "3s" },
         listener: {
           // Entry hop receives local plain TCP traffic; relays receive tunneled traffic.
           type: Number(currentHop.seq) === 0 ? "tcp" : gostTunnelTransportType(tunnel.mode),
