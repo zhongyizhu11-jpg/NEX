@@ -1,4 +1,5 @@
 import { agentSupportsUnifiedBalance, UNIFIED_BALANCE_AGENT_VERSION } from "@shared/loadBalance";
+import { dbBool } from "./repositories/repositoryUtils";
 import { GOST_RELAY_SELECTOR_MIN_NEX_BUILD, gostRuntimeSupportsRelaySelector, isTunnelRelayFailover } from "@shared/tunnelRelay";
 
 /*
@@ -15,10 +16,6 @@ type HostLite = { id?: unknown; name?: unknown; agentVersion?: unknown; runtimeV
 
 export type TunnelBalanceAgentIssue = { hostId: number; hostName: string; fxpVersion: null; message: string };
 
-function truthy(value: unknown) {
-  return value === true || value === 1 || value === "1" || String(value || "").toLowerCase() === "true";
-}
-
 /** entryHostIds：这条链路的入口机（入口组时是组里启用的成员）；extraExitCount：启用的额外出口节点数。 */
 export function tunnelBalanceAgentIssues(
   tunnel: { mode?: unknown; loadBalanceEnabled?: unknown; loadBalanceStrategy?: unknown } | null | undefined,
@@ -28,7 +25,7 @@ export function tunnelBalanceAgentIssues(
 ): TunnelBalanceAgentIssue[] {
   const mode = String(tunnel?.mode || "").trim().toLowerCase();
   if (!tunnel || mode === "forwardx" || mode === "nginx_stream") return [];
-  if (!truthy(tunnel.loadBalanceEnabled) || !(extraExitCount > 0)) return [];
+  if (!dbBool(tunnel.loadBalanceEnabled) || !(extraExitCount > 0)) return [];
   const issues: TunnelBalanceAgentIssue[] = [];
   const seen = new Set<number>();
   for (const value of entryHostIds) {

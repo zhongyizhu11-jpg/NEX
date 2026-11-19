@@ -23,6 +23,7 @@ import {
   pushRouteRelayHostsForParents,
   syncTunnelExitGroupEndpoints,
   updateTunnel,
+  getTunnelEntryHostIds,
 } from "../repositories/tunnelRepository";
 import { clearTunnelRuntimeStatus, clearTunnelRuntimeStatusForHosts } from "../tunnelRuntimeStatus";
 import { withKeyedTaskLock } from "../keyedTaskLock";
@@ -34,15 +35,9 @@ import { getForwardGroupById } from "../repositories/forwardGroupRepository";
 import { invalidateForwardGroupProbeTopologyAfterChange } from "./probeTopology";
 import { afterForwardGroupSyncCommit, syncChainsUsingEntryGroup, syncForwardGroupRules } from "./ruleSync";
 
-export async function groupHostIds(groupId: unknown) {
-  const id = Number(groupId || 0);
-  if (!Number.isFinite(id) || id <= 0) return [] as number[];
-  const group = await getForwardGroupById(id) as any;
-  if (!group) return [] as number[];
-  return sortedMembers(group)
-    .filter((member: any) => member?.memberType === "host")
-    .map((member: any) => Number(member.hostId || 0))
-    .filter((hostId: number) => Number.isFinite(hostId) && hostId > 0);
+/** 一个组里的主机成员（按优先级，含停用的）。 */
+export function groupHostIds(groupId: unknown) {
+  return getTunnelEntryHostIds({ entryGroupId: groupId });
 }
 
 async function refreshControlledTunnelRuntime(
@@ -90,10 +85,7 @@ async function pushControlledTunnelConfig(
 ) {
   const tunnelId = Number(tunnel?.id || 0);
   if (!Number.isFinite(tunnelId) || tunnelId <= 0) return;
-  const entryHostIds = new Set<number>();
-  const entryHostId = Number(tunnel?.entryHostId || 0);
-  if (entryHostId > 0) entryHostIds.add(entryHostId);
-  for (const hostId of await groupHostIds(tunnel?.entryGroupId)) entryHostIds.add(hostId);
+  const entryHostIds = new Set<number>(await getTunnelEntryHostIds(tunnel));
   const exitHostIds = new Set<number>();
   const primaryExitHostId = Number(tunnel?.exitHostId || 0);
   if (primaryExitHostId > 0) exitHostIds.add(primaryExitHostId);

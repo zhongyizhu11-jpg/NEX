@@ -1,3 +1,4 @@
+import { dbBool } from "../repositories/repositoryUtils";
 import * as db from "../db";
 import { groupModeSupportsMemberSchedule, memberEnabledIntent, serializeMemberSchedule } from "../../shared/memberSchedule";
 import { getDdnsSettings } from "../ddns";
@@ -360,10 +361,9 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
     normalized.data.ddnsDualStack = keep && forwardGroupSupportsDualStack(normalized.data.groupMode, normalized.data.recordType);
   }
   // 外部观察、按权重解析：没传的（老客户端、脚本）保持原样。
-  const truthy = (value: unknown) => value === true || value === 1 || value === "1";
-  if (input.peerProbeEnabled === undefined) normalized.data.peerProbeEnabled = existing.peerProbeEnabled === undefined || existing.peerProbeEnabled === null || truthy(existing.peerProbeEnabled);
+  if (input.peerProbeEnabled === undefined) normalized.data.peerProbeEnabled = dbBool(existing.peerProbeEnabled, true);
   if (input.peerObserverHostIds === undefined) normalized.data.peerObserverHostIds = serializePeerObserverHostIds(existing.peerObserverHostIds);
-  if (input.ddnsWeightEnabled === undefined) normalized.data.ddnsWeightEnabled = truthy(existing.ddnsWeightEnabled) && !!normalized.data.bandwidthAggregationEnabled;
+  if (input.ddnsWeightEnabled === undefined) normalized.data.ddnsWeightEnabled = dbBool(existing.ddnsWeightEnabled) && !!normalized.data.bandwidthAggregationEnabled;
   const desiredEnabled = !!normalized.data.isEnabled;
   const enabledChanged = !!existing.isEnabled !== desiredEnabled;
   const memberPriorityChanged = memberPrioritySignature((existing?.members || []) as ForwardGroupMemberRequest[])

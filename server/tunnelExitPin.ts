@@ -2,6 +2,7 @@ import { pushAgentRefresh } from "./agentEvents";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 import { appendPanelLog } from "./_core/panelLogger";
 import { clearTunnelRuntimeStatusForHosts } from "./tunnelRuntimeStatus";
+import { getTunnelEntryHostIds } from "./repositories/tunnelRepository";
 
 /*
   手动指定的出口掉线 / 回来时，马上让入口重新拿配置（C1）。
@@ -27,17 +28,8 @@ export async function refreshTunnelsPinnedToHost(hostId: number, reason: string)
   const pushed = new Set<number>();
   for (const tunnel of tunnels) {
     const tunnelId = Number(tunnel.id);
-    const entryHostIds = new Set<number>();
-    if (Number(tunnel.entryHostId || 0) > 0) entryHostIds.add(Number(tunnel.entryHostId));
-    const entryGroupId = Number(tunnel.entryGroupId || 0);
-    if (entryGroupId > 0) {
-      // 入口是入口组：组里每台都替这条链路监听，都要推
-      const members = await queryRaw<{ hostId?: number | null }>(
-        `SELECT ${q("hostId")} FROM ${q("forward_group_members")} WHERE ${q("groupId")} = ? AND ${q("memberType")} = ?`,
-        [entryGroupId, "host"],
-      );
-      for (const member of members) if (Number(member.hostId || 0) > 0) entryHostIds.add(Number(member.hostId));
-    }
+    // 入口是入口组：组里每台都替这条链路监听，都要推
+    const entryHostIds = new Set(await getTunnelEntryHostIds(tunnel));
     if (entryHostIds.size === 0) continue;
     clearTunnelRuntimeStatusForHosts(tunnelId, Array.from(entryHostIds));
     for (const entryHostId of entryHostIds) {

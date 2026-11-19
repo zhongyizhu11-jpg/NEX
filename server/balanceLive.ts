@@ -1,7 +1,6 @@
 import { getHostNamesByIds, getHostsByIds } from "./repositories/hostRepository";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
-import { getTunnelsByIds, getTunnelExitNodesByTunnelIds } from "./repositories/tunnelRepository";
-import { getForwardGroupById } from "./repositories/forwardGroupRepository";
+import { getTunnelEntryHostIds, getTunnelsByIds, getTunnelExitNodesByTunnelIds } from "./repositories/tunnelRepository";
 
 /*
   负载均衡的真实状态（2.3.539，用户：「全部排查下优化改进……不要再这么多问题了」）。
@@ -150,8 +149,7 @@ export async function ingestBalanceLiveReport(input: {
   for (const tunnel of tunnels) {
     const groupId = Number(tunnel.entryGroupId || 0);
     if (groupId > 0 && !entryGroupMembers.has(groupId)) {
-      const group = await getForwardGroupById(groupId).catch(() => null) as { members?: Array<{ hostId?: number | null }> } | null;
-      entryGroupMembers.set(groupId, new Set((group?.members || []).map((member) => Number(member?.hostId || 0)).filter((id) => id > 0)));
+      entryGroupMembers.set(groupId, new Set(await getTunnelEntryHostIds({ entryGroupId: groupId }).catch(() => [])));
     }
   }
   const exitHostIdsByTunnel = new Map<number, number[]>();

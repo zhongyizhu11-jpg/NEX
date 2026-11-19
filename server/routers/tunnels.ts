@@ -373,25 +373,9 @@ async function requireExitGroupAccess(ctx: any, exitGroupId: number | null | und
   return group;
 }
 
-async function getTunnelEntryTestHostIds(tunnel: any) {
-  const ids: number[] = [];
-  const pushId = (value: unknown) => {
-    const id = Number(value || 0);
-    if (!Number.isFinite(id) || id <= 0 || ids.includes(id)) return;
-    ids.push(id);
-  };
-  const entryGroupId = Number(tunnel?.entryGroupId || 0);
-  if (entryGroupId > 0) {
-    const group = await db.getForwardGroupById(entryGroupId) as any;
-    if (group && dbBool(group.isEnabled) && String(group.groupMode || "") === "entry") {
-      const members = [...(group.members || [])]
-        .filter((member: any) => member && dbBool(member.isEnabled, true) && member.memberType === "host")
-        .sort((a: any, b: any) => Number(a?.priority || 0) - Number(b?.priority || 0));
-      for (const member of members) pushId(member.hostId);
-    }
-  }
-  if (ids.length === 0) pushId(tunnel?.entryHostId);
-  return ids;
+/** 测速用的入口机：启用的入口组里启用的主机成员（按优先级）；没有时用 entryHostId。 */
+function getTunnelEntryTestHostIds(tunnel: any) {
+  return hopRepo.getTunnelEntryHostIds(tunnel, { enabledOnly: true, entryHost: "fallback" });
 }
 function normalizeHopConnectForHost(rawConnectHost: string | null | undefined, host: any) {
   const raw = String(rawConnectHost || "").trim();

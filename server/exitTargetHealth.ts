@@ -1,11 +1,11 @@
 import { appendPanelLog } from "./_core/panelLogger";
+import { dbBool } from "./repositories/repositoryUtils";
 import { ExitTargetPushDebouncer } from "./exitTargetPush";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
-import { getForwardGroupById } from "./repositories/forwardGroupRepository";
 import { getSetting, setSetting } from "./repositories/settingsRepository";
 import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
-import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
+import { getTunnelEntryHostIds, getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { type BalanceDetect, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeExitGroupStrategy } from "../shared/loadBalance";
 import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
 
@@ -292,13 +292,9 @@ type TunnelRow = {
   balanceDetect?: string | null;
 };
 
-function truthy(value: unknown) {
-  return value === true || value === 1 || value === "1" || value === "true";
-}
-
 /** 这条链路是不是「几台出口一起分」的负载均衡。 */
 export function tunnelBalancesExits(tunnel: TunnelRow | null | undefined) {
-  return !!tunnel && truthy(tunnel.loadBalanceEnabled);
+  return !!tunnel && dbBool(tunnel.loadBalanceEnabled);
 }
 
 /** 链路的检测参数（没设 = 默认值）。 */
@@ -384,7 +380,7 @@ export async function ingestExitTargetReports(input: {
   // 记下链路的出口顺序和分配方式：规则卡、诊断要知道「现在实际走哪台」（ruleActiveExit），不想每次再查库
   for (const tunnel of tunnels) {
     const order = [Number(tunnel.exitHostId || 0), ...exitNodes
-      .filter((node) => Number(node.tunnelId) === Number(tunnel.id) && truthy(node.isEnabled ?? true))
+      .filter((node) => Number(node.tunnelId) === Number(tunnel.id) && dbBool(node.isEnabled ?? true))
       .map((node) => Number(node.hostId))]
       .filter((hostId, index, list) => hostId > 0 && list.indexOf(hostId) === index);
     tunnelMetaById.set(Number(tunnel.id), { tunnel, order, at: nowMs });
@@ -400,20 +396,14 @@ export async function ingestExitTargetReports(input: {
     const tunnelId = Number(tunnel.id);
     const cached = entryHostIdsByTunnel.get(tunnelId);
     if (cached) return cached;
-    const ids = new Set<number>();
-    if (Number(tunnel.entryHostId || 0) > 0) ids.add(Number(tunnel.entryHostId));
     // 入口是入口组：组里每台都替这条链路监听，都要推
-    if (Number(tunnel.entryGroupId || 0) > 0) {
-      const group = await getForwardGroupById(Number(tunnel.entryGroupId)).catch(() => null) as { members?: Array<{ hostId?: number | null }> } | null;
-      for (const member of group?.members || []) if (Number(member?.hostId || 0) > 0) ids.add(Number(member.hostId));
-    }
-    const list = Array.from(ids);
+    const list = await getTunnelEntryHostIds(tunnel).catch(() => [Number(tunnel.entryHostId || 0)].filter((id) => id > 0));
     entryHostIdsByTunnel.set(tunnelId, list);
     return list;
   };
   for (const report of reports) {
     const rule = ruleById.get(Number(report.ruleId));
-    if (!rule || truthy(rule.pendingDelete) || Number(rule.routeParentRuleId || 0) > 0) continue;
+    if (!rule || dbBool(rule.pendingDelete) || Number(rule.routeParentRuleId || 0) > 0) continue;
     const tunnel = tunnelById.get(Number(rule.tunnelId || 0));
     if (!tunnel || !tunnelBalancesExits(tunnel) || !exitHostsByTunnel.get(Number(tunnel.id))?.has(hostId)) continue;
     const previous = getState(Number(rule.id), hostId);
