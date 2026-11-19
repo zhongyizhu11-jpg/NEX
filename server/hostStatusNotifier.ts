@@ -10,6 +10,7 @@ import {
   type AgentFastLivenessTransition,
 } from "./agentFastLiveness";
 import { withKeyedTaskLock } from "./keyedTaskLock";
+import { refreshTunnelsPinnedToHost } from "./tunnelExitPin";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } from "./discordNotify";
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
@@ -218,9 +219,20 @@ async function notifyHostStatusChanges(hosts: any[], status: HostStatus) {
 async function clearRuntimeStateForOfflineHost(hostId: number) {
   clearTunnelRuntimeStatusForHost(hostId);
   try {
-    await db.resetAgentRuntimeStateForHost(hostId);
+    // offline：这台只是多出口链路里的一个出口、别的出口还在线时，那条链路不跟着清（见 resetAgentRuntimeStateForHost）。
+    await db.resetAgentRuntimeStateForHost(hostId, { offline: true });
   } catch (error) {
     console.warn(`[HostStatus] 掉线后清理运行状态失败 host=${hostId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  await refreshExitPinsForHost(hostId, "exit-pin-host-offline");
+}
+
+/** 这台是某条链路手动指定的出口：上线 / 掉线都马上让那条链路的入口重新拿配置（server/tunnelExitPin.ts）。 */
+async function refreshExitPinsForHost(hostId: number, reason: string) {
+  try {
+    await refreshTunnelsPinnedToHost(hostId, reason);
+  } catch (error) {
+    console.warn(`[HostStatus] 通知手动指定出口的链路失败 host=${hostId}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -254,6 +266,8 @@ export async function primeHostStatusNotifier() {
 
 export async function notifyHostOnlineIfNeeded(host: any) {
   fastOfflineNotificationDebouncer.cancel(Number(host?.id || 0));
+  // 只在真的从离线回来时催（这个函数每次心跳都会进来）。
+  if (lastKnownStatus.get(Number(host?.id || 0)) === "offline") await refreshExitPinsForHost(Number(host?.id || 0), "exit-pin-host-online");
   await notifyHostStatusChange(host, "online");
   void db.scheduleForwardGroupsForHostHealthChange(Number(host?.id || 0)).catch((error) => {
     console.warn(`[HostStatus] Online forward-group evaluation failed host=${host?.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -284,6 +298,7 @@ async function handlePresenceCapableHostOnline(event: AgentFastLivenessTransitio
   if (!event.isCurrent()) return;
   const host = await db.getHostById(hostId);
   if (!host || !event.isCurrent()) return;
+  await refreshExitPinsForHost(hostId, "exit-pin-host-online");
   await db.scheduleForwardGroupsForHostHealthChange(hostId);
   if (!event.isCurrent()) return;
   await notifyHostStatusChange({ ...host, isOnline: true, lastHeartbeat: new Date() }, "online");

@@ -385,11 +385,15 @@ export function routeNodeBreakerState(hostId: number) {
 
 /**
  * 一条路径「此刻不该走」的面板提示（Agent 认的短语，界面用 describeRouteIssue 翻译）：
- * 暂停 > 维护 > 离线 > 熔断。中转断了的提示在 routeHopDownHints 里。
+ * 暂停 > 维护 > 流量暂停 > 离线 > 熔断。中转断了的提示在 routeHopDownHints 里。
+ *
+ * paused / maintenance / quota 开头的是管理上的排除：Agent 对这几种（还有 disabled）哪怕别的线路全挂了
+ * 也不往它上面送流量（agent 那边按前缀认），所以流量到阈值被暂停的机器要单独报 quota，不能混在
+ * 「离线」里 —— 离线的线路在没有别的可用时还会被当最后的退路。
  */
 export function routeNodeHints(
   paths: readonly RoutePath[],
-  node: (hostId: number) => { name: string; online: boolean; maintenance: boolean } | null,
+  node: (hostId: number) => { name: string; online: boolean; maintenance: boolean; quota?: boolean } | null,
   tripped: ReadonlySet<number> = routeTrippedNodeIds(),
 ) {
   const hints = new Map<string, RouteHopHint>();
@@ -404,6 +408,7 @@ export function routeNodeHints(
       const status = node(hostId);
       const name = status?.name || `主机 ${hostId}`;
       if (status?.maintenance) found = { down: true, hopIndex, reason: `maintenance: ${name}` };
+      else if (status?.quota) found = { down: true, hopIndex, reason: `quota: ${name}` };
       else if (status && !status.online) found = { down: true, hopIndex, reason: `node offline: ${name}` };
       else if (tripped.has(Number(hostId))) found = { down: true, hopIndex, reason: `breaker: ${name}` };
     });

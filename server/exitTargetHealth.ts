@@ -1,5 +1,5 @@
 import { appendPanelLog } from "./_core/panelLogger";
-import { pushAgentRefresh } from "./agentEvents";
+import { ExitTargetPushDebouncer } from "./exitTargetPush";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
 import { getForwardGroupById } from "./repositories/forwardGroupRepository";
 import { getSetting, setSetting } from "./repositories/settingsRepository";
@@ -7,7 +7,7 @@ import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
-import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
+import { BALANCE_ANTI_FLAP, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
 import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
 
 /*
@@ -64,11 +64,37 @@ export type ExitTargetState = {
   minMs?: number | null;
   source?: "traffic" | "probe" | null;
   conns?: number | null;
+  /**
+   * 抖动从什么时候起一直超过门槛（null = 现在没超）。「持续多久才处理」（jitterHoldSeconds）按它算。
+   * 不带这个字段（undefined）= 调用方没记持续时间，只按这一次的数判断。
+   */
+  jitterSince?: number | null;
 };
 
-const states = new Map<string, ExitTargetState>();
+/*
+  按规则分开放（规则 → 出口机 → 状态）：查一条规则的各台出口直接取，不用把所有规则的状态扫一遍
+  （以前是一张平的表，每条规则每次下发、每次汇总都从头扫到尾）。
+*/
+const statesByRule = new Map<number, Map<number, ExitTargetState>>();
 /** 最近一次收到报告时链路的样子（出口顺序、分配方式、手动指定）。 */
 const tunnelMetaById = new Map<number, { tunnel: TunnelRow; order: number[]; at: number }>();
+
+function getState(ruleId: number, hostId: number) {
+  return statesByRule.get(Number(ruleId))?.get(Number(hostId));
+}
+
+function putState(state: ExitTargetState) {
+  let byHost = statesByRule.get(state.ruleId);
+  if (!byHost) {
+    byHost = new Map();
+    statesByRule.set(state.ruleId, byHost);
+  }
+  byHost.set(state.hostId, state);
+}
+
+function* allStates() {
+  for (const byHost of statesByRule.values()) yield* byHost.values();
+}
 
 /*
   每台出口到每条规则目标的「平时水平」（2.3.536，用户：「延迟抖动的判断方法不准」）。
@@ -136,7 +162,8 @@ async function saveBaselinesIfDue(nowMs: number) {
   （主出口一直在测）的，拿它最近 24 小时记录里的最低延迟当平时延迟，马上就能用，不用等半小时。
   每个（规则, 出口）只查一次；查不到的照常自己攒。
 */
-const baselineSeedTried = new Set<string>();
+// 值是哪一刻查的：半小时后清掉（pruneExitTargetMemory），之后这对（规则, 出口）还在报的话再查一次。
+const baselineSeedTried = new Map<string, number>();
 const BASELINE_SEED_WINDOW_MS = 24 * 3600_000;
 
 async function seedBaselinesFromRuleRecords(hostId: number, ruleIds: number[], nowMs: number) {
@@ -145,7 +172,7 @@ async function seedBaselinesFromRuleRecords(hostId: number, ruleIds: number[], n
     return !baselines.has(key) && !baselineSeedTried.has(key);
   });
   if (missing.length === 0) return;
-  for (const ruleId of missing) baselineSeedTried.add(stateKey(ruleId, hostId));
+  for (const ruleId of missing) baselineSeedTried.set(stateKey(ruleId, hostId), nowMs);
   const floors = await getRuleLatencyFloors(hostId, missing, new Date(nowMs - BASELINE_SEED_WINDOW_MS)).catch(() => new Map<number, number>());
   for (const [ruleId, floor] of floors) {
     const key = stateKey(ruleId, hostId);
@@ -237,9 +264,13 @@ function finiteOrNull(value: unknown) {
 
 /** 只给测试用 */
 export function resetExitTargetStates() {
-  states.clear();
+  statesByRule.clear();
   tunnelMetaById.clear();
   latencyLeaderByRule.clear();
+  excludedMemoByRule.clear();
+  lastFlipAt.clear();
+  flipPushesInstance?.clear();
+  lastPrunedAt = 0;
   baselines.clear();
   baselineSeedTried.clear();
   baselinesLoaded = true;
@@ -248,7 +279,7 @@ export function resetExitTargetStates() {
 
 /** 只给测试用：直接放一条状态（不走数据库校验） */
 export function setExitTargetStateForTest(state: ExitTargetState) {
-  states.set(stateKey(state.ruleId, state.hostId), state);
+  putState(state);
 }
 
 type TunnelRow = {
@@ -294,13 +325,31 @@ export function exitTargetProbeSpec(detect: BalanceDetect) {
  * 一条路平时就晃 40ms，门槛 30ms 时它不该一直挂着「不稳」；平时 2ms 突然晃到 40ms 才是真抖。
  */
 export function exitTargetUnstable(
-  state: Pick<ExitTargetState, "jitterMs" | "lossPct" | "samples">,
+  state: Pick<ExitTargetState, "jitterMs" | "lossPct" | "samples"> & Partial<Pick<ExitTargetState, "jitterSince" | "at">>,
   detect: BalanceDetect,
   baseline?: Pick<ExitTargetBaseline, "jitterMs"> | null,
 ) {
   if (detect.jitterAction === "ignore") return false;
   if ((state.samples || 0) < 5) return false;
   if ((state.lossPct ?? 0) >= UNSTABLE_LOSS_PCT) return true;
+  if (!exitTargetJittery(state, detect, baseline)) return false;
+  /*
+    抖动要持续「持续多久才处理」（jitterHoldSeconds，默认 30 秒）才算不稳（C3）：界面上一直有这一项，以前这里
+    没看它 —— 一次抖动大的样本就把这台标成不稳，延迟优先马上把它排到后面，下一次样本正常又排回来。
+    丢包不等：它本来就是最近一段样本的比例，不是单次的数。
+  */
+  if (state.jitterSince === undefined) return true;
+  return state.jitterSince !== null
+    && (state.at ?? Date.now()) - state.jitterSince >= Math.max(0, detect.jitterHoldSeconds) * 1000;
+}
+
+/** 这一次的抖动超没超：同时超过门槛和「平时的 2 倍 + 5ms」（不管持续了多久）。 */
+function exitTargetJittery(
+  state: Pick<ExitTargetState, "jitterMs" | "samples">,
+  detect: BalanceDetect,
+  baseline?: Pick<ExitTargetBaseline, "jitterMs"> | null,
+) {
+  if (detect.jitterAction === "ignore" || (state.samples || 0) < 5) return false;
   const jitter = state.jitterMs ?? 0;
   if (jitter <= detect.jitterMs) return false;
   return !baseline || jitter > baseline.jitterMs * 2 + 5;
@@ -346,14 +395,30 @@ export async function ingestExitTargetReports(input: {
   if (!hostName) hostName = (await getHostNamesByIds([hostId])).get(hostId) || `主机 ${hostId}`;
   let recorded = 0;
   const flipped: number[] = [];
-  const refreshHosts = new Set<number>();
+  // 入口机 → 这一轮要它重新拿配置的理由里最急的那个（见 exitTargetPush.ts）。
+  const refreshRequests = new Map<number, { urgent: boolean; notBefore: number }>();
+  const entryHostIdsByTunnel = new Map<number, number[]>();
+  const entryHostIdsOf = async (tunnel: TunnelRow) => {
+    const tunnelId = Number(tunnel.id);
+    const cached = entryHostIdsByTunnel.get(tunnelId);
+    if (cached) return cached;
+    const ids = new Set<number>();
+    if (Number(tunnel.entryHostId || 0) > 0) ids.add(Number(tunnel.entryHostId));
+    // 入口是入口组：组里每台都替这条链路监听，都要推
+    if (Number(tunnel.entryGroupId || 0) > 0) {
+      const group = await getForwardGroupById(Number(tunnel.entryGroupId)).catch(() => null) as { members?: Array<{ hostId?: number | null }> } | null;
+      for (const member of group?.members || []) if (Number(member?.hostId || 0) > 0) ids.add(Number(member.hostId));
+    }
+    const list = Array.from(ids);
+    entryHostIdsByTunnel.set(tunnelId, list);
+    return list;
+  };
   for (const report of reports) {
     const rule = ruleById.get(Number(report.ruleId));
     if (!rule || truthy(rule.pendingDelete) || Number(rule.routeParentRuleId || 0) > 0) continue;
     const tunnel = tunnelById.get(Number(rule.tunnelId || 0));
     if (!tunnel || !tunnelBalancesExits(tunnel) || !exitHostsByTunnel.get(Number(tunnel.id))?.has(hostId)) continue;
-    const key = stateKey(Number(rule.id), hostId);
-    const previous = states.get(key);
+    const previous = getState(Number(rule.id), hostId);
     const detect = tunnelBalanceDetect(tunnel);
     const next: ExitTargetState = {
       ruleId: Number(rule.id),
@@ -375,40 +440,81 @@ export async function ingestExitTargetReports(input: {
       conns: finiteOrNull(report.conns),
     };
     const baseline = exitTargetBaseline(Number(rule.id), hostId);
+    next.jitterSince = exitTargetJittery(next, detect, baseline) ? (previous?.jitterSince ?? nowMs) : null;
     next.unstable = exitTargetUnstable(next, detect, baseline);
     const wasBad = !!previous && (previous.down || previous.unstable);
     const isBad = next.down || next.unstable;
     updateExitTargetBaseline(next, nowMs);
     if (!previous || previous.down !== next.down || wasBad !== isBad) next.changedAt = nowMs;
-    states.set(key, next);
+    putState(next);
     recorded += 1;
-    const isGost = String(tunnel.mode || "").toLowerCase() !== "forwardx";
-    // GOST「延迟优先」：最快的那台换了（过了滞后门槛），入口要重新拿配置才会按新顺序走
-    let leaderChanged = false;
-    if (isGost && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) === "latency") {
-      const exitIds = Array.from(exitHostsByTunnel.get(Number(tunnel.id)) || []);
-      const leader = latencyLeaderByRule.get(Number(rule.id));
-      const nextLeader = exitIds.length > 1 ? latencyOrderedExitHostIds(Number(rule.id), exitIds, detect, { nowMs, remember: false })[0] : undefined;
-      leaderChanged = leader != null && nextLeader != null && nextLeader !== leader;
-      if (leaderChanged) appendPanelLog("info", `[LoadBalance] rule=${rule.id} 延迟优先换到出口 ${nextLeader}（tunnel=${tunnel.id}）`);
+    if (previous && previous.down !== next.down) {
+      flipped.push(Number(rule.id));
+      appendPanelLog(next.down ? "warn" : "info", `[LoadBalance] rule=${rule.id} 出口 ${hostName} ${next.down ? "连不上目标" : "到目标恢复"}（tunnel=${tunnel.id}）`);
     }
-    if ((previous && previous.down !== next.down) || leaderChanged) {
-      if (previous && previous.down !== next.down) {
-        flipped.push(Number(rule.id));
-        appendPanelLog(next.down ? "warn" : "info", `[LoadBalance] rule=${rule.id} 出口 ${hostName} ${next.down ? "连不上目标" : "到目标恢复"}（tunnel=${tunnel.id}）`);
-      }
-      // GOST 隧道要入口重新拿配置才会摘掉 / 加回这台出口；NEX 隧道入口自己会换，不用推。
-      if (isGost) {
-        if (Number(tunnel.entryHostId || 0) > 0) refreshHosts.add(Number(tunnel.entryHostId));
-        // 入口是入口组：组里每台都替这条链路监听，都要推
-        if (Number(tunnel.entryGroupId || 0) > 0) {
-          const group = await getForwardGroupById(Number(tunnel.entryGroupId)).catch(() => null) as { members?: Array<{ hostId?: number | null }> } | null;
-          for (const member of group?.members || []) if (Number(member?.hostId || 0) > 0) refreshHosts.add(Number(member.hostId));
+    // NEX 隧道入口自己会换出口，不用推；下面只管 GOST。
+    if (String(tunnel.mode || "").toLowerCase() === "forwardx") continue;
+    const ruleId = Number(rule.id);
+    const exitIds = Array.from(exitHostsByTunnel.get(Number(tunnel.id)) || []).filter((id) => id > 0);
+    /*
+      要不要让入口重新拿配置，看「下发出去的东西变没变」，不看「这台出口翻没翻」（C2 / C3）：
+        · 摘掉的出口变了（exitTargetExcludedHostIds 的结果）。每台都连不上时一台都不摘，这时候各台再怎么
+          翻，下发的都是同一份 —— 以前每翻一次推一次。
+        · 面板重启后第一次听到的就是「连不上」（没有上一次的状态可比）：以前要等它再翻一次才推，那台有问题
+          的出口要在轮转里多待到下一次整份心跳。现在没记过的当成「一台都没摘」，和重启后下发的那份一致，
+          一比就知道要推。
+    */
+    const excluded = exitIds.length > 1 ? Array.from(exitTargetExcludedHostIds(ruleId, exitIds, nowMs)).sort((left, right) => left - right) : [];
+    const excludedKey = excluded.join(",");
+    const previousExcludedKey = excludedMemoByRule.get(ruleId)?.key ?? "";
+    excludedMemoByRule.set(ruleId, { key: excludedKey, at: nowMs });
+    let urgent = false;
+    let notBefore = 0;
+    let push = false;
+    if (excludedKey !== previousExcludedKey) {
+      push = true;
+      const before = new Set(previousExcludedKey ? previousExcludedKey.split(",").map(Number) : []);
+      const after = new Set(excluded);
+      for (const exitHostId of new Set([...before, ...after])) {
+        if (before.has(exitHostId) === after.has(exitHostId)) continue;
+        const flipKey = stateKey(ruleId, exitHostId);
+        const lastAt = lastFlipAt.get(flipKey) || 0;
+        const repeated = lastAt > 0 && nowMs - lastAt < EXIT_TARGET_FLIP_REPEAT_MS;
+        lastFlipAt.set(flipKey, nowMs);
+        if (after.has(exitHostId)) {
+          // 这条规则的这台出口头一回连不上：马上推（一台入口一秒最多一次）。30 秒内又翻的走合并。
+          if (!repeated) urgent = true;
+        } else if (repeated) {
+          // 刚摘掉又说好了：等它离上一次翻转满 30 秒再加回去，别跟着它来回热更新。
+          notBefore = Math.max(notBefore, lastAt + EXIT_TARGET_FLIP_REPEAT_MS);
         }
       }
     }
+    // GOST「延迟优先」：最快的那台换了（过了滞后门槛），入口要重新拿配置才会按新顺序走
+    if (normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) === "latency" && exitIds.length > 1) {
+      /*
+        「上一次最快的是谁」每评估一次就记一次（C2）。以前只有生成 GOST 配置的那条路在记，而它在三种情况下
+        不记：每台都连不上目标（没有分数）、手动指定了出口、只有 TCP 的规则走本机代理（那条 GOST 链根本不
+        生成）。记的不动、这里每次算出来的又和它不一样，于是之后每来一份上报就推一次。
+      */
+      const leader = latencyLeaderByRule.get(ruleId)?.hostId;
+      const nextLeader = latencyOrderedExitHostIds(ruleId, exitIds, detect, { nowMs, remember: "always" })[0];
+      if (leader != null && nextLeader != null && nextLeader !== leader) {
+        push = true;
+        appendPanelLog("info", `[LoadBalance] rule=${rule.id} 延迟优先换到出口 ${nextLeader}（tunnel=${tunnel.id}）`);
+      }
+    }
+    if (!push) continue;
+    for (const entryHostId of await entryHostIdsOf(tunnel)) {
+      const current = refreshRequests.get(entryHostId);
+      // 一台入口这一轮有好几个理由：有一个要紧急就紧急；都不急时按最早能发的那个。
+      refreshRequests.set(entryHostId, current
+        ? { urgent: current.urgent || urgent, notBefore: Math.min(current.notBefore, notBefore) }
+        : { urgent, notBefore });
+    }
   }
-  for (const entryHostId of refreshHosts) pushAgentRefresh(entryHostId, "exit-target-flip", { urgent: true });
+  for (const [entryHostId, request] of refreshRequests) flipPushes().request(entryHostId, request);
+  pruneExitTargetMemory(nowMs);
   await saveBaselinesIfDue(nowMs);
   return { recorded, flipped };
 }
@@ -475,15 +581,44 @@ function exitTargetScore(state: ExitTargetState | undefined) {
   延迟 + 抖动排好顺序给它。带一点滞后：新的最快那台要比现在排第一的快过「延迟差多少才换」（默认 50ms）
   才换到前面 —— 不然两台差不多快时每次探测都在换顺序，GOST 跟着热更新。
 */
-const latencyLeaderByRule = new Map<number, number>();
+/*
+  还带内置的防来回乱切（shared/loadBalance.ts 的 BALANCE_ANTI_FLAP，文档 guide/groups.md 写的那句）：
+    · 切过去至少用 minHoldSeconds（1 分钟）：刚换上来的那台，哪怕别的又快过门槛了，也先用满这一分钟；
+    · 一小时里换了 maxSwitchesPerHour（3）次以上：放慢，每次至少用 slowedHoldSeconds（5 分钟）。
+  现在排第一的那台连不上 / 没数据 / 不稳时不受这两条限制 —— 那是逃生，不是择优。
+*/
+type LatencyLeader = { hostId: number; since: number; switches: number[]; at: number };
+const latencyLeaderByRule = new Map<number, LatencyLeader>();
+
+function latencyLeaderHoldMs(leader: LatencyLeader, nowMs: number) {
+  // 一开始定下来的那台（since = 0）不是「切过去的」，不用驻留。
+  if (leader.since <= 0) return 0;
+  const recent = leader.switches.filter((at) => nowMs - at < 3600_000).length;
+  return (recent >= BALANCE_ANTI_FLAP.maxSwitchesPerHour ? BALANCE_ANTI_FLAP.slowedHoldSeconds : BALANCE_ANTI_FLAP.minHoldSeconds) * 1000;
+}
+
+function rememberLatencyLeader(ruleId: number, hostId: number, nowMs: number) {
+  const leader = latencyLeaderByRule.get(ruleId);
+  if (!leader) {
+    latencyLeaderByRule.set(ruleId, { hostId, since: 0, switches: [], at: nowMs });
+    return;
+  }
+  leader.at = nowMs;
+  if (leader.hostId === hostId) return;
+  leader.hostId = hostId;
+  leader.since = nowMs;
+  leader.switches = [...leader.switches.filter((at) => nowMs - at < 3600_000), nowMs];
+}
 
 export function latencyOrderedExitHostIds(
   ruleId: number,
   hostIds: readonly number[],
   detect: BalanceDetect,
-  options: { nowMs?: number; remember?: boolean } = {},
+  /** remember：true（默认）= 排第一的有数据才记；"always" = 没数据也记（上报那条路用，见 ingestExitTargetReports）；false = 不记。 */
+  options: { nowMs?: number; remember?: boolean | "always" } = {},
 ): number[] {
-  const fresh = new Map(exitTargetStatesForRule(ruleId, options.nowMs).map((state) => [state.hostId, state]));
+  const nowMs = options.nowMs ?? Date.now();
+  const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
   const penalized = (hostId: number) => detect.jitterAction !== "ignore" && fresh.get(hostId)?.unstable === true;
   const scored = hostIds.map((hostId, index) => ({ hostId, index, score: exitTargetScore(fresh.get(hostId)), bad: penalized(hostId) }));
   const rank = (item: (typeof scored)[number]) => [item.score == null ? 2 : item.bad ? 1 : 0, item.score ?? 0, item.index];
@@ -493,15 +628,74 @@ export function latencyOrderedExitHostIds(
     return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
   });
   const leader = latencyLeaderByRule.get(Number(ruleId));
-  const current = leader != null ? ordered.find((item) => item.hostId === leader) : undefined;
+  const current = leader ? ordered.find((item) => item.hostId === leader.hostId) : undefined;
   const best = ordered[0];
-  if (current && best && current !== best && current.score != null && best.score != null && !current.bad
-    && best.score > current.score - detect.latencyMarginMs) {
+  if (leader && current && best && current !== best && current.score != null && best.score != null && !current.bad
+    && (best.score > current.score - detect.latencyMarginMs || nowMs - leader.since < latencyLeaderHoldMs(leader, nowMs))) {
     ordered.splice(ordered.indexOf(current), 1);
     ordered.unshift(current);
   }
-  if (options.remember !== false && ordered[0]?.score != null) latencyLeaderByRule.set(Number(ruleId), ordered[0].hostId);
+  if (ordered[0] && (options.remember === "always" || (options.remember !== false && ordered[0].score != null))) {
+    rememberLatencyLeader(Number(ruleId), ordered[0].hostId, nowMs);
+  }
   return ordered.map((item) => item.hostId);
+}
+
+/*
+  每条 GOST 规则上一次算出来「该摘掉哪几台」（出口机号排好序拼起来）：变了才让入口重新拿配置。
+  lastFlipAt：某条规则的某台出口上一次进 / 出这个名单的时刻，30 秒内又翻的不再紧急推（见 exitTargetPush.ts）。
+*/
+const excludedMemoByRule = new Map<number, { key: string; at: number }>();
+const lastFlipAt = new Map<string, number>();
+export const EXIT_TARGET_FLIP_REPEAT_MS = 30_000;
+// 用到时才建：exitTargetPush → agentEvents 那一串模块会绕回来引用这个文件，模块加载时还拿不到这个类。
+let flipPushesInstance: ExitTargetPushDebouncer | null = null;
+function flipPushes() {
+  if (!flipPushesInstance) flipPushesInstance = new ExitTargetPushDebouncer();
+  return flipPushesInstance;
+}
+
+/** 只给测试用：换掉真正发推送的那一下，返回原来的。 */
+export function setExitTargetPushDebouncerForTest(debouncer: ExitTargetPushDebouncer) {
+  const previous = flipPushes();
+  flipPushesInstance = debouncer;
+  return previous;
+}
+
+/*
+  清理（C3）：这几张表以前只进不出 —— 规则删了、链路拆了、出口换了，它们的状态一直留在内存里，
+  面板跑得越久扫得越慢。半小时没再报过的（规则 / 链路 / 出口已经不在，或者不再走负载均衡）清掉；
+  每分钟最多清一次。平时值（baselines）另有三天的期限，不在这里清。
+*/
+export const EXIT_TARGET_FORGET_MS = 30 * 60_000;
+const EXIT_TARGET_PRUNE_EVERY_MS = 60_000;
+let lastPrunedAt = 0;
+
+export function pruneExitTargetMemory(nowMs = Date.now(), force = false) {
+  if (!force && nowMs - lastPrunedAt < EXIT_TARGET_PRUNE_EVERY_MS) return;
+  lastPrunedAt = nowMs;
+  const gone = (at: number) => nowMs - at > EXIT_TARGET_FORGET_MS;
+  for (const [ruleId, byHost] of statesByRule) {
+    for (const [hostId, state] of byHost) {
+      if (!gone(state.at)) continue;
+      byHost.delete(hostId);
+      lastFlipAt.delete(stateKey(ruleId, hostId));
+    }
+    if (byHost.size === 0) statesByRule.delete(ruleId);
+  }
+  for (const [tunnelId, meta] of tunnelMetaById) if (gone(meta.at)) tunnelMetaById.delete(tunnelId);
+  for (const [ruleId, leader] of latencyLeaderByRule) if (gone(leader.at) && !statesByRule.has(ruleId)) latencyLeaderByRule.delete(ruleId);
+  for (const [ruleId, memo] of excludedMemoByRule) if (gone(memo.at)) excludedMemoByRule.delete(ruleId);
+  for (const [key, at] of lastFlipAt) if (gone(at)) lastFlipAt.delete(key);
+  for (const [key, at] of baselineSeedTried) if (gone(at)) baselineSeedTried.delete(key);
+  flipPushesInstance?.prune(EXIT_TARGET_FORGET_MS);
+}
+
+/** 只给测试用：内存里各张表现在有多少条。 */
+export function exitTargetMemorySizeForTest() {
+  let stateCount = 0;
+  for (const byHost of statesByRule.values()) stateCount += byHost.size;
+  return { states: stateCount, tunnels: tunnelMetaById.size, leaders: latencyLeaderByRule.size, seeds: baselineSeedTried.size, excluded: excludedMemoByRule.size };
 }
 
 /**
@@ -595,7 +789,7 @@ export function exitTargetSummaryForTunnel(
     return exitTargetSummaryFromLive(lives, exitIds, { strategy, gost, detect, pinHostId, hostNames: options.hostNames });
   }
   const byRule = new Map<number, Map<number, ExitTargetState>>();
-  for (const state of states.values()) {
+  for (const state of allStates()) {
     if (state.tunnelId !== tunnelId || nowMs - state.at > EXIT_TARGET_STALE_MS || !exitIds.includes(state.hostId)) continue;
     const map = byRule.get(state.ruleId) || new Map<number, ExitTargetState>();
     map.set(state.hostId, state);
@@ -793,8 +987,8 @@ function exitTargetSummaryFromLive(
 /** 一条规则各台出口到目标的情况（只要新鲜的）。 */
 export function exitTargetStatesForRule(ruleId: number, nowMs = Date.now()): ExitTargetState[] {
   const out: ExitTargetState[] = [];
-  for (const state of states.values()) {
-    if (state.ruleId === Number(ruleId) && nowMs - state.at <= EXIT_TARGET_STALE_MS) out.push(state);
+  for (const state of statesByRule.get(Number(ruleId))?.values() || []) {
+    if (nowMs - state.at <= EXIT_TARGET_STALE_MS) out.push(state);
   }
   return out.sort((left, right) => left.hostId - right.hostId);
 }

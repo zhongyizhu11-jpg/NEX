@@ -273,3 +273,57 @@ test("主出口正常、或者每台都连不上：照旧按主出口", () => {
   assert.equal(row.latestLatencyIsTimeout, true);
   assert.equal(row.exitTargetVia, null);
 });
+
+/*
+  C3：「持续多久才处理」（jitterHoldSeconds，默认 30 秒）以前没人看 —— 一次抖动大的样本就算不稳，延迟优先
+  马上把这台排到后面。现在抖动要连续超过门槛满这段时间才算；丢包照旧立刻算（它本来就是一段样本的比例）。
+*/
+test("不稳：抖动要持续「持续多久才处理」才算，单次抖动大的样本不算；丢包不等", () => {
+  const detect = { ...DEFAULT_BALANCE_DETECT };
+  const at = Date.now();
+  const jittery = { jitterMs: 63, lossPct: 0, samples: 30, at };
+  assert.equal(exitTargetUnstable({ ...jittery, jitterSince: at }, detect), false, "刚开始抖：不算");
+  assert.equal(exitTargetUnstable({ ...jittery, jitterSince: at - (detect.jitterHoldSeconds - 1) * 1000 }, detect), false);
+  assert.equal(exitTargetUnstable({ ...jittery, jitterSince: at - detect.jitterHoldSeconds * 1000 }, detect), true, "抖满了「持续多久才处理」才算");
+  assert.equal(exitTargetUnstable({ jitterMs: 4, lossPct: 12, samples: 30, at, jitterSince: null }, detect), true, "丢包不等");
+});
+
+/*
+  C3：文档写的内置防来回乱切（BALANCE_ANTI_FLAP）以前没有任何代码引用。现在用在 GOST「延迟优先」的排序上：
+  切过去至少用 1 分钟；一小时换了 3 次以上，每次至少用 5 分钟；排第一的那台连不上时不受限制。
+*/
+test("GOST 延迟优先的防来回乱切：切过去至少用 1 分钟，一小时换 3 次以上放慢到 5 分钟，逃生不受限", () => {
+  resetExitTargetStates();
+  const detect = { ...DEFAULT_BALANCE_DETECT };
+  let now = Date.now();
+  const set = (hostId: number, medianMs: number, down = false) => setExitTargetStateForTest(state({ hostId, ruleId: 30, medianMs, latencyMs: medianMs, jitterMs: 0, down, gost: true, at: now, changedAt: now }));
+  const order = () => latencyOrderedExitHostIds(30, [1, 2], detect, { nowMs: now });
+  const swap = (fast: number) => { set(fast, 10); set(fast === 1 ? 2 : 1, 200); };
+
+  swap(2);
+  assert.deepEqual(order(), [2, 1], "一开始定下来的那台不算「切过去的」");
+  now += 1000;
+  swap(1);
+  assert.deepEqual(order(), [1, 2], "第 1 次切换：2 慢了很多，马上换");
+  now += 1000;
+  swap(2);
+  assert.deepEqual(order(), [1, 2], "刚切过去不到 1 分钟：2 又快了也先不换");
+  now += 60_000;
+  swap(2);
+  assert.deepEqual(order(), [2, 1], "用满 1 分钟：换（第 2 次）");
+  now += 61_000;
+  swap(1);
+  assert.deepEqual(order(), [1, 2], "第 3 次");
+  // 一小时里已经换了 3 次：放慢，至少用 5 分钟
+  now += 61_000;
+  swap(2);
+  assert.deepEqual(order(), [1, 2], "换得太勤：1 分钟不够了");
+  now += 240_000;
+  swap(2);
+  assert.deepEqual(order(), [2, 1], "用满 5 分钟才换");
+  // 逃生：排第一的连不上，不等
+  now += 1000;
+  set(2, 10, true);
+  set(1, 200);
+  assert.deepEqual(order(), [1, 2], "现在用的那台连不上：马上换，不受驻留限制");
+});

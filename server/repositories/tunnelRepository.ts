@@ -24,7 +24,7 @@ import { boolValue, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, pickAvailablePort, portPolicyFrom } from "@shared/portPolicy";
 import { addRulePortSpan } from "@shared/portRange";
 import { releaseHostPortReservations, reserveAvailableHostPort, reserveSpecificHostPort, reserveSpecificHostPortOnHosts, type HostPortReservation } from "../portReservations";
-import { getHostById } from "./hostRepository";
+import { getHostById, getHostsByIds } from "./hostRepository";
 import { getForwardRulesByTunnel } from "./forwardRuleRepository";
 import { getActiveEntryBridgesOnHost } from "./ruleEntryBridgeRepository";
 import { dbBool, sqlBool } from "./repositoryUtils";
@@ -34,6 +34,7 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { tunnelExitPinUnsupportedReason } from "../../shared/tunnelExitPin";
 import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { noteTunnelRunningRestored } from "../agentHeartbeatGate";
@@ -742,17 +743,83 @@ export async function updateForwardRuleRuntimeOptionsByTunnel(tunnelId: number, 
   return changedCount;
 }
 
-export async function resetAgentRuntimeStateForHost(hostId: number) {
+/*
+  这台机器只是某条多出口链路的出口之一、而且还有别的出口在线：这条链路照常在跑，不该跟着清（P14）。
+
+  以前只要机器出现在链路的出口里，整条链路和链路上所有规则都被写成「未运行」—— 三个出口掉线一台，
+  界面上整条链路的规则全红，入口对剩下两个出口的探测也跟着停（探测只给在跑的规则做），而流量其实
+  一直在另外两台上走。
+
+  什么时候不清（返回的就是这些链路）：
+    · 负载均衡开着，这台是其中一个出口，别的出口里至少一台在线；
+    · 而且这台不是这条链路的入口、中转、入口组成员（那些位置上少了它链路就走不通）；
+    · 这台是主出口时只在掉线（offline）时不清：主出口重连 / 换地址后要按 tunnels.isRunning 重新下发
+      出口那一头（GOST / Nginx 的出口动作看这一列），所以那几条路照旧清。额外出口的重下发看的是它自己
+      的就绪状态（tunnelRuntimeStatus），和这一列无关，任何时候都不用清整条链路。
+  入口掉线、唯一的出口掉线、出口全掉线：照旧清。
+*/
+type ExitPinNodeRow = { hostId?: number | null; isEnabled?: unknown };
+type ExitPinHopRow = { hostId?: number | null };
+
+async function tunnelsKeptRunningWithoutExit(hostId: number, options: { offline?: boolean }) {
+  const rows = await queryRaw<{ id: number; entryHostId?: number | null; exitHostId?: number | null; entryGroupId?: number | null; loadBalanceEnabled?: unknown }>(
+    `SELECT ${quoteIdentifier("id")}, ${quoteIdentifier("entryHostId")}, ${quoteIdentifier("exitHostId")}, ${quoteIdentifier("entryGroupId")}, ${quoteIdentifier("loadBalanceEnabled")}
+     FROM ${quoteIdentifier("tunnels")}
+     WHERE ${quoteIdentifier("exitHostId")} = ?
+        OR ${quoteIdentifier("id")} IN (SELECT ${quoteIdentifier("tunnelId")} FROM ${quoteIdentifier("tunnel_exit_nodes")} WHERE ${quoteIdentifier("hostId")} = ?)`,
+    [hostId, hostId],
+  );
+  const kept: number[] = [];
+  for (const tunnel of rows) {
+    const tunnelId = Number(tunnel.id);
+    if (!dbBool(tunnel.loadBalanceEnabled) || Number(tunnel.entryHostId || 0) === hostId) continue;
+    const primaryExitHostId = Number(tunnel.exitHostId || 0);
+    if (primaryExitHostId === hostId && !options.offline) continue;
+    const [nodes, hops]: [ExitPinNodeRow[], ExitPinHopRow[]] = await Promise.all([getTunnelExitNodes(tunnelId), getTunnelHops(tunnelId)]);
+    const exitHostIds = new Set<number>([primaryExitHostId, ...nodes
+      .filter((node) => dbBool(node?.isEnabled, true))
+      .map((node) => Number(node?.hostId || 0))].filter((value) => value > 0));
+    if (!exitHostIds.has(hostId)) continue;
+    // 在中转的位置上（多跳里除了出口的那几跳）：少了它走不通。
+    if (hops.some((hop) => Number(hop?.hostId || 0) === hostId && Number(hop?.hostId || 0) !== primaryExitHostId)) continue;
+    const entryGroupId = Number(tunnel.entryGroupId || 0);
+    if (entryGroupId > 0) {
+      const entryMembers = await queryRaw<{ id: number }>(
+        `SELECT m.${quoteIdentifier("id")} FROM ${quoteIdentifier("forward_group_members")} m
+         WHERE m.${quoteIdentifier("groupId")} = ? AND m.${quoteIdentifier("memberType")} = ? AND m.${quoteIdentifier("hostId")} = ?`,
+        [entryGroupId, "host", hostId],
+      );
+      if (entryMembers.length > 0) continue;
+    }
+    const otherExitHostIds = Array.from(exitHostIds).filter((value) => value !== hostId);
+    if (otherExitHostIds.length === 0) continue;
+    const others = await getHostsByIds(otherExitHostIds) as Array<{ isOnline?: unknown }>;
+    if (others.some((host) => dbBool(host?.isOnline))) kept.push(tunnelId);
+  }
+  return kept;
+}
+
+export async function resetAgentRuntimeStateForHost(hostId: number, options: { offline?: boolean } = {}) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return;
   const db = await getDb();
   if (!db) return;
   const now = Math.floor(Date.now() / 1000);
+  const keptTunnelIds = await tunnelsKeptRunningWithoutExit(id, options).catch((error) => {
+    // 算不出来就按老办法全清：宁可多显示一会儿「未运行」，也不留一条假的「运行中」。
+    console.warn(`[AgentRecovery] exit redundancy check failed host=${id}: ${error instanceof Error ? error.message : String(error)}`);
+    return [] as number[];
+  });
+  // keptTunnelIds 是上面从库里读出来的整数，直接拼进 SQL。
+  const keptClause = (column: string) => (keptTunnelIds.length > 0
+    ? `AND ${column} NOT IN (${keptTunnelIds.map((value) => Math.floor(Number(value))).join(", ")})`
+    : "");
 
   await executeRaw(
     `UPDATE ${quoteIdentifier("tunnels")}
      SET ${quoteIdentifier("isRunning")} = ?, ${quoteIdentifier("updatedAt")} = ?
      WHERE ${quoteIdentifier("isRunning")} = ?
+       ${keptClause(quoteIdentifier("id"))}
        AND (
          ${quoteIdentifier("entryHostId")} = ?
          OR ${quoteIdentifier("exitHostId")} = ?
@@ -789,7 +856,7 @@ export async function resetAgentRuntimeStateForHost(hostId: number) {
          OR ${quoteIdentifier("tunnelId")} IN (
            SELECT ${quoteIdentifier("id")}
            FROM ${quoteIdentifier("tunnels")}
-           WHERE ${quoteIdentifier("entryHostId")} = ?
+           WHERE (${quoteIdentifier("entryHostId")} = ?
              OR ${quoteIdentifier("exitHostId")} = ?
              OR ${quoteIdentifier("id")} IN (
                SELECT ${quoteIdentifier("tunnelId")}
@@ -810,7 +877,8 @@ export async function resetAgentRuntimeStateForHost(hostId: number) {
                  AND m.${quoteIdentifier("memberType")} = ?
                  AND m.${quoteIdentifier("hostId")} = ?
                  AND m.${quoteIdentifier("isEnabled")} = ?
-             )
+             ))
+             ${keptClause(quoteIdentifier("id"))}
          )
        )`,
     [boolValue(false), now, boolValue(true), id, id, id, id, id, "entry", boolValue(true), "host", id, boolValue(true)],
@@ -2522,17 +2590,17 @@ export async function syncTunnelExitGroupEndpoints(
 ) {
   assertOutsideDatabaseTransaction("syncTunnelExitGroupEndpoints");
   const tunnelId = Number(tunnelInput?.id || 0);
-  if (tunnelId <= 0) return { tunnel: tunnelInput, changed: false, previousHostIds: [], nextHostIds: [] };
+  if (tunnelId <= 0) return { tunnel: tunnelInput, changed: false, reprovision: false, previousHostIds: [], nextHostIds: [] };
   return withKeyedTaskLock(`tunnel:${tunnelId}`, async () => {
     const currentTunnel = await getTunnelById(tunnelId) as any;
-    if (!currentTunnel) return { tunnel: tunnelInput, changed: false, previousHostIds: [], nextHostIds: [] };
+    if (!currentTunnel) return { tunnel: tunnelInput, changed: false, reprovision: false, previousHostIds: [], nextHostIds: [] };
 
     const [existingNodes, existingHops] = await Promise.all([
       getTunnelExitNodes(tunnelId),
       getTunnelHops(tunnelId),
     ]);
     const database = await getDb();
-    if (!database) return { tunnel: currentTunnel, changed: false, previousHostIds: [], nextHostIds: [] };
+    if (!database) return { tunnel: currentTunnel, changed: false, reprovision: false, previousHostIds: [], nextHostIds: [] };
     const mappedRules = String(currentTunnel.mode || "").toLowerCase() === "forwardx"
       ? []
       : await database.select().from(forwardRules).where(and(
@@ -2687,6 +2755,22 @@ export async function syncTunnelExitGroupEndpoints(
         || String(currentTunnel.loadBalanceStrategy || "") !== strategy
         || loadBalanceChanged
         || balanceDetectChanged;
+      /*
+        要不要把链路和它的规则标成「未运行」重新铺（P9）。只有出口这一头真的要重新装的才要：
+          · 出口的集合变了（加 / 减出口、换了监听端口或连接地址）；
+          · 主出口换了（GOST / Nginx 链路的主出口和排在第一的那条规则共用链路监听口，规则在各出口上的
+            端口也跟着重分，出口机要按新角色重装）；
+          · 负载均衡从开变关 / 从关变开。
+        只改分配方式、检测与切换参数，或者只调了后面几台的先后：出口机上什么都不用动，是入口那边换一份
+        配置的事（下发时入口不停）。以前这些也一律标未运行 —— 界面上整条链路的规则全变成「未运行」，
+        入口对出口的探测跟着停（探测只给在跑的规则做），直到各台重新上报。
+      */
+      const endpointSetKey = (list: ReadonlyArray<{ hostId?: unknown; listenPort?: unknown; mimicPort?: unknown; connectHost?: unknown }>) => JSON.stringify(list
+        .map((endpoint) => [Number(endpoint.hostId || 0), Number(endpoint.listenPort || 0), Number(endpoint.mimicPort || 0), String(endpoint.connectHost || "").trim()].join("|"))
+        .sort());
+      const endpointSetChanged = endpointSetKey(existingEndpoints) !== endpointSetKey(planned);
+      const primaryChanged = Number(existingEndpoints[0]?.hostId || 0) !== Number(planned[0].hostId || 0);
+      const reprovision = endpointSetChanged || primaryChanged || loadBalanceChanged;
 
       await updateTunnel(tunnelId, {
         exitHostId: primary.hostId,
@@ -2697,7 +2781,7 @@ export async function syncTunnelExitGroupEndpoints(
         loadBalanceEnabled: nextNodes.length > 0,
         loadBalanceStrategy: strategy,
         balanceDetect: nextBalanceDetect,
-        ...(changed ? { isRunning: false } : {}),
+        ...(reprovision ? { isRunning: false } : {}),
       } as any);
 
       if (endpointsChanged && (existingHops as any[]).length >= 2) {
@@ -2726,7 +2810,7 @@ export async function syncTunnelExitGroupEndpoints(
         loadBalanceEnabled: nextNodes.length > 0,
         loadBalanceStrategy: strategy,
         balanceDetect: nextBalanceDetect,
-        ...(changed ? { isRunning: false } : {}),
+        ...(reprovision ? { isRunning: false } : {}),
       };
       if (String(refreshedTunnel.mode || "").toLowerCase() === "forwardx"
         && (dbBool(refreshedTunnel.udpOverTcp) || String(refreshedTunnel.forwardxVersion || "").toLowerCase() === "v2")) {
@@ -2768,13 +2852,18 @@ export async function syncTunnelExitGroupEndpoints(
             if (!primaryReservation) throw new Error(`Exit Agent ${primaryHost?.name || primary.hostId} has no available rule port`);
             primaryRulePort = primaryReservation.port;
             preferredPorts.set(primary.hostId, primaryRulePort);
-            await database.update(forwardRules).set({
-              tunnelExitPort: primaryRulePort,
-              isRunning: false,
-              updatedAt: nowDate(),
-            } as any).where(eq(forwardRules.id, ruleId));
+            // 只调了后面几台的先后（reprovision=false）：出口端口不变，只是各出口的序号要重记，规则不标未运行。
+            const portChanged = Number(rule.tunnelExitPort || 0) !== primaryRulePort;
+            const resetRule = reprovision || portChanged;
+            if (resetRule) {
+              await database.update(forwardRules).set({
+                tunnelExitPort: primaryRulePort,
+                isRunning: false,
+                updatedAt: nowDate(),
+              } as any).where(eq(forwardRules.id, ruleId));
+            }
             await reconcileForwardRuleTunnelExits(
-              { ...rule, tunnelExitPort: primaryRulePort, isRunning: false },
+              { ...rule, tunnelExitPort: primaryRulePort, ...(resetRule ? { isRunning: false } : {}) },
               refreshedTunnel,
               preferredPorts,
             );
@@ -2785,11 +2874,43 @@ export async function syncTunnelExitGroupEndpoints(
       } else if (endpointsChanged || loadBalanceChanged) {
         await reconcileTunnelRuleExitMappings(tunnelId);
       }
-      return { tunnel: refreshedTunnel, changed, previousHostIds, nextHostIds };
+      // 指定的那台被去掉 / 停用了、或者只剩一台出口：指定作废。
+      if (await clearStaleTunnelExitPin(tunnelId)) refreshedTunnel = { ...refreshedTunnel, balancePinHostId: null };
+      return { tunnel: refreshedTunnel, changed, reprovision, previousHostIds, nextHostIds };
     } finally {
       releaseHostPortReservations(heldReservations);
     }
   });
+}
+
+/*
+  手动指定的出口（balancePinHostId）什么时候作废（C1）：指定的那台已经不是这条链路能用的出口了 ——
+  从出口里去掉了、被停用了、负载均衡关了，或者链路改成了指定不了的形态（Nginx、带中转的 NEX）。
+  以前从来不清：那台后来又被加回来、或者换成别的链路结构时，一个早就没人记得的指定突然又生效，
+  界面上也一直挂着「已指定走 xxx」。改出口、改出口组成员、关负载均衡之后都叫它一次。
+*/
+export async function clearStaleTunnelExitPin(tunnelId: number): Promise<boolean> {
+  const tunnel = await getTunnelById(Number(tunnelId)) as {
+    balancePinHostId?: number | null;
+    exitHostId?: number | null;
+    loadBalanceEnabled?: unknown;
+    loadBalanceStrategy?: string | null;
+    mode?: string | null;
+  } | null | undefined;
+  const pinHostId = Number(tunnel?.balancePinHostId || 0);
+  if (!tunnel || pinHostId <= 0) return false;
+  const [nodes, hops]: [ExitPinNodeRow[], ExitPinHopRow[]] = await Promise.all([getTunnelExitNodes(Number(tunnelId)), getTunnelHops(Number(tunnelId))]);
+  const exitHostIds = [Number(tunnel.exitHostId || 0), ...nodes
+    .filter((node) => dbBool(node?.isEnabled, true))
+    .map((node) => Number(node?.hostId || 0))];
+  const usable = dbBool(tunnel.loadBalanceEnabled)
+    && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+    && exitHostIds.includes(pinHostId)
+    && !tunnelExitPinUnsupportedReason(tunnel, hops.length);
+  if (usable) return false;
+  await updateTunnel(Number(tunnelId), { balancePinHostId: null });
+  appendPanelLog("info", `[Tunnel] exit pin cleared tunnel=${tunnelId} host=${pinHostId}: no longer a usable exit of this tunnel`);
+  return true;
 }
 
 export async function clearTunnelExitNodes(tunnelId: number) {

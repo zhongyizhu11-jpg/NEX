@@ -37,16 +37,19 @@ test("别的线路两分钟内探通过这台：不熔断（只是一条线的�
   assert.ok(!routeTrippedNodeIds().has(9));
 });
 
-test("节点提示：暂停 > 维护 > 离线 > 熔断；下游延迟按这条路径的中继探测相加", () => {
+test("节点提示：暂停 > 维护 > 流量暂停 > 离线 > 熔断；下游延迟按这条路径的中继探测相加", () => {
   resetRouteStatsForTest();
   const paths = [
     { key: "p", hops: [2], paused: true },
     { key: "m", hops: [3] },
     { key: "o", hops: [4] },
     { key: "t", hops: [9] },
+    { key: "q", hops: [5] },
     { key: "ok", hops: [2] },
   ] as unknown as RoutePath[];
-  const nodes: Record<number, { name: string; online: boolean; maintenance: boolean }> = {
+  const nodes: Record<number, { name: string; online: boolean; maintenance: boolean; quota?: boolean }> = {
+    // 流量到阈值被暂停、而且正好也离线：报 quota（管理上的排除，Agent 不拿它当最后的退路），不报离线
+    5: { name: "US", online: false, maintenance: false, quota: true },
     2: { name: "jinx", online: true, maintenance: false },
     3: { name: "HK2", online: true, maintenance: true },
     4: { name: "SG", online: false, maintenance: false },
@@ -57,8 +60,9 @@ test("节点提示：暂停 > 维护 > 离线 > 熔断；下游延迟按这条�
   assert.equal(hints.get("m")?.reason, "maintenance: HK2");
   assert.equal(hints.get("o")?.reason, "node offline: SG");
   assert.equal(hints.get("t")?.reason, "breaker: JP");
+  assert.equal(hints.get("q")?.reason, "quota: US");
   assert.equal(hints.has("ok"), false);
   recordRouteHopProbe({ parentRuleId: 5, pathKey: "ok", hopIndex: 0, hostId: 2, hostName: "jinx", nextLabel: "落地", ok: true, latencyMs: 12.4 });
   // 界面上要 0.8 + 1.5 = 2.3 这种：留一位小数（下发给 Agent 时心跳那边再取整）。
-  assert.equal(routePathDownstreamMs(5, paths[4]), 12.4);
+  assert.equal(routePathDownstreamMs(5, paths[5]), 12.4);
 });

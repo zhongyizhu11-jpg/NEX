@@ -382,11 +382,18 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
       || ((normalized.data as { balanceDetect?: string | null }).balanceDetect !== undefined
         && String((normalized.data as { balanceDetect?: string | null }).balanceDetect ?? "") !== String(existing?.balanceDetect ?? ""))
     );
-  const shouldResetChinaHealth = !normalized.data.chinaHealthCheckEnabled
-    || !!existing?.chinaHealthCheckEnabled !== !!normalized.data.chinaHealthCheckEnabled
-    || String(existing?.chinaHealthCheckTarget || "") !== String(normalized.data.chinaHealthCheckTarget || "")
-    || normalizeForwardGroupHealthCheckMethod(existing?.chinaHealthCheckMethod)
-      !== normalizeForwardGroupHealthCheckMethod(normalized.data.chinaHealthCheckMethod);
+  /*
+    成员健康什么时候重置（P11）：健康检查的开关变了，或者开着的时候目标 / 方式变了 —— 旧结论不是按现在
+    这套设置测出来的。以前第一个条件是「健康检查没开」，没开健康检查的组每保存一次（哪怕只改名字）就把
+    所有成员的健康和故障 / 恢复计时清掉：正在数的切换观察时间从头再来，界面上成员全变回「未知」。
+  */
+  const chinaHealthToggled = !!existing?.chinaHealthCheckEnabled !== !!normalized.data.chinaHealthCheckEnabled;
+  const shouldResetChinaHealth = chinaHealthToggled
+    || (!!normalized.data.chinaHealthCheckEnabled && (
+      String(existing?.chinaHealthCheckTarget || "") !== String(normalized.data.chinaHealthCheckTarget || "")
+      || normalizeForwardGroupHealthCheckMethod(existing?.chinaHealthCheckMethod)
+        !== normalizeForwardGroupHealthCheckMethod(normalized.data.chinaHealthCheckMethod)
+    ));
   const persistConfiguration = async (options: { deferRefresh?: boolean; skipMemberSync?: boolean } = {}) => {
     await db.updateForwardGroup(id, {
       ...normalized.data,

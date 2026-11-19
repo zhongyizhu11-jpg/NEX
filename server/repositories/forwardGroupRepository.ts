@@ -26,7 +26,8 @@ import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues, type DdnsRec
 import { forwardGroupMirrorRecordType, mirrorForwardGroupDdnsValues } from "../forwardGroupDualStackDdns";
 import { prepareForwardGroupDdnsLines, syncForwardGroupDdnsLines, type ForwardGroupLineContext } from "../forwardGroupDdnsLines";
 import type { LineMemberStatus, LinePlannerMember } from "../ddnsLinePlanner";
-import { serializeDdnsLines } from "../../shared/ddnsLines";
+import { parseDdnsLineState, serializeDdnsLines } from "../../shared/ddnsLines";
+import { ddnsLineProviderLabel, ddnsLineSupport, deleteDdnsLineRecords } from "../ddnsLineRecords";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { withForwardTestDates } from "./forwardTestRepository";
@@ -89,7 +90,7 @@ import {
 } from "./tunnelRepository";
 import { findTrafficBillingResourceForRule, settleTrafficBillingRuleOnDelete, trafficBillingResourceCandidatesForRule } from "./trafficBillingRepository";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
-import { clearTunnelRuntimeStatus } from "../tunnelRuntimeStatus";
+import { clearTunnelRuntimeStatus, clearTunnelRuntimeStatusForHosts } from "../tunnelRuntimeStatus";
 import { linkProbeMethodForProtocol, type LinkProbeMethod } from "@shared/latencyProbe";
 import {
   ForwardGroupEvaluationBatchError,
@@ -103,6 +104,7 @@ import {
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
+import { FORWARD_GROUP_AUTO_SWITCH_EVENT, FORWARD_GROUP_FLAP_WINDOW_MS, forwardGroupFlapHoldAt, forwardGroupFlapHoldLabel } from "../forwardGroupFlapHold";
 import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
@@ -628,6 +630,8 @@ type MemberAgentLiveness = {
   trafficExcluded: boolean;
   failureSince: Date | null;
   lastOfflineAt: number | null;
+  /** 这台机器上一次从离线回到在线的时刻（面板看到的）；「刚回来」的成员不马上切回，见 evaluateMemberHealth。 */
+  lastRestoredAt: number | null;
   signature: string;
 };
 
@@ -685,6 +689,7 @@ async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()): Prom
     trafficExcluded,
     failureSince: available ? null : new Date(failureAt),
     lastOfflineAt,
+    lastRestoredAt: Number(fastState?.lastRestoredAt || 0) || null,
     signature: [
       hostId,
       available ? 1 : 0,
@@ -997,6 +1002,44 @@ async function refreshControlledTunnelRuntime(
   for (const hostId of hostIds) pushAgentRefresh(hostId, `${reason}-tunnel-${tunnelId}`, { urgent: true });
 }
 
+/*
+  链路的配置变了、但不用重新铺（P9）：出口组只改了分配方式、检测与切换参数，或只调了后面几台出口的
+  先后。入口换一份配置就行 —— GOST / Nginx 的配置是按内容比对同步的，FXP 入口（和多跳里挑出口的中转）
+  看到自己「没就绪」会带着新规格再下发一次，都不停转发。所以这里不动 tunnels.isRunning、不重置规则，
+  只把入口和中转的就绪状态清掉并通知各台来拉配置。出口机的就绪状态留着，免得被连带重装。
+*/
+async function pushControlledTunnelConfig(
+  tunnel: { id?: unknown; entryHostId?: unknown; exitHostId?: unknown; entryGroupId?: unknown } | null | undefined,
+  reason: string,
+  extraHostIds: number[] = [],
+) {
+  const tunnelId = Number(tunnel?.id || 0);
+  if (!Number.isFinite(tunnelId) || tunnelId <= 0) return;
+  const entryHostIds = new Set<number>();
+  const entryHostId = Number(tunnel?.entryHostId || 0);
+  if (entryHostId > 0) entryHostIds.add(entryHostId);
+  for (const hostId of await groupHostIds(tunnel?.entryGroupId)) entryHostIds.add(hostId);
+  const exitHostIds = new Set<number>();
+  const primaryExitHostId = Number(tunnel?.exitHostId || 0);
+  if (primaryExitHostId > 0) exitHostIds.add(primaryExitHostId);
+  for (const node of await getTunnelExitNodes(tunnelId).catch(() => []) as Array<{ hostId?: unknown }>) {
+    const hostId = Number(node?.hostId || 0);
+    if (hostId > 0) exitHostIds.add(hostId);
+  }
+  // 中转（多跳里除了出口的那几跳）和入口一样要重新拿规格。
+  const relayHostIds = new Set<number>();
+  for (const hop of await getTunnelHops(tunnelId).catch(() => []) as Array<{ hostId?: unknown }>) {
+    const hostId = Number(hop?.hostId || 0);
+    if (hostId > 0 && !exitHostIds.has(hostId)) relayHostIds.add(hostId);
+  }
+  const dispatchHostIds = new Set<number>([...entryHostIds, ...relayHostIds]);
+  clearTunnelRuntimeStatusForHosts(tunnelId, Array.from(dispatchHostIds));
+  for (const hostId of dispatchHostIds) pushAgentRefresh(hostId, `${reason}-tunnel-${tunnelId}`, { urgent: true });
+  for (const hostId of new Set<number>([...exitHostIds, ...extraHostIds])) {
+    if (hostId > 0 && !dispatchHostIds.has(hostId)) pushAgentRefresh(hostId, `${reason}-tunnel-${tunnelId}`);
+  }
+}
+
 async function refreshTunnelsUsingForwardGroup(
   groupId: number,
   groupMode: "entry" | "exit",
@@ -1021,13 +1064,17 @@ async function refreshTunnelsUsingForwardGroup(
   const hasEnabledExitMember = exitMembers.some((member: any) => member?.memberType === "host" && dbBool(member?.isEnabled));
 
   for (const tunnel of affectedTunnels) {
+    // 入口组的成员变化、出口组加减出口 / 换主出口：要重新铺，照旧标未运行。只是配置变了的走配置下发。
+    let reprovision = true;
     if (exitStrategy && group && hasEnabledExitMember) {
       const synced = await syncTunnelExitGroupEndpoints(tunnel, exitMembers, exitStrategy, group?.balanceDetect ?? null);
       Object.assign(tunnel, synced.tunnel);
+      reprovision = synced.reprovision;
     } else if (exitStrategy && dbBool(group?.isEnabled)) {
       throw new Error("Enabled exit group must contain at least one enabled host");
     }
-    await refreshControlledTunnelRuntime(tunnel, reason, { resetRules: true, extraHostIds: referencedHostIds });
+    if (reprovision) await refreshControlledTunnelRuntime(tunnel, reason, { resetRules: true, extraHostIds: referencedHostIds });
+    else await pushControlledTunnelConfig(tunnel, reason, referencedHostIds);
   }
 }
 
@@ -2159,7 +2206,11 @@ async function failoverAgentSelectionStillCurrent(group: any, active: any, next:
   const enabledMemberIds = new Set((latest.members || [])
     .filter((member: any) => dbBool(member?.isEnabled))
     .map((member: any) => Number(member.id || 0)));
-  if ((active && !enabledMemberIds.has(Number(active.id || 0)))
+  /*
+    评估之后成员又被改了（停用 / 去掉）才算过期。活动成员在评估时就已经是停用的不算：那正是这次要从它
+    身上换走的原因（P4）—— 以前这里一律要求活动成员启用，停用的活动成员永远换不走，评估还会不停重排。
+  */
+  if ((active && dbBool(active.isEnabled) && !enabledMemberIds.has(Number(active.id || 0)))
     || (next && !enabledMemberIds.has(Number(next.id || 0)))) return false;
   if (active && !(await memberAgentSelectionStillCurrent(active))) return false;
   if (next && !(await memberAgentSelectionStillCurrent(next))) return false;
@@ -4372,6 +4423,15 @@ export async function replaceForwardGroupMembers(
     }
   }
 
+  /*
+    删掉去掉的成员、写入留下 / 新加的成员放在一个事务里（P5）：以前是一条条直接写，中途哪一步失败
+    （写库报错、主机刚好被删）就留下「旧成员删了一半、新成员没写上」的组 —— 主备组可能一个成员都不剩。
+    现在要么整份换成新的，要么原样不动。已经在别人的事务里（转发链保存）时直接并进去。
+    事务里收子规则只标待删，结算、通知 Agent、收中继都在提交之后（removeManagedRule、afterForwardGroupSyncCommit）；
+    事务里要用事务自己的连接（getDb 在事务里返回它），所以这里重新取一次。
+  */
+  await withDatabaseTransaction(async () => {
+  const db = await getDb();
   for (const old of existing as any[]) {
     const key = `${old.memberType}:${old.memberType === "host" ? old.hostId : old.tunnelId}`;
     if (!keepKeys.has(key)) {
@@ -4417,6 +4477,7 @@ export async function replaceForwardGroupMembers(
       });
     }
   }
+  });
   // 组的第一个成员就是订阅里的入口机器，成员一变订阅缓存就得作废。
   invalidateProxySubCacheAll();
   if (options.skipSync) return;
@@ -4428,6 +4489,12 @@ export async function replaceForwardGroupMembers(
     });
   } else {
     await syncForwardGroupRules(groupId);
+    /*
+      主备组改了成员马上评估一次（P4）：定时启停、节点池同步改成员走的也是这里，以前只同步子规则、
+      不重选活动成员 —— 活动成员被停用 / 去掉之后，解析还指着它，要等下一次健康上报或巡检才换。
+      走健康上报用的那条防抖队列（不在这里内联跑：调用方可能拿着编辑锁，DNS 写入不该卡在里面）。
+    */
+    if (groupMode === "failover") scheduleForwardGroupFailover([groupId]);
   }
 }
 
@@ -4446,6 +4513,8 @@ export async function getForwardGroupEndpointReferences(groupId: number) {
 
 export async function deleteForwardGroup(id: number) {
   const db = await getDb();
+  // 删之前留一份（带成员）：删完要按它发布过的值把解析记录清掉（clearForwardGroupPublishedDdns）。
+  const groupBeforeDelete = await getForwardGroupById(id).catch(() => null);
   const childRules = await getForwardGroupChildRules(id);
   for (const rule of childRules as any[]) await removeManagedRule(Number(rule.id));
   const templates = await getForwardGroupTemplateRules(id);
@@ -4476,6 +4545,16 @@ export async function deleteForwardGroup(id: number) {
    */
   await db.delete(subscriptionPlanForwardGroups).where(eq(subscriptionPlanForwardGroups.forwardGroupId, id));
   await db.delete(forwardGroups).where(eq(forwardGroups.id, id));
+  forwardGroupHealthRechecks.replace(id, null);
+  exactDdnsReconciledGroups.delete(id);
+  /*
+    组行删掉之后再清解析，并且拿评估用的那把锁：正在跑的一轮评估（可能还要写一次服务商）先跑完，
+    之后的评估读不到组就直接返回，不会在清完之后又把记录写回去。清理失败不影响删除（里面自己记日志）。
+  */
+  if (groupBeforeDelete) {
+    await withKeyedTaskLock(`forward-group-failover:${id}`, () => clearForwardGroupPublishedDdns(groupBeforeDelete))
+      .catch((error) => appendPanelLog("warn", `[DDNS] 转发组 ${id} 已删除，清理解析记录时出错：${error instanceof Error ? error.message : String(error)}`));
+  }
 }
 
 /**
@@ -4700,7 +4779,6 @@ async function evaluateMemberHealth(member: any, group: any) {
   let observedFailureSince: Date | null = null;
   let agentHealthPending = false;
   let agentFailureFinal = false;
-  let allRuleHealthAgentFinal = false;
   let nextProbeExpiryAt: number | null = null;
 
   if (agentLiveness.trafficExcluded) {
@@ -4708,7 +4786,13 @@ async function evaluateMemberHealth(member: any, group: any) {
     agentFailureFinal = true;
     observedFailureSince = now;
   } else if (!dbBool(member?.isEnabled)) {
+    /*
+      成员被停用（手动关、可用时段外、节点池里去掉）是管理动作，不是健康事件：它正好是活动成员时
+      马上换走，不等「异常多久切」那段观察时间 —— 那段时间里解析还指着一台已经不铺规则的机器。
+    */
     message = "Member disabled";
+    agentFailureFinal = true;
+    observedFailureSince = now;
   } else if (childRules.length === 0) {
     message = "No forwarding rule is using this group yet";
   } else {
@@ -4739,7 +4823,6 @@ async function evaluateMemberHealth(member: any, group: any) {
       message = "Member Agent offline";
     } else {
       healthy = true;
-      allRuleHealthAgentFinal = true;
       const latencies: number[] = [];
       for (const rule of activeChildRules as any[]) {
         if (!dbBool(rule.isEnabled) || dbBool(rule.pendingDelete)) {
@@ -4755,7 +4838,6 @@ async function evaluateMemberHealth(member: any, group: any) {
         const latestStat = await latestTcping(Number(rule.id));
         if (!agentHealthSampleIsCurrent(agentLiveness, latestStat?.recordedAt)) {
           healthy = false;
-          allRuleHealthAgentFinal = false;
           agentHealthPending = true;
           message = "Waiting for Agent health result after reconnect";
           break;
@@ -4763,7 +4845,6 @@ async function evaluateMemberHealth(member: any, group: any) {
         const stat = freshForwardGroupRuleProbe(latestStat, now);
         if (!stat) {
           healthy = false;
-          allRuleHealthAgentFinal = false;
           const recordedAt = toDate(latestStat?.recordedAt);
           if (recordedAt) {
             agentFailureFinal = true;
@@ -4792,7 +4873,6 @@ async function evaluateMemberHealth(member: any, group: any) {
         const agentHealthStatus = String(stat.healthStatus || "").trim().toLowerCase();
         if (agentHealthStatus === "unknown") {
           healthy = false;
-          allRuleHealthAgentFinal = false;
           agentHealthPending = true;
           message = "Waiting for Agent health decision";
           break;
@@ -4803,7 +4883,6 @@ async function evaluateMemberHealth(member: any, group: any) {
           message = "Agent health check failed";
           break;
         }
-        if (agentHealthStatus !== "healthy") allRuleHealthAgentFinal = false;
         if (agentHealthStatus !== "healthy" && dbBool(stat.isTimeout)) {
           healthy = false;
           message = "Latency probe timeout";
@@ -4873,8 +4952,23 @@ async function evaluateMemberHealth(member: any, group: any) {
 
   const failedLongEnough = agentFailureFinal
     || (!!failureSince && Date.now() - failureSince.getTime() >= forwardGroupFailoverDelayMs(group));
-  const recoveredLongEnough = (healthy && allRuleHealthAgentFinal)
-    || (!!healthySince && Date.now() - healthySince.getTime() >= forwardGroupRecoverDelayMs(group));
+  /*
+    「恢复够久」只按面板自己看到的算（P3）：成员连续健康满 recoverSeconds 才有资格被切回。
+
+    以前 Agent 报「健康」就立刻算数（healthy && allRuleHealthAgentFinal）。成员 Agent 重启后它本地的
+    恢复观察是从零开始的，第一个正常样本就报 healthy，面板马上把解析切回去 —— 那台机器可能还在
+    反复重启。Agent 的结论照样决定「健不健康」，但「稳没稳住」由面板计时：
+      · healthySince：面板第一次看到它健康的时刻，中间只要有一次不健康 / 等结果就清掉重计；
+      · 机器刚从离线回来（lastRestoredAt）：从回来那一刻起算，哪怕成员表里的 healthySince 更早
+        （面板没来得及在它离线期间评估一轮）。
+    逃生（当前成员不可用）不看这个，照旧立刻换。
+  */
+  const recoverySinceMs = healthy && healthySince
+    ? Math.max(healthySince.getTime(), Number(agentLiveness.lastRestoredAt || 0))
+    : 0;
+  const recoverySince = recoverySinceMs > 0 ? new Date(Math.min(recoverySinceMs, Date.now())) : null;
+  const recoveredLongEnough = !!recoverySince
+    && Date.now() - recoverySince.getTime() >= forwardGroupRecoverDelayMs(group);
   return {
     ...member,
     healthy,
@@ -4886,6 +4980,7 @@ async function evaluateMemberHealth(member: any, group: any) {
     healthySince,
     failedLongEnough,
     recoveredLongEnough,
+    recoverySince,
     nextProbeExpiryAt,
     agentLivenessSignature: agentLiveness.signature,
   };
@@ -4897,11 +4992,8 @@ async function evaluateMemberHealth(member: any, group: any) {
  */
 type ForwardGroupDdnsTarget = { id?: unknown; domain?: unknown; recordType?: unknown; ddnsDualStack?: unknown; ddnsAutoResolveEnabled?: unknown };
 
-async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput) {
-  await updateDdnsRecordValues(input);
-  const mirrorType = forwardGroupMirrorRecordType(group);
-  if (!mirrorType) return;
-  const primaryType = normalizeForwardGroupRecordType(input.recordType);
+/** 主记录发了 primaryValues 时，双栈副记录上该是哪些值（按成员一一对应）。 */
+async function forwardGroupMirrorValues(group: ForwardGroupDdnsTarget, primaryType: ForwardGroupRecordType, mirrorType: "A" | "AAAA", primaryValues: string[]) {
   const pairs: Array<{ primary: string; mirror: string }> = [];
   const members: unknown[] = sortedMembers(group);
   for (const member of members) {
@@ -4909,7 +5001,90 @@ async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, inpu
     const mirror = primary ? await memberDdnsValue(member, mirrorType).catch(() => "") : "";
     if (primary && mirror) pairs.push({ primary, mirror });
   }
-  await updateDdnsRecordValues({ ...input, recordType: mirrorType, values: mirrorForwardGroupDdnsValues(input.values, pairs) });
+  return mirrorForwardGroupDdnsValues(primaryValues, pairs);
+}
+
+async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput) {
+  await updateDdnsRecordValues(input);
+  const mirrorType = forwardGroupMirrorRecordType(group);
+  if (!mirrorType) return;
+  const primaryType = normalizeForwardGroupRecordType(input.recordType);
+  await updateDdnsRecordValues({ ...input, recordType: mirrorType, values: await forwardGroupMirrorValues(group, primaryType, mirrorType, input.values) });
+}
+
+/*
+  删主备组 / 入口组时把面板发过的解析记录清掉（P6）。以前组删了记录还留在服务商那边：域名继续解析到
+  那几台机器，而面板里已经没有任何东西管它，机器换了 IP、下线了也不会再跟着改。
+
+  只删面板自己写的，用的就是发布时记的那几样：
+    · 主记录：组的 lastDdnsValue（真的写过服务商才算，看 lastDdnsAt）里的那几个值，按值删；
+    · 双栈副记录：同一批成员对应的另一族地址；
+    · 分线路记录：ddnsLineState 里记的记录 ID（deleteDdnsLineRecords 只删这些 ID）。
+  这个名字上别人手动加的记录、别的服务商上的记录一律不动；自动解析关着的组面板从没替它写过，也不动。
+  清不掉不拦删除：记面板日志，让人去服务商那边手动清。停用组不清（恢复时还要用）。
+*/
+export async function clearForwardGroupPublishedDdns(group: ForwardGroupDdnsTarget & {
+  groupMode?: unknown;
+  lastDdnsAt?: unknown;
+  lastDdnsValue?: unknown;
+  ddnsLineState?: unknown;
+} | null | undefined) {
+  if (!group) return;
+  const groupId = Number(group?.id || 0);
+  const mode = forwardGroupModeOf(group);
+  const domain = String(group?.domain || "").trim();
+  if ((mode !== "failover" && mode !== "entry") || !domain || group?.ddnsAutoResolveEnabled === false) return;
+  const publishedValues = toDate(group?.lastDdnsAt)
+    ? String(group?.lastDdnsValue || "").split(",").map((value) => value.trim()).filter(Boolean)
+    : [];
+  const lineState = parseDdnsLineState(group?.ddnsLineState);
+  const lineEntries = lineState ? Object.values(lineState.lines).filter((entry) => entry.recordIds.length > 0) : [];
+  if (publishedValues.length === 0 && lineEntries.length === 0) return;
+  const label = `group=${groupId} domain=${domain}`;
+  const failed = (what: string, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[ForwardGroup] delete: clearing ${what} failed ${label}: ${message}`);
+    appendPanelLog("warn", `[DDNS] 转发组已删除，但${what}没清掉，请到 DNS 服务商手动删除；${label} ${message}`);
+  };
+  const ddnsSettings = await getDdnsSettings();
+  if (!ddnsSettings.enabled || ddnsSettings.provider === "disabled") {
+    appendPanelLog("warn", `[DDNS] 转发组已删除，系统 DDNS 未启用，之前发布的解析记录没有清理，请到 DNS 服务商手动删除；${label} values=${publishedValues.join(",")}`);
+    return;
+  }
+  const recordType = normalizeForwardGroupRecordType(group.recordType);
+  const ttl = Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL);
+  if (publishedValues.length > 0) {
+    try {
+      await updateDdnsRecordValues({ groupId, domain, recordType, values: [], removeOnlyValues: publishedValues, ttl });
+      appendPanelLog("info", `[DDNS] 转发组已删除，面板发布的解析记录已清理；${label} type=${recordType} values=${publishedValues.join(",")}`);
+    } catch (error) {
+      failed(`${recordType} 记录（${publishedValues.join(",")}）`, error);
+    }
+    const mirrorType = forwardGroupMirrorRecordType(group);
+    if (mirrorType) {
+      try {
+        const mirrorValues = await forwardGroupMirrorValues(group, recordType, mirrorType, publishedValues);
+        if (mirrorValues.length > 0) await updateDdnsRecordValues({ groupId, domain, recordType: mirrorType, values: [], removeOnlyValues: mirrorValues, ttl });
+      } catch (error) {
+        failed(`双栈 ${mirrorType} 记录`, error);
+      }
+    }
+  }
+  if (lineState && lineEntries.length > 0) {
+    const support = ddnsLineSupport(ddnsSettings);
+    if (!support.supported || support.provider !== lineState.provider) {
+      // 记录 ID 是原来那家服务商的，绝不拿去现在这家删。
+      appendPanelLog("warn", `[DDNS] 转发组已删除，分线路记录写在另一家服务商（${ddnsLineProviderLabel(lineState.provider)}），面板没有清理，请手动删除；${label}`);
+      return;
+    }
+    for (const entry of lineEntries) {
+      try {
+        await deleteDdnsLineRecords(ddnsSettings, { domain: lineState.domain || domain, recordType: lineState.recordType || recordType, line: entry, recordIds: entry.recordIds });
+      } catch (error) {
+        failed(`线路 ${entry.name} 的记录`, error);
+      }
+    }
+  }
 }
 
 /** 关掉双栈时把面板发过的副记录清掉：留着它，双栈客户端会一直连那条不再跟着切换的记录。 */
@@ -5671,6 +5846,8 @@ async function syncSingleForwardGroupDdns(
     switchReason?: string;
     switchDetail?: string;
     previousMember?: any | null;
+    /** 活动成员没变时附在「当前入口 x」后面的说明（为什么这会儿不切回）。 */
+    currentNote?: string;
     beforeCommit?: () => boolean | Promise<boolean>;
   } = {},
 ) {
@@ -5706,7 +5883,7 @@ async function syncSingleForwardGroupDdns(
   ) {
     const changed = await updateForwardGroupRuntimeIfChanged(db, group, {
       lastStatus: "healthy",
-      lastMessage: `当前入口 ${value}`,
+      lastMessage: options.currentNote ? `当前入口 ${value}；${options.currentNote}` : `当前入口 ${value}`,
     });
     if (changed) await insertForwardGroupEvent(group.id, memberId, "ddns-current", `${currentMessage}；${detail}`);
     return;
@@ -5765,6 +5942,17 @@ async function syncSingleForwardGroupDdns(
     await insertForwardGroupEvent(group.id, memberId, "ddns-error", `DDNS 更新失败；${message}；${detail}`);
     throw error;
   }
+}
+
+/** 这个组最近一小时的自动切换（forward_group_events 里的 auto-switch）算出来的抖动抑制。 */
+async function forwardGroupFlapHold(groupId: number, nowMs = Date.now()) {
+  const sinceSeconds = Math.floor((nowMs - FORWARD_GROUP_FLAP_WINDOW_MS) / 1000);
+  const rows = await queryRaw<{ createdAt: unknown }>(
+    `SELECT ${quoteIdentifier("createdAt")} FROM ${quoteIdentifier("forward_group_events")}
+      WHERE ${quoteIdentifier("groupId")} = ? AND ${quoteIdentifier("type")} = ? AND ${quoteIdentifier("createdAt")} >= ?`,
+    [groupId, FORWARD_GROUP_AUTO_SWITCH_EVENT, sinceSeconds],
+  ).catch(() => []);
+  return forwardGroupFlapHoldAt(rows.map((row) => toDate(row.createdAt)?.getTime() || 0), nowMs);
 }
 
 type ForwardGroupFailoverContext = {
@@ -5856,7 +6044,8 @@ async function runForwardGroupFailoverForGroups(
     for (const member of members) evaluated.push(await evaluateMemberHealth(member, group));
 
     const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
-      members: evaluated,
+      // 「恢复够久」从 recoverySince 起算（机器刚回来时比 healthySince 晚），到点要再评估一次才切得回去。
+      members: evaluated.map((member) => ({ ...member, healthySince: member.recoverySince ?? member.healthySince })),
       failoverMs: forwardGroupFailoverDelayMs(group),
       recoverMs: forwardGroupRecoverDelayMs(group),
     });
@@ -5867,9 +6056,10 @@ async function runForwardGroupFailoverForGroups(
       .map((member: any) => Number(member.nextProbeExpiryAt || 0))
       .filter((value: number) => value > Date.now())
       .sort((left: number, right: number) => left - right)[0] ?? null;
-    forwardGroupHealthRechecks.replace(Number(group.id), healthRecheckAt && probeExpiryAt
+    const baseRecheckAt = healthRecheckAt && probeExpiryAt
       ? Math.min(healthRecheckAt, probeExpiryAt)
-      : healthRecheckAt ?? probeExpiryAt);
+      : healthRecheckAt ?? probeExpiryAt;
+    forwardGroupHealthRechecks.replace(Number(group.id), baseRecheckAt);
 
     if (!group.domain) {
       const anyHealthy = evaluated.some((member) => member.healthy);
@@ -5913,11 +6103,35 @@ async function runForwardGroupFailoverForGroups(
       && !!failbackCandidate
       && Number(failbackCandidate.priority) < Number(active.priority);
     const shouldFailover = !active || (!!active && !active.healthy && active.failedLongEnough);
+    /*
+      暂不切回的两种情况，都写进组状态让用户看得到原因（P3）：
+        · 高优先级成员已经恢复，但面板看到它连续正常还不满 recoverSeconds —— 观察中；
+        · 抖动抑制：一小时内自动切了三次以上，切回要多等（server/forwardGroupFlapHold.ts）。
+      只在当前成员还健康时才压着：当前成员不可用是逃生，照旧立刻换。人工操作（forcePriority）不受限制。
+    */
+    let holdNote = "";
+    let failbackHeld = false;
+    if (!options.forcePriority && dbBool(group.autoFailback) && active?.healthy) {
+      if (shouldFailback && failbackCandidate) {
+        const flap = await forwardGroupFlapHold(Number(group.id));
+        if (flap.untilMs > 0) {
+          failbackHeld = true;
+          holdNote = `1 小时内已自动切换 ${flap.switches} 次，暂缓切回「${await forwardGroupMemberLabel(failbackCandidate)}」（抖动抑制 ${forwardGroupFlapHoldLabel(flap.holdMs)}）`;
+          // 到点再评估一次，不然要等下一次健康上报或巡检才切得回去。
+          forwardGroupHealthRechecks.replace(Number(group.id), baseRecheckAt ? Math.min(baseRecheckAt, flap.untilMs) : flap.untilMs);
+        }
+      } else if (!shouldFailback) {
+        const recovering = healthyMembers.find((member) => Number(member.priority) < Number(active.priority) && !member.recoveredLongEnough);
+        if (recovering) {
+          holdNote = `高优先级入口「${await forwardGroupMemberLabel(recovering)}」已恢复，需持续正常 ${Math.round(forwardGroupRecoverDelayMs(group) / 1000)} 秒后切回`;
+        }
+      }
+    }
     let next = active;
     let switchReason = "";
     let switchDetail = "";
     if (options.forcePriority) next = firstHealthy;
-    else if (shouldFailback) {
+    else if (shouldFailback && !failbackHeld) {
       next = failbackCandidate;
       switchReason = "高优先级入口恢复，已自动回切";
       switchDetail = `恢复稳定时间已达到 ${Number(group.recoverSeconds || 120)} 秒`;
@@ -5957,9 +6171,18 @@ async function runForwardGroupFailoverForGroups(
       switchReason,
       switchDetail,
       previousMember: active || null,
+      currentNote: holdNote,
       beforeCommit: () => failoverAgentSelectionStillCurrent(group, active, next),
     });
     if (committed === false) scheduleForwardGroupFailover([Number(group.id)]);
+    /*
+      自动切换记一笔（抖动抑制按它计数）：有原来的活动成员、换了人、不是人工操作。逃生也算 ——
+      「坏了切走、好了切回」来回几次正是要压的那种；但压只压切回。写事件失败不影响切换本身。
+    */
+    if (committed !== false && active && Number(active.id) !== Number(next.id) && !options.forcePriority && !options.forceSync) {
+      await insertForwardGroupEvent(Number(group.id), Number(next.id), FORWARD_GROUP_AUTO_SWITCH_EVENT, `自动切换：${switchReason || "入口不可用，切到健康成员"}`)
+        .catch((error) => console.warn(`[ForwardGroup] auto-switch event failed group=${group.id}: ${error instanceof Error ? error.message : String(error)}`));
+    }
     await syncLines();
   }
 }

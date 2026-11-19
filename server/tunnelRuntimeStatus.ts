@@ -132,6 +132,21 @@ export function clearTunnelRuntimeStatusForHost(hostId: number) {
   return affectedTunnelIds;
 }
 
+/**
+ * 只把这条链路上某几台的「已就绪」清掉（别的机器不动）。链路配置变了但不用重装时用：FXP 入口、多跳的
+ * 中转是看到自己「没就绪」才重新下发规格的，清掉它们就会带着新配置再下发一次；出口机的状态留着，
+ * 不会被连带重装。
+ */
+export function clearTunnelRuntimeStatusForHosts(tunnelId: number, hostIds: readonly number[]) {
+  const tid = normalizeTunnelId(tunnelId);
+  const hosts = tid ? tunnelRuntimeStatus.get(tid) : null;
+  if (!hosts) return;
+  let deleted = false;
+  for (const hostId of hostIds) deleted = hosts.delete(Number(hostId)) || deleted;
+  if (hosts.size === 0) tunnelRuntimeStatus.delete(tid);
+  if (deleted) bumpTunnelRuntimeGeneration(tid);
+}
+
 export function clearTunnelRuntimeStatus(tunnelId: number) {
   const tid = normalizeTunnelId(tunnelId);
   if (!tid) return;

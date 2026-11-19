@@ -174,6 +174,7 @@ import {
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
+import { tunnelExitPinUnsupportedReason } from "@shared/tunnelExitPin";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
@@ -5467,7 +5468,10 @@ function TunnelsContent() {
         const pinHostId = Number((tunnel as { balancePinHostId?: number | null }).balancePinHostId || 0);
         const pinActive = pinHostId > 0 && exits.some((exit) => exit.hostId === pinHostId);
         const pinOnline = pinActive && !!hostLookup.get(pinHostId)?.isOnline;
-        const canPin = exits.length > 1 && (user?.role === "admin" || Number(tunnel.userId) === Number(user?.id));
+        const canManagePin = exits.length > 1 && (user?.role === "admin" || Number(tunnel.userId) === Number(user?.id));
+        // Nginx 隧道、带中转的 NEX 链路指定了也不生效（挑出口的不是入口）：不给按钮，写一句原因。已有的指定照样能交回自动。
+        const pinUnsupported = tunnelExitPinUnsupportedReason(tunnel, getTunnelHopIds(tunnel).length);
+        const canPin = canManagePin && !pinUnsupported;
         const canReorder = exits.length > 1 && groupMembers.length > 1 && user?.role === "admin";
         const busy = setExitPinMutation.isPending;
         const setPin = (hostId: number | null) => setExitPinMutation.mutate({ tunnelId: Number(tunnel.id), hostId });
@@ -5538,11 +5542,12 @@ function TunnelsContent() {
                   <span className="min-w-0 flex-1">
                     {pinOnline ? `已指定走 ${hostName(pinHostId)}` : `${hostName(pinHostId)} 离线 · 暂按自动`}
                   </span>
-                  {canPin ? (
+                  {canManagePin ? (
                     <Button size="sm" variant="outline" disabled={busy} onClick={() => setPin(null)}>交回自动</Button>
                   ) : null}
                 </div>
               ) : null}
+              {canManagePin && pinUnsupported ? <p className="text-meta text-muted-foreground">{pinUnsupported}</p> : null}
               <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
                 {exits.map((exit, index) => {
                   const host = hostLookup.get(exit.hostId);

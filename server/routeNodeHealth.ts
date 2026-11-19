@@ -1,27 +1,37 @@
 import { queryRaw } from "./dbRuntime";
 import { quoteIdentifier as q } from "./dbCompat";
 import { dbBool } from "./repositories/repositoryUtils";
+import { hostTrafficExcluded } from "../shared/hostTrafficPolicy";
 
 /*
-  线路里每台机器此刻能不能走：在线、维护中。心跳下发线路组调度时要按它给路径打「用不了」的提示，
+  线路里每台机器此刻能不能走：在线、维护中、流量到阈值被暂停（quota）。心跳下发线路组调度时要按它给路径打「用不了」的提示，
   每次都查库太贵，这里留一份十秒的快照；改维护开关时立刻作废。
 
   节点熔断（多条线路都探不通同一台机器）在 routeGroupStats 里，按探测算，不在这里。
 */
 
-export type RouteNodeStatus = { id: number; name: string; online: boolean; maintenance: boolean };
+export type RouteNodeStatus = { id: number; name: string; online: boolean; maintenance: boolean; quota: boolean };
 
 const TTL_MS = 10_000;
 let snapshot: { byId: Map<number, RouteNodeStatus>; loadedAt: number } | null = null;
 let loading: Promise<void> | null = null;
 
 async function load() {
-  const rows = await queryRaw<any>(`SELECT ${q("id")}, ${q("name")}, ${q("isOnline")}, ${q("maintenanceMode")} FROM ${q("hosts")}`).catch(() => [] as any[]);
+  const rows = await queryRaw<any>(
+    `SELECT ${q("id")}, ${q("name")}, ${q("isOnline")}, ${q("maintenanceMode")}, ${q("trafficFailoverEnabled")}, ${q("trafficLimit")}, ${q("trafficFailoverExcluded")} FROM ${q("hosts")}`,
+  ).catch(() => [] as any[]);
   const byId = new Map<number, RouteNodeStatus>();
   for (const row of rows) {
     const id = Number(row.id);
     if (!(id > 0)) continue;
-    byId.set(id, { id, name: String(row.name || "").trim() || `主机 ${id}`, online: dbBool(row.isOnline), maintenance: dbBool(row.maintenanceMode) });
+    byId.set(id, {
+      id,
+      name: String(row.name || "").trim() || `主机 ${id}`,
+      online: dbBool(row.isOnline),
+      maintenance: dbBool(row.maintenanceMode),
+      // 流量到故障转移阈值被暂停（和组、落地池同一个口径；维护另算，所以这里把维护那一项拿掉）
+      quota: hostTrafficExcluded({ ...row, maintenanceMode: false }),
+    });
   }
   snapshot = { byId, loadedAt: Date.now() };
 }

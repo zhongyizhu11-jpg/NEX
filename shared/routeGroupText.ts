@@ -160,7 +160,7 @@ function describeRouteReasonBase(text: string): string {
   if (lower === "startup" || lower === "spec updated") return "线路组重新下发";
   if (lower === "relay recovered") return "中转恢复";
   if (lower.startsWith("precheck:")) return `预检未通过：${describeRouteIssue(text.slice("precheck:".length))}`;
-  if (lower.startsWith("relay down") || lower === "paused" || lower === "drill" || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
+  if (lower.startsWith("relay down") || lower === "paused" || lower === "drill" || lower.startsWith("maintenance:") || lower.startsWith("quota:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
   if (lower.startsWith("panel:")) return text.slice("panel:".length).trim();
   // Agent 的抖动抑制：flap: 3 switches in 1h, hold 5m until 2026-…
   const flap = /^flap:\s*(\d+)\s+switches in 1h,\s*hold\s+(\d+)m/i.exec(text);
@@ -175,7 +175,7 @@ function describeRouteReasonBase(text: string): string {
 function isRelayIssuePhrase(text: string) {
   const lower = text.toLowerCase();
   return lower === "relay down" || lower.startsWith("relay down:") || lower === "paused" || lower === "path unresolved" || lower === "drill"
-    || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:");
+    || lower.startsWith("maintenance:") || lower.startsWith("quota:") || lower.startsWith("node offline:") || lower.startsWith("breaker:");
 }
 
 /**
@@ -212,6 +212,7 @@ export function describeRouteIssue(issue: unknown): string {
   if (lower === "paused") return "已手动暂停";
   if (lower === "drill") return "演练中：当成挂了";
   if (lower.startsWith("maintenance:")) return `${text.slice("maintenance:".length).trim()} 维护中`;
+  if (lower.startsWith("quota:")) return `${text.slice("quota:".length).trim()} 流量到阈值，已暂停`;
   if (lower.startsWith("node offline:")) return `${text.slice("node offline:".length).trim()} 离线`;
   if (lower.startsWith("breaker:")) return `${text.slice("breaker:".length).trim()} 熔断：几条线路都探不通它`;
   return text;

@@ -3259,12 +3259,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       填「按访客固定」要剥头的 gost 端口转发名单（routeHeaderStripRuleIds 的来历见那里）。条件：
       gost 直连、不过协议守卫（守卫在前面时 gost 看到的访客是守卫自己）、有 TCP、规则本身不发
       PROXY 头（发的话头已经在了，调度器读完原样转）、调度确实会下发且分法是按访客。
+      「分法是按访客」看每一层：整组策略，或者任何一条线路的落地之间按访客分（targets[].spread）——
+      只看整组的话，整组主备、线路里按访客固定时调度器看到的访客全是 127.0.0.1，所有人落到同一个落地。
+      剥头不另设版本门槛：Agent 认线路级分法（2.2.245）比认 proxyProtocolStrip（2.2.199）晚，和整组那种同一个口径。
     */
     for (const rule of Array.from(new Set([...agentAllRules, ...agentHostRules])) as any[]) {
       if (!rule?.failoverEnabled || rule.forwardType !== "gost" || Number(rule.tunnelId || 0) > 0) continue;
       if (!isForwardRuleProtocolTcpEnabled(rule.protocol) || proxyProtocolEnabled(rule, "send")) continue;
       const spec = actionFailover(rule, { listenPort: failoverProxyPort(rule), bindAddress: "127.0.0.1" });
-      if (!spec || spec.strategy !== "ip_hash") continue;
+      if (!spec) continue;
+      const visitorSticky = spec.strategy === "ip_hash"
+        || spec.targets.some((target) => (target as { spread?: string }).spread === "ip_hash");
+      if (!visitorSticky) continue;
       if (await shouldUseRuleGuard(rule)) continue;
       routeHeaderStripRuleIds.add(Number(rule.id));
     }

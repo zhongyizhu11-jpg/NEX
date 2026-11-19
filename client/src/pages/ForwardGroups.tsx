@@ -2682,8 +2682,8 @@ export function ForwardGroupsContent({
                       <span className="space-y-1">
                         <span className="block text-sm font-medium">按带宽排序解析</span>
                         <span data-fx-help="" className="block text-xs text-muted-foreground">
-                          入口域名照旧解析出全部健康入口，只是把带宽大（或现在更闲）的排在前面。很多客户端优先用排在前面的地址，
-                          所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例。
+                          入口域名照旧解析出全部健康入口，面板按带宽给它们排先后并显示占用率。
+                          DNS 的多条记录没有顺序，解析器会自己轮换，所以它现在不改变客户端被分到哪一台。
                           要按比例分连接，用订阅里的「负载均衡」组；要把一条连接拆开同时走几台，用隧道中转的「单连接叠加」。
                         </span>
                       </span>
