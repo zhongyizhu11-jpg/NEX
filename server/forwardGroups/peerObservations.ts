@@ -86,10 +86,12 @@ export class ForwardGroupPeerObservationStore {
         if (!input.expectedPorts.has(port)) target.ports.delete(port);
       }
     }
+    // 上一份结论这一刻已经过期了（观察点断了一阵）：回来后的结论哪怕和过期前一样，也从现在重新算 since。
+    const wasStale = target.ok !== null && this.summarize(target, input.now, input.expectedPorts) === null;
     target.ports.set(input.portKey, { ok: !!input.ok, at: input.now, latencyMs: input.ok ? (input.latencyMs ?? null) : null });
     const next = this.summarize(target, input.now, input.expectedPorts);
     if (next === true) target.everOk = true;
-    if (next === target.ok) return false;
+    if (next === target.ok && !wasStale) return false;
     target.ok = next;
     target.since = input.now;
     return true;
