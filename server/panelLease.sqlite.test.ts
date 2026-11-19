@@ -79,7 +79,9 @@ test("SQLite：两个实例只有一个跑巡检，非持有者的评估交给�
 
       // 两个「实例」：同一个库、同一个假时钟；续约由测试手动推进
       let clock = Date.now();
-      const store = new leaseModule.SqlPanelLeaseStore();
+      // 租约按库的时钟算：测试把「时间过去」加在库的时钟上（clockOffsetMs），两个实例的本机时钟跟着同一个假时钟走
+      const clockStart = clock;
+      const store = new leaseModule.SqlPanelLeaseStore({ clockOffsetMs: () => clock - clockStart });
       const quiet = { info: () => {}, warn: () => {} };
       const makeLease = (instanceId) => new leaseModule.PanelLease({
         store, instanceId, now: () => clock, logger: quiet,
@@ -180,6 +182,46 @@ test("SQLite：两个实例只有一个跑巡检，非持有者的评估交给�
     });
     assert.equal(result.status, 0, result.error?.stack || result.stderr || result.stdout);
   } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite：两个实例的时钟差一分钟，快的那个也抢不走租约（抢 / 续的过期判断用库的时钟）", async () => {
+  process.env.DATABASE_TYPE = "sqlite";
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-panel-lease-skew-"));
+  const runtime = await import("./dbRuntime");
+  const { ensureDatabaseSchema } = await import("./dbSchema");
+  const leaseModule = await import("./panelLease");
+  try {
+    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: path.join(directory, "skew.db") } });
+    await ensureDatabaseSchema();
+    const store = new leaseModule.SqlPanelLeaseStore();
+    const quiet = { info: () => {}, warn: () => {} };
+    const makeLease = (instanceId: string, skewMs: number) => new leaseModule.PanelLease({
+      store, instanceId, now: () => Date.now() + skewMs, logger: quiet,
+      setTimer: (() => ({ unref() {} })) as any, clearTimer: () => {},
+    });
+    const a = makeLease("slow-clock", 0);
+    const b = makeLease("fast-clock", 60_000);
+    await a.start();
+    await b.start();
+    await a.tick();
+    await b.tick();
+    assert.equal(a.isHolder(), true);
+    assert.equal(b.isHolder(), false, "时钟快一分钟的实例把还在有效期里的租约抢走了");
+    assert.equal(b.status().holderId, "slow-clock");
+    assert.deepEqual(a.status().otherInstanceIds, ["fast-clock"]);
+    // 库里写的到期时刻按库的时钟：离现在大约一个 TTL
+    const row = (await runtime.queryRaw<{ expiresAt: unknown }>('SELECT "expiresAt" FROM "panel_leases" WHERE "name" = ?', ["background"]))[0];
+    const remaining = Number(row.expiresAt) - Date.now();
+    assert.ok(remaining > leaseModule.PANEL_LEASE_TTL_MS - 5_000 && remaining <= leaseModule.PANEL_LEASE_TTL_MS + 1_000, `到期时刻离现在 ${remaining}ms`);
+    // 放掉之后快的那个接手
+    await a.stop({ release: true });
+    await b.tick();
+    assert.equal(b.isHolder(), true);
+    await b.stop({ release: true });
+  } finally {
+    await runtime.closeDatabase().catch(() => undefined);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

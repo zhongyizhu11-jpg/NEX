@@ -30,22 +30,28 @@ const script = String.raw`
   await schema.ensureDatabaseSchema();
   const leaseModule = await import(moduleUrl("server/panelLease.ts"));
   const work = await import(moduleUrl("server/panelWorkRequests.ts"));
-  const store = new leaseModule.SqlPanelLeaseStore();
+  // 租约按库的时钟算：「时间过去」加在库的时钟上（clockOffsetMs）
+  let offset = 0;
+  const store = new leaseModule.SqlPanelLeaseStore({ clockOffsetMs: () => offset });
+
+  // 库的时钟和本机差不多（同一台机器）：now() 是毫秒
+  assert.ok(Math.abs((await store.now()) - Date.now()) < 5_000, "库的时钟不是毫秒？");
 
   // 并发抢一个没人拿过的租约：只有一个成功
-  const t0 = Date.now();
   const contenders = Array.from({ length: 8 }, (_, index) => "racer-" + index);
-  const results = await Promise.all(contenders.map((holder) => store.tryAcquire("race", holder, t0, 30_000)));
+  const results = await Promise.all(contenders.map((holder) => store.tryAcquire("race", holder, 30_000)));
   assert.equal(results.filter(Boolean).length, 1, "并发抢到了 " + results.filter(Boolean).length + " 个");
   const winner = contenders[results.indexOf(true)];
   assert.equal((await store.read("race")).holder, winner);
   // 拿着的续得上（同一毫秒再续也算），别人抢不到
-  assert.equal(await store.tryAcquire("race", winner, t0, 30_000), true);
-  assert.equal(await store.tryAcquire("race", winner, t0 + 10_000, 30_000), true);
-  assert.equal(await store.tryAcquire("race", "other", t0 + 20_000, 30_000), false);
+  assert.equal(await store.tryAcquire("race", winner, 30_000), true);
+  offset += 10_000;
+  assert.equal(await store.tryAcquire("race", winner, 30_000), true);
+  offset += 10_000;
+  assert.equal(await store.tryAcquire("race", "other", 30_000), false);
   // 过期之后：并发接手也只有一个成功
-  const after = t0 + 10_000 + 30_000;
-  const takeover = await Promise.all(contenders.map((holder) => store.tryAcquire("race", holder, after, 30_000)));
+  offset += 25_000;
+  const takeover = await Promise.all(contenders.map((holder) => store.tryAcquire("race", holder, 30_000)));
   assert.equal(takeover.filter(Boolean).length, 1, "过期后接手了 " + takeover.filter(Boolean).length + " 个");
   const next = contenders[takeover.indexOf(true)];
   await store.release("race", "not-the-holder");
@@ -55,12 +61,16 @@ const script = String.raw`
 
   // 两个实例用 PanelLease：一个持有、一个待命；持有者不续，另一个在 TTL + 一个续约间隔内接手
   let clock = Date.now();
+  const clockStart = clock;
+  const baseOffset = offset;
+  const tickClock = () => { offset = baseOffset + (clock - clockStart); };
   const quiet = { info: () => {}, warn: () => {} };
-  const makeLease = (instanceId) => new leaseModule.PanelLease({
-    store, instanceId, now: () => clock, logger: quiet, setTimer: () => ({ unref() {} }), clearTimer: () => {},
+  const makeLease = (instanceId, skewMs = 0) => new leaseModule.PanelLease({
+    store, instanceId, now: () => clock + skewMs, logger: quiet, setTimer: () => ({ unref() {} }), clearTimer: () => {},
   });
   const a = makeLease("ext-a");
-  const b = makeLease("ext-b");
+  // B 的时钟快 45 秒：过期判断按库的时钟，B 照样抢不走
+  const b = makeLease("ext-b", 45_000);
   await a.start();
   await b.start();
   await a.tick();
@@ -71,19 +81,23 @@ const script = String.raw`
   let takeoverAt = null;
   while (clock - lastRenew <= leaseModule.PANEL_LEASE_TTL_MS + 2 * leaseModule.PANEL_LEASE_RENEW_INTERVAL_MS) {
     clock += leaseModule.PANEL_LEASE_RENEW_INTERVAL_MS;
+    tickClock();
     await b.tick();
     assert.ok(!(a.isHolder() && b.isHolder()));
     if (b.isHolder() && takeoverAt === null) takeoverAt = clock;
   }
   assert.ok(takeoverAt !== null && takeoverAt - lastRenew <= leaseModule.PANEL_LEASE_TTL_MS + leaseModule.PANEL_LEASE_RENEW_INTERVAL_MS);
+  assert.ok(takeoverAt - lastRenew >= leaseModule.PANEL_LEASE_TTL_MS, "时钟快的实例提前接手了");
   await a.tick();
   assert.equal(a.isHolder(), false);
   assert.equal(a.status().holderId, "ext-b");
   await b.stop({ release: true });
   clock += 1_000;
+  tickClock();
   await a.tick();
   assert.equal(a.isHolder(), true);
-  assert.equal(await store.prune("instance:", clock + 60_000) >= 1, true);
+  offset += 15 * 60_000;
+  assert.equal(await store.prune("instance:", 60_000) >= 1, true);
 
   // 待办：同一件事覆盖写只留一行，取走时执行一次
   const seen = [];
