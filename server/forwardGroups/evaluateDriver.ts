@@ -22,8 +22,7 @@ import { appendPanelLog } from "../_core/panelLogger";
 import { getDdnsSettings, type DdnsSettings } from "../ddns";
 import { prepareForwardGroupDdnsLines, type ForwardGroupLineContext } from "../forwardGroupDdnsLines";
 import type { LineMemberStatus } from "../ddnsLinePlanner";
-import { getDb, nowDate, queryRaw } from "../dbRuntime";
-import { quoteIdentifier } from "../dbCompat";
+import { getDb, nowDate } from "../dbRuntime";
 import { getForwardGroupChildRulesForMember, getForwardGroupTemplateRules } from "../repositories/forwardRuleRepository";
 import { getHosts, getHostsByIds } from "../repositories/hostRepository";
 import {
@@ -36,7 +35,7 @@ import {
   nextForwardGroupChinaHealthExpiryAt,
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
-import { FORWARD_GROUP_AUTO_SWITCH_EVENT, FORWARD_GROUP_FLAP_WINDOW_MS, forwardGroupFlapHoldAt, forwardGroupFlapHoldLabel } from "../forwardGroupFlapHold";
+import { FORWARD_GROUP_AUTO_SWITCH_EVENT, forwardGroupFlapHoldForGroup, forwardGroupFlapHoldLabel } from "../forwardGroupFlapHold";
 import { dbBool } from "../repositories/repositoryUtils";
 import { HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE } from "../../shared/hostTrafficPolicy";
 import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
@@ -542,17 +541,6 @@ async function markExitGroupReady(group: any) {
   });
 }
 
-/** 这个组最近一小时的自动切换（forward_group_events 里的 auto-switch）算出来的抖动抑制。 */
-async function forwardGroupFlapHold(groupId: number, nowMs = Date.now()) {
-  const sinceSeconds = Math.floor((nowMs - FORWARD_GROUP_FLAP_WINDOW_MS) / 1000);
-  const rows = await queryRaw<{ createdAt: unknown }>(
-    `SELECT ${quoteIdentifier("createdAt")} FROM ${quoteIdentifier("forward_group_events")}
-      WHERE ${quoteIdentifier("groupId")} = ? AND ${quoteIdentifier("type")} = ? AND ${quoteIdentifier("createdAt")} >= ?`,
-    [groupId, FORWARD_GROUP_AUTO_SWITCH_EVENT, sinceSeconds],
-  ).catch(() => []);
-  return forwardGroupFlapHoldAt(rows.map((row) => toDate(row.createdAt)?.getTime() || 0), nowMs);
-}
-
 type ForwardGroupFailoverContext = {
   ddnsSettings: any;
 };
@@ -758,7 +746,7 @@ async function runForwardGroupFailoverForGroups(
     let failbackHeld = false;
     if (!options.forcePriority && dbBool(group.autoFailback) && active?.healthy) {
       if (shouldFailback && failbackCandidate) {
-        const flap = await forwardGroupFlapHold(Number(group.id));
+        const flap = await forwardGroupFlapHoldForGroup(Number(group.id));
         if (flap.untilMs > 0) {
           failbackHeld = true;
           holdNote = `1 小时内已自动切换 ${flap.switches} 次，暂缓切回「${await forwardGroupMemberLabel(failbackCandidate)}」（抖动抑制 ${forwardGroupFlapHoldLabel(flap.holdMs)}）`;

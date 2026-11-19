@@ -9,8 +9,7 @@ import { forwardGroupMembers, forwardGroups, type ForwardRule } from "../../driz
 import type { SniReadinessTemplate } from "../tlsInboundReadiness";
 import { DEFAULT_DDNS_TTL, type DdnsSettings } from "../ddns";
 import { prepareForwardGroupDdnsLines } from "../forwardGroupDdnsLines";
-import { getDb, nowDate, queryRaw } from "../dbRuntime";
-import { quoteIdentifier } from "../dbCompat";
+import { getDb, nowDate } from "../dbRuntime";
 import { getForwardGroupTemplateRules } from "../repositories/forwardRuleRepository";
 import { getHostsByIds } from "../repositories/hostRepository";
 import { getLatestHostMetricSnapshots } from "../repositories/metricsRepository";
@@ -30,7 +29,7 @@ import {
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
-import { FORWARD_GROUP_AUTO_SWITCH_EVENT, FORWARD_GROUP_FLAP_WINDOW_MS, forwardGroupFlapHoldAt } from "../forwardGroupFlapHold";
+import { FORWARD_GROUP_AUTO_SWITCH_EVENT, forwardGroupAutoSwitchTimesByMember, forwardGroupFlapHoldAt } from "../forwardGroupFlapHold";
 import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
 import { dbBool } from "../repositories/repositoryUtils";
 import { entryMemberInclusion, planEntryGroupRecordSet } from "./evaluate";
@@ -197,26 +196,6 @@ export async function syncEntryGroupDdns(group: any, ddnsSettings: any, options:
   const hook = createForwardGroupLineHook(group, lineCtx);
   await syncEntryGroupDefaultDdns(group, ddnsSettings, options, hook);
   if (hook.settled) await syncForwardGroupLinesAfterDefault(group, ddnsSettings, hook, "multi", options);
-}
-
-/** 这个组最近一小时每个成员的自动进出（auto-switch 事件，按成员分）：入口组的抖动抑制按成员算。 */
-async function forwardGroupAutoSwitchTimesByMember(groupId: number, nowMs: number) {
-  const sinceSeconds = Math.floor((nowMs - FORWARD_GROUP_FLAP_WINDOW_MS) / 1000);
-  const rows = await queryRaw<{ memberId: unknown; createdAt: unknown }>(
-    `SELECT ${quoteIdentifier("memberId")}, ${quoteIdentifier("createdAt")} FROM ${quoteIdentifier("forward_group_events")}
-      WHERE ${quoteIdentifier("groupId")} = ? AND ${quoteIdentifier("type")} = ? AND ${quoteIdentifier("createdAt")} >= ?`,
-    [groupId, FORWARD_GROUP_AUTO_SWITCH_EVENT, sinceSeconds],
-  ).catch(() => []);
-  const byMember = new Map<number, number[]>();
-  for (const row of rows) {
-    const memberId = Number(row.memberId || 0);
-    const at = toDate(row.createdAt)?.getTime() || 0;
-    if (!(memberId > 0) || !(at > 0)) continue;
-    const list = byMember.get(memberId);
-    if (list) list.push(at);
-    else byMember.set(memberId, [at]);
-  }
-  return byMember;
 }
 
 /*
