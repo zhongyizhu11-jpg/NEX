@@ -170,6 +170,8 @@ import {
 } from "../forwardGroups/readiness";
 import { ForwardGroupPublishQueue, ddnsProviderAccountKey } from "../forwardGroups/publish";
 import { databaseHealth } from "../databaseHealthState";
+import { isPanelBackgroundLeaseHolder } from "../panelLease";
+import { registerPanelWorkHandler, requestPanelWork } from "../panelWorkRequests";
 import { clearDdnsRecordWeights, ddnsWeightSupport, publishWeightedDdnsRecords } from "../ddnsWeightedRecords";
 import {
   DDNS_WEIGHT_ADAPTIVE_TOLERANCE,
@@ -642,6 +644,7 @@ export function scheduleForwardGroupFailover(groupIds: number[]) {
   （这次允许写），所以发出去的总是那一刻的结论；失败按 1～30 秒退避重试。
 */
 const forwardGroupPublishQueue = new ForwardGroupPublishQueue(
+  // 发布之前租约丢了（多实例部署，server/panelLease.ts）：runForwardGroupFailoverByIds 会把它转给现在的持有者。
   (groupId) => runForwardGroupFailoverByIds([groupId], { skipRuleSync: true }),
   {
     concurrency: 2,
@@ -7459,11 +7462,38 @@ async function loadForwardGroupForEvaluation(groupId: number, options: ForwardGr
   return { group: { ...group, groupMode: forwardGroupModeOf(group), members }, scope };
 }
 
+/** 评估选项里能交给持有实例的那几项（都是布尔）。 */
+const FORWARDABLE_FAILOVER_OPTIONS = ["forcePriority", "forceSync", "manual", "suppressSwitchNotify", "skipRuleSync", "deferPublish"] as const;
+
+function forwardableFailoverOptions(options: ForwardGroupFailoverOptions) {
+  const payload: Record<string, boolean> = {};
+  for (const key of FORWARDABLE_FAILOVER_OPTIONS) if (options[key]) payload[key] = true;
+  return payload;
+}
+
+/*
+  多实例部署（server/panelLease.ts）：评估和写 DNS 只在跑后台任务的实例上做。别的实例上来的评估（Agent 健康上报、
+  主机上下线、人工「立即同步」）写进 panel_work_requests，由持有者几秒内接着跑；这里直接返回（人工操作的结果
+  稍后在界面上刷新出来）。
+*/
+registerPanelWorkHandler("forward-group", async (key, payload) => {
+  const groupId = Number(key);
+  if (!Number.isInteger(groupId) || groupId <= 0) return;
+  const options: ForwardGroupFailoverOptions = {};
+  for (const name of FORWARDABLE_FAILOVER_OPTIONS) if ((payload as Record<string, unknown> | null)?.[name] === true) options[name] = true;
+  await runForwardGroupFailoverByIds([groupId], options);
+});
+
 async function runForwardGroupFailoverByIds(groupIds: number[], options: ForwardGroupFailoverOptions = {}) {
   const ids = Array.from(new Set(groupIds
     .map((value) => Number(value || 0))
     .filter((value) => Number.isInteger(value) && value > 0)));
   if (ids.length === 0) return;
+  if (!isPanelBackgroundLeaseHolder()) {
+    const payload = forwardableFailoverOptions(options);
+    for (const groupId of ids) await requestPanelWork("forward-group", groupId, payload);
+    return;
+  }
 
   const ddnsSettings = await getDdnsSettings();
   const failures: Array<{ groupId: number; error: unknown }> = [];

@@ -44,6 +44,7 @@ import {
 import { parseRoutePaths } from "../shared/routeGroup";
 import { hostTrafficExcluded } from "../shared/hostTrafficPolicy";
 import { getPresenceCapableHostLivenessSnapshot } from "./agentFastLiveness";
+import { isPanelBackgroundLeaseHolder } from "./panelLease";
 
 /*
   落地池（2.3.500）的同步：池的那一份配置（node_pools.landingJson，shared/landingPool.ts）→
@@ -492,6 +493,8 @@ async function refreshLandingDns(pool: NodePool, config: LandingConfig, health: 
   // 每台成员这一轮能不能用都记一笔（没设域名的池也记：同一台机器可能在别的设了域名的池里）。
   for (const member of health) noteLandingHostHealth(member.hostId, member.healthy, now);
   if (!pool.directDomain) return null;
+  // 多实例部署：直连域名按存活状态写，只由跑后台任务的实例写（server/panelLease.ts），它一分钟一轮的健康检查会补上。
+  if (!isPanelBackgroundLeaseHolder()) return null;
   const published = new Set(String(pool.directDnsValue || "").split(",").map((value) => value.trim()).filter(Boolean));
   const usable = health.filter((member) => !member.healthy || published.has(member.ipv4) || landingHostSettled(member.hostId, now));
   const values = landingPoolDnsValues(usable, config.port).sort();

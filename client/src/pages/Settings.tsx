@@ -963,6 +963,12 @@ function PanelLogsSection() {
                 面板日志
               </CardTitle>
               <CardDescription>今天和前两天的运行日志（按北京时间零点切）。</CardDescription>
+              {/* 几个面板实例连同一个库时，后台任务只由拿着租约的那个跑（server/panelLease.ts）。 */}
+              {panelLogs?.backgroundLease ? (
+                <p className="mt-1 text-meta text-muted-foreground" title={panelLogs.backgroundLease.instanceId ? `本实例 ${panelLogs.backgroundLease.instanceId}` : undefined}>
+                  {panelLogs.backgroundLease.text}
+                </p>
+              ) : null}
             </div>
             {/*
               原来这里并排五样：一个「导出级别」选择框、导出、刷新、生成支持包、一个红色实心的

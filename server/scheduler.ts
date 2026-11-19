@@ -59,6 +59,7 @@ import { runProxySubSourceSync } from "./proxySubSourceSync";
 import { loadProxySubSettings } from "./proxySubSettings";
 import { pruneProxySubRateLimit } from "./proxySubRateLimit";
 import { escapeHtmlText as escapeHtmlLocal } from "../shared/htmlEscape";
+import { leaseHolderOnly } from "./panelLease";
 
 type TimedOutForwardTest = {
   id: number;
@@ -1030,14 +1031,14 @@ export function startScheduler() {
 
   const monthlyTrafficReset = createNonOverlappingScheduledTask("monthly traffic reset", async () => {
     await runMonthlyTrafficReset();
-  });
+  }, { shouldRun: leaseHolderOnly });
   const expirationCheck = createNonOverlappingScheduledTask("subscription and account expiration", async () => {
     await runSubscriptionExpirationCheck();
     await runExpirationCheck();
-  });
+  }, { shouldRun: leaseHolderOnly });
   const hostBillingCycleCheck = createNonOverlappingScheduledTask("host billing cycle extension", async () => {
     await runHostBillingCycleExtension();
-  });
+  }, { shouldRun: leaseHolderOnly });
   const selfTestTimeoutSweep = createNonOverlappingScheduledTask("self-test timeout sweep", async () => {
     await runSelfTestTimeoutSweep();
   });
@@ -1066,34 +1067,34 @@ export function startScheduler() {
     } catch (error) {
       console.warn("[Scheduler] Proxy subscription cleanup failed:", error instanceof Error ? error.message : error);
     }
-  }, { slowTaskMs: 15_000 });
+  }, { slowTaskMs: 15_000, shouldRun: leaseHolderOnly });
   // 外部订阅：到点的拉一遍（间隔按每条来源自己的设置，最短 10 分钟）。
   const proxySubSourceSync = createNonOverlappingScheduledTask("proxy subscription source sync", async () => {
     const settings = await loadProxySubSettings();
     if (!settings.externalSourcesEnabled) return;
     const synced = await runProxySubSourceSync();
     if (synced > 0) console.log(`[Scheduler] Proxy subscription sources synced: ${synced}`);
-  }, { slowTaskMs: 60_000 });
+  }, { slowTaskMs: 60_000, shouldRun: leaseHolderOnly });
   // 把最近的原始延迟样本按天汇总进 latency_daily_stats（增量、带水位，见 latencyDailyRepository.ts）。
   const latencyDailyRollup = createNonOverlappingScheduledTask("latency daily rollup", async () => {
     await rollupLatencyDailyStats();
     // 主机探测按小时汇总进 host_probe_service_hourly，同一个节奏。
     await rollupHostProbeHourlyStats();
-  }, { slowTaskMs: 15_000 });
+  }, { slowTaskMs: 15_000, shouldRun: leaseHolderOnly });
   const forwardingMaintenance = createNonOverlappingScheduledTask("forward-group and DDNS maintenance", async () => {
     await runForwardGroupFailover();
     await runHostDdnsReconcile();
-  });
+  }, { shouldRun: leaseHolderOnly });
   const ruleEntryDomainMaintenance = createNonOverlappingScheduledTask("rule entry domain reconcile", async () => {
     await runRuleEntryDomainReconcile();
-  }, { slowTaskMs: 30_000 });
+  }, { slowTaskMs: 30_000, shouldRun: leaseHolderOnly });
   const autoStoppedRuleRecovery = createNonOverlappingScheduledTask("auto-stopped rule recovery", async () => {
     try {
       await healAutoStoppedRules("scheduled-auto-heal");
     } catch (error) {
       console.error("[Scheduler] Auto-stopped rule recovery error:", error);
     }
-  });
+  }, { shouldRun: leaseHolderOnly });
   /*
     换隧道后旧入口的临时桥接到期：删行并推一次刷新，Agent 才会马上撤掉监听。只靠心跳里
     「读的时候过滤掉」不够 —— 没有别的改动时 Agent 一直拿稳定心跳计划，要等到整轮对账才撤。
@@ -1105,7 +1106,7 @@ export function startScheduler() {
     } catch (error) {
       console.error("[Scheduler] Rule entry bridge expiry error:", error);
     }
-  });
+  }, { shouldRun: leaseHolderOnly });
   /*
     单条规则的到期 / 流量额度（server/ruleLimits.ts）：流量上报时已经即时判定，这里补到期
     （没有流量也要按时停）和面板重启前没做完的。只扫设过额度 / 到期 / 记过原因的规则。
@@ -1116,22 +1117,22 @@ export function startScheduler() {
     } catch (error) {
       console.error("[Scheduler] Rule limit sweep error:", error);
     }
-  });
+  }, { shouldRun: leaseHolderOnly });
   // 自动换 IP（插件 auto-ip-change）：冷却到期、到阈值补一次自动更换、插件启停后推探测任务；第一轮先把重启打断的标成「结果不确定」。
   const ipChangeTick = createNonOverlappingScheduledTask("auto IP change", async () => {
     await runIpChangeTick();
-  }, { slowTaskMs: 30_000 });
+  }, { slowTaskMs: 30_000, shouldRun: leaseHolderOnly });
   const hostStatusSweep = createNonOverlappingScheduledTask("host status sweep", async () => {
     await runHostStatusSweep();
-  });
+  }, { shouldRun: leaseHolderOnly });
   const hostGeoSweep = createNonOverlappingScheduledTask("host geo retry sweep", async () => {
     await runHostGeoRetrySweep();
-  }, { slowTaskMs: 60_000 });
+  }, { slowTaskMs: 60_000, shouldRun: leaseHolderOnly });
   const reminderSweep = createNonOverlappingScheduledTask("email and Telegram reminders", async () => {
     await runEmailReminders();
     await runTelegramReminders();
     await runDiscordReminders();
-  }, { slowTaskMs: 15_000 });
+  }, { slowTaskMs: 15_000, shouldRun: leaseHolderOnly });
   // 每日简报：北京时间 9 点以后发当天那一份，十分钟看一次；去重键带日期，一天只发一次。
   const telegramDigest = createNonOverlappingScheduledTask("Telegram daily digest", async () => {
     try {
@@ -1144,7 +1145,7 @@ export function startScheduler() {
     } catch (error) {
       console.error("[Scheduler] Discord digest error:", error);
     }
-  }, { slowTaskMs: 30_000 });
+  }, { slowTaskMs: 30_000, shouldRun: leaseHolderOnly });
   const updateCheck = createNonOverlappingScheduledTask("panel update check", async () => {
     await runUpdateAutoCheck();
   }, { slowTaskMs: 15_000 });
@@ -1156,12 +1157,12 @@ export function startScheduler() {
   });
   const memberScheduleSweep = createNonOverlappingScheduledTask("forward group member schedule", async () => {
     await applyForwardGroupMemberSchedules();
-  }, { slowTaskMs: 20_000 });
+  }, { slowTaskMs: 20_000, shouldRun: leaseHolderOnly });
   // 落地池（server/landingPools.ts）：首选那台换没换、直连域名的解析该不该改。
   const landingPoolHealth = createNonOverlappingScheduledTask("landing pool health", async () => {
     const { refreshAllLandingPoolsHealth } = await import("./landingPools");
     await refreshAllLandingPoolsHealth();
-  }, { slowTaskMs: 20_000 });
+  }, { slowTaskMs: 20_000, shouldRun: leaseHolderOnly });
   const paymentMaintenance = createNonOverlappingScheduledTask("payment order maintenance", async () => {
     /**
      * 先主动查单，再关过期的。
@@ -1175,7 +1176,7 @@ export function startScheduler() {
     }
     await expireStalePendingOrders();
     await recoverStaleProcessingPaymentOrders();
-  });
+  }, { shouldRun: leaseHolderOnly });
 
   const repeatAfter = (task: () => Promise<boolean>, intervalMs: number, delayMs: number) => {
     const startTimer = setTimeout(() => {
@@ -1231,7 +1232,7 @@ export function startScheduler() {
   repeatAfter(reminderSweep, 6 * 60 * 60 * 1000, 30_000);
   repeatAfter(telegramDigest, 10 * 60 * 1000, 70_000);
   // 事件时间线：每天删一次 90 天前的事件、记一遍三天内到期的用户（见 server/ops/eventHooks.ts）
-  repeatAfter(createNonOverlappingScheduledTask("panel events maintenance", runPanelEventsDailyMaintenance, { slowTaskMs: 30_000 }), 24 * 60 * 60 * 1000, 3 * 60_000);
+  repeatAfter(createNonOverlappingScheduledTask("panel events maintenance", runPanelEventsDailyMaintenance, { slowTaskMs: 30_000, shouldRun: leaseHolderOnly }), 24 * 60 * 60 * 1000, 3 * 60_000);
   repeatAfter(updateCheck, UPDATE_AUTO_CHECK_INTERVAL_MS, 45_000);
   repeatAfter(historyCleanup, 60 * 60 * 1000, 2 * 60_000);
   repeatAfter(latencyDailyRollup, 10 * 60 * 1000, 75_000);

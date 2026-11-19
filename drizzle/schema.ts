@@ -1739,6 +1739,21 @@ export const tcpingStats = table("tcping_stats", {
 export type TcpingStat = typeof tcpingStats.$inferSelect;
 export type InsertTcpingStat = typeof tcpingStats.$inferInsert;
 
+/* 面板后台任务租约与实例登记（server/panelLease.ts）。只走原生 SQL，这里留一份给类型和对照。 */
+export const panelLeases = table("panel_leases", {
+  name: varchar("name", { length: 128 }).primaryKey(),
+  holder: varchar("holder", { length: 128 }).notNull(),
+  expiresAt: bigint("expiresAt", { mode: "number" }).notNull().default(0),
+  updatedAt: bigint("updatedAt", { mode: "number" }).notNull().default(0),
+});
+
+/* 非持有实例交给持有实例的活（server/panelWorkRequests.ts）。只走原生 SQL。 */
+export const panelWorkRequests = table("panel_work_requests", {
+  name: varchar("name", { length: 128 }).primaryKey(),
+  payload: text("payload"),
+  requestedAt: bigint("requestedAt", { mode: "number" }).notNull().default(0),
+});
+
 // ===== 系统设置表（键值存储） =====
 export const systemSettings = table("system_settings", {
   key: varchar("key", { length: 191 }).primaryKey(),
