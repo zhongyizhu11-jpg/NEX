@@ -125,7 +125,7 @@ func TestRouteAutoCostIsBoundedAndNeutralForUnknowns(t *testing.T) {
 	p.stats[1].recordProbe(true, 5000, at)
 	p.spec.Targets[1].LoadPct = 100
 	all := []int{0, 1, 2}
-	members := p.membersLocked(all, lbcore.StrategyAuto, at, p.pathLoadLocked)
+	members := p.membersLocked(all, lbcore.StrategyAuto, at, false, p.pathLoadLocked)
 	fast, _ := lbcore.Cost(members, all, 0, false)
 	slow, _ := lbcore.Cost(members, all, 1, false)
 	unknown, _ := lbcore.Cost(members, all, 2, false)

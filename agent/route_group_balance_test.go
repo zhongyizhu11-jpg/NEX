@@ -156,18 +156,18 @@ func TestRouteSlowStartAfterRecovery(t *testing.T) {
 	if counts[1] > 3 {
 		t.Fatalf("刚恢复的路径分到了 %d 条：%v", counts[1], counts)
 	}
-	if p.slowStartLocked(1, time.Now().Add(routeSlowStartWindow)) != 1 {
+	if p.slowStartLocked(1, time.Now().Add(lbcore.DefaultSlowStart.Window), false) != 1 {
 		t.Fatal("窗口过了应该满份")
 	}
 }
 
 // 别的测试文件里直接按某一种分法挑一条用的（产品代码都从 spreadPickLocked 进）。调用方持有 p.mu。
 func (p *failoverProxy) weightedPickLocked(candidates []int) int {
-	return p.spreadPickLocked(lbcore.StrategyWeighted, candidates, "")
+	return p.spreadPickLocked(lbcore.StrategyWeighted, candidates, "", false)
 }
 
 func (p *failoverProxy) rendezvousPickLocked(candidates []int, key string) int {
-	return p.spreadPickLocked(lbcore.StrategyIPHash, candidates, key)
+	return p.spreadPickLocked(lbcore.StrategyIPHash, candidates, key, false)
 }
 
 // 按访客固定带有界负载（和出口组同一个实现）：一个访客自己占了大头时，超过「该分的 × 1.25」的连接落到别的路径上；

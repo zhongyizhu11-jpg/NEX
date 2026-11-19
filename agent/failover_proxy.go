@@ -22,7 +22,7 @@ type failoverProxy struct {
 	activeIndex    int
 	roundRobinNext int
 	// wrrCurrent 是「按权重」的平滑加权轮询计数；slowStartAt 是每条路径从挂掉恢复的时刻，
-	// 之后 routeSlowStartWindow 内按比例慢慢加量（route_group_balance.go）。
+	// 之后 lbcore.DefaultSlowStart.Window（60 秒）内按比例慢慢加量（route_group_balance.go）。
 	wrrCurrent  []int
 	slowStartAt []time.Time
 	// lbNear：「延迟优先」里哪几条算「一样快」的状态（lbcore.NearSet，route_group_balance.go）。
@@ -31,10 +31,8 @@ type failoverProxy struct {
 	lbQuality []routeQualityCache
 	// 在途：已经挑中、还在拨的连接数（A8，route_group_balance.go）。inflightGen 每换一次规格加一，
 	// 旧下标发出去的在途不再退到新下标上。
-	inflight    []int
-	inflightGen uint64
-	// 正在给 UDP 会话挑路径（pickTargetForKeyProto 里置位、挑完清掉，全程持有 p.mu）：慢启动看 UDP 那一侧。
-	pickingUDP     bool
+	inflight       []int
+	inflightGen    uint64
 	targetHealth   []bool
 	failureSince   []time.Time
 	recoveredSince []time.Time

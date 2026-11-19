@@ -569,20 +569,18 @@ func TestRouteGroupSlowStartOnHintAndUDPRecoveryAndRemap(t *testing.T) {
 	down := append([]failoverTarget(nil), proxy.spec.Targets...)
 	down[1].Down, down[1].DownReason = true, "relay down: x"
 	proxy.applyRelayHintsLocked(down)
-	if proxy.slowStartLocked(1, now) != 1 {
+	if proxy.slowStartLocked(1, now, false) != 1 {
 		t.Fatal("还没恢复不该有慢启动")
 	}
 	up := append([]failoverTarget(nil), proxy.spec.Targets...)
 	up[1].Down, up[1].DownReason = false, ""
 	proxy.applyRelayHintsLocked(up)
-	if got := proxy.slowStartLocked(1, time.Now()); got > 0.2 {
+	if got := proxy.slowStartLocked(1, time.Now(), false); got > 0.2 {
 		t.Fatalf("面板提示刚撤掉应当从一成起慢慢加量，系数 %.2f", got)
 	}
-	proxy.pickingUDP = true
-	if got := proxy.slowStartLocked(1, time.Now()); got > 0.2 {
+	if got := proxy.slowStartLocked(1, time.Now(), true); got > 0.2 {
 		t.Fatalf("面板提示撤掉，UDP 会话也慢启动，系数 %.2f", got)
 	}
-	proxy.pickingUDP = false
 
 	// UDP 那一侧自己断了又好了：只有 UDP 会话慢启动，TCP 的份额不动
 	fail, ok := []bool{true, true, false}, []bool{true, true, true}
@@ -598,14 +596,12 @@ func TestRouteGroupSlowStartOnHintAndUDPRecoveryAndRemap(t *testing.T) {
 		t.Fatal("UDP 那一侧应当恢复了")
 	}
 	recovered := now.Add(5 * time.Second)
-	if got := proxy.slowStartLocked(2, recovered.Add(time.Second)); got != 1 {
+	if got := proxy.slowStartLocked(2, recovered.Add(time.Second), false); got != 1 {
 		t.Fatalf("UDP 恢复不该压 TCP 的份额，系数 %.2f", got)
 	}
-	proxy.pickingUDP = true
-	if got := proxy.slowStartLocked(2, recovered.Add(time.Second)); got > 0.2 {
+	if got := proxy.slowStartLocked(2, recovered.Add(time.Second), true); got > 0.2 {
 		t.Fatalf("UDP 那一侧刚恢复，UDP 会话应当慢启动，系数 %.2f", got)
 	}
-	proxy.pickingUDP = false
 
 	// 换规格：前面插一条。慢启动、加权轮询的计数跟着原来那条路径到新下标上。
 	proxy.weightedPickLocked([]int{0, 1, 2})

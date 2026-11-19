@@ -30,8 +30,6 @@ lbcore/testdata/conformance 的用例卡住两边一致，这边由 lbcore_confo
 给人看的 0–100 分是同一个成本换算的（route_group.go 的 scoreLocked），不参与任何决定。
 */
 
-var routeSlowStartWindow = lbcore.DefaultSlowStart.Window
-
 func (p *failoverProxy) markSlowStartLocked(index int, now time.Time) {
 	if len(p.slowStartAt) != len(p.spec.Targets) {
 		p.slowStartAt = make([]time.Time, len(p.spec.Targets))
@@ -41,11 +39,11 @@ func (p *failoverProxy) markSlowStartLocked(index int, now time.Time) {
 	}
 }
 
-// 慢启动系数。给 UDP 会话挑（pickingUDP）而且规格两侧分开判时，看 UDP 那一侧的恢复时刻（A11）；
+// 慢启动系数。给 UDP 会话挑（udp）而且规格两侧分开判时，看 UDP 那一侧的恢复时刻（A11）；
 // 面板提示撤掉时两侧一起记，所以不用再取两者里晚的那个。
-func (p *failoverProxy) slowStartLocked(index int, now time.Time) float64 {
+func (p *failoverProxy) slowStartLocked(index int, now time.Time, udp bool) float64 {
 	marks := p.slowStartAt
-	if p.pickingUDP && p.udpSeparateLocked() {
+	if udp && p.udpSeparateLocked() {
 		marks = p.udpSide.slowStartAt
 	}
 	if index < 0 || index >= len(marks) {
@@ -208,15 +206,15 @@ func (p *failoverProxy) qualityLocked(index int, now time.Time, peak bool) lbcor
 /*
 membersLocked：把候选此刻的样子填成 lbcore.Member（按路径下标排，长度 = 路径数；只有候选那几格有意义）。
 conns / inflight 给每条候选此刻挂着的、在途的连接数：整组分时就是这条路径上的，线路里几个落地分时是同一个落地
-合起来的。strategy 决定要不要算质量（只有自动、延迟优先看）。
+合起来的。strategy 决定要不要算质量（只有自动、延迟优先看）；udp 决定慢启动看哪一侧。
 */
-func (p *failoverProxy) membersLocked(candidates []int, strategy string, now time.Time, load func(index int) (active, inflight int)) []lbcore.Member {
+func (p *failoverProxy) membersLocked(candidates []int, strategy string, now time.Time, udp bool, load func(index int) (active, inflight int)) []lbcore.Member {
 	members := make([]lbcore.Member, len(p.spec.Targets))
 	for _, index := range candidates {
 		active, inflight := load(index)
 		member := lbcore.Member{
 			Weight:   float64(p.spec.Targets[index].Weight),
-			Share:    p.slowStartLocked(index, now),
+			Share:    p.slowStartLocked(index, now, udp),
 			Active:   float64(active),
 			InFlight: float64(inflight),
 		}
@@ -285,12 +283,12 @@ spreadPickLocked：整组按 strategy 在候选里挑一条。hashKey 是访客�
 
 按访客固定时每条路径的标识见 rendezvousKeyLocked。
 */
-func (p *failoverProxy) spreadPickLocked(strategy string, candidates []int, hashKey string) int {
+func (p *failoverProxy) spreadPickLocked(strategy string, candidates []int, hashKey string, udp bool) int {
 	if len(candidates) == 0 {
 		return -1
 	}
 	now := time.Now()
-	members := p.membersLocked(candidates, strategy, now, p.pathLoadLocked)
+	members := p.membersLocked(candidates, strategy, now, udp, p.pathLoadLocked)
 	var keys []string
 	if strategy == lbcore.StrategyIPHash && hashKey != "" {
 		keys = make([]string, len(p.spec.Targets))
@@ -299,12 +297,13 @@ func (p *failoverProxy) spreadPickLocked(strategy string, candidates []int, hash
 		}
 	}
 	state := p.spreadStateLocked(members, candidates, strategy == lbcore.StrategyWeighted)
-	options := lbcore.Options{}
-	if strategy == lbcore.StrategyLatency {
-		// 门槛是规格的 LatencyMarginMs（GOST 出口组带面板「检测与切换」里的那个数），和 NEX 出口组一样留组 1 分钟。
-		options.Near = lbcore.NearPolicy{Margin: p.latencyMarginLocked(), Hold: lbcore.DefaultNearHold}
-	}
-	return lbcore.Pick(strategy, state, members, keys, candidates, hashKey, now, p.randLocked(), options)
+	return lbcore.Pick(strategy, state, members, keys, candidates, hashKey, now, p.randLocked(), p.pickOptionsLocked())
+}
+
+// pickOptionsLocked：整组分、线路里几个落地分都用这一份（F5：线路里以前传空的，门槛永远 50ms、不驻留）。
+// 延迟优先的门槛是规格的 LatencyMarginMs（GOST 出口组带面板「检测与切换」里的那个数），和 NEX 出口组一样留组 1 分钟。
+func (p *failoverProxy) pickOptionsLocked() lbcore.Options {
+	return lbcore.Options{Near: lbcore.NearPolicy{Margin: p.latencyMarginLocked(), Hold: lbcore.DefaultNearHold}}
 }
 
 // ---- 在途计数（A8，见 failover_pick.go 的 pickReserved） ----
