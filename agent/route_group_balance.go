@@ -17,7 +17,7 @@ lbcore/testdata/conformance 的用例卡住两边一致，这边由 lbcore_confo
 	Weight       路径的权重（≤ 0 不分新连接，除非所有路径都是 0）
 	Share        慢启动：刚从挂掉恢复的路径 60 秒内从 10% 慢慢加到满份
 	Active       这条路径上挂着的连接；InFlight 已经挑中、还在拨的（A8）
-	Latency      自动：探测耗时（和比它慢的真实拨号）的 peak EWMA 读数 + 面板给的下游延迟；
+	Latency      自动：探测耗时（和比它慢的真实拨号）加上面板给的下游延迟，整个喂进 peak EWMA 的读数；
 	             延迟优先：探测延迟的指数平均 + 下游延迟
 	Jitter、Loss 探测窗口（最近 10 分钟）的抖动（「比最低延迟高出多少」的 90 分位，见 routeProbeJitter）、丢包
 	Success      最近 10 分钟真实连接的拨通率（不到 5 次不算）
@@ -59,7 +59,9 @@ func (p *failoverProxy) slowStartLocked(index int, now time.Time) float64 {
 const routePeakSamples = 8
 
 /*
-peakLatencyLocked：这条路径延迟的 peak EWMA 读数（毫秒，0 = 还没探通过）。
+peakLatencyLocked：这条路径整链延迟的 peak EWMA 读数（毫秒，0 = 还没探通过）。整链 = 本机量到的那一段 +
+面板给的下游延迟（ExtraLatencyMs），样本喂进去的就是这个和（lbcore.PeakEWMA 两次样本之间停在最近一个样本上，
+读数和下游延迟不会一个落一个不落，排名不会在一个探测间隔里翻）。
 
 样本是最近几次探通的探测耗时，加上最近几次真实拨号里**比当时读数慢**的那些。真实拨号只到拨号地址（第一跳），
 快的拨号说明不了整条路快；但它慢了就是这条路此刻真的慢（握手包丢了、对端忙不过来），而且它比 5 秒一次的探测
@@ -68,9 +70,10 @@ peakLatencyLocked：这条路径延迟的 peak EWMA 读数（毫秒，0 = 还没
 每次现算（不另存状态）：样本都带着时刻，按时间先后过一遍就是那个读数；规格换了、路径挪了位置也不用搬。
 */
 func (p *failoverProxy) peakLatencyLocked(index int, now time.Time) float64 {
-	if index < 0 || index >= len(p.stats) || p.stats[index] == nil {
+	if index < 0 || index >= len(p.stats) || index >= len(p.spec.Targets) || p.stats[index] == nil {
 		return 0
 	}
+	extra := float64(p.spec.Targets[index].ExtraLatencyMs)
 	stats := p.stats[index]
 	probes := stats.samples
 	if len(probes) > routePeakSamples {
@@ -85,13 +88,15 @@ func (p *failoverProxy) peakLatencyLocked(index int, now time.Time) float64 {
 		if len(dials) == 0 || (len(probes) > 0 && !probes[0].at.After(dials[0].at)) {
 			if sample := probes[0]; sample.ok {
 				// 不到 1 毫秒按 1 算（和 latencyEwmaMs 一样）：0 留给「还没探通过」。
-				peak.Observe(maxFloat(1, float64(sample.latencyMs)), sample.at, 0)
+				peak.Observe(maxFloat(1, float64(sample.latencyMs))+extra, sample.at, 0)
 			}
 			probes = probes[1:]
 			continue
 		}
-		if sample := dials[0]; sample.ok && float64(sample.ms) > peak.Value(sample.at, 0) && peak.Value(sample.at, 0) > 0 {
-			peak.Observe(float64(sample.ms), sample.at, 0)
+		if sample := dials[0]; sample.ok {
+			if current, chain := peak.Value(sample.at, 0), float64(sample.ms)+extra; current > 0 && chain > current {
+				peak.Observe(chain, sample.at, 0)
+			}
 		}
 		dials = dials[1:]
 	}
@@ -165,8 +170,8 @@ func (p *failoverProxy) probeJitterLocked(index int) float64 {
 const routeSuccessMinDials = 5
 
 /*
-qualityLocked：这条路径有多好（lbcore.Quality）。peak 为 true 时延迟取 peak EWMA 的读数（自动），
-否则取指数平均（延迟优先要按毫秒门槛比）。本机探出了延迟才加面板给的下游延迟 ExtraLatencyMs
+qualityLocked：这条路径有多好（lbcore.Quality）。peak 为 true 时延迟取整链的 peak EWMA 读数（自动），
+否则取指数平均（延迟优先要按毫秒门槛比）。两种都是本机探出了延迟才加面板给的下游延迟 ExtraLatencyMs
 （和整链评分一个口径：没探出就是不知道，不能靠下游那几段凑一个数）。
 */
 func (p *failoverProxy) qualityLocked(index int, now time.Time, peak bool) lbcore.Quality {
@@ -179,10 +184,9 @@ func (p *failoverProxy) qualityLocked(index int, now time.Time, peak bool) lbcor
 		quality.Latency = p.peakLatencyLocked(index, now)
 	}
 	if quality.Latency <= 0 {
-		quality.Latency = p.plainLatencyLocked(index)
-	}
-	if quality.Latency > 0 {
-		quality.Latency += float64(target.ExtraLatencyMs)
+		if plain := p.plainLatencyLocked(index); plain > 0 {
+			quality.Latency = plain + float64(target.ExtraLatencyMs)
+		}
 	}
 	if index < len(p.stats) && p.stats[index] != nil {
 		quality.Jitter = p.probeJitterLocked(index)
