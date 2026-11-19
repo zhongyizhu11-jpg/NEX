@@ -101,7 +101,7 @@ type routeHopStats struct {
 }
 
 /*
-stats（2.2.260 起换了算法）：
+statsAt（2.2.260 起换了算法）。now 是零值时不做过期判断（测试里手搭的状态，见 stats）：
 
 	· 抖动：以前是「相邻两次成功的差的平均」—— 一次 1000ms 的重发就拉高几十毫秒。现在真实流量为主时用内核算的 RTT
 	  波动（各次的中位数）；主动探测为主时用「比这条路最低延迟高出多少」的 90 分位（排队造成的那部分，偶尔一个尖峰
@@ -112,11 +112,6 @@ stats（2.2.260 起换了算法）：
 	  现在超过 routeHopPassiveLossStale 没有新样本就不算它，由主动探测的结果接手；流量还在而且干净时，
 	  它本来就按 0.7 的系数每次扫描往下掉，二十来秒归零。
 */
-func (s *routeHopProbeState) stats() routeHopStats {
-	return s.statsAt(time.Time{})
-}
-
-// statsAt：now 是零值时不做过期判断（测试里手搭的状态）。
 func (s *routeHopProbeState) statsAt(now time.Time) routeHopStats {
 	var oks, passiveVars, activeOks []float64
 	failures := 0
@@ -680,16 +675,6 @@ func (r *routeHopProbeRunner) ack(pending *routeHopPendingReport, ok bool) {
 	if pending.full {
 		r.lastSnapshot = pending.at
 	}
-}
-
-// report 取一份并当场算作发成功了（测试里用；真正的循环走 pendingReport + ack）。
-func (r *routeHopProbeRunner) report() []map[string]any {
-	pending := r.pendingReport()
-	if pending == nil {
-		return nil
-	}
-	r.ack(pending, true)
-	return pending.results
 }
 
 func (r *routeHopProbeRunner) idle() bool {

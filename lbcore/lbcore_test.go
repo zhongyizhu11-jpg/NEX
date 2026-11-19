@@ -354,30 +354,57 @@ func TestPeakEWMAJumpsUpAndDecaysBack(t *testing.T) {
 	if got := peak.Value(now.Add(time.Second), 0); got != 2000 {
 		t.Fatalf("慢样本应该立刻跳上去：%v", got)
 	}
-	// 没有新样本：读数按 e^(-t/10s) 落回去。
-	if got := peak.Value(now.Add(11*time.Second), 0); math.Abs(got-2000*math.Exp(-1)) > 1e-6 {
-		t.Fatalf("10 秒后应该剩 1/e：%v", got)
+	// 尖峰之后来了正常的样本（探测不停）：读数从尖峰按 e^(-t/10s) 往新样本落，不会停在尖峰上饿死这个成员。
+	peak.Observe(20, now.Add(6*time.Second), 0)
+	if got := peak.Value(now.Add(6*time.Second), 0); got != 2000 {
+		t.Fatalf("新样本来的那一刻读数不跳：%v", got)
 	}
-	if got := peak.Value(now.Add(61*time.Second), 0); got > 6 {
+	if got, want := peak.Value(now.Add(16*time.Second), 0), 20+1980*math.Exp(-1); math.Abs(got-want) > 1e-6 {
+		t.Fatalf("10 秒后尖峰应该剩 1/e：%v，应该是 %v", got, want)
+	}
+	for at := 11 * time.Second; at <= 61*time.Second; at += 5 * time.Second {
+		peak.Observe(20, now.Add(at), 0)
+	}
+	if got := peak.Value(now.Add(61*time.Second), 0); got > 30 {
 		t.Fatalf("一分钟后尖峰应该基本落完：%v", got)
-	}
-	// 来了正常的样本：按间隔加权往样本靠，隔得越久靠得越多。
-	peak.Observe(20, now.Add(11*time.Second), 0)
-	want := 2000*math.Exp(-1) + 20*(1-math.Exp(-1))
-	if got := peak.Value(now.Add(11*time.Second), 0); math.Abs(got-want) > 1e-6 {
-		t.Fatalf("应该是 %v，实际 %v", want, got)
 	}
 	// 自定义时间常数；不合法的样本不记；Reset 清空。
 	var fast PeakEWMA
 	fast.Observe(100, now, time.Second)
 	fast.Observe(0, now, time.Second)
 	fast.Observe(-5, now, time.Second)
-	if got := fast.Value(now.Add(time.Second), time.Second); math.Abs(got-100*math.Exp(-1)) > 1e-6 {
+	fast.Observe(40, now, time.Second)
+	if got := fast.Value(now.Add(time.Second), time.Second); math.Abs(got-(40+60*math.Exp(-1))) > 1e-6 {
 		t.Fatalf("%v", got)
 	}
 	fast.Reset()
 	if fast.Value(now, 0) != 0 {
 		t.Fatal("Reset 之后是 0")
+	}
+}
+
+/*
+两次样本之间读数不往 0 落，停在最近一个样本上。以前没有新样本时读数按 e^(-t/10s) 落向 0，而调用方加上去的
+那几项（下游延迟、出口到目标的延迟、抖动）不落 —— 一个探测间隔里排名会翻：100ms 的 A 对 10ms + 下游 60ms 的 B，
+刚探完 B 快，4.9 秒后 A 落到 61、B 落到 66，A 反而「更快」。
+*/
+func TestPeakEWMAIsFlatBetweenSamples(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	var a, b PeakEWMA
+	for i := 0; i < 4; i++ {
+		at := now.Add(time.Duration(i) * 5 * time.Second)
+		a.Observe(100, at, 0)
+		b.Observe(10, at, 0)
+	}
+	last := now.Add(15 * time.Second)
+	for elapsed := time.Duration(0); elapsed < 5*time.Second; elapsed += 100 * time.Millisecond {
+		va, vb := a.Value(last.Add(elapsed), 0), b.Value(last.Add(elapsed), 0)
+		if va != 100 || vb != 10 {
+			t.Fatalf("平稳时两次样本之间读数应该不动：+%v A=%v B=%v", elapsed, va, vb)
+		}
+		if va <= vb+60 {
+			t.Fatalf("+%v：100ms 的 A 不该比 10+60ms 的 B 快（A=%v B=%v+60）", elapsed, va, vb)
+		}
 	}
 }
 
@@ -494,6 +521,17 @@ func TestNearSetEscapesWhenTheSetIsEmpty(t *testing.T) {
 	}
 	if near := set.Select(nil, members, []int{1}, policy, now.Add(time.Second)); len(near) != 1 || near[0] != 1 {
 		t.Fatalf("快的那个没了，慢的也得用：%v", near)
+	}
+}
+
+// 成员表换了顺序：状态跟着成员走，新成员从头来。
+func TestNearSetRemapFollowsMembers(t *testing.T) {
+	var set NearSet
+	now := time.Unix(1_800_000_000, 0)
+	set.Select(nil, latencies(20, 300), []int{0, 1}, NearPolicy{Margin: 50, Hold: time.Minute}, now)
+	moved := set.Remap([]int{1, -1, 0})
+	if moved.Contains(0) || moved.Contains(1) || !moved.Contains(2) {
+		t.Fatalf("慢的挪到 0、新成员在 1、快的挪到 2：%v %v %v", moved.Contains(0), moved.Contains(1), moved.Contains(2))
 	}
 }
 

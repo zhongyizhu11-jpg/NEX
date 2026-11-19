@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 /*
@@ -222,5 +223,39 @@ func TestLineSpreadSwitchClosesOldLineLandings(t *testing.T) {
 		if left != want {
 			t.Fatalf("%s：切走后线路 0 上应当还剩 %d 条连接，剩 %d", mode, want, left)
 		}
+	}
+}
+
+// F5：线路里几个落地按「延迟优先」分时，门槛和驻留跟整组分一样（规格的 LatencyMarginMs、进组留 1 分钟）。
+// 以前传的是空的选项：门槛永远是默认的 50ms、不驻留。
+func TestLineSpreadLatencyUsesTheGroupMarginAndHold(t *testing.T) {
+	targets := lineSpreadTargets("latency")
+	spec := failoverSpec{Strategy: "fallback", Targets: targets, LatencyMarginMs: 100}
+	proxy := routeTestProxy(spec)
+	at := time.Now()
+	for i, ms := range []int{20, 90, 400} {
+		proxy.stats[i].recordProbe(true, ms, at)
+	}
+	// 挑中就记在途、不退（像一批长连接）：组里按自动的成本分，快的分得多、慢的也分得到。
+	reserved := func(times int) map[int]int {
+		seen := map[int]int{}
+		for i := 0; i < times; i++ {
+			_, index, _ := proxy.pickReserved("198.51.100.1", nil, false)
+			seen[index]++
+		}
+		return seen
+	}
+	seen := reserved(60)
+	if seen[0] == 0 || seen[1] == 0 || seen[2] != 0 {
+		t.Fatalf("门槛 100ms：20ms 和 90ms 的落地一样快、都分到，400ms 的不分：%v", seen)
+	}
+	// B 慢到门槛外：刚进组不到 1 分钟，先留着。
+	proxy.mu.Lock()
+	proxy.stats[1] = &routeTargetStats{}
+	proxy.stats[1].recordProbe(true, 300, at)
+	proxy.mu.Unlock()
+	reserved(10)
+	if !proxy.lbNear.Contains(1) || proxy.lbNear.Contains(2) {
+		t.Fatal("进组至少留 1 分钟，驻留期里不该被请出去")
 	}
 }

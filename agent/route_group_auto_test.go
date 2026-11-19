@@ -125,7 +125,7 @@ func TestRouteAutoCostIsBoundedAndNeutralForUnknowns(t *testing.T) {
 	p.stats[1].recordProbe(true, 5000, at)
 	p.spec.Targets[1].LoadPct = 100
 	all := []int{0, 1, 2}
-	members := p.membersLocked(all, lbcore.StrategyAuto, at, p.pathLoadLocked)
+	members := p.membersLocked(all, lbcore.StrategyAuto, at, false, p.pathLoadLocked)
 	fast, _ := lbcore.Cost(members, all, 0, false)
 	slow, _ := lbcore.Cost(members, all, 1, false)
 	unknown, _ := lbcore.Cost(members, all, 2, false)
@@ -149,13 +149,14 @@ func TestRoutePeakLatencyFollowsSlowSamples(t *testing.T) {
 	if got := p.peakLatencyLocked(0, steady); math.Abs(got-20) > 0.01 {
 		t.Fatalf("平稳时就是那个延迟：%v", got)
 	}
-	// 一次 900ms 的探测：立刻跳上去；10 秒后没有新样本，落到 1/e。
+	// 一次 900ms 的探测：立刻跳上去；之后的探测回到 20ms，尖峰按 e^(-t/10s) 往 20 落（不会钉在 900 上饿死这条路）。
 	p.stats[0].recordProbe(true, 900, at.Add(15*time.Second))
 	if got := p.peakLatencyLocked(0, at.Add(15*time.Second)); got != 900 {
 		t.Fatalf("慢样本应该立刻跳上去：%v", got)
 	}
-	if got := p.peakLatencyLocked(0, at.Add(25*time.Second)); math.Abs(got-900/math.E) > 1 {
-		t.Fatalf("10 秒后应该落到 1/e：%v", got)
+	p.stats[0].recordProbe(true, 20, at.Add(20*time.Second))
+	if got, want := p.peakLatencyLocked(0, at.Add(30*time.Second)), 20+880/math.E; math.Abs(got-want) > 1 {
+		t.Fatalf("正常样本来了 10 秒后尖峰应该剩 1/e：%v，应该是 %v", got, want)
 	}
 	// 真实拨号：比读数慢的算（这条路此刻真的慢），比读数快的不算（拨号只到第一跳，说明不了整条路快）。
 	q := balanceTestProxy("auto", 1, 1)
@@ -171,6 +172,30 @@ func TestRoutePeakLatencyFollowsSlowSamples(t *testing.T) {
 	}
 	if q.peakLatencyLocked(1, at) != 0 {
 		t.Fatal("没探通过的是 0")
+	}
+}
+
+/*
+F1：自动的排名在一个探测间隔里不翻。延迟 = 探测的 peak EWMA + 面板给的下游延迟；以前 peak EWMA 两次探测之间
+往 0 落、下游延迟不落：A 本机 100ms、下游 0 对 B 本机 10ms、下游 60ms，刚探完 B（70）快，4.9 秒后
+A 落到 61、B 落到 66，A 反而排前面 —— 每个间隔里翻一次。
+*/
+func TestRouteAutoRankingIsStableBetweenProbes(t *testing.T) {
+	p := balanceTestProxy("auto", 1, 1)
+	p.ensureHealthStateLocked()
+	p.spec.Targets[1].ExtraLatencyMs = 60
+	at := time.Now().Add(-time.Minute)
+	for i := 0; i < 4; i++ {
+		p.stats[0].recordProbe(true, 100, at.Add(time.Duration(i)*5*time.Second))
+		p.stats[1].recordProbe(true, 10, at.Add(time.Duration(i)*5*time.Second))
+	}
+	last := at.Add(15 * time.Second)
+	for elapsed := time.Duration(0); elapsed < 5*time.Second; elapsed += 100 * time.Millisecond {
+		now := last.Add(elapsed)
+		a, b := p.qualityLocked(0, now, true).Latency, p.qualityLocked(1, now, true).Latency
+		if math.Abs(a-100) > 1e-9 || math.Abs(b-70) > 1e-9 {
+			t.Fatalf("+%v：整链延迟应该稳在 A=100、B=70，实际 A=%v B=%v", elapsed, a, b)
+		}
 	}
 }
 

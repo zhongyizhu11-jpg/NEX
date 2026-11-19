@@ -28,6 +28,18 @@ func jitterDuration(interval time.Duration) time.Duration {
 	return time.Duration(float64(interval) * (0.9 + 0.2*mathrand.Float64()))
 }
 
+/*
+固定节拍（规格带 ProbeIntervalSeconds，出口组）的两个数：
+
+  - 「持续够久」那道门槛按 fixedTickGatePercent% 算。面板把它算成「间隔 × (次数 − 1)」，而每轮间隔有 ±10% 的抖动 ——
+    不留余量的话，抖到 0.9 倍的那一半时候「2 秒一轮、2 次判坏」差 0.2 秒不够数，要多等一整轮。
+  - 一轮探得再慢（黑洞的出口要等满超时），到下一轮也至少歇间隔的 1/fixedTickMinRestDivisor。
+*/
+const (
+	fixedTickGatePercent    = 85
+	fixedTickMinRestDivisor = 4
+)
+
 func (p *failoverProxy) healthInterval() time.Duration {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -53,7 +65,7 @@ func (p *failoverProxy) nextHealthDelay(started time.Time) time.Duration {
 		return interval
 	}
 	delay := interval - time.Since(started)
-	if floor := interval / 4; delay < floor {
+	if floor := interval / fixedTickMinRestDivisor; delay < floor {
 		delay = floor
 	}
 	return delay
@@ -114,22 +126,18 @@ func (p *failoverProxy) checkHealth() {
 	if p.spec.ProbeTimeoutMs > 0 {
 		probeTimeout = time.Duration(p.spec.ProbeTimeoutMs) * time.Millisecond
 	}
-	/*
-		带探测节奏的规格（固定节拍）：「持续够久」那道门槛留 15% 的余量。面板把它算成「间隔 × (次数 − 1)」，而每轮
-		间隔有 ±10% 的抖动 —— 不留余量的话，抖到 0.9 倍的那一半时候「2 秒一轮、2 次判坏」差 0.2 秒不够数，要多等一整轮
-		（真实 gost 上实测：进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
-	*/
+	// 带探测节奏的规格（固定节拍）：「持续够久」那道门槛留余量（fixedTickGatePercent；真实 gost 上实测不留的话
+	// 进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
 	fixedTick := p.spec.ProbeIntervalSeconds > 0
 	gateReached := func(elapsed time.Duration, seconds int) bool {
 		gate := time.Duration(seconds) * time.Second
 		if fixedTick {
-			gate = gate * 85 / 100
+			gate = gate * fixedTickGatePercent / 100
 		}
 		return elapsed >= gate
 	}
 	// 出口组：直接探出口机，经出口复核判坏过的还要经出口探通（failover_exit_group.go）。
 	exitGroup := p.exitGroupLocked()
-	throughFailed := append([]bool(nil), p.exitThroughFailed...)
 	p.mu.RUnlock()
 	if len(targets) == 0 {
 		return
@@ -150,7 +158,7 @@ func (p *failoverProxy) checkHealth() {
 	var latencies []int
 	var results []bool
 	if exitGroup {
-		latencies, results = probeExitGroupTargets(protocol, targets, probeTimeout, throughFailed)
+		latencies, results = probeExitGroupTargets(protocol, targets, probeTimeout)
 	} else {
 		latencies, results = probeFailoverTargetsWithin(protocol, targets, probeTimeout)
 	}
@@ -161,6 +169,9 @@ func (p *failoverProxy) checkHealth() {
 		return
 	}
 	p.ensureHealthStateLocked()
+	if exitGroup {
+		p.gateExitThroughLocked(results)
+	}
 	if udpVerdicts != nil {
 		udpResults, udpLatencyMs := mergeUDPSide(results, latencies, udpVerdicts, udpLatencies)
 		p.applyUDPProbeLocked(udpResults, udpLatencyMs, now)
@@ -183,11 +194,11 @@ func (p *failoverProxy) checkHealth() {
 			if !p.targetHealth[i] {
 				if p.recoveredSince[i].IsZero() {
 					p.recoveredSince[i] = now
-				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) {
+				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) && p.exitThroughRecoveredLocked(i) {
 					p.targetHealth[i] = true
 					p.recoveredSince[i] = time.Time{}
 					if i < len(p.exitThroughFailed) {
-						p.exitThroughFailed[i] = false
+						p.exitThroughFailed[i], p.exitThroughOKs[i] = false, 0
 					}
 					if !p.spec.NoSlowStart {
 						p.markSlowStartLocked(i, now)
@@ -210,13 +221,25 @@ func (p *failoverProxy) checkHealth() {
 			// 两道门槛都要过：探测连续失败够 FailureThreshold 次，而且持续异常够 FailoverSeconds 秒。
 			// 只看探测这本账（A2）：真实连接拨通了不清它 —— 拨得通第一跳不等于探测目标还活着。
 			if p.statsLocked(i).probeFailures >= failureThreshold && gateReached(now.Sub(p.failureSince[i]), failoverSeconds) {
-				p.targetHealth[i] = false
-				p.failureSince[i] = time.Time{}
-				logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=health check", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
-				p.recordTargetEventLocked(i, "unhealthy", "health check")
-				p.onTargetDownLocked(i, true, false)
+				p.markUnhealthyLocked(i, "health check", "")
 			}
 		}
 	}
 	p.updateFallbackActiveLocked("health check")
+}
+
+/*
+markUnhealthyLocked 把这条路径判坏（TCP 那一侧 / 不分侧的主健康）：记日志和事件，按切换方式关它上面的连接、
+UDP 会话（onTargetDownLocked）。四个地方判坏都走这里：探测（checkHealth）、真实拨号连着失败（markDialFailure）、
+「回之前就关」（markEarlyClose）、出口组经出口复核（confirmExitEarlyClose）。detail 接在日志的原因后面（可以空）。
+重新选路（updateFallbackActiveLocked）由调用方做：探测一轮判坏几条只选一次。调用方持有 p.mu、下标有效。
+*/
+func (p *failoverProxy) markUnhealthyLocked(index int, reason string, detail string) {
+	target := p.spec.Targets[index]
+	p.targetHealth[index] = false
+	p.failureSince[index] = time.Time{}
+	p.recoveredSince[index] = time.Time{}
+	logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s%s", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, detail)
+	p.recordTargetEventLocked(index, "unhealthy", reason)
+	p.onTargetDownLocked(index, true, false)
 }

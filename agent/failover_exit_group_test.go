@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -51,11 +53,12 @@ func TestExitGroupKeepsTwentyTargetsWithAlignedHostIDs(t *testing.T) {
 	if len(spec.BalanceReport.HostIDs) != 23 {
 		t.Fatal("不能改调用方的规格")
 	}
-	// 面板给的两边长度就对不上：整个不要，不拿错位的数据报
+	// 面板给的两边长度就对不上：主机号整个不要（不拿错位的数据报），但它还是出口组（F8）——
+	// 以前连 BalanceReport 一起扔掉，出口组悄悄变成了线路组（拨本机端口永远成功，健康就不会判了）。
 	broken := exitGroupSpec("round_robin", 3)
 	broken.BalanceReport.HostIDs = broken.BalanceReport.HostIDs[:2]
-	if normalizeFailoverSpec(broken).BalanceReport != nil {
-		t.Fatal("主机号数量对不上时不该留着上报")
+	if report := normalizeFailoverSpec(broken).BalanceReport; report == nil || report.TunnelID != 7 || report.HostIDs != nil {
+		t.Fatalf("主机号数量对不上时还是出口组、只是不带主机号：%+v", report)
 	}
 	// 手动指定指到被截掉的那一条：当没指定
 	pinned := exitGroupSpec("round_robin", 23)
@@ -63,6 +66,28 @@ func TestExitGroupKeepsTwentyTargetsWithAlignedHostIDs(t *testing.T) {
 	pinned.PinnedIndex = &index
 	if normalizeFailoverSpec(pinned).PinnedIndex != nil {
 		t.Fatal("指定的下标超出留下的目标时应当清掉")
+	}
+}
+
+// F8：清掉不合法的目标时，手动指定跟着它指的那一条走（以前下标不动，指到了别的出口上，或者被当成越界清掉）。
+func TestNormalizeFailoverSpecRemapsPinWhenDroppingTargets(t *testing.T) {
+	spec := exitGroupSpec("round_robin", 4)
+	spec.Targets[0].TargetIP = ""
+	pin := 2
+	spec.PinnedIndex = &pin
+	spec.PinnedUntil = 1234
+	clean := normalizeFailoverSpec(spec)
+	if clean.PinnedIndex == nil || *clean.PinnedIndex != 1 || clean.Targets[1].TargetPort != 47002 || clean.PinnedUntil != 1234 {
+		t.Fatalf("指定的是端口 47002 那台：前面清掉一条以后应当指到下标 1，拿到 %v", clean.PinnedIndex)
+	}
+	if *spec.PinnedIndex != 2 {
+		t.Fatal("不能改调用方的规格")
+	}
+	// 指定的那一条自己被清掉了：当没指定。
+	pin = 0
+	spec.PinnedIndex = &pin
+	if clean := normalizeFailoverSpec(spec); clean.PinnedIndex != nil || clean.PinnedUntil != 0 {
+		t.Fatalf("指定的那一条不合法、被清掉了：应当当没指定，拿到 %v", clean.PinnedIndex)
 	}
 }
 
@@ -235,42 +260,77 @@ func TestExitGroupIPHashSpreadsByWeightAndSticks(t *testing.T) {
 	}
 }
 
-// 一条真实连接「出口没回就被关」：经出口复核，又被关才判坏；判坏以后直接探通不够，要经出口探通才放回。
-func TestExitGroupEarlyCloseIsConfirmedThroughTheExit(t *testing.T) {
-	oldProbe := failoverThroughProbe
-	t.Cleanup(func() { failoverThroughProbe = oldProbe })
-	verdicts := make(chan exitThroughVerdict, 8)
+// fakeExitThrough 换掉经出口的探测：每台出口（按本机端口）各给各的结论，记下每次等了多久。
+type fakeExitThrough struct {
+	mu       sync.Mutex
+	verdicts map[int]exitThroughVerdict
+	calls    map[int]int
+	windows  []time.Duration
+}
+
+func installFakeExitThrough(t *testing.T) *fakeExitThrough {
+	t.Helper()
+	fake := &fakeExitThrough{verdicts: map[int]exitThroughVerdict{}, calls: map[int]int{}}
+	old := failoverThroughProbe
+	t.Cleanup(func() { failoverThroughProbe = old })
 	failoverThroughProbe = func(target failoverTarget, window time.Duration) (exitThroughVerdict, int) {
-		return <-verdicts, 0
-	}
-	waitConfirm := func(proxy *failoverProxy, index int) {
-		t.Helper()
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			proxy.mu.RLock()
-			running := proxy.exitConfirming[index]
-			proxy.mu.RUnlock()
-			if !running {
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		fake.calls[target.TargetPort]++
+		fake.windows = append(fake.windows, window)
+		verdict, ok := fake.verdicts[target.TargetPort]
+		if !ok {
+			verdict = exitThroughOK
 		}
-		t.Fatal("复核没有结束")
+		return verdict, 0
 	}
+	return fake
+}
+
+func (f *fakeExitThrough) set(port int, verdict exitThroughVerdict) {
+	f.mu.Lock()
+	f.verdicts[port] = verdict
+	f.mu.Unlock()
+}
+
+func (f *fakeExitThrough) callsTo(port int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[port]
+}
+
+// 等这台出口上经出口的探测（复核 / 恢复）跑完。
+func waitExitThrough(t *testing.T, proxy *failoverProxy, index int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		proxy.mu.RLock()
+		running := proxy.exitConfirming[index]
+		proxy.mu.RUnlock()
+		if !running {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("经出口的探测没有结束")
+}
+
+// 一条真实连接「出口没回就被关」：经出口复核，又被关、而别的出口照样开着，才判坏。
+func TestExitGroupEarlyCloseIsConfirmedThroughTheExit(t *testing.T) {
+	fake := installFakeExitThrough(t)
 	proxy := routeTestProxy(exitGroupSpec("round_robin", 3))
 	proxy.done = make(chan struct{})
 
 	// 复核时连接一直开着：是那条连接自己的事，不动这台出口（只有一个访客也一样）
-	verdicts <- exitThroughOK
 	proxy.markEarlyClose(1, "203.0.113.9")
-	waitConfirm(proxy, 1)
+	waitExitThrough(t, proxy, 1)
 	if !proxy.healthyLocked(1) {
 		t.Fatal("复核通过了不该判坏")
 	}
-	// 复核又被关：当场判坏，不用凑两个访客、也不用等够次数
-	verdicts <- exitThroughClosed
+	// 复核又被关、别的出口经出口照样开着：当场判坏，不用凑两个访客、也不用等够次数
+	fake.set(47001, exitThroughClosed)
 	proxy.markEarlyClose(1, "203.0.113.9")
-	waitConfirm(proxy, 1)
+	waitExitThrough(t, proxy, 1)
 	proxy.mu.RLock()
 	down, through := !proxy.healthyLocked(1), proxy.exitThroughFailed[1]
 	proxy.mu.RUnlock()
@@ -278,9 +338,9 @@ func TestExitGroupEarlyCloseIsConfirmedThroughTheExit(t *testing.T) {
 		t.Fatalf("复核又被关应当判坏并记下是经出口判的：down=%v through=%v", down, through)
 	}
 	// 本机端口连不上（前面的 gost 在重载）：说不准，不判
-	verdicts <- exitThroughUnknown
+	fake.set(47002, exitThroughUnknown)
 	proxy.markEarlyClose(2, "203.0.113.9")
-	waitConfirm(proxy, 2)
+	waitExitThrough(t, proxy, 2)
 	if !proxy.healthyLocked(2) {
 		t.Fatal("本机端口连不上不该算出口的账")
 	}
@@ -293,15 +353,147 @@ func TestExitGroupEarlyCloseIsConfirmedThroughTheExit(t *testing.T) {
 	}
 }
 
-func TestExitGroupProbeRoundUsesDirectProbeAndThroughGate(t *testing.T) {
-	oldProbe := failoverThroughProbe
-	t.Cleanup(func() { failoverThroughProbe = oldProbe })
-	through := map[int]exitThroughVerdict{}
-	calls := map[int]int{}
-	failoverThroughProbe = func(target failoverTarget, window time.Duration) (exitThroughVerdict, int) {
-		calls[target.TargetPort]++
-		return through[target.TargetPort], 0
+/*
+F7：目标自己会很快关掉不说话的连接（经哪台出口都一样被关）时，「经出口复核被关」说明不了出口有问题。
+
+经出口的探测连的是入口机上那台出口的本机 gost 端口：relay 的应答（出口拨目标成没成）由入口的 gost 自己读掉
+（connector 带 nodelay，读到失败就关本机这条连接），探测这一头只看得到「连接被关了」—— 目标拒绝和目标连上以后
+自己关，看起来一模一样。所以拿别的出口比：别的能用的出口经出口也全被关，是目标的脾气，谁都不判，而且一阵子里
+不再拿这个信号判；没有别的出口可比时也不判（不拿它摘掉最后一台）。以前每台出口撞上一次就判坏一台，最后全判坏。
+*/
+func TestExitGroupSilentCloseOnEveryExitBlamesNoExit(t *testing.T) {
+	fake := installFakeExitThrough(t)
+	for port := 47000; port < 47003; port++ {
+		fake.set(port, exitThroughClosed)
 	}
+	proxy := routeTestProxy(exitGroupSpec("round_robin", 3))
+	proxy.done = make(chan struct{})
+	proxy.markEarlyClose(1, "203.0.113.9")
+	waitExitThrough(t, proxy, 1)
+	for i := 0; i < 3; i++ {
+		if !proxy.healthyLocked(i) {
+			t.Fatalf("每台出口经出口都被关（目标自己关不说话的连接）：不该判坏出口 %d", i)
+		}
+	}
+	if fake.callsTo(47000) != 1 || fake.callsTo(47002) != 1 {
+		t.Fatalf("应当拿别的出口各探一次比：%v", fake.calls)
+	}
+	// 之后一阵子里「回之前就关」不再触发复核（不再往目标开不说话的连接）
+	proxy.markEarlyClose(2, "203.0.113.9")
+	waitExitThrough(t, proxy, 2)
+	if fake.callsTo(47002) != 1 || !proxy.healthyLocked(2) {
+		t.Fatalf("目标会关不说话的连接时不该再复核、更不该判坏：%v", fake.calls)
+	}
+
+	// 只剩一台能用：没有别的可比，不拿这个信号摘掉最后一台
+	alone := routeTestProxy(exitGroupSpec("round_robin", 3))
+	alone.done = make(chan struct{})
+	alone.mu.Lock()
+	alone.targetHealth[0], alone.targetHealth[2] = false, false
+	alone.mu.Unlock()
+	alone.markEarlyClose(1, "203.0.113.9")
+	waitExitThrough(t, alone, 1)
+	if !alone.healthyLocked(1) {
+		t.Fatal("最后一台能用的出口不该被「经出口被关」摘掉")
+	}
+}
+
+/*
+F2：判坏以后的恢复要经出口等满 exitConfirmWindow，还要连着通 exitThroughRecoverOKs 次。
+
+在中转后面的出口（ViaRelay）入口机探不到，直接探测每轮算通；它死了以后 gost 要拨满 3 秒（dialTimeout）才关
+本机这条连接。以前恢复时经出口只等 1.5 秒 —— 死出口每次都「探通」，判坏后几秒就被放回来、再撞一次，
+每一轮都让真实连接卡 3 秒。出口到目标是 SYN 黑洞时（出口机本身探得通）也一样。
+*/
+func TestExitGroupDeadExitBehindRelayIsNotReadmitted(t *testing.T) {
+	fake := installFakeExitThrough(t)
+	var dead atomic.Bool
+	dead.Store(true)
+	old := failoverThroughProbe
+	failoverThroughProbe = func(target failoverTarget, window time.Duration) (exitThroughVerdict, int) {
+		verdict, ms := old(target, window)
+		// 死出口：gost 拨满 3 秒才关本机连接，等得比这短就以为还开着。
+		if target.TargetPort == 47001 && dead.Load() && window >= 3*time.Second {
+			return exitThroughClosed, 0
+		}
+		return verdict, ms
+	}
+	spec := exitGroupSpec("round_robin", 3)
+	spec.RecoverSeconds = 1
+	for i := range spec.Targets {
+		spec.Targets[i].ViaRelay = true
+	}
+	proxy := routeTestProxy(spec)
+	proxy.done = make(chan struct{})
+	proxy.mu.Lock()
+	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	proxy.mu.Unlock()
+	round := func() {
+		proxy.checkHealth()
+		waitExitThrough(t, proxy, 1)
+		time.Sleep(50 * time.Millisecond)
+	}
+	for deadline := time.Now().Add(2500 * time.Millisecond); time.Now().Before(deadline); {
+		round()
+		if proxy.healthyLocked(1) {
+			t.Fatal("中转后面的死出口被放回来了（经出口等得比 gost 的拨号超时短）")
+		}
+	}
+	fake.mu.Lock()
+	for _, window := range fake.windows {
+		if window < exitConfirmWindow {
+			fake.mu.Unlock()
+			t.Fatalf("恢复时经出口只等了 %v，比 gost 的拨号超时 + 余量（%v）短", window, exitConfirmWindow)
+		}
+	}
+	fake.mu.Unlock()
+	// 出口活过来了：要连着经出口探通 exitThroughRecoverOKs 次（再过恢复门槛）才放回
+	dead.Store(false)
+	start := fake.callsTo(47001)
+	for deadline := time.Now().Add(5 * time.Second); !proxy.healthyLocked(1); {
+		if time.Now().After(deadline) {
+			t.Fatal("出口活过来了却一直没放回")
+		}
+		round()
+	}
+	if got := fake.callsTo(47001) - start; got < exitThroughRecoverOKs {
+		t.Fatalf("经出口只探通了 %d 次就放回了，要连着 %d 次", got, exitThroughRecoverOKs)
+	}
+	proxy.mu.RLock()
+	defer proxy.mu.RUnlock()
+	if proxy.exitThroughFailed[1] {
+		t.Fatal("放回以后不该再要求经出口探")
+	}
+}
+
+// 判坏过的出口恢复时目标变成了「谁的不说话的连接都关」：别的出口经出口也被关，不拿这个扣着它（F7）。
+func TestExitGroupRecoversWhenEveryExitCloses(t *testing.T) {
+	fake := installFakeExitThrough(t)
+	for port := 47000; port < 47003; port++ {
+		fake.set(port, exitThroughClosed)
+	}
+	spec := exitGroupSpec("round_robin", 3)
+	spec.RecoverSeconds = 1
+	for i := range spec.Targets {
+		spec.Targets[i].ViaRelay = true
+	}
+	proxy := routeTestProxy(spec)
+	proxy.done = make(chan struct{})
+	proxy.mu.Lock()
+	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	proxy.mu.Unlock()
+	for deadline := time.Now().Add(5 * time.Second); !proxy.healthyLocked(1); {
+		if time.Now().After(deadline) {
+			t.Fatal("每台出口经出口都被关（目标的脾气）：判坏过的那台不该一直扣着")
+		}
+		proxy.checkHealth()
+		waitExitThrough(t, proxy, 1)
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestExitGroupProbeRoundProbesTheExitMachines(t *testing.T) {
+	fake := installFakeExitThrough(t)
 	// 出口机的「隧道监听」：两台在听，一台没有
 	listen := func() (net.Listener, int) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -322,18 +514,14 @@ func TestExitGroupProbeRoundUsesDirectProbeAndThroughGate(t *testing.T) {
 		// 在中转后面的出口：不探，算通
 		{TargetIP: "127.0.0.1", TargetPort: 47003, ProbeIP: "198.51.100.9", ProbePort: 1, ViaRelay: true},
 	}
-	through[47001] = exitThroughClosed
-	_, results := probeExitGroupTargets("tcp", targets, time.Second, []bool{false, true, true, false})
-	if !results[0] || results[1] || results[2] || !results[3] {
-		t.Fatalf("结果应当是 通 / 经出口不通 / 出口机不通 / 中转后面算通，拿到 %v", results)
+	_, results := probeExitGroupTargets("tcp", targets, time.Second)
+	if !results[0] || !results[1] || results[2] || !results[3] {
+		t.Fatalf("结果应当是 通 / 通 / 出口机不通 / 中转后面算通，拿到 %v", results)
 	}
-	if calls[47000] != 0 || calls[47001] != 1 || calls[47002] != 0 || calls[47003] != 0 {
-		t.Fatalf("只有经出口判坏过、而且出口机本身探得通的才经出口探：%v", calls)
-	}
-	// 经出口探通了才算通
-	through[47001] = exitThroughOK
-	if _, results := probeExitGroupTargets("tcp", targets, time.Second, []bool{false, true, false, false}); !results[1] {
-		t.Fatal("经出口探通了应当算通")
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 0 {
+		t.Fatalf("一轮探测本身不经出口探（往目标开不说话的连接）：%v", fake.calls)
 	}
 }
 
@@ -565,7 +753,7 @@ func TestExitGroupRelayProbeCatchesFrozenExit(t *testing.T) {
 		{TargetIP: "127.0.0.1", TargetPort: 47103, ProbeIP: "127.0.0.1", ProbePort: port(frozen)},
 	}
 	started := time.Now()
-	_, results := probeExitGroupTargets("tcp", targets, 300*time.Millisecond, nil)
+	_, results := probeExitGroupTargets("tcp", targets, 300*time.Millisecond)
 	if !results[0] || results[1] || results[2] || !results[3] {
 		t.Fatalf("活着的通、卡死的不通、不带 ProbeRelay 的照旧：%v", results)
 	}

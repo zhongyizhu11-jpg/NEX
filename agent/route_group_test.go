@@ -667,3 +667,35 @@ func TestPersistedSpecDropsRelayHints(t *testing.T) {
 		t.Fatal("去提示不该改到原来的规格")
 	}
 }
+
+/*
+F6：择优比的成本不能「拿苹果比梨」。拨通率只有在走的那条有（真实连接只拨它），候选一条真实拨号都没有、拨通率是
+「不知道」（不罚）。以前在走的那条 2/20 次拨号失败就按 1 + 10 × 10% = 2 倍罚，120ms 被算成 240ms，
+慢的候选（150ms）反而「好得多」，被切过去。现在只有两边都有拨号样本时才比拨通率。
+*/
+func TestPreferFastestComparesDialSuccessOnlyLikeForLike(t *testing.T) {
+	proxy := routeTestProxy(failoverSpec{Strategy: "fallback", AutoFailback: true, Targets: routeTargets(2), PreferFastest: true, ScoreHoldSeconds: 30})
+	at := time.Now().Add(-5 * time.Minute)
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	for i := 0; i < 40; i++ {
+		proxy.statsLocked(0).recordProbe(true, 120, at.Add(time.Duration(i)*5*time.Second))
+		proxy.statsLocked(1).recordProbe(true, 150, at.Add(time.Duration(i)*5*time.Second))
+	}
+	now := time.Now()
+	for i := 0; i < 20; i++ {
+		proxy.statsLocked(0).recordDial(i >= 2, 5, now.Add(-time.Duration(i)*time.Second), 120)
+	}
+	start := time.Now()
+	if got := fastestAfterHold(proxy, start); got != -1 {
+		t.Fatalf("在走的 120ms（偶尔拨不通）不该输给一条没拨过的 150ms：%d", got)
+	}
+	// 两边都有拨号样本时照比：候选拨号全通、在走的那条一半拨不通，差得远，该换。
+	for i := 0; i < 20; i++ {
+		proxy.statsLocked(0).recordDial(i%2 == 0, 5, now, 120)
+		proxy.statsLocked(1).recordDial(true, 5, now, 150)
+	}
+	if got := fastestAfterHold(proxy, start.Add(time.Second)); got != 1 {
+		t.Fatalf("两边都有拨号样本、在走的一半拨不通：应该换到候选，拿到 %d", got)
+	}
+}

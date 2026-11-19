@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -30,6 +31,8 @@ const (
 	failoverEarlyReplayLimit   = 64 * 1024
 	failoverEarlyMaxRetries    = 3
 	failoverEarlyReadChunkSize = 32 * 1024
+	// 「回之前就关」最多记几个不同的访客：判坏只要两个，多记几个只为日志里看得出是不是很多人。
+	failoverEarlyMaxVisitors = 16
 )
 
 type failoverEarlyChunk struct {
@@ -50,7 +53,7 @@ const (
 	failoverGuardFailed failoverGuardOutcome = iota
 	// 交给平常的双向转发：返回的连接和下标就是最终在用的。
 	failoverGuardRelay
-	// 上游回了东西以后自己断了：回的东西已经原样交给客户端、收了尾，调用方只管关客户端。
+	// 上游回了东西以后自己断了：回的东西已经原样交给客户端、收了尾，调用方只管关客户端（返回的下标是交付的那条）。
 	failoverGuardDelivered
 )
 
@@ -119,7 +122,7 @@ func (p *failoverProxy) guardedStart(client net.Conn, upstream net.Conn, index i
 	deliver := func(first []byte) (net.Conn, int, failoverGuardOutcome) {
 		p.markEarlyReply(index)
 		stopClientReader(nil)
-		return nil, -1, failoverDeliverAndClose(client, upstream, first)
+		return nil, index, failoverDeliverAndClose(client, upstream, first)
 	}
 	// 写上游失败：取回那次挂着的读。读到了东西就不能换路。
 	pendingReply := func() []byte {
@@ -134,7 +137,7 @@ func (p *failoverProxy) guardedStart(client net.Conn, upstream net.Conn, index i
 	retries := 0
 	// 上游一个字节没回就断了：换路。成功以后重新挂上读。
 	reroute := func() bool {
-		next, nextIndex, ok := p.earlyReroute(upstream, index, visitor, attempted, replay, replayOK, retries)
+		next, nextIndex, ok := p.earlyReroute(client, upstream, index, visitor, attempted, replay, replayOK, retries)
 		if !ok {
 			return false
 		}
@@ -218,15 +221,9 @@ func (p *failoverProxy) guardedStart(client net.Conn, upstream net.Conn, index i
 					// 写不进去：上游已经断了。先看它断之前回没回东西 —— 回了就交给客户端、收尾，绝不重发；
 					// 一个字节没回才按「回之前就关」换路。
 					if data := pendingReply(); len(data) > 0 {
-						if chunk.err != nil {
-							clientDone = true
-						}
 						return deliver(data)
 					}
 					if !reroute() {
-						if chunk.err != nil {
-							clientDone = true
-						}
 						stopClientReader(nil)
 						return nil, -1, failoverGuardFailed
 					}
@@ -316,39 +313,31 @@ func (p *failoverProxy) readUpstreamFirst(upstream net.Conn) chan failoverEarlyC
 	return out
 }
 
-// earlyReroute 关掉回之前就断了的上游，记一笔，换下一条路径并重发留着的数据。
-func (p *failoverProxy) earlyReroute(upstream net.Conn, index int, visitor string, attempted map[int]bool, replay []byte, replayOK bool, retries int) (net.Conn, int, bool) {
+/*
+earlyReroute 关掉回之前就断了的上游，记一笔，换下一条路径并重发留着的数据。拨新路径和建连接时一样记在途
+（dialNextPathReserved），拨通后这条客户端连接当场记到新路径名下（以前要等保护期结束才挪，最长 8 秒里还算在
+旧路径头上；拨的时候也不记在途，一批一起换路的连接互相看不见）。
+*/
+func (p *failoverProxy) earlyReroute(client net.Conn, upstream net.Conn, index int, visitor string, attempted map[int]bool, replay []byte, replayOK bool, retries int) (net.Conn, int, bool) {
 	_ = upstream.Close()
 	p.markEarlyClose(index, visitor)
 	attempted[index] = true
 	if !replayOK || retries >= failoverEarlyMaxRetries {
 		return nil, -1, false
 	}
-	for {
-		target, nextIndex := p.pickTargetForKey(visitor, attempted)
-		if nextIndex < 0 {
-			return nil, -1, false
+	next, nextIndex, reservation, err := p.dialNextPathReserved(visitor, attempted, func(conn net.Conn) error {
+		if len(replay) == 0 {
+			return nil
 		}
-		next, _, dialedIndex, err := p.dialFailoverPath(visitor, target, nextIndex, attempted, failoverProxyDialTimeout)
-		if err != nil {
-			p.mu.RLock()
-			exhausted := len(attempted) >= len(p.spec.Targets)
-			p.mu.RUnlock()
-			if exhausted {
-				return nil, -1, false
-			}
-			continue
-		}
-		if len(replay) > 0 {
-			if _, err := next.Write(replay); err != nil {
-				_ = next.Close()
-				attempted[dialedIndex] = true
-				continue
-			}
-		}
-		logf("failover early close rerouted rule=%d source=%d from=%d to=%d replay=%dB", p.ruleID, p.sourcePort, index, dialedIndex, len(replay))
-		return next, dialedIndex, true
+		_, err := conn.Write(replay)
+		return err
+	})
+	if err != nil {
+		return nil, -1, false
 	}
+	p.moveConnReserved(client, nextIndex, reservation)
+	logf("failover early close rerouted rule=%d source=%d from=%d to=%d replay=%dB", p.ruleID, p.sourcePort, index, nextIndex, len(replay))
+	return next, nextIndex, true
 }
 
 // markEarlyClose 记一次「回之前就关」；连续满次数、而且至少两个不同访客，才把路径标成异常。
@@ -367,7 +356,7 @@ func (p *failoverProxy) markEarlyClose(index int, visitor string) {
 	state.count++
 	// 访客地址不知道（没带 PROXY 头，看到的只是前面那个转发工具的 127.0.0.1）时不记：所有人都是同一个
 	// 「访客」，凑不出两个不同的，也就永远不会靠这个判坏 —— 宁可不判，也不假装知道是两个人。
-	if failoverVisitorKnown(visitor) && len(state.visitors) < 16 {
+	if failoverVisitorKnown(visitor) && len(state.visitors) < failoverEarlyMaxVisitors {
 		state.visitors[visitor] = true
 	}
 	// 出口组：不靠「两个不同访客」，经这台出口再探一次，又被关才判坏（failover_exit_group.go）。
@@ -383,14 +372,8 @@ func (p *failoverProxy) markEarlyClose(index int, visitor string) {
 	if !p.targetHealth[index] || count < threshold || distinct < 2 {
 		return
 	}
-	target := p.spec.Targets[index]
 	reason := "upstream closed before reply"
-	p.targetHealth[index] = false
-	p.failureSince[index] = time.Now()
-	p.recoveredSince[index] = time.Time{}
-	logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s closes=%d visitors=%d", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, count, distinct)
-	p.recordTargetEventLocked(index, "unhealthy", reason)
-	p.onTargetDownLocked(index, true, false)
+	p.markUnhealthyLocked(index, reason, fmt.Sprintf(" closes=%d visitors=%d", count, distinct))
 	p.updateFallbackActiveLocked(reason)
 }
 

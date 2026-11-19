@@ -100,7 +100,7 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 		}
 		return active, inflight
 	}
-	members := p.membersLocked(reps, head.Spread, now, landingLoad)
+	members := p.membersLocked(reps, head.Spread, now, udp, landingLoad)
 	// 落地没有各自的权重：都按一样大（代表那条路径的权重是整组分时用的，这里不看）。
 	for _, index := range reps {
 		members[index].Weight = 1
@@ -112,7 +112,7 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 		keys = p.lineLandingKeysLocked()
 	}
 	state := p.spreadStateLocked(members, reps, false)
-	best := lbcore.Pick(head.Spread, state, members, keys, reps, key, now, p.randLocked(), lbcore.Options{})
+	best := lbcore.Pick(head.Spread, state, members, keys, reps, key, now, p.randLocked(), p.pickOptionsLocked())
 	switch {
 	case head.Spread == lbcore.StrategyLeastLoad:
 		// 有落地挂了：成本不比挑中的高的几个里，优先和挂掉那个同出口 IP 的（2.2.251）。

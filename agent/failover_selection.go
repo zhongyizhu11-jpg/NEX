@@ -19,7 +19,8 @@ func (p *failoverProxy) resetFastestLocked() {
 自动择优（主备里开了「整链最优」）：有没有一条明显更好、而且已经领先够久的。返回它的下标，没有是 -1。
 
 「明显更好」和「等多久」是 lbcore.SwitchPolicy（lbcore/switch.go）：比的是只看质量的成本
-（整链延迟 + 抖动，乘丢包 / 拨号失败系数，除以沿途主机负载留下的余量），差出延迟优先的那个门槛
+（整链延迟 + 抖动，乘丢包 / 拨号失败系数 —— 拨号失败只在每条都有拨号样本时才算，见 comparableCostsLocked ——
+除以沿途主机负载留下的余量），差出延迟优先的那个门槛
 （switchPolicyLocked：规格的 LatencyMarginMs，默认 50ms）而且快出两成才算；同一条要连着领先 ScoreHoldSeconds，
 好得多的（不到一半、差出两个门槛）10 秒就换。切过去以后的来回由抖动抑制压（holdingLocked）。
 
@@ -49,15 +50,19 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 		p.resetFastestLocked()
 		return -1
 	}
-	activeCost := p.qualityCostLocked(p.activeIndex, now)
-	best, bestCost := -1, 0.0
+	contenders := []int{p.activeIndex}
 	for index := range p.spec.Targets {
-		if index == p.activeIndex || !p.healthyLocked(index) || (tiered && *p.spec.Targets[index].Tier != bestTier) {
-			continue
+		if index != p.activeIndex && p.healthyLocked(index) && (!tiered || *p.spec.Targets[index].Tier == bestTier) {
+			contenders = append(contenders, index)
 		}
+	}
+	costs := p.comparableCostsLocked(contenders, now)
+	activeCost := costs[0]
+	best, bestCost := -1, 0.0
+	for i := 1; i < len(contenders); i++ {
 		// 还没量出延迟的（成本 0）不能当成「好得不得了」。
-		if cost := p.qualityCostLocked(index, now); cost > 0 && (best < 0 || cost < bestCost) {
-			best, bestCost = index, cost
+		if c := costs[i]; c > 0 && (best < 0 || c < bestCost) {
+			best, bestCost = contenders[i], c
 		}
 	}
 	policy := p.switchPolicyLocked()
@@ -72,9 +77,26 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 	return best
 }
 
-// qualityCostLocked 这条出站只看质量的成本（lbcore.QualityCost，整链延迟，见 qualityLocked）；不知道延迟是 0。
-func (p *failoverProxy) qualityCostLocked(index int, now time.Time) float64 {
-	return lbcore.QualityCost(p.qualityLocked(index, now, false))
+/*
+comparableCostsLocked：indices 这几条只看质量的成本（lbcore.QualityCost，整链延迟，见 qualityLocked；不知道延迟是 0），
+拿来互相比的。拨通率只在每条都有拨号样本时才算进去（F6）：真实连接只拨在走的那条，别的几条的拨通率几乎总是
+「不知道」（不罚），在走的那条偶尔拨不通一次就被罚、别的永远不被罚 —— 比下来总像是「该换了」。
+*/
+func (p *failoverProxy) comparableCostsLocked(indices []int, now time.Time) []float64 {
+	qualities := make([]lbcore.Quality, len(indices))
+	allDialed := true
+	for i, index := range indices {
+		qualities[i] = p.qualityLocked(index, now, false)
+		allDialed = allDialed && qualities[i].Success > 0
+	}
+	costs := make([]float64, len(indices))
+	for i, quality := range qualities {
+		if !allDialed {
+			quality.Success = 0
+		}
+		costs[i] = lbcore.QualityCost(quality)
+	}
+	return costs
 }
 
 // latencyMarginLocked「一样快」的门槛（毫秒）：延迟优先圈组、择优比成本、同出口 IP 算平手都用它。
@@ -389,12 +411,7 @@ func (p *failoverProxy) markDialFailure(index int, reason string, startedAt time
 			logVerbosef("failover target dial failed rule=%d source=%d index=%d target=%s:%d failures=%d/%d counted=%v", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, stats.dialFailures, p.spec.FailureThreshold, counted)
 			return
 		}
-		p.targetHealth[index] = false
-		p.failureSince[index] = now
-		p.recoveredSince[index] = time.Time{}
-		logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason)
-		p.recordTargetEventLocked(index, "unhealthy", reason)
-		p.onTargetDownLocked(index, true, false)
+		p.markUnhealthyLocked(index, reason, "")
 	}
 	p.updateFallbackActiveLocked(reason)
 }

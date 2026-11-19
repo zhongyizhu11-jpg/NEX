@@ -70,26 +70,22 @@ func (s *failoverUDPSide) ensure(n int) {
 	}
 }
 
-// carried 按「还是同一条出站」（rebuildForSpecLocked 的 oldIndex）把状态搬到新下标上；新出站从头来。
-func (s *failoverUDPSide) carried(n int, from func(i int) (int, bool)) failoverUDPSide {
-	next := failoverUDPSide{}
-	next.ensure(n)
-	for i := 0; i < n; i++ {
-		j, ok := from(i)
-		if !ok || j < 0 || j >= len(s.health) {
-			continue
-		}
-		next.health[i] = s.health[j]
-		next.failureSince[i] = s.failureSince[j]
-		next.recoveredSince[i] = s.recoveredSince[j]
-		next.lastLatencyMs[i] = s.lastLatencyMs[j]
-		if j < len(s.slowStartAt) {
-			next.slowStartAt[i] = s.slowStartAt[j]
-		}
-		if s.stats[j] != nil {
-			next.stats[i] = s.stats[j]
+// carried 按「还是同一条出站」（rebuildForSpecLocked 的 carryIndex）把状态搬到新下标上；新出站从头来（健康）。
+func (s *failoverUDPSide) carried(from []int) failoverUDPSide {
+	next := failoverUDPSide{
+		health:         carried(s.health, from),
+		failureSince:   carried(s.failureSince, from),
+		recoveredSince: carried(s.recoveredSince, from),
+		lastLatencyMs:  carried(s.lastLatencyMs, from),
+		stats:          carried(s.stats, from),
+		slowStartAt:    carried(s.slowStartAt, from),
+	}
+	for i, j := range from {
+		if j < 0 || j >= len(s.health) {
+			next.health[i] = true
 		}
 	}
+	next.ensure(len(from))
 	return next
 }
 
@@ -127,7 +123,7 @@ func (p *failoverProxy) usableLocked(index int, udp bool) bool {
 
 TCP 在走的那条 UDP 也通就用它；不通就按人工指定 > 时段表 > 数组顺序找第一条候选，同样够格时优先和 TCP 在走的
 那条同出口 IP 的（escapePickLocked，2.2.251）—— 同一个访客的 TCP 和 UDP 在对端看到的是同一个来源。不调
-preferredLocked：它里面的自动择优会改 fastestCandidate / fastestSince，选路的热路径不该动评估状态。
+preferredLocked：它里面的自动择优会改 challenger（谁在领先、从什么时候起），选路的热路径不该动评估状态。
 */
 func (p *failoverProxy) udpFallbackIndexLocked(candidates []int, exclude map[int]bool) int {
 	inCandidates := func(index int) bool {

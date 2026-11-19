@@ -75,11 +75,10 @@ func (p *failoverProxy) escapePickLocked(order []int, failed int, explicit int, 
 	}
 	// 成本差得太多就不算平手（不管开没开整链最优）。一条都量不出时都算。
 	now := time.Now()
-	costs := make([]float64, len(equals))
+	costs := p.comparableCostsLocked(equals, now)
 	best := 0.0
-	for position, index := range equals {
-		costs[position] = p.qualityCostLocked(index, now)
-		if cost := costs[position]; cost > 0 && (best == 0 || cost < best) {
+	for _, cost := range costs {
+		if cost > 0 && (best == 0 || cost < best) {
 			best = cost
 		}
 	}
