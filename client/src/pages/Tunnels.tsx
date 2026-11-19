@@ -5298,7 +5298,7 @@ function TunnelsContent() {
               </Select>
               {form.exitGroupId ? (
                 <p className="text-xs text-muted-foreground">
-                  出口组固定为隧道出口；策略：{BALANCE_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)].label}。
+                  分配方式：{BALANCE_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)].label}（在出口组里改），第一台是主出口。
                 </p>
               ) : (
                 <p data-fx-help="" className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>

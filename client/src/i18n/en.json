@@ -2186,6 +2186,7 @@
  "分配并管理资源": "Assign and manage resources",
  "分配或购买套餐后会显示在这里。": "The distribution or purchase of the plan will show up here.",
  "分配方式": "Distribution",
+ "分配方式：{0}（在出口组里改），第一台是主出口。": "Distribution: {0} (change it in the exit group); the first one is the primary exit.",
  "分配记录里没有国家": "The allocation record has no country",
  "分钟": "Minute",
  "切到这台": "Use this one",
