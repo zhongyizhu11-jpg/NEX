@@ -282,11 +282,24 @@ async function holdEntryGroupDdns(
 }
 
 async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: DdnsSettings, options: ForwardGroupFailoverOptions = {}, lines: ForwardGroupLineHook | null = null) {
+  const classified = await classifyEntryGroupMembers(group, options, lines);
+  const plan = await planEntryGroupPublish(group, classified, lines);
+  return publishEntryGroupDefaultDdns(group, ddnsSettings, options, lines, classified, plan);
+}
+
+/*
+  入口组这一轮分三步（以前是一个 450 行的函数）：
+    1. classifyEntryGroupMembers —— 逐个成员判：进不进解析、为什么（健康、外部观察、恢复观察、抖动抑制、流量暂停、
+       SNI 没就绪），成员行上的故障 / 恢复计时顺手写回；
+    2. planEntryGroupPublish —— 排下一次到点重评、分线路时只留默认线路上的成员、带宽聚合排序、状态消息里的那几句；
+    3. publishEntryGroupDefaultDdns —— 等结果 / 没域名 / 全挂保留 / 自动解析关着 / DDNS 没开 / 已是最新 / 真的写服务商。
+  每一步只读前一步交出来的东西。
+*/
+async function classifyEntryGroupMembers(group: LineGroupRow, options: ForwardGroupFailoverOptions, lines: ForwardGroupLineHook | null) {
   const db = await getDb();
   const members = sortedMembers(group, true) as any[];
   const sniTemplates = await sniTemplatesUsingEntryGroup(Number(group.id));
   const recordType = normalizeForwardGroupRecordType(group.recordType);
-  const forceSync = !!options.forceSync;
   const previousValue = String(group.lastDdnsValue || "").trim();
   const previousValues = new Set(previousValue.split(",").map((value) => value.trim()).filter(Boolean));
   const values: string[] = [];
@@ -536,6 +549,76 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     recoveringCount = 0;
     flapHeldCount = 0;
   }
+  return {
+    members,
+    recordType,
+    previousValue,
+    previousValues,
+    values,
+    excluded,
+    quotaExcludedValues,
+    healthWindows,
+    initialHealthSnapshot,
+    initialAgentLivenessSnapshot,
+    agentLivenessByMemberId,
+    pendingHealthExpiryCandidates,
+    activeMemberId: activeMemberId as number | null,
+    chinaHealthEnabled,
+    chinaHealthNow,
+    failoverMs,
+    recoverMs,
+    pendingAgentHealth,
+    trafficExcludedMemberCount,
+    valuedMemberCount,
+    recoveringCount,
+    flapHeldCount,
+    externalKeptCount,
+    externalDownCount,
+    peerObservedCount,
+    autoChanges,
+    aggregationMembers,
+  };
+}
+
+type EntryGroupClassification = Awaited<ReturnType<typeof classifyEntryGroupMembers>>;
+
+/** 评估期间成员的存活状态、健康上报有没有变过：变了这一轮的结论作废、重排一次。 */
+async function entryAgentSelectionStillCurrent(group: LineGroupRow, c: EntryGroupClassification) {
+  const { members, initialAgentLivenessSnapshot, initialHealthSnapshot, chinaHealthEnabled } = c;
+  const db = await getDb();
+  for (const member of members) {
+    const initial = initialAgentLivenessSnapshot.get(Number(member.id));
+    if (initial === undefined) continue;
+    const current = await resolveMemberAgentLiveness(member);
+    if (current.signature !== initial) return false;
+  }
+  if (initialHealthSnapshot.size > 0) {
+    const currentRows = await db.select({
+      id: forwardGroupMembers.id,
+      healthStatus: forwardGroupMembers.healthStatus,
+      lastCheckedAt: forwardGroupMembers.lastCheckedAt,
+      chinaHealthStatus: forwardGroupMembers.chinaHealthStatus,
+      chinaHealthCheckedAt: forwardGroupMembers.chinaHealthCheckedAt,
+    }).from(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, Number(group.id)));
+    const seen = new Set<number>();
+    for (const member of currentRows as any[]) {
+      const memberId = Number(member.id);
+      const initial = initialHealthSnapshot.get(memberId);
+      if (initial === undefined) continue;
+      seen.add(memberId);
+      const currentStatus = chinaHealthEnabled ? member.chinaHealthStatus : member.healthStatus;
+      const currentCheckedAt = chinaHealthEnabled ? member.chinaHealthCheckedAt : member.lastCheckedAt;
+      const current = `${String(currentStatus || "unknown")}:${toDate(currentCheckedAt)?.getTime() || 0}`;
+      if (current !== initial) return false;
+    }
+    if (seen.size !== initialHealthSnapshot.size) return false;
+  }
+  return true;
+}
+
+async function planEntryGroupPublish(group: LineGroupRow, c: EntryGroupClassification, lines: ForwardGroupLineHook | null) {
+  let { activeMemberId } = c;
+  const { members, recordType, previousValues, values, excluded, healthWindows, agentLivenessByMemberId, pendingHealthExpiryCandidates, chinaHealthEnabled, chinaHealthNow, failoverMs, recoverMs, recoveringCount, flapHeldCount, externalKeptCount, externalDownCount, aggregationMembers } = c;
   const healthWindowRecheckAt = nextForwardGroupHealthRecheckAt({
     members: healthWindows,
     failoverMs,
@@ -561,39 +644,6 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     .filter((value): value is number => typeof value === "number" && value > chinaHealthNow)
     .sort((left, right) => left - right)[0] ?? null;
   forwardGroupHealthRechecks.replace(Number(group.id), nextHealthRecheckAt);
-  const agentSelectionStillCurrent = async () => {
-    for (const member of members) {
-      const initial = initialAgentLivenessSnapshot.get(Number(member.id));
-      if (initial === undefined) continue;
-      const current = await resolveMemberAgentLiveness(member);
-      if (current.signature !== initial) return false;
-    }
-    if (initialHealthSnapshot.size > 0) {
-      const currentRows = await db.select({
-        id: forwardGroupMembers.id,
-        healthStatus: forwardGroupMembers.healthStatus,
-        lastCheckedAt: forwardGroupMembers.lastCheckedAt,
-        chinaHealthStatus: forwardGroupMembers.chinaHealthStatus,
-        chinaHealthCheckedAt: forwardGroupMembers.chinaHealthCheckedAt,
-      }).from(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, Number(group.id)));
-      const seen = new Set<number>();
-      for (const member of currentRows as any[]) {
-        const memberId = Number(member.id);
-        const initial = initialHealthSnapshot.get(memberId);
-        if (initial === undefined) continue;
-        seen.add(memberId);
-        const currentStatus = chinaHealthEnabled ? member.chinaHealthStatus : member.healthStatus;
-        const currentCheckedAt = chinaHealthEnabled ? member.chinaHealthCheckedAt : member.lastCheckedAt;
-        const current = `${String(currentStatus || "unknown")}:${toDate(currentCheckedAt)?.getTime() || 0}`;
-        if (current !== initial) return false;
-      }
-      if (seen.size !== initialHealthSnapshot.size) return false;
-    }
-    return true;
-  };
-  const retryChangedAgentSelection = () => {
-    scheduleForwardGroupFailover([Number(group.id)]);
-  };
   if (lines) {
     // 分线路：默认线路只发布默认线路上的成员（server/ddnsLinePlanner.ts 规则 1），其余交给线路发布。
     const kept = aggregationMembers.filter((entry) => lines.defaultMemberIds.has(entry.memberId));
@@ -623,6 +673,25 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
   const nextValues = new Set(publishedValues);
   const removedValues = Array.from(previousValues).filter((value) => !nextValues.has(value));
 
+  return { activeMemberId, aggregation, publishedValues, aggregationSuffix, joined, excludedSuffix, holdSuffix, addedValues, removedValues };
+}
+
+async function publishEntryGroupDefaultDdns(
+  group: LineGroupRow,
+  ddnsSettings: DdnsSettings,
+  options: ForwardGroupFailoverOptions,
+  lines: ForwardGroupLineHook | null,
+  c: EntryGroupClassification,
+  plan: Awaited<ReturnType<typeof planEntryGroupPublish>>,
+) {
+  const db = await getDb();
+  const forceSync = !!options.forceSync;
+  const { recordType, previousValue, previousValues, values, excluded, quotaExcludedValues, pendingAgentHealth, trafficExcludedMemberCount, valuedMemberCount, externalKeptCount, externalDownCount, peerObservedCount, autoChanges } = c;
+  const { activeMemberId, aggregation, publishedValues, aggregationSuffix, joined, excludedSuffix, holdSuffix, addedValues, removedValues } = plan;
+  const agentSelectionStillCurrent = () => entryAgentSelectionStillCurrent(group, c);
+  const retryChangedAgentSelection = () => {
+    scheduleForwardGroupFailover([Number(group.id)]);
+  };
   // A newly enabled health check starts with unknown member states.  Keep the
   // current provider record intact until at least one probe result arrives;
   // once results exist, only healthy members are emitted above.
