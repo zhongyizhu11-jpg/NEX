@@ -502,6 +502,7 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 	p.lbQuality = carried(p.lbQuality, from)
 	p.pickCounts = carried(p.pickCounts, from)
 	p.exitThroughFailed = carried(p.exitThroughFailed, from)
+	p.exitThroughOKs = carried(p.exitThroughOKs, from)
 	// 按权重的计数还没用过（nil）就保持没用过：spreadStateLocked 第一次用时才开、才随机转起步位置。
 	if p.wrrCurrent != nil {
 		p.wrrCurrent = carried(p.wrrCurrent, from)

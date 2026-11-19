@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -383,14 +384,8 @@ func (p *failoverProxy) markEarlyClose(index int, visitor string) {
 	if !p.targetHealth[index] || count < threshold || distinct < 2 {
 		return
 	}
-	target := p.spec.Targets[index]
 	reason := "upstream closed before reply"
-	p.targetHealth[index] = false
-	p.failureSince[index] = time.Now()
-	p.recoveredSince[index] = time.Time{}
-	logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s closes=%d visitors=%d", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, count, distinct)
-	p.recordTargetEventLocked(index, "unhealthy", reason)
-	p.onTargetDownLocked(index, true, false)
+	p.markUnhealthyLocked(index, reason, fmt.Sprintf(" closes=%d visitors=%d", count, distinct))
 	p.updateFallbackActiveLocked(reason)
 }
 

@@ -94,10 +94,15 @@ type failoverProxy struct {
 	// 客户端连进来以后有没有拨通一条路径（最近 10 分钟，按分钟一格）：线路详情「入站」那一段。
 	inbound routeInboundWindow
 	// 出口组（failover_exit_group.go）：每条目标累计分到多少条新连接 / 新 UDP 会话（报给面板的 picks）；
-	// 经出口复核过「连上就被关」的目标（exitThroughFailed，恢复要经出口探得通）和正在复核的（exitConfirming）。
-	pickCounts        []uint64
-	exitThroughFailed []bool
-	exitConfirming    []bool
+	// 经出口复核过「连上就被关」的目标（exitThroughFailed，恢复要经出口连着探通 exitThroughOKs 次）和正在经出口探的
+	// （exitConfirming：复核或恢复，每台同一时刻一个）。exitSilentCloseUntil：目标自己会关不说话的连接，这之前不拿
+	// 「经出口被关」判出口；exitOthersOpenAt：上一次拿别的出口比、有一台照样开着的时刻（exitCloseIsOwnFault）。
+	pickCounts           []uint64
+	exitThroughFailed    []bool
+	exitThroughOKs       []int
+	exitConfirming       []bool
+	exitSilentCloseUntil time.Time
+	exitOthersOpenAt     time.Time
 	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
 	// 访客是谁」，建会话时拿它当哈希键（route_group_udp_visitor.go）。
 	udpVisitors map[netip.AddrPort]failoverUDPVisitor
@@ -565,6 +570,9 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	}
 	if len(p.exitConfirming) != n {
 		p.exitConfirming = make([]bool, n)
+	}
+	if len(p.exitThroughOKs) != n {
+		p.exitThroughOKs = make([]int, n)
 	}
 	p.udpSide.ensure(n)
 	if p.activeIndex < 0 || p.activeIndex >= n {

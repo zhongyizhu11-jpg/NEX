@@ -27,6 +27,9 @@ import (
 // 规格里路径特别多时一下子开太多探测连接 / ping。
 const failoverProbeParallelism = 8
 
+// failoverProbeDefaultTimeout 探测默认等多久（规格没带 ProbeTimeoutMs；经出口探时拨本机 gost 端口也用它）。
+const failoverProbeDefaultTimeout = 2 * time.Second
+
 // failoverRaceDelayMin 竞速前至少等这么久（RFC 8305 建议 250 ms 左右）。路径本身往返就慢
 // （跨洲线路握手几百毫秒很正常）时按它最近一次探测耗时的两倍等，免得把健康但远的路径上
 // 的连接系统性地抢到近的路径上，打乱权重分配。

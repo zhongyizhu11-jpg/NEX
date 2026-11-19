@@ -411,12 +411,7 @@ func (p *failoverProxy) markDialFailure(index int, reason string, startedAt time
 			logVerbosef("failover target dial failed rule=%d source=%d index=%d target=%s:%d failures=%d/%d counted=%v", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, stats.dialFailures, p.spec.FailureThreshold, counted)
 			return
 		}
-		p.targetHealth[index] = false
-		p.failureSince[index] = now
-		p.recoveredSince[index] = time.Time{}
-		logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason)
-		p.recordTargetEventLocked(index, "unhealthy", reason)
-		p.onTargetDownLocked(index, true, false)
+		p.markUnhealthyLocked(index, reason, "")
 	}
 	p.updateFallbackActiveLocked(reason)
 }

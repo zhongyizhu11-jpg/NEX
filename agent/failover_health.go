@@ -129,7 +129,6 @@ func (p *failoverProxy) checkHealth() {
 	}
 	// 出口组：直接探出口机，经出口复核判坏过的还要经出口探通（failover_exit_group.go）。
 	exitGroup := p.exitGroupLocked()
-	throughFailed := append([]bool(nil), p.exitThroughFailed...)
 	p.mu.RUnlock()
 	if len(targets) == 0 {
 		return
@@ -150,7 +149,7 @@ func (p *failoverProxy) checkHealth() {
 	var latencies []int
 	var results []bool
 	if exitGroup {
-		latencies, results = probeExitGroupTargets(protocol, targets, probeTimeout, throughFailed)
+		latencies, results = probeExitGroupTargets(protocol, targets, probeTimeout)
 	} else {
 		latencies, results = probeFailoverTargetsWithin(protocol, targets, probeTimeout)
 	}
@@ -161,6 +160,9 @@ func (p *failoverProxy) checkHealth() {
 		return
 	}
 	p.ensureHealthStateLocked()
+	if exitGroup {
+		p.gateExitThroughLocked(results)
+	}
 	if udpVerdicts != nil {
 		udpResults, udpLatencyMs := mergeUDPSide(results, latencies, udpVerdicts, udpLatencies)
 		p.applyUDPProbeLocked(udpResults, udpLatencyMs, now)
@@ -183,11 +185,11 @@ func (p *failoverProxy) checkHealth() {
 			if !p.targetHealth[i] {
 				if p.recoveredSince[i].IsZero() {
 					p.recoveredSince[i] = now
-				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) {
+				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) && p.exitThroughRecoveredLocked(i) {
 					p.targetHealth[i] = true
 					p.recoveredSince[i] = time.Time{}
 					if i < len(p.exitThroughFailed) {
-						p.exitThroughFailed[i] = false
+						p.exitThroughFailed[i], p.exitThroughOKs[i] = false, 0
 					}
 					if !p.spec.NoSlowStart {
 						p.markSlowStartLocked(i, now)
@@ -210,13 +212,25 @@ func (p *failoverProxy) checkHealth() {
 			// 两道门槛都要过：探测连续失败够 FailureThreshold 次，而且持续异常够 FailoverSeconds 秒。
 			// 只看探测这本账（A2）：真实连接拨通了不清它 —— 拨得通第一跳不等于探测目标还活着。
 			if p.statsLocked(i).probeFailures >= failureThreshold && gateReached(now.Sub(p.failureSince[i]), failoverSeconds) {
-				p.targetHealth[i] = false
-				p.failureSince[i] = time.Time{}
-				logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=health check", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
-				p.recordTargetEventLocked(i, "unhealthy", "health check")
-				p.onTargetDownLocked(i, true, false)
+				p.markUnhealthyLocked(i, "health check", "")
 			}
 		}
 	}
 	p.updateFallbackActiveLocked("health check")
+}
+
+/*
+markUnhealthyLocked 把这条路径判坏（TCP 那一侧 / 不分侧的主健康）：记日志和事件，按切换方式关它上面的连接、
+UDP 会话（onTargetDownLocked）。四个地方判坏都走这里：探测（checkHealth）、真实拨号连着失败（markDialFailure）、
+「回之前就关」（markEarlyClose）、出口组经出口复核（confirmExitEarlyClose）。detail 接在日志的原因后面（可以空）。
+重新选路（updateFallbackActiveLocked）由调用方做：探测一轮判坏几条只选一次。调用方持有 p.mu、下标有效。
+*/
+func (p *failoverProxy) markUnhealthyLocked(index int, reason string, detail string) {
+	target := p.spec.Targets[index]
+	p.targetHealth[index] = false
+	p.failureSince[index] = time.Time{}
+	p.recoveredSince[index] = time.Time{}
+	logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=%s%s", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, detail)
+	p.recordTargetEventLocked(index, "unhealthy", reason)
+	p.onTargetDownLocked(index, true, false)
 }

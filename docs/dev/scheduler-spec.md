@@ -137,7 +137,9 @@
 1. 直接探出口机的隧道监听（`probeExitGroupTargets`，`agent/failover_exit_group.go:188`）。tcp / mtcp 隧道带 `probeRelay`：
    连上后发 8 个 0 字节、等 gost 断开（`failoverProbeRelay`，`:229`），进程卡死也判得出来。多跳（`viaRelay`）不探，每轮算通。
 2. 真实连接「本机 gost 端口拨通、出口一个字节没回就被关」→ 当场换下一台重发（`failover_early_close.go`），并经出口复核
-   （等 4 s，`exitConfirmWindow`，`failover_exit_group.go:74`）：又被关就当场判坏，之后恢复要经出口探通（1.5 s 窗口，`:77`）。
+   （等 4 s，`exitConfirmWindow`，`failover_exit_group.go`）：又被关、而别的能用的出口经出口照样开着就当场判坏；别的也全被关
+   （目标自己会关不说话的连接）谁都不判、5 min 里不再拿这个信号判，没有别的可比也不判（`exitCloseIsOwnFault`）。之后恢复要经出口
+   连着探通 2 次（`exitThroughRecoverOKs`，每次同样等满 4 s：多跳 / 出口到目标黑洞时 gost 要 3 s 才关本机连接）再过恢复门槛。
 3. 面板提示：出口机探规则目标的结果（`server/exitTargetHealth.ts` 的 `exitTargetExcludedHostIds`：有别的已知好的才摘）→ `Down`；
    出口到目标的中位数 → `ExtraLatencyMs`。
 
