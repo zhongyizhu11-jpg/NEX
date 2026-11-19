@@ -3054,7 +3054,28 @@ export function ForwardGroupsContent({
             */}
             {!(form.groupMode === "port" && form.entryGroupId) && (
               <div className={form.groupMode === "chain" ? "space-y-2" : "space-y-3 rounded-lg border border-border/60 p-3"}>
-                <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
+                {/* 标题和「添加成员」放一行（省一行高：3 台出口的出口组在笔记本上不用滚） */}
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
+                  {form.groupMode !== "chain" ? (
+                    <Select onValueChange={(v) => addMember(Number(v))}>
+                      <SelectTrigger aria-label="添加成员" className="w-full sm:w-64">
+                        <SelectValue placeholder={effectiveGroupType === "host" ? "添加主机成员" : "添加隧道成员"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableMemberOptions.map((item: any) => (
+                          <SelectItem key={item.id} value={String(item.id)} textValue={item.label}>
+                            {effectiveGroupType === "host" ? (
+                              <HostStatusLabel host={item.host} label={item.label} />
+                            ) : (
+                              <span>{item.label} {item.meta ? "/ " + item.meta : ""}</span>
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                </div>
                 {editingPoolId ? (
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-[var(--fx-accent)]/30 bg-[var(--fx-accent-soft)] px-3 py-2 text-xs leading-[1.5]" data-testid="group-follows-pool">
                     <span className="min-w-0 flex-1">
@@ -3081,24 +3102,6 @@ export function ForwardGroupsContent({
                   />
                 ) : (
                   <>
-                    <div className="flex justify-end">
-                      <Select onValueChange={(v) => addMember(Number(v))}>
-                        <SelectTrigger aria-label="添加成员" className="w-full sm:w-64">
-                          <SelectValue placeholder={effectiveGroupType === "host" ? "添加主机成员" : "添加隧道成员"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {availableMemberOptions.map((item: any) => (
-                            <SelectItem key={item.id} value={String(item.id)} textValue={item.label}>
-                              {effectiveGroupType === "host" ? (
-                                <HostStatusLabel host={item.host} label={item.label} />
-                              ) : (
-                                <span>{item.label} {item.meta ? "/ " + item.meta : ""}</span>
-                              )}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
                     <div className="space-y-2">
                       {form.members.length > 0 && (
                         <>

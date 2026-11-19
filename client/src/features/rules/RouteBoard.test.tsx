@@ -107,7 +107,7 @@ test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕�
   const rows = html.split("<li ").slice(1);
   assert.equal(rows.length, 2);
   assert.match(rows[0], /HK entry 01[^]*?>23<[^]*?HK relay[^]*?>20<[^]*?JP relay[^]*?>30<[^]*?落地/);
-  assert.match(rows[0], />在走</);
+  assert.match(rows[0], />在用</);
   assert.match(rows[0], /73 ms/);
   assert.match(rows[1], /data-state="failed"/);
   assert.match(rows[1], />✕</);
@@ -129,5 +129,5 @@ test("TCP+UDP 两侧结论不一致时路径上标「UDP 不通」/「仅 UDP �
   assert.equal(describeRouteUdpSplit(path(0, { down: true, healthy: false, udpHealthy: true })), null, "断了的路径交给「断了」说");
   const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
   const mini = renderToStaticMarkup(<RouteMiniChain status={{ paths: [path(0, { udpHealthy: false }), path(1)] }} policy={policy} onOpen={() => {}} />);
-  assert.match(mini, /在走 · UDP 不通/);
+  assert.match(mini, /在用 · UDP 不通/);
 });

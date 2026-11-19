@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { BALANCE_STATE_WORDS } from "@/lib/balanceState";
 
 import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
@@ -218,7 +219,7 @@ export function RouteMiniChain({ status, policy, onOpen, className }: { status: 
         const udpSplit = describeRouteUdpSplit(path);
         const state = (weighted
           ? `${shares[path.index]}%`
-          : path.active ? "在走" : path.down ? "断了" : path.prewarming ? "预热中" : "备用") + (udpSplit ? ` · ${udpSplit.text}` : "");
+          : path.active ? BALANCE_STATE_WORDS.active : path.down ? BALANCE_STATE_WORDS.down : path.prewarming ? "预热中" : BALANCE_STATE_WORDS.standby) + (udpSplit ? ` · ${udpSplit.text}` : "");
         const total = chain.totalMs === null ? "" : `${chain.partial ? "≥" : ""}${round(chain.totalMs)} ms`;
         const row = (
           <>
