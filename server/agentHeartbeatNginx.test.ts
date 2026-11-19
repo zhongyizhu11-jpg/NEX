@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   buildNginxStreamServerBlock,
   nginxFallbackBackupWeights,
-  nginxFallbackIsStrictlyOrdered,
   nginxUpstreamBlock,
   nginxUpstreamServerCount,
 } from "./agentHeartbeatNginx";
@@ -78,8 +77,6 @@ test("主备：两台是一主一备；三台以上备用按 100 倍递减的权
   assert.deepEqual(nginxFallbackBackupWeights(3), [10000, 100, 1]);
   // 最多三档，再往后的备用之间轮流
   assert.deepEqual(nginxFallbackBackupWeights(5), [10000, 100, 1, 1, 1]);
-  assert.equal(nginxFallbackIsStrictlyOrdered(2), true);
-  assert.equal(nginxFallbackIsStrictlyOrdered(3), false);
 });
 
 test("老的 least_conn 和「按负载」一样：least_conn + 权重", () => {

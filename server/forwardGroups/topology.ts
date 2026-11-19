@@ -22,6 +22,8 @@ export class TopologyCache<T> {
     private readonly build: () => Promise<T>,
     private readonly ttlMs: number,
     private readonly now: TimeSource = Date.now,
+    /** 一份拓扑真的留进缓存时调（建到一半被作废的那份不调）：跟着拓扑收拾别的状态放这里。 */
+    private readonly onCommit: (snapshot: T) => void = () => {},
   ) {}
 
   /** 拿当前拓扑：没过期直接给；过期 / 作废了重建，并发只建一次。 */
@@ -32,18 +34,16 @@ export class TopologyCache<T> {
     const generation = this.generation;
     const work = this.build().then((snapshot) => {
       // 建的过程中又被作废了：这份可能是旧数据，交给这次的调用方用，但不留在缓存里。
-      if (generation === this.generation) this.value = { snapshot, builtAt: this.now() };
+      if (generation === this.generation) {
+        this.value = { snapshot, builtAt: this.now() };
+        this.onCommit(snapshot);
+      }
       return snapshot;
     }).finally(() => {
       if (this.building === work) this.building = null;
     });
     this.building = work;
     return work;
-  }
-
-  /** 已经建好的那份（可能过期）；从没建过是 null。只读内存。 */
-  peek(): T | null {
-    return this.value?.snapshot ?? null;
   }
 
   invalidate() {

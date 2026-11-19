@@ -276,14 +276,6 @@ export function nginxFallbackBackupWeights(backupCount: number): number[] {
   });
 }
 
-/**
- * nginx 上的「主备」是不是严格按顺序：两台以内是（一主一备）；三台以上不是 —— 备用之间是「靠前的拿绝大部分」，
- * 不是「前一台挂了才用后一台」。界面可以拿它决定要不要加一句说明。
- */
-export function nginxFallbackIsStrictlyOrdered(serverCount: number) {
-  return Math.floor(Number(serverCount) || 0) <= 2;
-}
-
 /** nginx 的 upstream 里实际会写几台服务器（地址为空的不写）。交给 buildNginxStreamServerBlock 的 upstreamServers。 */
 export const nginxUpstreamServerCount = (endpoints: Array<{ addr: string }>) => (
   endpoints.filter((endpoint) => endpoint.addr).length
