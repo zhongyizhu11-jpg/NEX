@@ -31,6 +31,7 @@ forwardx-fxp/ 里各写了一遍，界面上是同一个下拉框，算出来的
     另有两件跨分配方式的：SlowStart（刚恢复的成员 60 秒里从 10% 线性加到满份，slowstart.go）、
     FlapDamper（切得越勤、下一次等得越久，flap.go）。
 
+两边都从总入口 Pick（strategy.go）进来：同一个名字在两边就是同一段代码。
 每个文件开头写了那个算法做什么、为什么选它、参数和默认值。
 
 下标约定：成员用它在调用方列表里的下标表示；members、health、keys、SmoothWRR、临时区这些切片都按成员下标排，
@@ -73,7 +74,7 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
   - 主备里「现在走哪条」的粘性、切回、择优、时段表是线路组自己的状态机（agent/failover_selection.go），
     出口组的主备每次按 First 现挑。两边共用的是健康信号怎么排序和抖动抑制。
   - 「延迟优先」只有出口组有（线路组的「整链最优」是主备里的择优，不是按连接分）。
-  - FXP 叠加连接按会话固定出口用的是不搅、没有上限的哈希（RendezvousOptions{Raw: true, LoadFactor: -1}）：
-    那个结果要和别的中继、老版本算出来的逐位一致。
+  - FXP 叠加连接按会话固定出口用的是没有上限的哈希（RendezvousOptions{LoadFactor: -1}）：
+    那个结果要几台中继各自算出同一个，各台看到的负载不一样。
 */
 package lbcore

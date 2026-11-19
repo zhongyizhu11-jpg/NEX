@@ -163,34 +163,29 @@ func TestRandomHonorsShare(t *testing.T) {
 
 // ---- 按访客固定 ----
 
-// 手写的 FNV-1a 必须和 hash/fnv 逐位一致：FXP 叠加连接靠各台中继（新老版本）算出同一个结果。
-func TestHashKeyMatchesStdlibFNV(t *testing.T) {
+// 手写的 FNV-1a 必须和 hash/fnv 逐位一致（再搅一遍）：同一个访客在哪台机器上算都落在同一个成员上。
+func TestHashKeyIsMixedStdlibFNV(t *testing.T) {
 	for _, pair := range [][2]string{{"198.51.100.7", "10.0.0.1:443"}, {"", "x"}, {"key", ""}, {"会话", "出口:1"}} {
 		hash := fnv.New64a()
 		_, _ = hash.Write([]byte(pair[0]))
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write([]byte(pair[1]))
-		if got := HashKey(pair[0], pair[1]); got != hash.Sum64() {
-			t.Fatalf("HashKey(%q,%q)=%d，hash/fnv 是 %d", pair[0], pair[1], got, hash.Sum64())
+		if got := HashKey(pair[0], pair[1]); got != Mix64(hash.Sum64()) {
+			t.Fatalf("HashKey(%q,%q)=%d，应该是 %d", pair[0], pair[1], got, Mix64(hash.Sum64()))
 		}
 	}
 }
 
-// 路线图 X2：两个成员的标识只差最后一个字符、分量 900:100。不搅的哈希把所有访客都给了 900 那个。
-func TestRendezvousMixSpreadsNearlyIdenticalMemberKeys(t *testing.T) {
+// 路线图 X2：两个成员的标识只差最后一个字符、分量 900:100。哈希不搅的话所有访客都给了 900 那个。
+func TestRendezvousSpreadsNearlyIdenticalMemberKeys(t *testing.T) {
 	members, candidates := equalMembers(900, 100)
 	keys := []string{"127.0.0.1:20001", "127.0.0.1:20002"}
-	mixed, raw := [2]int{}, [2]int{}
+	counts := [2]int{}
 	for i := 0; i < 2000; i++ {
-		visitor := fmt.Sprintf("198.51.100.%d", i)
-		mixed[Rendezvous(members, keys, candidates, visitor, RendezvousOptions{})]++
-		raw[Rendezvous(members, keys, candidates, visitor, RendezvousOptions{Raw: true, LoadFactor: -1})]++
+		counts[Rendezvous(members, keys, candidates, fmt.Sprintf("198.51.100.%d", i), RendezvousOptions{})]++
 	}
-	if mixed[1] < 140 || mixed[1] > 260 {
-		t.Fatalf("搅过以后应该大约 9:1：%v", mixed)
-	}
-	if raw[1] >= mixed[1]/2 {
-		t.Fatalf("这个用例本来是为了说明不搅会偏：不搅 %v，搅过 %v", raw, mixed)
+	if counts[1] < 140 || counts[1] > 260 {
+		t.Fatalf("应该大约 9:1：%v", counts)
 	}
 }
 
@@ -448,7 +443,7 @@ func TestNearSetKeepsEveryoneWithinTheMargin(t *testing.T) {
 	}
 }
 
-func TestNearSetHoldsMembershipAgainstFlapping(t *testing.T) {
+func TestNearSetHoldsMembersInButLetsThemBackImmediately(t *testing.T) {
 	var set NearSet
 	policy := NearPolicy{Margin: 50, Hold: time.Minute}
 	now := time.Unix(1_800_000_000, 0)
@@ -466,16 +461,25 @@ func TestNearSetHoldsMembershipAgainstFlapping(t *testing.T) {
 	if near := set.Select(nil, members, all, policy, now.Add(61*time.Second)); len(near) != 1 || near[0] != 0 {
 		t.Fatalf("过了驻留应该出组：%v", near)
 	}
-	// 马上又回到门槛内：刚出组，一分钟内不放回来。
+	// 回到门槛内：马上回来（一个尖峰不该让它空等一分钟）。
 	members[1].Latency = 30
-	if near := set.Select(nil, members, all, policy, now.Add(70*time.Second)); len(near) != 1 {
-		t.Fatalf("刚出组不该马上回来：%v", near)
+	if near := set.Select(nil, members, all, policy, now.Add(64*time.Second)); len(near) != 2 {
+		t.Fatalf("回到门槛以内应该马上回来：%v", near)
 	}
-	if near := set.Select(nil, members, all, policy, now.Add(125*time.Second)); len(near) != 2 {
-		t.Fatalf("稳了一分钟应该回来：%v", near)
+	// 刚回来又慢了：回来不到一分钟，留着。
+	members[1].Latency = 200
+	if near := set.Select(nil, members, all, policy, now.Add(70*time.Second)); len(near) != 2 {
+		t.Fatalf("刚回来的要留满驻留：%v", near)
 	}
 	if !set.Contains(1) || set.Contains(7) {
 		t.Fatal("Contains 不对")
+	}
+	// 抖动算在延迟上：30ms + 抖动 60ms 按 90ms 比。
+	var jitter NearSet
+	jittery := latencies(20, 30)
+	jittery[1].Jitter = 60
+	if near := jitter.Select(nil, jittery, all, NearPolicy{Margin: 50}, now); len(near) != 1 || near[0] != 0 {
+		t.Fatalf("抖得厉害的不算一样快：%v", near)
 	}
 }
 
@@ -611,6 +615,8 @@ func healths(words string) []Health {
 			list[i] = Health{DownstreamDown: true}
 		case 'd':
 			list[i] = Health{Dead: true}
+		case 'c':
+			list[i] = Health{Dead: true, Cooling: true}
 		case 'x':
 			list[i] = Health{Excluded: true}
 		}
@@ -640,6 +646,7 @@ func TestCandidates(t *testing.T) {
 		{"hht", nil, EjectPolicy{PanicBelow: 2}, []int{0, 1}, LevelNormal},
 		{"sht", nil, EjectPolicy{PanicBelow: 2}, []int{0, 1, 2}, LevelPanic}, // 摘完只剩 1 个，不够：恐慌，软的也算
 		{"ddx", nil, EjectPolicy{}, []int{0, 1}, LevelDead},                  // 都连不上：所有没被排除的
+		{"cdc", nil, EjectPolicy{}, []int{0, 1, 2}, LevelDead},               // 分着用时不分冷却没冷却：摊开
 		{"xx", nil, EjectPolicy{}, nil, LevelNone},
 		{"hhd", map[int]bool{0: true, 1: true}, EjectPolicy{}, []int{2}, LevelDead}, // 健康的都试过了
 		{"hd", map[int]bool{0: true, 1: true}, EjectPolicy{}, nil, LevelNone},
@@ -666,6 +673,9 @@ func TestFirstPrefersStableThenSoftThenDownstreamThenDead(t *testing.T) {
 		{"tssd", nil, 1},
 		{"tdd", nil, 0},
 		{"dd", nil, 0},
+		{"cd", nil, 1}, // 全都连不上：先试冷却到期的
+		{"cc", nil, 0},
+		{"ctc", nil, 1},
 		{"xd", nil, 1},
 		{"xx", nil, -1},
 		{"hh", map[int]bool{0: true}, 1},
@@ -727,5 +737,47 @@ func BenchmarkCandidates(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		Candidates(buffer[:0], health, nil, EjectPolicy{})
+	}
+}
+
+// ---- 总入口 ----
+
+func TestPickDispatchesEveryStrategy(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	members, candidates := equalMembers(1, 1, 1)
+	keys := []string{"a", "b", "c"}
+	for _, strategy := range Strategies {
+		if !ValidStrategy(strategy) {
+			t.Fatalf("%s 应该认得", strategy)
+		}
+		next := 0
+		var near NearSet
+		state := State{WRR: make(SmoothWRR, 3), Near: &near, Next: &next}
+		if got := Pick(strategy, state, members, keys, candidates, "203.0.113.7", now, nil, Options{}); got < 0 || got > 2 {
+			t.Fatalf("%s 挑出了 %d", strategy, got)
+		}
+		if Pick(strategy, state, members, keys, nil, "k", now, nil, Options{}) != -1 {
+			t.Fatalf("%s：没有候选应该是 -1", strategy)
+		}
+	}
+	if ValidStrategy("least_conn") || len(Strategies) != 8 {
+		t.Fatal("只有八种分配方式")
+	}
+	// 认不出的名字、不知道访客是谁的按访客固定：轮流。零值的 State 也能用。
+	next := 0
+	for _, strategy := range []string{"nonsense", StrategyIPHash} {
+		next = 0
+		first := Pick(strategy, State{Next: &next}, members, keys, candidates, "", now, nil, Options{})
+		second := Pick(strategy, State{Next: &next}, members, keys, candidates, "", now, nil, Options{})
+		if first != 0 || second != 1 {
+			t.Fatalf("%s 应该轮流：%d %d", strategy, first, second)
+		}
+	}
+	if got := Pick(StrategyWeighted, State{}, members, keys, candidates, "", now, nil, Options{}); got < 0 {
+		t.Fatal("零值的 State 也得挑得出来")
+	}
+	// 按访客固定走的就是 Rendezvous。
+	if got, want := Pick(StrategyIPHash, State{}, members, keys, candidates, "v1", now, nil, Options{}), Rendezvous(members, keys, candidates, "v1", RendezvousOptions{}); got != want {
+		t.Fatalf("%d != %d", got, want)
 	}
 }

@@ -279,16 +279,17 @@ func TestLeastLoadCountsIdleStreams(t *testing.T) {
 		selector.loads[index].open(time.Now())
 		idle(selector.loads[index])
 	}
-	// 忙的连接照旧按流量：一台 1 条 4K 视频（3 MiB/s），另一台 30 条闲连接 —— 给闲连接那台。
+	// 流量通过「利用率 = 流量 ÷ 线路带宽」算进来（阶段 2 起，lbcore 的成本）：一台 30M 的线路上跑着一条 3.4 MiB/s 的
+	// 视频（利用率九成多，按 95% 封顶，余量 5%），另一台挂着 5 条闲连接 —— 给闲连接那台。
 	selector = leastLoadSelector(
-		[]exitEndpoint{{Host: "10.0.6.4", Port: 2}},
-		exitEndpoint{Host: "10.0.6.3", Port: 1},
+		[]exitEndpoint{{Host: "10.0.6.4", Port: 2, CapacityMbps: 30}},
+		exitEndpoint{Host: "10.0.6.3", Port: 1, CapacityMbps: 30},
 	)
 	selector.loads[0].active.Store(1)
-	setBusy(selector.loads[0], 3*1024*1024)
-	selector.loads[1].active.Store(30)
+	setBusy(selector.loads[0], 3.4*1024*1024)
+	selector.loads[1].active.Store(5)
 	if _, index, _ := selector.pick(nil); index != 1 {
-		t.Fatalf("一条跑满的视频比 30 条闲连接重，应该给 1，得到 %d", index)
+		t.Fatalf("一条把线路跑满的视频比 5 条闲连接重，应该给 1，得到 %d", index)
 	}
 }
 
@@ -466,8 +467,8 @@ func TestOneOutageIsOneFlipPairAndRecoversQuickly(t *testing.T) {
 		if recovered < 0 || recovered > 15*time.Second {
 			t.Fatalf("第 %d 次中断：目标回来后应该 15 秒内恢复，实际 %v", round+1, recovered)
 		}
-		if h.unstable || h.flapping() {
-			t.Fatalf("第 %d 次中断刚恢复：unstable=%v flapping=%v（flips=%d）", round+1, h.unstable, h.flapping(), len(h.flips))
+		if h.unstable || h.flapping(time.Now()) {
+			t.Fatalf("第 %d 次中断刚恢复：unstable=%v flapping=%v（中断 %d 次）", round+1, h.unstable, h.flapping(time.Now()), len(h.outages))
 		}
 		// 接着探 5 分钟：不能被窗口里的旧失败拖进「不稳」。
 		for at := to.Add(16 * time.Second); at.Before(until); at = at.Add(targetProbeInterval(h, d)) {
@@ -476,8 +477,8 @@ func TestOneOutageIsOneFlipPairAndRecoversQuickly(t *testing.T) {
 				t.Fatalf("第 %d 次中断恢复后 %v 又被判成 unstable=%v down=%v", round+1, at.Sub(to).Round(time.Second), h.unstable, h.down)
 			}
 		}
-		if h.flapping() {
-			t.Fatalf("第 %d 次中断后不该算抖动（flips=%d）", round+1, len(h.flips))
+		if h.flapping(time.Now()) {
+			t.Fatalf("第 %d 次中断后不该算抖动（中断 %d 次）", round+1, len(h.outages))
 		}
 		start = until
 	}

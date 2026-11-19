@@ -30,7 +30,8 @@ const (
 	HealthHealthy    = "healthy"     // 健康而且稳（默认）
 	HealthUnstable   = "unstable"    // 软信号：连得上但不稳（按「切走」处理）/ 刚恢复还在观察
 	HealthTargetDown = "target_down" // 连得上，但它到下游（目标）不通
-	HealthDown       = "down"        // 硬信号：连不上
+	HealthDown       = "down"        // 硬信号：连不上（冷却已到期，或者没有冷却这回事）
+	HealthCooling    = "cooling"     // 连不上，而且刚判的、还在冷却里（只有主备分这个先后）
 	HealthExcluded   = "excluded"    // 管理上排除（暂停 / 维护）：永远不挑
 )
 

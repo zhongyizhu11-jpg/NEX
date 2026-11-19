@@ -69,10 +69,14 @@ func (p *PeakEWMA) Reset() { *p = PeakEWMA{} }
 不全压在最快的一个上，也不在几毫秒的差别上来回跳。圈这一组时延迟要用普通的平均（绝对的毫秒数），
 不是 PeakEWMA 的读数。
 
-NearSet 记着每个成员上一次在不在「一样快」的那一组里、从什么时候起。门槛之外再加一道驻留（Hold）：
-一个成员刚进组 / 刚出组，至少保持这么久才会再翻 —— 延迟卡在门槛上下时不会每条连接都换一次结论
-（文档里写的「切过去至少用 1 分钟」）。驻留不拦逃生：组里一个都不剩时直接按这一刻的延迟重算；
-成员健不健康也不归它管（那是 Candidates 的事，不健康的根本进不了 candidates）。
+比的是 Latency + Jitter（抖得厉害的路，按它慢的时候算）。
+
+NearSet 记着每个成员上一次在不在「一样快」的那一组里、从什么时候进的组。门槛之外再加一道驻留（Hold）：
+一个成员进了组，至少留这么久才会被请出去 —— 延迟卡在门槛上下时不会每条连接都换一次结论
+（文档里写的「切过去至少用 1 分钟」）。进组不设驻留：一次慢样本把它挤出去，回到门槛以内马上就能回来，
+不会因为一个尖峰空等一分钟（路线图 X10）；回来之后又得留满 Hold，所以来回翻最多每个 Hold 一次。
+驻留不拦逃生：成员健不健康不归它管（那是 Candidates 的事，不健康的根本进不了 candidates），
+组里一个都不剩时直接按这一刻的延迟重算。
 
 参数：Margin 默认 50ms（DefaultLatencyMargin），Hold 默认 0（不驻留）。
 状态按成员下标排，调用方自己加锁。成员表变了就换一个新的 NearSet（零值可用）。
@@ -90,7 +94,7 @@ const DefaultLatencyMargin = 50.0
 type NearPolicy struct {
 	// Margin（毫秒）：比最快的慢不到这么多就算一样快。≤ 0 用 DefaultLatencyMargin。
 	Margin float64
-	// Hold：进组 / 出组之后至少保持这么久。0 表示不驻留（每次按这一刻的延迟算）。
+	// Hold：进组之后至少留这么久。0 表示不驻留（每次按这一刻的延迟算）。
 	Hold time.Duration
 }
 
@@ -104,7 +108,7 @@ func (p NearPolicy) margin() float64 {
 // Select 返回这一次「一样快」的那一组（追加到 dst），并更新状态。都还不知道延迟时返回全部候选 ——
 // 没有依据就不排除谁。不知道延迟的成员不算「一样快」。
 func (n *NearSet) Select(dst []int, members []Member, candidates []int, policy NearPolicy, now time.Time) []int {
-	best := MinLatency(members, candidates)
+	best := minDelay(members, candidates)
 	if best <= 0 {
 		return append(dst, candidates...)
 	}
@@ -112,13 +116,15 @@ func (n *NearSet) Select(dst []int, members []Member, candidates []int, policy N
 	margin := policy.margin()
 	mark := len(dst)
 	for _, index := range candidates {
-		latency := members[index].Latency
+		latency := members[index].delay()
 		near := latency > 0 && latency-best <= margin
 		switch {
 		case !n.known[index]:
 			n.known[index], n.in[index], n.since[index] = true, near, now
-		case near != n.in[index] && now.Sub(n.since[index]) >= policy.Hold:
-			n.in[index], n.since[index] = near, now
+		case near && !n.in[index]:
+			n.in[index], n.since[index] = true, now
+		case !near && n.in[index] && now.Sub(n.since[index]) >= policy.Hold:
+			n.in[index] = false
 		}
 		if n.in[index] {
 			dst = append(dst, index)
@@ -129,7 +135,7 @@ func (n *NearSet) Select(dst []int, members []Member, candidates []int, policy N
 	}
 	// 组里一个都不剩（都在驻留期里被留在组外，或者组里的都不在候选里了）：按这一刻的延迟重算，状态跟着改。
 	for _, index := range candidates {
-		latency := members[index].Latency
+		latency := members[index].delay()
 		if latency > 0 && latency-best <= margin {
 			n.in[index], n.since[index] = true, now
 			dst = append(dst, index)
@@ -139,6 +145,27 @@ func (n *NearSet) Select(dst []int, members []Member, candidates []int, policy N
 		return append(dst, candidates...)
 	}
 	return dst
+}
+
+// delay：延迟 + 抖动；不知道延迟返回 0。
+func (m *Member) delay() float64 {
+	if m.Latency <= 0 {
+		return 0
+	}
+	if m.Jitter > 0 {
+		return m.Latency + m.Jitter
+	}
+	return m.Latency
+}
+
+func minDelay(members []Member, candidates []int) float64 {
+	min := 0.0
+	for _, index := range candidates {
+		if delay := members[index].delay(); delay > 0 && (min == 0 || delay < min) {
+			min = delay
+		}
+	}
+	return min
 }
 
 // Contains 成员 index 上一次算下来在不在「一样快」的那一组里（没算过返回 false）。

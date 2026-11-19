@@ -99,6 +99,8 @@ func HealthFor(word string) (lbcore.Health, error) {
 		return lbcore.Health{DownstreamDown: true}, nil
 	case HealthDown:
 		return lbcore.Health{Dead: true}, nil
+	case HealthCooling:
+		return lbcore.Health{Dead: true, Cooling: true}, nil
 	case HealthExcluded:
 		return lbcore.Health{Excluded: true}, nil
 	}
@@ -124,32 +126,22 @@ func (r *Reference) Pick(key string, mode string) (int, error) {
 		r.members[index].Share = lbcore.DefaultSlowStart.Factor(r.recovered[index], r.now)
 		r.members[index].Latency = 0
 	}
-	pick := -1
 	switch r.strategy {
-	case "weighted":
-		pick = r.wrr.Pick(r.members, candidates)
-	case "round_robin":
-		pick = lbcore.RoundRobin(&r.next, r.members, candidates, r.rnd)
-	case "random":
-		pick = lbcore.Random(r.members, candidates, r.rnd)
-	case "ip_hash":
-		pick = lbcore.Rendezvous(r.members, r.keys, candidates, key, lbcore.RendezvousOptions{Scratch: r.scratch})
-	case "least_load":
-		pick = lbcore.LeastLoad(r.members, candidates, &r.next, r.rnd)
-	case "auto":
+	case lbcore.StrategyAuto:
 		for _, index := range candidates {
 			r.members[index].Latency = r.peak[index].Value(r.now, 0)
 		}
-		pick = lbcore.Auto(r.members, candidates, &r.next, r.rnd)
-	case "latency":
+	case lbcore.StrategyLatency:
 		for _, index := range candidates {
 			r.members[index].Latency = r.last[index]
 		}
-		near := r.near.Select(nil, r.members, candidates, lbcore.NearPolicy{}, r.now)
-		pick = lbcore.Auto(r.members, near, &r.next, r.rnd)
 	default:
-		return -1, fmt.Errorf("不认识的分配方式 %q", r.strategy)
+		if !lbcore.ValidStrategy(r.strategy) {
+			return -1, fmt.Errorf("不认识的分配方式 %q", r.strategy)
+		}
 	}
+	state := lbcore.State{WRR: r.wrr, Near: &r.near, Next: &r.next}
+	pick := lbcore.Pick(r.strategy, state, r.members, r.keys, candidates, key, r.now, r.rnd, lbcore.Options{Scratch: r.scratch})
 	return r.settle(pick, mode), nil
 }
 

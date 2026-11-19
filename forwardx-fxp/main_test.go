@@ -166,6 +166,8 @@ func TestExitSelectorStrategies(t *testing.T) {
 		t.Fatal("expected ip hash endpoint")
 	}
 	for i := 0; i < 10; i++ {
+		// 上一条退掉再挑（不留在途）：这里看的是哈希稳不稳，不是有界负载（那个另有用例）。
+		ipHash.unpick(firstIndex)
 		next, nextIndex, nextOK := ipHash.pick(nil, "203.0.113.9")
 		if !nextOK || nextIndex != firstIndex || next != first {
 			t.Fatalf("ip hash selection changed: first=%+v/%d next=%+v/%d", first, firstIndex, next, nextIndex)

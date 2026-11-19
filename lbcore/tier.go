@@ -12,6 +12,7 @@ import "math"
 	Dead            硬信号：成员本身连不上（探测、握手不通）。只要还有一个连得上的，就不挑它。
 	DownstreamDown  连得上，但它到下游不通（出口通、出口到目标不通 —— 多半是目标自己的问题）。
 	Soft            软信号：不稳（抖动 / 丢包过门槛）、刚恢复还在观察。连得上，只是质量可疑。
+	Cooling         Dead 的细分：刚判成连不上、还在冷却（退避）里。只有主备看它（见 First）。
 
 Candidates 的规矩：
 
@@ -26,14 +27,17 @@ Candidates 的规矩：
 为什么硬信号不设上限：连不上的成员接了连接就是失败（UDP 会话没有重放，挑中就钉死在上面，路线图 X1），
 没有「可能误判所以留几成」的余地 —— 误判由后台探测去纠正，不拿用户的连接去试。
 
-First 是「主备」：一次只用一个，按「稳的 → 带软信号的 → 下游不通的 → 连不上的」找第一个，同一类里按配置的先后。
-主备不受摘除上限限制：流量本来就全在一个成员上，跳过不稳的不会把谁压垮。
+First 是「主备」：一次只用一个，按「稳的 → 带软信号的 → 下游不通的 → 连不上但冷却到期的 → 还在冷却的」找第一个，
+同一类里按配置的先后。主备不受摘除上限限制：流量本来就全在一个成员上，跳过不稳的不会把谁压垮。
+全都连不上时先试冷却到期的那个：它是「该再试一次了」的，还在冷却的是刚撞过墙的；主备不分摊，
+所以这里可以有先后（分着用的时候不分这个先后，见上面第 3 条）。
 */
 type Health struct {
 	Excluded       bool
 	Dead           bool
 	DownstreamDown bool
 	Soft           bool
+	Cooling        bool
 }
 
 // EjectPolicy 是摘除的两个参数。零值 = 默认。
@@ -145,6 +149,8 @@ func Candidates(dst []int, health []Health, skip map[int]bool, policy EjectPolic
 func (h Health) rank() int {
 	switch {
 	case h.Excluded:
+		return 5
+	case h.Dead && h.Cooling:
 		return 4
 	case h.Dead:
 		return 3
@@ -158,7 +164,7 @@ func (h Health) rank() int {
 
 // First 是「主备」该走哪个：最好的一类里排最前的。没有可挑的返回 -1。
 func First(health []Health, skip map[int]bool) int {
-	best, bestRank := -1, 4
+	best, bestRank := -1, 5
 	for index, h := range health {
 		if skip != nil && skip[index] {
 			continue

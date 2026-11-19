@@ -73,10 +73,6 @@ type balanceRuleReport struct {
 // balanceSnapshotLocked：这条规则此刻每台出口的状态（不含比例）。调用方持锁。
 func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExitReport {
 	exits := make([]balanceExitReport, len(s.endpoints))
-	tiers := make([]int, len(s.states))
-	for i, state := range s.states {
-		tiers[i] = state.tier(now)
-	}
 	for i, endpoint := range s.endpoints {
 		item := balanceExitReport{HostID: endpoint.HostID, Host: endpoint.Host, Port: endpoint.Port, State: "standby", Share: -1}
 		if !s.states[i].isHealthy() {
@@ -103,14 +99,13 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 	// 现在会挑谁（没有新连接时用它当 active）
 	if s.strategy == "fallback" {
 		// 主备：实际会挑的那台就是「在用」，哪怕它到目标不稳 / 刚恢复（前面的都连不上时就是它在扛，路线图 X1）。
-		if index, ok := s.fallbackChoiceLocked(nil, tiers, now); ok && exits[index].State != "down" {
+		if index, ok := s.fallbackChoiceLocked(nil, now, false); ok && exits[index].State != "down" {
 			exits[index].State = "active"
 		}
 		return exits
 	}
-	candidates := s.candidatesLocked(nil, tiers)
-	factors := s.targetFactorsLocked(candidates, now)
-	for _, index := range s.filterByFactorLocked(candidates, factors) {
+	candidates, _ := s.candidatesLocked(nil, now, false)
+	for _, index := range candidates {
 		if exits[index].State == "standby" {
 			exits[index].State = "active"
 		}

@@ -224,8 +224,10 @@ func TestLeastLoadPowerOfTwoChoices(t *testing.T) {
 		_, index, _ := selector.pick(nil)
 		counts[index]++
 	}
-	if counts[2] != 0 {
-		t.Fatalf("跑满的那台被挑中 %d 次", counts[2])
+	// 利用率最多按 95% 算（lbcore.MaxUtilisation）：跑满的那台留 5% 的余量，别人压上来的连接多到 20 倍时它才轮得到，
+	// 不是永远分不到。
+	if counts[2] > 400/20 {
+		t.Fatalf("跑满的那台被挑中 %d 次，应该不到 5%%", counts[2])
 	}
 	for _, index := range []int{0, 1, 3} {
 		if counts[index] < 80 {

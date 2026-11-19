@@ -176,18 +176,15 @@ func (s *fxpEndpointState) isHealthy() bool {
 	return s.healthy
 }
 
-// tier 给选择器分档：1 健康，2 挂过但冷却到期，3 其余。
-func (s *fxpEndpointState) tier(now time.Time) int {
+// reachable：这个端点此刻连不连得上（挑出口用）。udp 为 true 是给 UDP 会话问的。
+// cooling：连不上，而且还在退避里（刚判的；主备全挂时先试冷却到期的，见 lbcore.First）。
+func (s *fxpEndpointState) reachable(udp bool, now time.Time) (ok bool, cooling bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch {
-	case s.healthy:
-		return 1
-	case s.retryAfter.IsZero() || !now.Before(s.retryAfter):
-		return 2
-	default:
-		return 3
+	if s.healthy {
+		return true, false
 	}
+	return false, !s.retryAfter.IsZero() && now.Before(s.retryAfter)
 }
 
 func (s *fxpEndpointState) markFailure(err error) {
