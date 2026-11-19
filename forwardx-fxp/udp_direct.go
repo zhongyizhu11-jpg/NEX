@@ -361,12 +361,21 @@ func (s *udpDirectEntrySession) noteReply() {
 	s.silentDatagrams = 0
 }
 
+// udpRepickDue：该不该看一眼这条会话的出口 —— 有别的出口可换，而且离上次看过了 fxpUDPRepickCheckEvery。
+// 看就记下这一次（checkedAt）。只在读循环里调。
+func udpRepickDue(selector *exitEndpointSelector, index int, checkedAt *int64, nowNano int64) bool {
+	if selector == nil || index < 0 || len(selector.states) < 2 || nowNano-*checkedAt < int64(fxpUDPRepickCheckEvery) {
+		return false
+	}
+	*checkedAt = nowNano
+	return true
+}
+
 // repickReason：这条会话该不该换出口（空 = 不换）。只在入口的读循环里调。
 func (s *udpDirectEntrySession) repickReason(nowNano int64) string {
-	if s.selector == nil || s.endpointIndex < 0 || len(s.selector.states) < 2 || nowNano-s.healthCheckedAt < int64(fxpUDPRepickCheckEvery) {
+	if !udpRepickDue(s.selector, s.endpointIndex, &s.healthCheckedAt, nowNano) {
 		return ""
 	}
-	s.healthCheckedAt = nowNano
 	now := time.Unix(0, nowNano)
 	state := s.selector.states[s.endpointIndex]
 	reason := "exit unhealthy"
@@ -402,21 +411,14 @@ func (s *udpDirectEntrySession) silentTooLong(state *fxpEndpointState, now time.
 
 // exitUnhealthy：这条中转会话的下一跳被判成连不上了（UDP 那一侧），而且有别的连得上的下一跳。只在中转的读循环里调。
 func (s *udpDirectRelaySession) exitUnhealthy(nowNano int64) bool {
-	if s.selector == nil || s.endpointIndex < 0 || len(s.selector.states) < 2 || nowNano-s.healthCheckedAt < int64(fxpUDPRepickCheckEvery) {
+	if !udpRepickDue(s.selector, s.endpointIndex, &s.healthCheckedAt, nowNano) {
 		return false
 	}
-	s.healthCheckedAt = nowNano
 	now := time.Unix(0, nowNano)
 	if ok, _ := s.selector.states[s.endpointIndex].reachable(true, now); ok {
 		return false
 	}
 	return s.selector.hasReachableAlternative(s.endpointIndex, true, now)
-}
-
-// udpPickHint：建 UDP 会话时挑出口的附加条件。avoid 是不想再用的那台（换出口时的旧出口），-1 表示没有。
-type udpPickHint struct {
-	key   string
-	avoid int
 }
 
 func udpDirectEntrySessionSnapshot(session *udpDirectEntrySession) fxpUDPSessionSnapshot {
@@ -471,91 +473,237 @@ func udpDirectRelaySessionSnapshot(session *udpDirectRelaySession) fxpUDPSession
 	return state
 }
 
+/*
+udpEntrySessions：入口一个 UDP 直连监听的会话表和建会话要用的东西。读循环、清扫协程、抗丢包的冗余包认领共用，mu 管三张表。
+*/
+type udpEntrySessions struct {
+	conn        *net.UDPConn
+	cfg         config
+	selector    *exitEndpointSelector
+	inLimiter   *limiter
+	outLimiter  *limiter
+	counter     *trafficCounter
+	queueBudget *fxpUDPQueueRuleBudget
+	// ruleGate：规则自己的连接上限，和 TCP 入口用同一套闸（newConnGate）：maxConnections 管同时在跑的会话数，
+	// maxIPs 和 TCP 一样按来源 IP 限。以前 UDP 只受全局的会话上限约束，套餐里给规则设的限制对 UDP 不起作用。
+	ruleGate    *connGate
+	policy      fxpUDPSessionPolicy
+	fec         *fxpUDPFEC
+	wakeSweeper func()
+
+	// 会话表按 netip 的地址找：可以直接比较的值类型，读循环里每个包不再把地址格式化成字符串。
+	mu       sync.Mutex
+	byClient map[netip.AddrPort]*udpDirectEntrySession
+	byID     map[uint64]*udpDirectEntrySession
+	perIP    map[netip.Addr]int
+}
+
+func (t *udpEntrySessions) detachLocked(session *udpDirectEntrySession) bool {
+	if session == nil || t.byClient[session.key] != session {
+		return false
+	}
+	if session.releaseGate != nil {
+		session.releaseGate()
+		session.releaseGate = nil
+	}
+	delete(t.byClient, session.key)
+	if t.byID[session.sessionID] == session {
+		delete(t.byID, session.sessionID)
+	}
+	if session.sourceIP.IsValid() {
+		if t.perIP[session.sourceIP] <= 1 {
+			delete(t.perIP, session.sourceIP)
+		} else {
+			t.perIP[session.sourceIP]--
+		}
+	}
+	return true
+}
+
+func (t *udpEntrySessions) remove(session *udpDirectEntrySession) {
+	t.mu.Lock()
+	t.detachLocked(session)
+	t.mu.Unlock()
+}
+
+// sweep：清扫协程定时调 —— 空闲到期的关掉，会话太多时按压力回收。
+func (t *udpEntrySessions) sweep(now time.Time) {
+	var expired []*udpDirectEntrySession
+	var reclaimed []*udpDirectEntrySession
+	t.mu.Lock()
+	for key, session := range t.byClient {
+		if session != nil {
+			session.returnFragments.expire(now)
+		}
+		state := udpDirectEntrySessionSnapshot(session)
+		if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
+			if t.byClient[key] == session && t.detachLocked(session) {
+				expired = append(expired, session)
+			}
+		}
+	}
+	for _, victim := range planFXPUDPPressureReclamation(now, t.byClient, t.policy, udpDirectEntrySessionSnapshot) {
+		if t.byClient[victim.key] == victim.session && t.detachLocked(victim.session) {
+			reclaimed = append(reclaimed, victim.session)
+		}
+	}
+	t.mu.Unlock()
+	for _, session := range expired {
+		fxpVerbosef("entry udp direct session idle timeout tunnel=%d rule=%d client=%s", session.cfg.TunnelID, session.cfg.RuleID, session.clientAddr)
+		session.close()
+	}
+	for _, session := range reclaimed {
+		session.close()
+		fxpUDPDropLog.Printf("entry udp direct reclaimed idle session tunnel=%d rule=%d client=%s reason=capacity-pressure", session.cfg.TunnelID, session.cfg.RuleID, session.clientAddr)
+	}
+}
+
+func (t *udpEntrySessions) closeAll() {
+	var closing []*udpDirectEntrySession
+	t.mu.Lock()
+	for _, session := range t.byClient {
+		closing = append(closing, session)
+	}
+	t.mu.Unlock()
+	for _, session := range closing {
+		session.close()
+	}
+}
+
+/*
+lookupOrRepick：这个访客的包交给哪条会话。有会话、而且它的出口不用换（repickReason）就是它；要换就关掉旧会话，
+返回 nil 和要避开的旧出口（avoid），repicked 表示是「一直没回包」换的。没有会话时顺带查一下会话数上限（preflight）。
+*/
+func (t *udpEntrySessions) lookupOrRepick(key netip.AddrPort, sourceIP netip.Addr) (session *udpDirectEntrySession, avoid int, repicked bool, preflight fxpUDPAdmission) {
+	avoid = -1
+	preflight = fxpUDPAdmission{allow: true}
+	var replaced *udpDirectEntrySession
+	reason := ""
+	t.mu.Lock()
+	session = t.byClient[key]
+	if session != nil {
+		nowNano := time.Now().UnixNano()
+		session.lastActivity.Store(nowNano)
+		// 这台出口连不上了 / 一直不回包：关掉旧会话，调用方当场重新挑一台（见 repickReason）。
+		if reason = session.repickReason(nowNano); reason != "" && t.detachLocked(session) {
+			replaced, avoid = session, session.endpointIndex
+			session = nil
+		}
+	}
+	if session == nil {
+		preflight = checkFXPUDPSessionCapacity(len(t.byClient), t.perIP[sourceIP], sourceIP.String(), t.policy)
+	}
+	t.mu.Unlock()
+	if replaced != nil {
+		log.Printf("entry udp direct session leaves exit tunnel=%d rule=%d client=%s exit=%s:%d reason=%s", t.cfg.TunnelID, t.cfg.RuleID, replaced.clientAddr, replaced.endpoint.Host, replaced.endpoint.Port, reason)
+		replaced.close()
+	}
+	return session, avoid, reason == "no replies", preflight
+}
+
+/*
+createAndAdmit：给这个访客建一条新会话（挑出口时避开 avoid）、过规则的连接闸和会话数上限、登记进表。
+ok 为 false 表示这个包丢掉（被拒、建不起来，已经打过日志）。同时有别的包先建好了这个访客的会话时返回那一条
+（started 为 false）；started 为 true 表示是新建的、调用方要把它跑起来。
+*/
+func (t *udpEntrySessions) createAndAdmit(key netip.AddrPort, sourceIP netip.Addr, avoid int, repicked bool) (session *udpDirectEntrySession, started bool, ok bool) {
+	cfg := t.cfg
+	// 新会话才需要 *net.UDPAddr（写 socket、连接闸、日志），每个会话分配一次。
+	addr := net.UDPAddrFromAddrPort(key)
+	sourceIPLabel := sourceIP.String()
+	releaseGate, allowed, reason := t.ruleGate.acquire(addr)
+	if !allowed {
+		active, ips, forIP := t.ruleGate.statsFor(addr)
+		fxpUDPDropLog.Printf("entry udp direct rejected by connection gate tunnel=%d rule=%d client=%s reason=%s active=%d maxConnections=%d distinctIPs=%d sessionsForIP=%d maxIPs=%d", cfg.TunnelID, cfg.RuleID, addr, reason, active, cfg.MaxConnections, ips, forIP, cfg.MaxIPs)
+		return nil, false, false
+	}
+	created, err := newUDPDirectEntrySession(t.conn, addr, cfg, t.selector, t.inLimiter, t.outLimiter, t.counter, t.queueBudget, t.remove, avoid)
+	if err != nil {
+		releaseGate()
+		if errors.Is(err, errHopResolvePending) {
+			fxpUDPDropLog.Printf("entry udp direct waiting for exit address tunnel=%d rule=%d client=%s: %v", cfg.TunnelID, cfg.RuleID, addr, err)
+		} else if !isClosedErr(err) {
+			log.Printf("entry udp direct session create failed tunnel=%d rule=%d client=%s: %v", cfg.TunnelID, cfg.RuleID, addr, err)
+		}
+		return nil, false, false
+	}
+	created.fec = t.fec
+	created.repicked = repicked
+	var closeCreated *udpDirectEntrySession
+	var admission fxpUDPAdmission
+	rejected, collision, pressure := false, false, false
+	t.mu.Lock()
+	if existing := t.byClient[key]; existing != nil {
+		session = existing
+		session.touch()
+		closeCreated = created
+	} else if t.byID[created.sessionID] != nil {
+		closeCreated = created
+		collision = true
+	} else {
+		admission = checkFXPUDPSessionCapacity(len(t.byClient), t.perIP[sourceIP], sourceIPLabel, t.policy)
+		if !admission.allow {
+			closeCreated = created
+			rejected = true
+		} else {
+			created.releaseGate = releaseGate
+			t.byClient[key] = created
+			t.byID[created.sessionID] = created
+			t.perIP[sourceIP]++
+			session, started = created, true
+			pressure = fxpUDPSessionPressure(len(t.byClient), t.perIP[sourceIP], sourceIPLabel, t.policy)
+		}
+	}
+	t.mu.Unlock()
+	if !started {
+		releaseGate()
+	}
+	if closeCreated != nil {
+		closeCreated.close()
+	}
+	switch {
+	case collision:
+		fxpUDPDropLog.Printf("entry udp direct rejected session id collision tunnel=%d rule=%d client=%s session=%d", cfg.TunnelID, cfg.RuleID, addr, created.sessionID)
+		return nil, false, false
+	case rejected:
+		t.wakeSweeper()
+		fxpUDPDropLog.Printf("entry udp direct rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, addr, admission.reason, admission.total, admission.perIP, t.policy.hardSessions, t.policy.hardPerIP)
+		return nil, false, false
+	case pressure:
+		t.wakeSweeper()
+	}
+	return session, started, true
+}
+
 func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter) error {
-	// 会话表按 netip 的地址找：可以直接比较的值类型，读循环里每个包不再把地址
-	// 格式化成字符串。
-	sessionsByClient := map[netip.AddrPort]*udpDirectEntrySession{}
-	sessionsByID := map[uint64]*udpDirectEntrySession{}
-	sessionsPerIP := map[netip.Addr]int{}
-	policy := defaultFXPUDPSessionPolicy()
-	// 规则自己的连接上限，和 TCP 入口用同一套闸（newConnGate）：maxConnections
-	// 管同时在跑的会话数，maxIPs 和 TCP 一样按来源 IP 限。以前 UDP 只受全局的
-	// 会话上限约束，套餐里给规则设的限制对 UDP 不起作用。
-	ruleGate := newConnGate(cfg.MaxConnections, cfg.MaxIPs)
-	var sessionsMu sync.Mutex
-	var workerWG sync.WaitGroup
 	counter := &trafficCounter{}
 	stopReporting := startTrafficReporter(cfg, counter)
 	defer stopReporting()
-	queueBudget := newDefaultFXPUDPQueueRuleBudget()
-	detachSessionLocked := func(session *udpDirectEntrySession) bool {
-		if session == nil || sessionsByClient[session.key] != session {
-			return false
-		}
-		if session.releaseGate != nil {
-			session.releaseGate()
-			session.releaseGate = nil
-		}
-		delete(sessionsByClient, session.key)
-		if sessionsByID[session.sessionID] == session {
-			delete(sessionsByID, session.sessionID)
-		}
-		if session.sourceIP.IsValid() {
-			if sessionsPerIP[session.sourceIP] <= 1 {
-				delete(sessionsPerIP, session.sourceIP)
-			} else {
-				sessionsPerIP[session.sourceIP]--
-			}
-		}
-		return true
+	sessions := &udpEntrySessions{
+		conn: conn, cfg: cfg, selector: selector, inLimiter: inLimiter, outLimiter: outLimiter, counter: counter,
+		queueBudget: newDefaultFXPUDPQueueRuleBudget(),
+		ruleGate:    newConnGate(cfg.MaxConnections, cfg.MaxIPs),
+		policy:      defaultFXPUDPSessionPolicy(),
+		byClient:    map[netip.AddrPort]*udpDirectEntrySession{},
+		byID:        map[uint64]*udpDirectEntrySession{},
+		perIP:       map[netip.Addr]int{},
 	}
-	removeSession := func(session *udpDirectEntrySession) {
-		sessionsMu.Lock()
-		detachSessionLocked(session)
-		sessionsMu.Unlock()
-	}
-	stopSweeper, wakeSweeper := startFXPUDPSessionSweeper(func(now time.Time) {
-		var expired []*udpDirectEntrySession
-		var reclaimed []*udpDirectEntrySession
-		sessionsMu.Lock()
-		for key, session := range sessionsByClient {
-			if session != nil {
-				session.returnFragments.expire(now)
-			}
-			state := udpDirectEntrySessionSnapshot(session)
-			if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
-				if sessionsByClient[key] == session && detachSessionLocked(session) {
-					expired = append(expired, session)
-				}
-			}
-		}
-		for _, victim := range planFXPUDPPressureReclamation(now, sessionsByClient, policy, udpDirectEntrySessionSnapshot) {
-			if sessionsByClient[victim.key] == victim.session && detachSessionLocked(victim.session) {
-				reclaimed = append(reclaimed, victim.session)
-			}
-		}
-		sessionsMu.Unlock()
-		for _, session := range expired {
-			fxpVerbosef("entry udp direct session idle timeout tunnel=%d rule=%d client=%s", session.cfg.TunnelID, session.cfg.RuleID, session.clientAddr)
-			session.close()
-		}
-		for _, session := range reclaimed {
-			session.close()
-			fxpUDPDropLog.Printf("entry udp direct reclaimed idle session tunnel=%d rule=%d client=%s reason=capacity-pressure", session.cfg.TunnelID, session.cfg.RuleID, session.clientAddr)
-		}
-	})
+	var workerWG sync.WaitGroup
+	stopSweeper, wakeSweeper := startFXPUDPSessionSweeper(sessions.sweep)
 	defer stopSweeper()
+	sessions.wakeSweeper = wakeSweeper
 	// 入口的监听口也收客户端的包：只有从会话的出口地址来、会话号对得上的才算冗余包。
 	fec := newFXPUDPFEC(conn, cfg, fmt.Sprintf("entry tunnel=%d rule=%d", cfg.TunnelID, cfg.RuleID), func(from netip.AddrPort, packetType byte, _ int, sessionID uint64) bool {
 		if packetType != fxpUDPTypeReturn {
 			return false
 		}
-		sessionsMu.Lock()
-		defer sessionsMu.Unlock()
-		session := sessionsByID[sessionID]
+		sessions.mu.Lock()
+		defer sessions.mu.Unlock()
+		session := sessions.byID[sessionID]
 		return session != nil && from == session.remoteAddrPort
 	})
 	defer fec.close()
+	sessions.fec = fec
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
 	// 一次 recvmmsg 收一批（开 GRO），读循环照旧一个一个地拿（udp_batch_linux.go）。
@@ -566,28 +714,20 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		// 开了抗丢包时 fec.read 先交出还原出来的包。
 		n, clientAddrPort, err := fec.read(reader, buf)
 		if err != nil {
-			var closing []*udpDirectEntrySession
-			sessionsMu.Lock()
-			for _, session := range sessionsByClient {
-				closing = append(closing, session)
-			}
-			sessionsMu.Unlock()
-			for _, session := range closing {
-				session.close()
-			}
+			sessions.closeAll()
 			workerWG.Wait()
 			return err
 		}
 		clientAddrPort = fxpUDPNormalizeAddrPort(clientAddrPort)
 		if fxpUDPHasMagic(buf[:n]) {
 			if sessionID, ok := fxpUDPSessionID(buf[:n]); ok {
-				sessionsMu.Lock()
-				session := sessionsByID[sessionID]
+				sessions.mu.Lock()
+				session := sessions.byID[sessionID]
 				claimedReturn := session != nil && clientAddrPort == session.remoteAddrPort
 				if claimedReturn {
 					session.inFlight.Add(1)
 				}
-				sessionsMu.Unlock()
+				sessions.mu.Unlock()
 				if claimedReturn {
 					func() {
 						defer session.inFlight.Add(-1)
@@ -598,12 +738,12 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 						}
 						current := false
 						if packet.packetType == fxpUDPTypeReturn && packetMatchesConfig(packet, cfg) {
-							sessionsMu.Lock()
-							current = sessionsByID[sessionID] == session && clientAddrPort == session.remoteAddrPort
+							sessions.mu.Lock()
+							current = sessions.byID[sessionID] == session && clientAddrPort == session.remoteAddrPort
 							if current {
 								session.touch()
 							}
-							sessionsMu.Unlock()
+							sessions.mu.Unlock()
 						}
 						if current {
 							session.noteReply()
@@ -617,117 +757,26 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 				}
 			}
 		}
-		key := clientAddrPort
 		sourceIP := fxpUDPSourceIP(clientAddrPort)
-		pickHint := udpPickHint{avoid: -1}
-		var replaced *udpDirectEntrySession
-		replacedReason := ""
-		sessionsMu.Lock()
-		session := sessionsByClient[key]
-		if session != nil {
-			nowNano := time.Now().UnixNano()
-			session.lastActivity.Store(nowNano)
-			// 这台出口连不上了 / 一直不回包：关掉旧会话，下面当场重新挑一台（见 repickReason）。
-			if replacedReason = session.repickReason(nowNano); replacedReason != "" && detachSessionLocked(session) {
-				replaced, pickHint.avoid = session, session.endpointIndex
-				session = nil
-			}
-		}
-		preflight := fxpUDPAdmission{allow: true}
-		if session == nil {
-			preflight = checkFXPUDPSessionCapacity(len(sessionsByClient), sessionsPerIP[sourceIP], sourceIP.String(), policy)
-		}
-		sessionsMu.Unlock()
-		if replaced != nil {
-			log.Printf("entry udp direct session leaves exit tunnel=%d rule=%d client=%s exit=%s:%d reason=%s", cfg.TunnelID, cfg.RuleID, replaced.clientAddr, replaced.endpoint.Host, replaced.endpoint.Port, replacedReason)
-			replaced.close()
-		}
+		session, avoid, repicked, preflight := sessions.lookupOrRepick(clientAddrPort, sourceIP)
 		if !preflight.allow {
 			wakeSweeper()
-			fxpUDPDropLog.Printf("entry udp direct rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, clientAddrPort, preflight.reason, preflight.total, preflight.perIP, policy.hardSessions, policy.hardPerIP)
+			fxpUDPDropLog.Printf("entry udp direct rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, clientAddrPort, preflight.reason, preflight.total, preflight.perIP, sessions.policy.hardSessions, sessions.policy.hardPerIP)
 			continue
 		}
-		startSession := false
 		if session == nil {
-			// 新会话才需要 *net.UDPAddr（写 socket、连接闸、日志），每个会话分配一次。
-			addr := net.UDPAddrFromAddrPort(clientAddrPort)
-			sourceIPLabel := sourceIP.String()
-			releaseGate, ok, reason := ruleGate.acquire(addr)
+			created, started, ok := sessions.createAndAdmit(clientAddrPort, sourceIP, avoid, repicked)
 			if !ok {
-				active, ips, forIP := ruleGate.statsFor(addr)
-				fxpUDPDropLog.Printf("entry udp direct rejected by connection gate tunnel=%d rule=%d client=%s reason=%s active=%d maxConnections=%d distinctIPs=%d sessionsForIP=%d maxIPs=%d", cfg.TunnelID, cfg.RuleID, addr, reason, active, cfg.MaxConnections, ips, forIP, cfg.MaxIPs)
 				continue
 			}
-			created, err := newUDPDirectEntrySession(conn, addr, cfg, selector, inLimiter, outLimiter, counter, queueBudget, removeSession, pickHint)
-			if err == nil {
-				created.fec = fec
-				created.repicked = replacedReason == "no replies"
+			session = created
+			if started {
+				session.counter.connections.Add(1)
+				session.start(&workerWG)
+				// 下一跳是中转时，它要按访客的 IP 做「按访客固定」：赶在第一个数据包之前告诉它（udp_ping.go）。
+				// 下一跳是出口、或者是老版本，这两个小包直接被丢掉。
+				sendFXPUDPClientHint(conn, session.remoteAddr, udpEndpointKey(session.endpoint, cfg.Key), cfg.TunnelID, cfg.RuleID, session.sessionID, session.clientAddr.IP.String())
 			}
-			if err != nil {
-				releaseGate()
-				if errors.Is(err, errHopResolvePending) {
-					fxpUDPDropLog.Printf("entry udp direct waiting for exit address tunnel=%d rule=%d client=%s: %v", cfg.TunnelID, cfg.RuleID, addr, err)
-				} else if !isClosedErr(err) {
-					log.Printf("entry udp direct session create failed tunnel=%d rule=%d client=%s: %v", cfg.TunnelID, cfg.RuleID, addr, err)
-				}
-				continue
-			}
-			var closeCreated *udpDirectEntrySession
-			var admission fxpUDPAdmission
-			rejected := false
-			collision := false
-			pressure := false
-			adopted := false
-			sessionsMu.Lock()
-			if existing := sessionsByClient[key]; existing != nil {
-				session = existing
-				session.touch()
-				closeCreated = created
-			} else if sessionsByID[created.sessionID] != nil {
-				closeCreated = created
-				collision = true
-			} else {
-				admission = checkFXPUDPSessionCapacity(len(sessionsByClient), sessionsPerIP[sourceIP], sourceIPLabel, policy)
-				if !admission.allow {
-					closeCreated = created
-					rejected = true
-				} else {
-					created.releaseGate = releaseGate
-					adopted = true
-					sessionsByClient[key] = created
-					sessionsByID[created.sessionID] = created
-					sessionsPerIP[sourceIP]++
-					session = created
-					startSession = true
-					pressure = fxpUDPSessionPressure(len(sessionsByClient), sessionsPerIP[sourceIP], sourceIPLabel, policy)
-				}
-			}
-			sessionsMu.Unlock()
-			if !adopted {
-				releaseGate()
-			}
-			if closeCreated != nil {
-				closeCreated.close()
-			}
-			if collision {
-				fxpUDPDropLog.Printf("entry udp direct rejected session id collision tunnel=%d rule=%d client=%s session=%d", cfg.TunnelID, cfg.RuleID, addr, created.sessionID)
-				continue
-			}
-			if rejected {
-				wakeSweeper()
-				fxpUDPDropLog.Printf("entry udp direct rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, addr, admission.reason, admission.total, admission.perIP, policy.hardSessions, policy.hardPerIP)
-				continue
-			}
-			if pressure {
-				wakeSweeper()
-			}
-		}
-		if startSession {
-			session.counter.connections.Add(1)
-			session.start(&workerWG)
-			// 下一跳是中转时，它要按访客的 IP 做「按访客固定」：赶在第一个数据包之前告诉它（udp_ping.go）。
-			// 下一跳是出口、或者是老版本，这两个小包直接被丢掉。
-			sendFXPUDPClientHint(conn, session.remoteAddr, udpEndpointKey(session.endpoint, cfg.Key), cfg.TunnelID, cfg.RuleID, session.sessionID, session.clientAddr.IP.String())
 		}
 		session.noteClientDatagram(time.Now().UnixNano())
 		session.load.addBytes(n)
@@ -739,12 +788,9 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 	}
 }
 
-func newUDPDirectEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter, counter *trafficCounter, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpDirectEntrySession), hints ...udpPickHint) (*udpDirectEntrySession, error) {
-	avoid := -1
-	if len(hints) > 0 {
-		avoid = hints[0].avoid
-	}
-	endpoint, index, remoteAddr, err := pickUDPDirectEndpoint(selector, cfg, clientAddr.IP.String(), avoid)
+// newUDPDirectEntrySession 给访客建一条会话：挑出口（UDP 那一侧，avoid ≥ 0 是换出口时不想再用的旧出口）、建好、挂到出口上。
+func newUDPDirectEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter, counter *trafficCounter, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpDirectEntrySession), avoid int) (*udpDirectEntrySession, error) {
+	endpoint, index, remoteAddr, err := pickUDPDirectEndpoint(selector, clientAddr.IP.String(), avoid)
 	if err != nil {
 		return nil, err
 	}
@@ -754,13 +800,19 @@ func newUDPDirectEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg co
 		selector.unpick(index)
 		return nil, err
 	}
-	// 和 TCP 会话一样记到出口的负载里：建会话时开、会话结束时关（close）。端点也记一笔：挂着 UDP 会话的出口探得勤。
 	session.selector = selector
-	session.load = selector.loads[index]
-	session.load.open(time.Now())
-	session.state = selector.states[index]
-	session.state.udpSessionOpened()
+	session.load, session.state = attachUDPSessionToExit(selector, index)
 	return session, nil
+}
+
+// attachUDPSessionToExit：一条 UDP 会话挂到出口 index 上。和 TCP 会话一样记到出口的负载里（建会话时开、会话结束时关，
+// 见各自的 close）；端点也记一笔：挂着 UDP 会话的出口探得勤。
+func attachUDPSessionToExit(selector *exitEndpointSelector, index int) (*fxpHostLoad, *fxpEndpointState) {
+	load := selector.loads[index]
+	load.open(time.Now())
+	state := selector.states[index]
+	state.udpSessionOpened()
+	return load, state
 }
 
 func buildUDPDirectEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg config, endpoint exitEndpoint, index int, remoteAddr *net.UDPAddr, inLimiter, outLimiter *limiter, counter *trafficCounter, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpDirectEntrySession)) (*udpDirectEntrySession, error) {
@@ -1663,74 +1715,213 @@ func (s *udpDirectExitSession) close() {
 	})
 }
 
-func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSelector) error {
+/*
+udpRelaySessions：中转一个 UDP 直连监听的会话表和建会话要用的东西。读循环、清扫协程、抗丢包的冗余包认领共用，mu 管两张表。
+*/
+type udpRelaySessions struct {
+	conn        *net.UDPConn
+	cfg         config
+	selector    *exitEndpointSelector
+	queueBudget *fxpUDPQueueRuleBudget
+	policy      fxpUDPSessionPolicy
+	fec         *fxpUDPFEC
+	wakeSweeper func()
 	// clientHints：上一跳告诉的「这条会话的访客是谁」，建会话时取（udp_ping.go）。
-	clientHints := &udpClientHints{}
-	var missingClientHint sync.Once
-	sessionsByUpstream := map[udpRuleSessionKey]*udpDirectRelaySession{}
-	sessionsByID := map[uint64]*udpDirectRelaySession{}
-	policy := defaultFXPUDPSessionPolicy()
-	queueBudget := newDefaultFXPUDPQueueRuleBudget()
-	var sessionsMu sync.Mutex
+	clientHints       *udpClientHints
+	missingClientHint sync.Once
+
+	mu         sync.Mutex
+	byUpstream map[udpRuleSessionKey]*udpDirectRelaySession
+	byID       map[uint64]*udpDirectRelaySession
+}
+
+func (t *udpRelaySessions) detachLocked(session *udpDirectRelaySession) bool {
+	if session == nil || t.byUpstream[session.key] != session {
+		return false
+	}
+	delete(t.byUpstream, session.key)
+	if t.byID[session.sessionID] == session {
+		delete(t.byID, session.sessionID)
+	}
+	return true
+}
+
+func (t *udpRelaySessions) remove(session *udpDirectRelaySession) {
+	t.mu.Lock()
+	t.detachLocked(session)
+	t.mu.Unlock()
+}
+
+// sweep：清扫协程定时调 —— 过期的访客地址、空闲到期的会话清掉，会话太多时按压力回收。
+func (t *udpRelaySessions) sweep(now time.Time) {
+	var expired []*udpDirectRelaySession
+	var reclaimed []*udpDirectRelaySession
+	t.clientHints.expire(now)
+	t.mu.Lock()
+	for key, session := range t.byUpstream {
+		if session != nil {
+			session.dataFragments.expire(now)
+			session.returnFragments.expire(now)
+		}
+		state := udpDirectRelaySessionSnapshot(session)
+		if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
+			if t.byUpstream[key] == session && t.detachLocked(session) {
+				expired = append(expired, session)
+			}
+		}
+	}
+	for _, victim := range planFXPUDPPressureReclamation(now, t.byUpstream, t.policy, udpDirectRelaySessionSnapshot) {
+		if t.byUpstream[victim.key] == victim.session && t.detachLocked(victim.session) {
+			reclaimed = append(reclaimed, victim.session)
+		}
+	}
+	t.mu.Unlock()
+	for _, session := range expired {
+		fxpVerbosef("relay udp direct session idle timeout tunnel=%d rule=%d upstream=%s", session.cfg.TunnelID, session.ruleID, session.upstream())
+		session.close()
+	}
+	for _, session := range reclaimed {
+		session.close()
+		fxpUDPDropLog.Printf("relay udp direct reclaimed idle session tunnel=%d rule=%d upstream=%s reason=capacity-pressure", session.cfg.TunnelID, session.ruleID, session.upstream())
+	}
+}
+
+func (t *udpRelaySessions) closeAll() {
+	var closing []*udpDirectRelaySession
+	t.mu.Lock()
+	for _, session := range t.byUpstream {
+		closing = append(closing, session)
+	}
+	t.mu.Unlock()
+	for _, session := range closing {
+		session.close()
+	}
+}
+
+/*
+lookupOrRepick：这个（规则, 会话号）的数据包交给哪条会话。有会话、而且它的下一跳没被判成连不上（exitUnhealthy）就是它，
+返回前占一个 inFlight（调用方转完放掉）；要换就关掉旧会话，返回 nil、接着用的挑选键和要避开的旧下一跳（avoid）。
+没有会话时顺带查一下会话数上限（preflight）。
+*/
+func (t *udpRelaySessions) lookupOrRepick(key udpRuleSessionKey) (session *udpDirectRelaySession, selectionKey string, avoid int, preflight fxpUDPAdmission) {
+	avoid = -1
+	preflight = fxpUDPAdmission{allow: true}
+	var replaced *udpDirectRelaySession
+	t.mu.Lock()
+	session = t.byUpstream[key]
+	// 这条会话的下一跳被判成连不上了：关掉它，按同一个键重新挑一台（见 exitUnhealthy）。
+	if session != nil && session.exitUnhealthy(time.Now().UnixNano()) && t.detachLocked(session) {
+		replaced, selectionKey, avoid = session, session.selectionKey, session.endpointIndex
+		session = nil
+	}
+	if session != nil {
+		session.inFlight.Add(1)
+	} else {
+		preflight = checkFXPUDPSessionCapacity(len(t.byUpstream), 0, "", t.policy)
+	}
+	t.mu.Unlock()
+	if replaced != nil {
+		log.Printf("relay udp direct session leaves downstream tunnel=%d rule=%d session=%d downstream=%s:%d reason=exit unhealthy", t.cfg.TunnelID, replaced.ruleID, replaced.sessionID, replaced.endpoint.Host, replaced.endpoint.Port)
+		replaced.close()
+	}
+	return session, selectionKey, avoid, preflight
+}
+
+/*
+createAndAdmit：给上一跳的这条会话（第一个数据包 packet，从 addr 来）建一条中转会话、登记进表。selectionKey 为空时用上一跳
+告诉的访客地址，再没有就用会话号（newUDPDirectRelaySession）。ok 为 false 表示这个包丢掉（被拒、建不起来，已经打过日志）；
+别的包先建好了同一条会话时返回那一条（started 为 false）；started 为 true 表示是新建的、调用方要把它跑起来。
+*/
+func (t *udpRelaySessions) createAndAdmit(addr netip.AddrPort, key udpRuleSessionKey, packet fxpUDPPacket, selectionKey string, avoid int) (session *udpDirectRelaySession, started bool, ok bool) {
+	cfg := t.cfg
+	if selectionKey == "" {
+		selectionKey = t.clientHints.take(key, time.Now())
+		if selectionKey == "" && t.selector.strategy == "ip_hash" && t.selector.count() > 1 {
+			// 上一跳没告诉访客是谁（那个包丢了，或者上一跳版本过旧）：只能按会话号挑，同一个访客的几条会话
+			// 会落到不同出口上。说一次，别悄悄退化。
+			t.missingClientHint.Do(func() {
+				log.Printf("relay udp direct tunnel=%d: upstream did not announce the client address; ip_hash falls back to the session id (peer runs an outdated FXP, or the announcement was lost)", cfg.TunnelID)
+			})
+		}
+	}
+	created, err := newUDPDirectRelaySession(t.conn, net.UDPAddrFromAddrPort(addr), cfg, t.selector, packet.ruleID, packet.sessionID, t.queueBudget, t.remove, selectionKey, avoid)
+	if err != nil {
+		if errors.Is(err, errHopResolvePending) {
+			fxpUDPDropLog.Printf("relay udp direct waiting for downstream address tunnel=%d rule=%d upstream=%s: %v", cfg.TunnelID, packet.ruleID, addr, err)
+		} else {
+			log.Printf("relay udp direct session create failed tunnel=%d rule=%d upstream=%s: %v", cfg.TunnelID, packet.ruleID, addr, err)
+		}
+		return nil, false, false
+	}
+	created.fec = t.fec
+	var closeCreated *udpDirectRelaySession
+	var admission fxpUDPAdmission
+	rejected, collision, pressure := false, false, false
+	t.mu.Lock()
+	if existing := t.byUpstream[key]; existing != nil {
+		closeCreated = created
+		if existing.ruleID == packet.ruleID {
+			session = existing
+		} else {
+			collision = true
+		}
+	} else if existing := t.byID[created.sessionID]; existing != nil {
+		closeCreated = created
+		collision = true
+	} else {
+		admission = checkFXPUDPSessionCapacity(len(t.byUpstream), 0, "", t.policy)
+		if !admission.allow {
+			closeCreated = created
+			rejected = true
+		} else {
+			t.byUpstream[key] = created
+			t.byID[created.sessionID] = created
+			session, started = created, true
+			pressure = fxpUDPSessionPressure(len(t.byUpstream), 0, "", t.policy)
+		}
+	}
+	t.mu.Unlock()
+	if closeCreated != nil {
+		closeCreated.close()
+	}
+	switch {
+	case collision:
+		fxpUDPDropLog.Printf("relay udp direct rejected session id collision tunnel=%d rule=%d upstream=%s session=%d", cfg.TunnelID, packet.ruleID, addr, packet.sessionID)
+		return nil, false, false
+	case rejected:
+		t.wakeSweeper()
+		fxpUDPDropLog.Printf("relay udp direct rejected new session tunnel=%d rule=%d upstream=%s reason=%s sessions=%d hardSessions=%d", cfg.TunnelID, packet.ruleID, addr, admission.reason, admission.total, t.policy.hardSessions)
+		return nil, false, false
+	case pressure:
+		t.wakeSweeper()
+	}
+	return session, started, true
+}
+
+func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSelector) error {
+	sessions := &udpRelaySessions{
+		conn: conn, cfg: cfg, selector: selector,
+		queueBudget: newDefaultFXPUDPQueueRuleBudget(),
+		policy:      defaultFXPUDPSessionPolicy(),
+		clientHints: &udpClientHints{},
+		byUpstream:  map[udpRuleSessionKey]*udpDirectRelaySession{},
+		byID:        map[uint64]*udpDirectRelaySession{},
+	}
 	var workerWG sync.WaitGroup
-	detachSessionLocked := func(session *udpDirectRelaySession) bool {
-		if session == nil || sessionsByUpstream[session.key] != session {
-			return false
-		}
-		delete(sessionsByUpstream, session.key)
-		if sessionsByID[session.sessionID] == session {
-			delete(sessionsByID, session.sessionID)
-		}
-		return true
-	}
-	removeSession := func(session *udpDirectRelaySession) {
-		sessionsMu.Lock()
-		detachSessionLocked(session)
-		sessionsMu.Unlock()
-	}
-	stopSweeper, wakeSweeper := startFXPUDPSessionSweeper(func(now time.Time) {
-		var expired []*udpDirectRelaySession
-		var reclaimed []*udpDirectRelaySession
-		clientHints.expire(now)
-		sessionsMu.Lock()
-		for key, session := range sessionsByUpstream {
-			if session != nil {
-				session.dataFragments.expire(now)
-				session.returnFragments.expire(now)
-			}
-			state := udpDirectRelaySessionSnapshot(session)
-			if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
-				if sessionsByUpstream[key] == session && detachSessionLocked(session) {
-					expired = append(expired, session)
-				}
-			}
-		}
-		for _, victim := range planFXPUDPPressureReclamation(now, sessionsByUpstream, policy, udpDirectRelaySessionSnapshot) {
-			if sessionsByUpstream[victim.key] == victim.session && detachSessionLocked(victim.session) {
-				reclaimed = append(reclaimed, victim.session)
-			}
-		}
-		sessionsMu.Unlock()
-		for _, session := range expired {
-			fxpVerbosef("relay udp direct session idle timeout tunnel=%d rule=%d upstream=%s", session.cfg.TunnelID, session.ruleID, session.upstream())
-			session.close()
-		}
-		for _, session := range reclaimed {
-			session.close()
-			fxpUDPDropLog.Printf("relay udp direct reclaimed idle session tunnel=%d rule=%d upstream=%s reason=capacity-pressure", session.cfg.TunnelID, session.ruleID, session.upstream())
-		}
-	})
+	stopSweeper, wakeSweeper := startFXPUDPSessionSweeper(sessions.sweep)
 	defer stopSweeper()
+	sessions.wakeSweeper = wakeSweeper
 	fec := newFXPUDPFEC(conn, cfg, fmt.Sprintf("relay tunnel=%d", cfg.TunnelID), func(from netip.AddrPort, packetType byte, ruleID int, sessionID uint64) bool {
-		sessionsMu.Lock()
-		defer sessionsMu.Unlock()
+		sessions.mu.Lock()
+		defer sessions.mu.Unlock()
 		if packetType == fxpUDPTypeReturn {
-			session := sessionsByID[sessionID]
+			session := sessions.byID[sessionID]
 			return session != nil && from == session.downstreamAddrPort
 		}
-		return sessionsByUpstream[udpRuleSessionKey{ruleID: ruleID, sessionID: sessionID}] != nil
+		return sessions.byUpstream[udpRuleSessionKey{ruleID: ruleID, sessionID: sessionID}] != nil
 	})
 	defer fec.close()
+	sessions.fec = fec
 	carrierKey := lossCarrierListenKey(cfg.ListenHost, udpListenPort(cfg))
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
@@ -1739,15 +1930,7 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 	for {
 		n, addr, err := fec.read(reader, buf)
 		if err != nil {
-			var closing []*udpDirectRelaySession
-			sessionsMu.Lock()
-			for _, session := range sessionsByUpstream {
-				closing = append(closing, session)
-			}
-			sessionsMu.Unlock()
-			for _, session := range closing {
-				session.close()
-			}
+			sessions.closeAll()
 			workerWG.Wait()
 			return err
 		}
@@ -1761,13 +1944,13 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 			continue
 		}
 		addr = fxpUDPNormalizeAddrPort(addr)
-		sessionsMu.Lock()
-		session := sessionsByID[sessionID]
+		sessions.mu.Lock()
+		session := sessions.byID[sessionID]
 		claimedReturn := session != nil && addr == session.downstreamAddrPort
 		if claimedReturn {
 			session.inFlight.Add(1)
 		}
-		sessionsMu.Unlock()
+		sessions.mu.Unlock()
 		if claimedReturn {
 			func() {
 				defer session.inFlight.Add(-1)
@@ -1777,12 +1960,12 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 				}
 				current := false
 				if packet.packetType == fxpUDPTypeReturn && packetMatchesConfig(packet, cfg) {
-					sessionsMu.Lock()
-					current = sessionsByID[sessionID] == session && addr == session.downstreamAddrPort
+					sessions.mu.Lock()
+					current = sessions.byID[sessionID] == session && addr == session.downstreamAddrPort
 					if current {
 						session.touch()
 					}
-					sessionsMu.Unlock()
+					sessions.mu.Unlock()
 				}
 				if current {
 					session.forwardToUpstream(packet, true)
@@ -1800,7 +1983,7 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		}
 		if err == nil && header.packetType == fxpUDPTypeClient {
 			// 上一跳告诉这条会话的访客是谁：记下来，等它的第一个数据包来建会话时当「按访客固定」的键。
-			clientHints.accept(buf[:n], cfg, time.Now())
+			sessions.clientHints.accept(buf[:n], cfg, time.Now())
 			continue
 		}
 		if err != nil || header.packetType != fxpUDPTypeData {
@@ -1813,27 +1996,7 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		// 和出口一样只按（规则, 会话号）找：中转会给下一跳重新封包、换新序号，
 		// 这里放进去的重放，下一跳是认不出来的。
 		key := udpRuleSessionKey{ruleID: header.ruleID, sessionID: header.sessionID}
-		pickHint := udpPickHint{avoid: -1}
-		var replaced *udpDirectRelaySession
-		sessionsMu.Lock()
-		session = sessionsByUpstream[key]
-		// 这条会话的下一跳被判成连不上了：关掉它，下面按同一个键重新挑一台（见 exitUnhealthy）。
-		if session != nil && session.exitUnhealthy(time.Now().UnixNano()) && detachSessionLocked(session) {
-			replaced, pickHint = session, udpPickHint{key: session.selectionKey, avoid: session.endpointIndex}
-			session = nil
-		}
-		if session != nil {
-			session.inFlight.Add(1)
-		}
-		preflight := fxpUDPAdmission{allow: true}
-		if session == nil {
-			preflight = checkFXPUDPSessionCapacity(len(sessionsByUpstream), 0, "", policy)
-		}
-		sessionsMu.Unlock()
-		if replaced != nil {
-			log.Printf("relay udp direct session leaves downstream tunnel=%d rule=%d session=%d downstream=%s:%d reason=exit unhealthy", cfg.TunnelID, replaced.ruleID, replaced.sessionID, replaced.endpoint.Host, replaced.endpoint.Port)
-			replaced.close()
-		}
+		session, selectionKey, avoid, preflight := sessions.lookupOrRepick(key)
 		if session != nil {
 			func() {
 				defer session.inFlight.Add(-1)
@@ -1843,12 +2006,12 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 				}
 				current := false
 				if packet.packetType == fxpUDPTypeData && packetMatchesConfig(packet, cfg) && fxpUDPReplayGuard.fresh(packet.sentAt, time.Now()) {
-					sessionsMu.Lock()
-					current = sessionsByUpstream[key] == session
+					sessions.mu.Lock()
+					current = sessions.byUpstream[key] == session
 					if current {
 						session.touch()
 					}
-					sessionsMu.Unlock()
+					sessions.mu.Unlock()
 				}
 				if !current {
 					putFXPByteBuffer(packet.payload)
@@ -1860,106 +2023,39 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		}
 		if !preflight.allow {
 			wakeSweeper()
-			fxpUDPDropLog.Printf("relay udp direct rejected new session tunnel=%d rule=%d upstream=%s reason=%s sessions=%d hardSessions=%d", cfg.TunnelID, header.ruleID, addr, preflight.reason, preflight.total, policy.hardSessions)
+			fxpUDPDropLog.Printf("relay udp direct rejected new session tunnel=%d rule=%d upstream=%s reason=%s sessions=%d hardSessions=%d", cfg.TunnelID, header.ruleID, addr, preflight.reason, preflight.total, sessions.policy.hardSessions)
 			continue
 		}
 		packet, err := openFXPUDPPacket(buf[:n], cfg.TunnelID, cfg.Key)
 		if err != nil || packet.packetType != fxpUDPTypeData || !packetMatchesConfig(packet, cfg) || !fxpUDPReplayGuard.fresh(packet.sentAt, time.Now()) {
 			continue
 		}
-		if session == nil {
-			if pickHint.key == "" {
-				pickHint.key = clientHints.take(key, time.Now())
-				if pickHint.key == "" && selector.strategy == "ip_hash" && selector.count() > 1 {
-					// 上一跳没告诉访客是谁（那个包丢了，或者上一跳版本过旧）：只能按会话号挑，同一个访客的几条会话
-					// 会落到不同出口上。说一次，别悄悄退化。
-					missingClientHint.Do(func() {
-						log.Printf("relay udp direct tunnel=%d: upstream did not announce the client address; ip_hash falls back to the session id (peer runs an outdated FXP, or the announcement was lost)", cfg.TunnelID)
-					})
-				}
-			}
-			created, err := newUDPDirectRelaySession(conn, net.UDPAddrFromAddrPort(addr), cfg, selector, packet.ruleID, packet.sessionID, queueBudget, removeSession, pickHint)
-			if err == nil {
-				created.fec = fec
-			}
-			if err != nil {
-				if errors.Is(err, errHopResolvePending) {
-					fxpUDPDropLog.Printf("relay udp direct waiting for downstream address tunnel=%d rule=%d upstream=%s: %v", cfg.TunnelID, packet.ruleID, addr, err)
-				} else {
-					log.Printf("relay udp direct session create failed tunnel=%d rule=%d upstream=%s: %v", cfg.TunnelID, packet.ruleID, addr, err)
-				}
-				continue
-			}
-			var closeCreated *udpDirectRelaySession
-			var admission fxpUDPAdmission
-			rejected := false
-			collision := false
-			startSession := false
-			pressure := false
-			sessionsMu.Lock()
-			if existing := sessionsByUpstream[key]; existing != nil {
-				closeCreated = created
-				if existing.ruleID == packet.ruleID {
-					session = existing
-				} else {
-					collision = true
-				}
-			} else if existing := sessionsByID[created.sessionID]; existing != nil {
-				closeCreated = created
-				collision = true
-			} else {
-				admission = checkFXPUDPSessionCapacity(len(sessionsByUpstream), 0, "", policy)
-				if !admission.allow {
-					closeCreated = created
-					rejected = true
-				} else {
-					sessionsByUpstream[key] = created
-					sessionsByID[created.sessionID] = created
-					session = created
-					startSession = true
-					pressure = fxpUDPSessionPressure(len(sessionsByUpstream), 0, "", policy)
-				}
-			}
-			sessionsMu.Unlock()
-			if closeCreated != nil {
-				closeCreated.close()
-			}
-			if collision {
-				fxpUDPDropLog.Printf("relay udp direct rejected session id collision tunnel=%d rule=%d upstream=%s session=%d", cfg.TunnelID, packet.ruleID, addr, packet.sessionID)
-				continue
-			}
-			if rejected {
-				wakeSweeper()
-				fxpUDPDropLog.Printf("relay udp direct rejected new session tunnel=%d rule=%d upstream=%s reason=%s sessions=%d hardSessions=%d", cfg.TunnelID, packet.ruleID, addr, admission.reason, admission.total, policy.hardSessions)
-				continue
-			}
-			if pressure {
-				wakeSweeper()
-			}
-			if startSession {
-				session.start(&workerWG)
-				// 下一跳也是中转时接着往下传访客地址（键是会话号时这里什么都不发）。
-				sendFXPUDPClientHint(conn, session.downstreamAddr, udpEndpointKey(session.endpoint, cfg.RelayKey), cfg.TunnelID, session.ruleID, session.sessionID, session.selectionKey)
-			}
+		session, started, ok := sessions.createAndAdmit(addr, key, packet, selectionKey, avoid)
+		if !ok {
+			continue
+		}
+		if started {
+			session.start(&workerWG)
+			// 下一跳也是中转时接着往下传访客地址（键是会话号时这里什么都不发）。
+			sendFXPUDPClientHint(conn, session.downstreamAddr, udpEndpointKey(session.endpoint, cfg.RelayKey), cfg.TunnelID, session.ruleID, session.sessionID, session.selectionKey)
 		}
 		session.forwardToDownstream(addr, packet, false)
 	}
 }
 
-func newUDPDirectRelaySession(conn *net.UDPConn, upstreamAddr *net.UDPAddr, cfg config, selector *exitEndpointSelector, ruleID int, sessionID uint64, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpDirectRelaySession), hints ...udpPickHint) (*udpDirectRelaySession, error) {
-	/*
-		「按访客固定」的键：上一跳告诉了访客的 IP 就用它（入口在会话的第一个数据包之前发来，见 udp_ping.go），
-		同一个访客的几条会话落在同一台出口上，和 TCP 一致。没有（上一跳是老版本、那个小包丢了）就退回会话号 ——
-		以前一直是会话号，每条会话随机，等于没有固定。
-	*/
-	hint := udpPickHint{avoid: -1}
-	if len(hints) > 0 {
-		hint = hints[0]
+/*
+newUDPDirectRelaySession 给上一跳的一条会话建中转会话：挑下一跳（UDP 那一侧，avoid ≥ 0 是换出口时不想再用的旧下一跳）、
+建好、挂到下一跳上。
+
+「按访客固定」的键（selectionKey）：上一跳告诉了访客的 IP 就用它（入口在会话的第一个数据包之前发来，见 udp_ping.go），
+同一个访客的几条会话落在同一台出口上，和 TCP 一致。没有（上一跳是老版本、那个小包丢了）就退回会话号 ——
+以前一直是会话号，每条会话随机，等于没有固定。
+*/
+func newUDPDirectRelaySession(conn *net.UDPConn, upstreamAddr *net.UDPAddr, cfg config, selector *exitEndpointSelector, ruleID int, sessionID uint64, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpDirectRelaySession), selectionKey string, avoid int) (*udpDirectRelaySession, error) {
+	if selectionKey == "" {
+		selectionKey = strconv.FormatUint(sessionID, 10)
 	}
-	if hint.key == "" {
-		hint.key = strconv.FormatUint(sessionID, 10)
-	}
-	endpoint, index, downstreamAddr, err := pickUDPDirectEndpoint(selector, cfg, hint.key, hint.avoid)
+	endpoint, index, downstreamAddr, err := pickUDPDirectEndpoint(selector, selectionKey, avoid)
 	if err != nil {
 		return nil, err
 	}
@@ -1969,11 +2065,8 @@ func newUDPDirectRelaySession(conn *net.UDPConn, upstreamAddr *net.UDPAddr, cfg 
 		return nil, err
 	}
 	session.selector = selector
-	session.selectionKey = hint.key
-	session.load = selector.loads[index]
-	session.load.open(time.Now())
-	session.state = selector.states[index]
-	session.state.udpSessionOpened()
+	session.selectionKey = selectionKey
+	session.load, session.state = attachUDPSessionToExit(selector, index)
 	return session, nil
 }
 
@@ -2252,17 +2345,23 @@ func recycleFXPUDPPayload(payload []byte, pooled bool) {
 
 // pickUDPDirectEndpoint 给一条新的 UDP 会话挑出口，候选、分配方式和 TCP 完全一样（selector.pickUDP），
 // 只是出口本身通不通看 UDP 那一侧。
-// avoid（≥ 0）是换出口时的旧出口：先不考虑它，实在没有别的再用。
-func pickUDPDirectEndpoint(selector *exitEndpointSelector, cfg config, selectionKey string, avoid int) (exitEndpoint, int, *net.UDPAddr, error) {
+// avoid（≥ 0）是换出口时的旧出口：先不考虑它；别的都试过、一台都不行，才再试它。
+func pickUDPDirectEndpoint(selector *exitEndpointSelector, selectionKey string, avoid int) (exitEndpoint, int, *net.UDPAddr, error) {
 	if selector == nil || selector.count() == 0 {
 		return exitEndpoint{}, -1, nil, errors.New("no exit endpoints")
 	}
-	if avoid >= 0 && selector.count() > 1 {
-		if endpoint, index, addr, err := pickUDPDirectEndpointExcluding(selector, selectionKey, map[int]bool{avoid: true}); err == nil {
-			return endpoint, index, addr, nil
-		}
+	attempted := map[int]bool{}
+	avoiding := avoid >= 0 && selector.count() > 1
+	if avoiding {
+		attempted[avoid] = true
 	}
-	return pickUDPDirectEndpointExcluding(selector, selectionKey, map[int]bool{})
+	endpoint, index, addr, err := pickUDPDirectEndpointExcluding(selector, selectionKey, attempted)
+	if err != nil && avoiding {
+		// 别的都试过了（attempted 里记着）：只剩旧出口。
+		delete(attempted, avoid)
+		return pickUDPDirectEndpointExcluding(selector, selectionKey, attempted)
+	}
+	return endpoint, index, addr, err
 }
 
 func pickUDPDirectEndpointExcluding(selector *exitEndpointSelector, selectionKey string, attempted map[int]bool) (exitEndpoint, int, *net.UDPAddr, error) {

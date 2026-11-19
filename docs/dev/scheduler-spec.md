@@ -163,11 +163,21 @@
 
 - 出口本身：连续 `几次不通` 次失败（真实连接的握手失败也算）判死；被盯着的健康出口 10 s 内没有任何东西证明它活着就主动探
   一次（`fxpHealthyProbeEvery`，`forwardx-fxp/endpoint_pool.go:47`）；恢复要连着 `恢复连续通` 次、每次间隔一个 `间隔`
-  （均衡 3 次 × 2 s ≈ 4 s）。
+  （均衡 3 次 × 2 s ≈ 4 s）。隧道连接在池里、握手中、等出口回结果时设着 30 s 的 `TCP_USER_TIMEOUT`（对端黑洞就判死，
+  `fxpTunnelUserTimeout`）；会话提交（入口）/ 目标或下一跳接上（出口、中转）之后清掉（`secureConn.commitSession`）——
+  Linux 5.11 起零窗口探测也算进它，访客暂停不读超过 30 s 会被复位；跑起来的会话靠保活发现对端没了。
 - 出口到目标：出口回报「连上目标没有」（入口当场换出口重放，`selected_transport.go`）；按「出口 + 目标」记最近 30 次
   （`fxpTargetWindow`，`target_health.go:140`）的延迟、抖动、丢包；丢包 ≥ 10% 或抖动超门槛并持续够久算不稳。
-- UDP 那一侧：探活包（类型 3/4），有会话时 1 s 一轮、闲着 5 s（`endpoint_pool.go:55`），每轮 3 次 × 等 1 s
-  （`udp_ping.go:43`）；从没回过的 30 s 再问、问过 2 轮还没回就报 `udpState: "unverified"`、`peerOutdated`。
+  入口等这一帧最多等 `fxpTargetStatusWait` = 出口拨目标的时限 4 s（`fxpTargetDialTimeoutDefault`，出口解析目标域名也算在里面，
+  `exit_targets.go` 的 `dialExitTarget`）+ 2 s 余量（`fxpTargetProbeReplyGrace`），再加量到的到这台出口的握手耗时（指数平均，
+  封顶 4 s，`targetStatusWaitFor`）；现拨的流水线连接从握手确认那一刻起至少再等 6 s。等不到：这条连接换下一台重放（见 §10），
+  这台出口记一次「可疑」—— 和后台探测失败同一套计数，连着 `几次不通` 次才判坏，不当场判坏（结果帧可能只是晚到了）。
+- UDP 那一侧：探活包（类型 3/4），有会话时 1 s 一轮、闲着 5 s（`fxpUDPProbeActiveEvery` / `fxpUDPProbeEvery`，`endpoint_pool.go`）。
+  一轮最多等 1 s，这 1 s 里最多发 3 个包：每隔 1/3 s 没等到应答就再发一个，最后一个等到这一轮结束（`fxpUDPPingAttempts`、
+  `fxpUDPPingWait`，`udp_ping.go`）；正常的出口第一个包就回了。一轮没回紧接着再来一轮，连着 `几次不通` 轮没回判 UDP 不通，
+  判坏后每 `间隔` 一轮、连着 `恢复连续通` 轮回了才恢复（和 TCP 那一侧同一套计数，`sideHealth`，但各记各的）。地址和数据走同一套
+  解析（`resolveHopAddress`）。从没回过的 30 s 再问、问过 2 轮还没回就报 `udpState: "unverified"`、`peerOutdated`；这种出口只在
+  有别的验证过、UDP 通的出口时才算软信号（§4）。
 - 实测（`forwardx-fxp/lb_stage2_test.go`，路线图阶段 2）：UDP 会话所在出口黑洞 → 2.2 s 换走；出口恢复 → 4 s 放回、UDP 5 s。
 
 ### 6.5 Nginx 隧道（基础支持）
@@ -189,7 +199,15 @@
 - Agent UDP 会话：一个访客端口一个会话；空闲 2 分钟回收（`failoverUDPIdleTimeout`，`agent/route_group_udp.go:41`），上限 4096；
   一条路径 / 出口判坏的那一刻它上面的 UDP 会话全部关掉，下一个包重挑（`route_group_path_down.go`）；之后还落在坏路径上的：
   发了 ≥ 8 个包、≥ 10 s 没回包、且路径 UDP 那一侧此刻是坏的 → 丢掉重挑（`:83`）。
-- FXP UDP 会话：会话没回包 + 一轮探活没回 → 访客的包换到另一台出口（同一个套接字）。
+- FXP UDP 会话（`udp_direct.go`）：入口在访客的下一个包到来时看一眼（每条会话最多每 250 ms 看一次，`fxpUDPRepickCheckEvery`），
+  只在还有别的 UDP 连得上的出口时换；换 = 关掉旧会话、当场按同样的规则重挑一台（先不考虑旧出口，别的都不行才再用它），
+  建一条新会话（新会话号；访客那边的套接字不变）：
+  1. 出口 UDP 那一侧被判成不通了（`repickReason` 的 `exit unhealthy`）；
+  2. 出口回过探活包：上一次回包之后访客连着发了 ≥ 4 个包、过了 ≥ 2 s 一个回包都没有（`fxpUDPSilentMinDatagrams` /
+     `fxpUDPSilentMinAge`），**而且**这期间有一轮探活没回、一次应答都没收到（`no replies`）。这期间探活回过就不换（应用协议本来就单向）；
+  3. 出口从没回过探活包（没法验证）：从头到尾没收到过回包、发了 ≥ 8 个、建了 ≥ 5 s、最近 25 s 没有别的东西证明它活着
+     （`fxpUDPRepickMinDatagrams` / `fxpUDPRepickMinAge` / `fxpUDPRepickConfirmedWithin`），只换一次。
+  中转（`serveRelayUDPDirect`）只按第 1 条换下一跳（`exitUnhealthy`；会话号是入口定的，不变，挑选键沿用上一跳告诉的访客地址）。
 - TCP：挑定不搬。线路组「快速切换」在故障切换时断旧连接、「强制」每次切换都断（`switchMode`）；GOST / NEX 出口组的 TCP 不断。
 
 ## 8. 抖动抑制（`lbcore.FlapDamper`）
@@ -197,7 +215,7 @@
 | 谁 | 记什么 | 窗口 / 门槛 / 驻留 | 出处 |
 |---|---|---|---|
 | 线路组、GOST 出口组 | 自动切换（人工指定、演练、开机 90 s 预热期内的不记） | 1 h 内第 3 次起压 5 min，每多一次翻倍，最多 1 h；挂了逃生不受限 | `agent/failover_selection.go:103-120` |
-| FXP 出口本身 | 断开 | 1 h 内第 4 次起，下一次恢复要从断开算坏满 30 s，翻倍，最多 5 min | `forwardx-fxp/endpoint_pool.go:94` |
+| FXP 出口本身 | 断开（TCP 那一侧、UDP 那一侧各记各的：一次两侧一起断的中断每侧各记一次，不是两次） | 每一侧 1 h 内第 4 次断开起，下一次恢复要从断开算坏满 30 s，翻倍，最多 5 min | `forwardx-fxp/endpoint_pool.go` 的 `fxpEndpointFlapPolicy`、`sideHealth` |
 | FXP 出口到目标 | 中断（好 → 坏） | 1 h 内第 4 次起，恢复要坏满 5 min（不翻倍） | `forwardx-fxp/target_health.go:295` |
 | DNS 组 | 自动切换 / 拿掉加回 | 1 h 内 3 次起 5 min，翻倍，最多 1 h | `server/forwardGroupFlapHold.ts:13` |
 
@@ -222,5 +240,8 @@ FXP 另有两个功能门槛（出口回报目标 `FXP_TARGET_AWARE_VERSION` 2.2
 - Nginx 隧道只有基础支持（§6.5）。
 - 0–100 分只给人看，不参与任何决定。
 - 一条 TCP 连接不会在途中换路径 / 出口（FXP 在目标回报之前的重放除外）。
+- **FXP 等不到「连上目标没有」时的重放不保证至多一次**：只有出口一个字节都没回过才重放，可出口也许已经连上目标、把发过去的
+  首包转出去了，只是结果帧丢了或者晚过了等待（§6.4）。这时目标会从另一台出口再收到一份同样的开头。出口回「连不上」、
+  握手没确认这两种情况内容没到过目标，重放是安全的。
 - DNS 组：只有主备（转发组）和按权重解析（入口组，服务商支持时）；外部观察不覆盖落地池直连域名、共享 TLS 入站的规则、
   还没有规则在用的主备组；多面板实例时没有租约（路线图 P15）。

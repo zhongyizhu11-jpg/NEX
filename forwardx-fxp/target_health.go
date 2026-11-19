@@ -691,7 +691,7 @@ func probeEndpointTarget(state *fxpEndpointState, endpoint exitEndpoint, cfg con
 	if err = writeSecureFramesWithDeadline(sec, hello); err != nil {
 		return targetStatusFrame{}, err
 	}
-	_ = sec.conn.SetReadDeadline(time.Now().Add(fxpTargetDialTimeoutDefault + fxpTargetProbeReplyGrace))
+	_ = sec.conn.SetReadDeadline(time.Now().Add(targetStatusWaitFor(state.hostLoad())))
 	frame, err := sec.readFrame()
 	if err != nil {
 		return targetStatusFrame{}, err

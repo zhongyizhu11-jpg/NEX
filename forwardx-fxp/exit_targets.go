@@ -121,8 +121,12 @@ func dialExitTargetFor(cfg config, hello helloFrame, timeout time.Duration) (net
 
 // dialExitTarget 拨一个核对过的 TCP 目标。拨的就是解析出来、查过的那个 IP，
 // 查和拨之间不会再解析一次。
+//
+// 解析目标域名也算在 timeout 里（F2）：入口等结果帧的时间是按「拨目标的时限」算的，解析放在时限外面，
+// 冷 DNS 一慢，每台出口的结果都晚过入口的等待，被当成出口没回话。
 func dialExitTarget(hello helloFrame, timeout time.Duration) (net.Conn, error) {
-	address, err := resolveHopAddress(hello.TargetIP, hello.TargetPort)
+	deadline := time.Now().Add(timeout)
+	address, err := resolveHopAddressWithin(hello.TargetIP, hello.TargetPort, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +137,7 @@ func dialExitTarget(hello helloFrame, timeout time.Duration) (net.Conn, error) {
 	if err := checkResolvedExitTarget(hello, net.ParseIP(host)); err != nil {
 		return nil, err
 	}
-	d := net.Dialer{Timeout: timeout, KeepAlive: fxpTCPKeepAlive}
+	d := net.Dialer{Deadline: deadline, KeepAlive: fxpTCPKeepAlive}
 	conn, err := d.Dial("tcp", address)
 	if err != nil {
 		return nil, err

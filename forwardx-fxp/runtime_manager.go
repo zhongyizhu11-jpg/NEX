@@ -711,8 +711,9 @@ func (s *tcpListenerSlot) serveListener(m *fxpRuntimeManager, ln net.Listener, r
 		}
 		enableTCPKeepAlive(conn)
 		if role != "entry" {
-			// 出口 / 中转接进来的是隧道连接（入口接的是用户的连接，不动）：上一跳黑洞了 30 秒就判死。
-			setTCPUserTimeout(conn, fxpTunnelUserTimeout)
+			// 出口 / 中转接进来的是隧道连接（入口接的是用户的连接，不动）：还在等 hello、握手的时候上一跳黑洞了 30 秒就判死；
+			// 会话跑起来（目标 / 下一跳接上了）就清掉（secureConn.commitSession）。
+			setTCPUserTimeout(conn, tunnelUserTimeout())
 		}
 		handler := s.handler.Load()
 		if handler == nil {

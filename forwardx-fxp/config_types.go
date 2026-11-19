@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 type exitEndpoint struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
@@ -161,4 +163,7 @@ type config struct {
 	LossTolerant bool `json:"lossTolerant,omitempty"`
 	// ReloadNonce 由 Agent 在热更新时写入，进程应用后原样写回 <config>.applied。
 	ReloadNonce string `json:"reloadNonce,omitempty"`
+	// v3HandshakeTimeout 不上线：V3 现拨物理连接时外层 + 内层握手最多等多久（0 = fxpHandshakeTimeout，10 秒）。
+	// 入口有别的出口可换时用 fxpPipelinedAckFast（和 V1 流水线握手的确认一样，见 selectedTransport.connectLocked）。
+	v3HandshakeTimeout time.Duration
 }

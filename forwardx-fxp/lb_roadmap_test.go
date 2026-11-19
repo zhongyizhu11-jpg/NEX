@@ -352,13 +352,13 @@ func TestResolvingAnAddressDoesNotReviveADeadEndpoint(t *testing.T) {
 	selector.markFailure(0, errTestEndpointDown)
 	state := selector.states[0]
 	state.mu.Lock()
-	failures, retryAfter := state.failures, state.retryAfter
+	failures, retryAfter := state.tcp.failures, state.tcp.retryAfter
 	state.mu.Unlock()
 	selector.markResolved(0)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.healthy || state.failures != failures || !state.retryAfter.Equal(retryAfter) {
-		t.Fatalf("解析成功把连不上的出口改回了健康 / 清了退避：healthy=%v failures=%d→%d", state.healthy, failures, state.failures)
+	if !state.tcp.down || state.tcp.failures != failures || !state.tcp.retryAfter.Equal(retryAfter) {
+		t.Fatalf("解析成功把连不上的出口改回了健康 / 清了退避：healthy=%v failures=%d→%d", !state.tcp.down, failures, state.tcp.failures)
 	}
 }
 
@@ -582,7 +582,6 @@ func TestTargetStatusWaitHasADeadline(t *testing.T) {
 	if elapsed > 9*time.Second {
 		t.Fatalf("等结果等了 %v，应该有截止时间", elapsed.Round(time.Millisecond))
 	}
-	if fxpEndpointStateFor(exitEndpoint{Host: "127.0.0.1", Port: ports[0], Key: key}).isHealthy() {
-		t.Fatal("不回结果的出口应该记一次出口失败")
-	}
+	// 等不到结果记在出口头上的是一次「可疑」，不是当场判坏（F2，见 TestOneMissingTargetStatusIsOnlyASuspect）；
+	// 这台出口握手照常通，后台探测会把可疑清掉，这里不看它的健康。
 }

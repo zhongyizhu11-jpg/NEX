@@ -172,6 +172,26 @@ type secureConn struct {
 	writeLenPlain [4]byte
 	readNonce     [12]byte
 	readLenPlain  [4]byte
+	// userTimeoutRaw：这条会话独占的那条物理 TCP 连接（V1 / V2 的连接本身、不复用的 V3 底下那条），它上面设着
+	// TCP_USER_TIMEOUT。会话交出去（commitSession）时清掉；V3 复用会话里的逻辑流是 nil（物理连接是大家的）。
+	userTimeoutRaw     net.Conn
+	userTimeoutCleared atomic.Bool
+}
+
+/*
+commitSession：这条隧道连接从此承载一条正在跑的会话（入口：握手确认了、要等的「连目标的结果」也到了；
+出口 / 中转：目标连上了 / 下一跳接上了）。清掉 TCP_USER_TIMEOUT（F1）。
+
+TCP_USER_TIMEOUT 是给池里的、握手中的、等结果的连接用的：对端黑洞了，30 秒判死，别把用户的东西发进去。
+可 Linux 5.11 起零窗口探测也算进它 —— 访客停下来不读（视频暂停、标签页切到后台）超过 30 秒，对面那一头的
+发送窗口一直是零，正在用的连接就被内核复位。会话跑起来之后，对端没了靠保活发现（fxpTCPKeepAlive），不靠它。
+可以重复调，只清一次。
+*/
+func (c *secureConn) commitSession() {
+	if c == nil || c.userTimeoutRaw == nil || !c.userTimeoutCleared.CompareAndSwap(false, true) {
+		return
+	}
+	clearTCPUserTimeout(c.userTimeoutRaw)
 }
 
 // fxpAckError 表示对端没有确认握手：连不通的黑洞、拒绝了密钥、半路断开。
@@ -551,8 +571,9 @@ activateUDP 在一个 UDP 直连运行时启动时调用（入口的 UDP 监听�
 也盯着这些端点（路线图 X3）。
 
 以前只有 TCP 运行时会探测。纯 UDP 的规则、中转的 UDP 选择器没有任何健康信号：出口机没了，新会话照样
-挑它，直到有一条同隧道的 TCP 规则碰巧把它判坏。怎么探见 endpoint_pool.go 的 watchUDP：
-新出口回 UDP 探活包；老出口不认识，退回去探它的 TCP 端口（确认过它有 TCP 监听才算数）。
+挑它，直到有一条同隧道的 TCP 规则碰巧把它判坏。怎么探见 endpoint_pool.go 的 watchUDP：发 UDP 探活包，
+对端回过就以它为准；从没回过（版本过旧、UDP 一直不通）就不拿「没回」判它坏，UDP 跟着 TCP 那一侧的结论走，
+问过两轮还不回标成「没验证过」报给面板。
 不预热 TCP 连接池，也不派「出口连得上目标吗」的 TCP 探测 —— UDP 规则的目标是 UDP 的。
 */
 func (s *exitEndpointSelector) activateUDP(cfg config) func() {
@@ -678,6 +699,14 @@ func (s *exitEndpointSelector) observeLatency(index int, d time.Duration) {
 		return
 	}
 	s.loads[index].observeLatency(d, time.Now())
+}
+
+// probeFailed：这台出口有一次可疑（后台探测没通、等不到出口回结果）。健康的要连着几次才判坏（fxpEndpointState.probeFailed）。
+func (s *exitEndpointSelector) probeFailed(index int, err error) {
+	if s == nil || index < 0 || index >= len(s.states) {
+		return
+	}
+	s.states[index].probeFailed(err)
 }
 
 func (s *exitEndpointSelector) markFailure(index int, err error) {
@@ -1147,13 +1176,24 @@ func dialTCP(host string, port int, timeout time.Duration, fastOpen bool) (net.C
 		return nil, err
 	}
 	enableTCPKeepAlive(conn)
-	// 到下一跳的隧道连接：对端黑洞了 30 秒就让内核判死（tcp_user_timeout_linux.go）。
-	setTCPUserTimeout(conn, fxpTunnelUserTimeout)
+	// 到下一跳的隧道连接：在池里、握手中、等结果时对端黑洞了 30 秒就让内核判死（tcp_user_timeout_linux.go）；
+	// 交给会话之后清掉（secureConn.commitSession）。
+	setTCPUserTimeout(conn, tunnelUserTimeout())
 	return conn, nil
 }
 
 // fxpTunnelUserTimeout：隧道连接上发出去的数据这么久没人确认就判死（TCP_USER_TIMEOUT，只在 Linux 上生效）。
 const fxpTunnelUserTimeout = 30 * time.Second
+
+// fxpTunnelUserTimeoutOverride 只给测试用（非零时代替 fxpTunnelUserTimeout）：后台还有上一个测试留下的拨号协程在读，所以是原子的。
+var fxpTunnelUserTimeoutOverride atomic.Int64
+
+func tunnelUserTimeout() time.Duration {
+	if override := fxpTunnelUserTimeoutOverride.Load(); override > 0 {
+		return time.Duration(override)
+	}
+	return fxpTunnelUserTimeout
+}
 
 func secureDialTimeout(cfg config) time.Duration {
 	// The panel includes the primary endpoint in Exits even when no extra
@@ -1835,6 +1875,11 @@ func relayExitTCPToTarget(sec frameConn, hello helloFrame, cfg config) error {
 		return fmt.Errorf("dial target: %w", err)
 	}
 	defer target.Close()
+	// 目标连上了，会话从这里跑起来：上一跳这条连接不再受 TCP_USER_TIMEOUT 管（F1，见 commitSession）。
+	// 多路径会话的每条腿在入伙时已经清过（handleExitMultipath）。
+	if committer, ok := sec.(interface{ commitSession() }); ok {
+		committer.commitSession()
+	}
 	// 出口按放行的规则记一份流量（见 exit_traffic.go）。多路径会话只有领头那条腿
 	// 走到这里，一个会话只记一次。
 	counter, stopReporting := startExitTrafficReporter(cfg, hello.accountingRuleID)
@@ -1878,6 +1923,7 @@ func handleExitUDP(sec *secureConn, hello helloFrame, cfg config) error {
 	}
 	tuneUDPConn(target, "exit target", fxpUDPSessionBufferBytes)
 	defer target.Close()
+	sec.commitSession()
 	counter, stopReporting := startExitTrafficReporter(cfg, hello.accountingRuleID)
 	defer stopReporting()
 	if counter == nil {
@@ -2046,6 +2092,9 @@ func handleRelayBusiness(upSec *secureConn, cfg config, selector *exitEndpointSe
 	}
 	endpoint := down.currentEndpoint()
 	fxpVerbosef("relay tcp routed tunnel=%d upstream=%s downstream=%s:%d target=%s:%d", cfg.TunnelID, upConn.RemoteAddr(), endpoint.Host, endpoint.Port, hello.TargetIP, hello.TargetPort)
+	// 下一跳接上了，会话从这里跑起来：上一跳这条连接不再受 TCP_USER_TIMEOUT 管（F1，见 commitSession）。
+	// 到下一跳那条由 selectedTransport 在提交时清。
+	upSec.commitSession()
 	// Bidirectional relay: upstream ↔ downstream
 	return relayBidir(upSec, down)
 }
@@ -2826,7 +2875,7 @@ func newSessionSecureConnWithWire(conn net.Conn, key string, salt []byte, client
 	if err != nil {
 		return nil, err
 	}
-	sec := &secureConn{conn: conn, lengthAD: wire.lengthAD, payloadAD: wire.payloadAD, reader: newFXPFrameReader(conn)}
+	sec := &secureConn{conn: conn, lengthAD: wire.lengthAD, payloadAD: wire.payloadAD, reader: newFXPFrameReader(conn), userTimeoutRaw: conn}
 	if client {
 		sec.lenWriteAEAD, sec.dataWriteAEAD = keys.c2sLen, keys.c2sData
 		sec.lenReadAEAD, sec.dataReadAEAD = keys.s2cLen, keys.s2cData
