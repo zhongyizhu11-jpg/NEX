@@ -3105,7 +3105,8 @@ export function ForwardGroupsContent({
                     <div className="space-y-2">
                       {form.members.length > 0 && (
                         <>
-                          {form.groupMode !== "port" && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/35 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                          {/* 有鼠标的宽屏上说明挪到表头的悬停里（省两行，3 台成员的组不用滚）；触屏照旧写出来 */}
+                          {form.groupMode !== "port" && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/35 px-2.5 py-1.5 text-[11px] text-muted-foreground [@media(hover:hover)_and_(min-width:640px)]:hidden">
                             <span className="font-medium text-foreground/70">开关说明</span>
                             {showExitAddressColumns && (
                               <>
@@ -3129,20 +3130,20 @@ export function ForwardGroupsContent({
                             <span>{effectiveGroupType === "host" ? "主机" : "隧道"}</span>
                             {showExitAddressColumns && (
                               <>
-                                <span className="text-center">内网</span>
-                                <span className="text-center">IPv6</span>
+                                <span className="text-center" title="使用该主机内网 IP（和 IPv6 互斥，未配置时不可开启）">内网</span>
+                                <span className="text-center" title="使用该主机 IPv6（和内网互斥，未配置时不可开启）">IPv6</span>
                                 {showExitWeightColumn && <span className="text-center">权重</span>}
                               </>
                             )}
                             {showAggregationColumns && (
                               <>
-                                <span className="text-center">上行 Mbps</span>
+                                <span className="text-center" title="该前置的上行带宽，留空或 0 表示未知">上行 Mbps</span>
                                 <span className="text-center">权重</span>
                               </>
                             )}
-                            {showLineColumn && <span className="text-center">线路</span>}
-                            {showScheduleColumn && <span className="text-center">时段</span>}
-                            {form.groupMode !== "port" && <span className="text-center">启用</span>}
+                            {showLineColumn && <span className="text-center" title="按运营商分线路解析，不分 = 只在默认线路">线路</span>}
+                            {showScheduleColumn && <span className="text-center" title="只在设定的时段使用这个成员，时段外自动暂停">时段</span>}
+                            {form.groupMode !== "port" && <span className="text-center" title="关闭后该成员不参与当前组">启用</span>}
                             <span className="text-right">操作</span>
                           </div>
                         </>
