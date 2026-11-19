@@ -106,3 +106,35 @@
 | GOST 一条 UDP 会话，中途黑洞所在出口 | 一直无回包 | 仍然一直无回包（GOST 的 UDP 还在 gost 自己的选择器上，阶段 2 处理） |
 
 遗留到阶段 2：GOST 出口组交给入口 Agent（含 UDP）；NEX UDP 掉线发现从约 16 秒压到 5 秒以内；V3 多路复用下的状态帧超时；同一规则 TCP+UDP 时 UDP 单独被封发现不了；主出口换位 / 重新上线时规则仍会短暂显示未运行。
+
+### 阶段 2 · 挑选算法统一 + FXP 遗留项（2026-11-19）
+
+**一份算法**：仓库根目录新增 Go 模块 `lbcore/`（没有第三方依赖，纯函数 / 小结构体，不做 I/O、不拿锁、不读时钟）。线路组（`agent/route_group_balance.go`、`failover_pick_strategies.go`、`route_group_line_spread.go`、`failover_pick_candidates.go`、`failover_selection.go` 的抖动抑制）和 NEX 出口选择器（`forwardx-fxp/exit_select.go`，原来散在 `main.go` / `exit_load.go` / `target_health.go` 里的那一份删了）都从 `lbcore.Pick` 进。两个 `go.mod` 用 `replace … => ../lbcore`。每个算法做什么、为什么选它、参数和默认值写在 `lbcore` 各文件开头，总览在 `lbcore/doc.go`。
+
+| 分配方式 | 算法（两边一样） |
+|---|---|
+| 自动 | P2C + peak EWMA：成本 = (延迟 + 抖动) × (1 + 10×丢包) × (1 + 10×拨号失败率) × (在途 + 活动 + 1) ÷ (分量 × 慢启动 × (1 − 利用率，最多按 95%))；候选 ≤ 3 全算，> 3 抽两个比 |
+| 按负载 | 同一个成本只留负载那一半 |
+| 延迟优先 | 先圈出和最快的差不到门槛（50ms）的一组（进组至少留 1 分钟），组里用自动的成本 |
+| 按权重 / 轮流 / 随机 | 平滑加权轮询、轮流、随机；都随机起步，刚恢复的 60 秒内从 10% 加到满份 |
+| 按访客固定 | 加权 rendezvous（FNV-1a 后再搅一遍）+ 有界负载 1.25 倍；不知道访客是谁时按轮流 |
+| 主备 | 稳的 → 不稳 / 刚恢复的 → 到目标不通的 → 连不上但冷却到期的 → 还在冷却的 |
+
+候选（`lbcore.Candidates`）：连不上的只要还有别的就不挑；软信号（不稳按「切走」、UDP 没验证过）最多摘一半、至少留一个；正常的一个都不剩就在所有连得上的里分，再不行在所有没被排除的里分；管理上排除的永远不挑。抖动抑制两边是同一个 `FlapDamper`（参数不同）。
+
+一致性用例 `lbcore/testdata/conformance/*.json`（42 个；其中 6 个用到线路组没有的信号 —— 不稳、下游不通、冷却 —— 只给 lbcore 和 FXP 跑）三处各跑一遍：`lbcore`、`agent/lbcore_conformance_test.go`（拿 `pickTargetForKeyProto` / `pickReserved`）、`forwardx-fxp/lbcore_conformance_test.go`（拿 `selector.pick`）。
+
+**FXP 遗留项**（实测见 `forwardx-fxp/lb_stage2_test.go`，「之前」是同一批用例在阶段 1 的代码上跑出来的）：
+
+| 项 | 之前 | 之后 |
+|---|---|---|
+| UDP 会话所在的出口变黑洞，访客的包换到另一台 | 整台出口黑洞约 16 秒（实验室）；TCP+UDP 规则只有 UDP 被拦时 60 秒也不换（只跑 TCP 探测） | 2.2 秒（会话没回包 + 一轮探活没回）；出口 2.5～3 秒判成 UDP 不通 |
+| 同一规则 TCP+UDP、只有 UDP 被拦 | 发现不了 | UDP 那一侧单独记：UDP 新会话换出口，TCP 照常用它 |
+| V3 等「连上目标没有」 | 没有截止时间，一直等 | 逻辑流自己的读超时（6 秒），超时换出口重放 |
+| 一台出口黑洞后开 30 条 TCP | V1 0 失败；V3 不复用 2 条失败；V3 复用 10 条失败 | 三种都是 0 失败，第一条等 6 秒，其余立刻 |
+| 出口恢复后重新认回来（轮流 / 自动） | 12 秒起（黑洞越久退避越长，最长 2 分钟） | 4 秒（连着 3 次探通、间隔 2 秒）；UDP 那一侧 5 秒；来回断的由抖动抑制压着 |
+| `TestMultipathEntryToExitHandlesManyConcurrentSessions` 偶发红 | 测试端口在临时端口范围里，关掉到重新监听之间会被往外拨的连接抢走 / 自连 | 测试端口从临时端口范围之外挑 |
+
+不回 UDP 探活包的对端（版本过旧 / UDP 一直不通）不再悄悄退回去探 TCP 端口：打一条日志，出口状态上报里带 `udpState: "unverified"`、`peerOutdated: true`，UDP 新会话优先给验证过的出口。
+
+还没做的：GOST 出口组交给入口 Agent；线路评分（0–100）仍然是主备「整链最优」比分差的依据，和 `lbcore` 的成本用同一批探测结果但不是同一个数（要统一得连 `shared/routeScore.ts` 一起改）。

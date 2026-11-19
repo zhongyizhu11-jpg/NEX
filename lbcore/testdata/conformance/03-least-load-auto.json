@@ -134,9 +134,8 @@
   },
   {
     "name": "latency-near-set",
-    "about": "延迟优先：只在和最快的差不到 50ms 的那一组里分（组里用自动的成本：20ms 对 60ms 是 3 比 1）；慢出门槛的不分（线路组没有这种分法，不跑）",
+    "about": "延迟优先：只在和最快的差不到 50ms 的那一组里分（组里用自动的成本：20ms 对 60ms 是 3 比 1）；慢出门槛的不分",
     "strategy": "latency",
-    "only": ["lbcore", "fxp"],
     "members": [
       { "name": "a", "latencyMs": 20 },
       { "name": "b", "latencyMs": 60 },
