@@ -144,6 +144,11 @@ test("出口上报后什么时候推入口：冷启动第一次就是连不上�
     await reportAged(4, true, 1000, 60_000);
     assert.deepEqual([...health.exitTargetExcludedHostIds(503, [2, 3, 4], harness.now())], [4]);
     assert.equal(pushCount(), beforeRecover + 1, "新探出来的连不上：马上推");
+    // 10 秒后它恢复了（Agent 已经连着探通几次才报）：头一回恢复马上加回去，不再等离上一次翻转满 30 秒
+    harness.advance(10_000);
+    await reportAged(4, false, 0, 2000);
+    assert.equal(health.exitTargetExcludedHostIds(503, [2, 3, 4], harness.now()).size, 0);
+    assert.equal(pushCount(), beforeRecover + 2, "摘掉后头一回恢复：马上推（以前要等到离摘掉满 30 秒）");
 
     // --- C3：半小时没再报的清掉
     assert.ok(health.exitTargetMemorySizeForTest().states >= 6);

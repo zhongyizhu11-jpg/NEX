@@ -493,14 +493,22 @@ export async function ingestExitTargetReports(input: {
       for (const exitHostId of new Set([...before, ...after])) {
         if (before.has(exitHostId) === after.has(exitHostId)) continue;
         const flipKey = stateKey(ruleId, exitHostId);
-        const lastAt = lastFlipAt.get(flipKey) || 0;
-        const repeated = lastAt > 0 && nowMs - lastAt < EXIT_TARGET_FLIP_REPEAT_MS;
-        lastFlipAt.set(flipKey, nowMs);
+        // 30 秒内的前几次翻转（不含这一次）
+        const recent = (lastFlipAt.get(flipKey) || []).filter((at) => nowMs - at < EXIT_TARGET_FLIP_REPEAT_MS);
+        const lastAt = recent[recent.length - 1] || 0;
+        lastFlipAt.set(flipKey, [...recent, nowMs].slice(-4));
         if (after.has(exitHostId)) {
           // 这条规则的这台出口头一回连不上：马上推（一台入口一秒最多一次）。30 秒内又翻的走合并。
-          if (!repeated) urgent = true;
-        } else if (repeated) {
-          // 刚摘掉又说好了：等它离上一次翻转满 30 秒再加回去，别跟着它来回热更新。
+          if (recent.length === 0) urgent = true;
+        } else if (recent.length <= 1) {
+          /*
+            摘掉以后头一回恢复：马上加回去。出口那边已经连着探通 RecoverOks 次才报「通了」，入口加回去还有慢启动，
+            不用再等。以前这里一律等到离上一次翻转满 30 秒 —— 实验室里断 10 秒又恢复的出口，Agent 9 秒内就报了恢复，
+            GOST 还是过了 30 秒才分到它（NEX 隧道 9 秒）。
+          */
+          urgent = true;
+        } else {
+          // 30 秒里已经摘了又放、又摘了（来回翻）：等它离上一次翻转满 30 秒再加回去，别跟着它来回热更新。
           notBefore = Math.max(notBefore, lastAt + EXIT_TARGET_FLIP_REPEAT_MS);
         }
       }
@@ -598,10 +606,10 @@ function exitTargetScore(state: ExitTargetState | undefined) {
 
 /*
   每条 GOST 规则上一次算出来「该摘掉哪几台」（出口机号排好序拼起来）：变了才让入口重新拿配置。
-  lastFlipAt：某条规则的某台出口上一次进 / 出这个名单的时刻，30 秒内又翻的不再紧急推（见 exitTargetPush.ts）。
+  lastFlipAt：某条规则的某台出口最近几次进 / 出这个名单的时刻（最多 4 个），30 秒内又翻的不再紧急推（见 exitTargetPush.ts）。
 */
 const excludedMemoByRule = new Map<number, { key: string; at: number }>();
-const lastFlipAt = new Map<string, number>();
+const lastFlipAt = new Map<string, number[]>();
 const EXIT_TARGET_FLIP_REPEAT_MS = 30_000;
 // 用到时才建：exitTargetPush → agentEvents 那一串模块会绕回来引用这个文件，模块加载时还拿不到这个类。
 let flipPushesInstance: ExitTargetPushDebouncer | null = null;
@@ -640,7 +648,7 @@ export function pruneExitTargetMemory(nowMs = Date.now(), force = false) {
   }
   for (const [tunnelId, meta] of tunnelMetaById) if (gone(meta.at)) tunnelMetaById.delete(tunnelId);
   for (const [ruleId, memo] of excludedMemoByRule) if (gone(memo.at)) excludedMemoByRule.delete(ruleId);
-  for (const [key, at] of lastFlipAt) if (gone(at)) lastFlipAt.delete(key);
+  for (const [key, times] of lastFlipAt) if (gone(times[times.length - 1] || 0)) lastFlipAt.delete(key);
   for (const [key, at] of baselineSeedTried) if (gone(at)) baselineSeedTried.delete(key);
   for (const [ruleId, memo] of allDownByRule) if (gone(memo.at)) allDownByRule.delete(ruleId);
   flipPushesInstance?.prune(EXIT_TARGET_FORGET_MS);

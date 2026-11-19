@@ -369,7 +369,7 @@ func (r *routeHopProbeRunner) sync(probes []ruleLatencyProbe) {
 /*
 routeHopProbeInterval：负载均衡「出口到目标」那几条（Passive）判成连不上以后探多勤（每次只连 1 次）。分两种：
 
-  - 目标主动拒绝（RST、连上就被关，routeHopDialRejected）—— 2.2.261 起的退避：间隔每多失败一次翻一倍，最长
+  - 目标主动拒绝（RST：connection refused / reset，routeHopDialRejected）—— 2.2.261 起的退避：间隔每多失败一次翻一倍，最长
     60 秒。用户：「这么久了不会一直没恢复吧，机器是正常的」—— 目标是高防时，一直每 2 秒连三次、连上就断，像
     扫描，会让对方一直拦着这台出口的 IP，永远恢复不了；慢下来让拦截有机会过期。恢复最多晚一分钟发现。
   - 超时、网络不可达（出口自己的网络断了 / 被黑洞，对方根本没看到这台出口的连接）：不放慢，最多两倍节拍（默认
@@ -383,7 +383,7 @@ routeHopProbeInterval：负载均衡「出口到目标」那几条（Passive）�
 */
 const routeHopProbeBackoffMax = 60 * time.Second
 
-// routeHopDialRejected 这次连接是不是被目标主动拒了（RST / 连上就被关）—— 和「超时、网络不可达」分开：
+// routeHopDialRejected 这次连接是不是被目标主动拒了（RST：refused / reset）—— 和「超时、网络不可达」分开：
 // 前者是对方在拦这台出口，后者多半是出口自己的网络断了（见 routeHopProbeInterval）。
 func routeHopDialRejected(err error) bool {
 	if err == nil {
