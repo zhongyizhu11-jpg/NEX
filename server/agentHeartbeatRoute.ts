@@ -5674,6 +5674,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentVersion: effectiveAgentVersion,
       inbounds: hostTlsInbounds,
       rules,
+      visitorHeaderRuleIds: new Set(gostBalancePlans.keys()),
     });
     const stateSections = buildAgentStateResponseSections({
       runningRules,

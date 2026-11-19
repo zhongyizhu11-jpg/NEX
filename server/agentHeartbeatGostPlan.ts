@@ -220,6 +220,9 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
           */
           const balance = gostBalancePlans.get(Number(r.id))!;
           service.handler = { type: proto, metadata: gostProxyProtocolMetadata(proto === "udp" ? 2 : balance.proxyVersion) };
+          // 共享 TLS 入站上的规则：这个回环监听前面是 SNI 分流器，它先发一个 v2 头带着访客地址
+          // （tlsInboundRuntime 的 visitorHeaderRuleIds）。这里收下，访客地址才传得到代理。
+          if (proto === "tcp" && isSniRuntimeRule(r)) service.metadata = { ...(service.metadata || {}), ...gostProxyProtocolMetadata(2) };
           service.forwarder = {
             nodes: [{
               name: `balance-${r.id}`,

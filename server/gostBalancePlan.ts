@@ -106,7 +106,7 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     bindAddress: "127.0.0.1",
     protocol: input.protocol,
     strategy,
-    // 延迟优先「一样快」的门槛（毫秒）：「检测与切换」里的「比最快的慢多少就少分」
+    // 延迟优先「一样快」的门槛（毫秒）：「检测与切换」高级里的「延迟优先：差多少算一样快」
     latencyMarginMs: input.detect.latencyMarginMs,
     targets: exits.map((exit, index) => {
       const extra = input.extraLatencyMs.get(exit.hostId);

@@ -172,3 +172,14 @@ test("心跳接上了：隧道入口（FXP / gost / nginx）在 SNI 规则上只
   assert.match(gost, /addr: loopbackOnly \? `127\.0\.0\.1:\$\{serviceListenPort\}` : `:\$\{serviceListenPort\}`/);
   assert.match(nginx, /loopbackOnly: useRuleGuard \|\| isSniRuntimeRule\(rule\),/);
 });
+
+test("GOST 链路负载均衡的规则：分流器先发 PROXY v2 头带访客地址（按访客固定才分得开），别的规则照旧不发", () => {
+  const specs = buildAgentSniInbounds({
+    hostId: 10, agentVersion: NEW, inbounds, rules: viewOn(10, NEW, [directRule, tunnelRule]),
+    visitorHeaderRuleIds: new Set([200]),
+  });
+  assert.deepEqual(specs[0].routes.map((route) => [route.ruleId, route.proxyProtocolVersion]), [[100, 0], [200, 2]]);
+  // 没有负载均衡时经隧道的规则不发头（入口在回环上只看得到本机地址）
+  const plain = buildAgentSniInbounds({ hostId: 10, agentVersion: NEW, inbounds, rules: viewOn(10, NEW, [tunnelRule]) });
+  assert.equal(plain[0].routes[0].proxyProtocolVersion, 0);
+});

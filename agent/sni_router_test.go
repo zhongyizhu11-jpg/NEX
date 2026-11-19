@@ -415,3 +415,72 @@ func (c *recordingConn) Write(p []byte) (int, error) {
 }
 
 var _ io.Writer = (*recordingConn)(nil)
+
+// 共享 TLS 入站 + GOST 链路负载均衡（按访客固定）：面板给这种规则的路由带 ProxyProtocolVersion 2，分流器要把**访客**的
+// 地址写进头里交给规则的回环监听，而不是它自己的 127.0.0.1 —— 不然入口本机代理看到的访客永远是同一个，全落到一台出口上。
+func TestSNIInboundPassesVisitorAddressInProxyV2(t *testing.T) {
+	backend, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	type seen struct {
+		info proxyProtocolInfo
+		v2   bool
+	}
+	received := make(chan seen, 1)
+	go func() {
+		conn, err := backend.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		first := make([]byte, 12)
+		if _, err := io.ReadFull(conn, first); err != nil {
+			return
+		}
+		info, _, ok, err := consumeProxyProtocolFromConn(conn, first, 3*time.Second)
+		if err != nil || !ok {
+			return
+		}
+		received <- seen{info: info, v2: bytes.Equal(first, proxyProtocolV2Signature)}
+	}()
+
+	previousListen := sniListen
+	sniListen = func(int) (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") }
+	defer func() { sniListen = previousListen }()
+	syncSNIInbounds([]sniInboundSpec{{
+		ID: 8, Port: 443, RejectEmptySNI: true, UnknownSNIAction: "reject",
+		Routes: []sniRoute{{Name: "lb.example.com", RuleID: 2, BackendPort: backend.Addr().(*net.TCPAddr).Port, Active: true, ProxyProtocolVersion: 2}},
+	}})
+	defer syncSNIInbounds(nil)
+	sniInboundMu.Lock()
+	server := sniInboundServers[8]
+	sniInboundMu.Unlock()
+	if server == nil {
+		t.Fatal("inbound did not start")
+	}
+	// 访客从 127.0.0.2 来（和分流器自己的 127.0.0.1 分得开）
+	dialer := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}}
+	conn, err := dialer.Dial("tcp", server.listener.Addr().String())
+	if err != nil {
+		t.Skipf("can't dial from 127.0.0.2: %v", err)
+	}
+	defer conn.Close()
+	visitorPort := conn.LocalAddr().(*net.TCPAddr).Port
+	client := tls.Client(conn, &tls.Config{ServerName: "lb.example.com", InsecureSkipVerify: true})
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	go func() { _ = client.Handshake() }()
+	select {
+	case got := <-received:
+		if !got.v2 {
+			t.Fatal("want a PROXY v2 header")
+		}
+		if got.info.SourceIP != "127.0.0.2" || got.info.SourcePort != visitorPort {
+			t.Fatalf("header must carry the visitor 127.0.0.2:%d, got %s:%d", visitorPort, got.info.SourceIP, got.info.SourcePort)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("backend got no PROXY header")
+	}
+}
