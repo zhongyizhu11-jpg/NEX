@@ -182,3 +182,18 @@
 不回 UDP 探活包的对端（版本过旧 / UDP 一直不通）不再悄悄退回去探 TCP 端口：打一条日志，出口状态上报里带 `udpState: "unverified"`、`peerOutdated: true`，UDP 新会话优先给验证过的出口。
 
 还没做的：GOST 出口组交给入口 Agent；线路评分（0–100）仍然是主备「整链最优」比分差的依据，和 `lbcore` 的成本用同一批探测结果但不是同一个数（要统一得连 `shared/routeScore.ts` 一起改）。
+
+### 阶段 2 收尾 · 一个决策公式（2026-11-19）
+
+规格按代码写在 `docs/dev/scheduler-spec.md`（每个数带出处）。
+
+| 项 | 落点 |
+|---|---|
+| 主备择优不再比 0–100 分 | `lbcore/switch.go`（`QualityCost`、`SwitchPolicy`、`Challenger`、`DisplayScore`）；`agent/failover_selection.go` 的 `fastestIndexLocked`；同出口 IP 的平手也按成本 + 门槛（`failover_exit_ip.go`）。门槛就是延迟优先的「一样快」（50ms，规格 `latencyMarginMs`）+ 低两成；分数只给人看。规格去掉 `scoreMargin`（面板的编辑框、下发、漂移比对、Agent 规格都删了；库里 `routeScoreMargin` 列不再读写） |
+| GOST 出口组的延迟优先 | 不再借「主备 + 择优」，直接按 lbcore 的延迟优先分，门槛来自「检测与切换」 |
+| 线路组能选延迟优先 | `shared/routeGroupModel.ts` 的 `ROUTE_SPREADS` |
+| FXP 的 `udpState` / `peerOutdated` | `server/balanceLive.ts` → `exitTargetHealth.ts` 的每台出口摘要 → 负载均衡弹窗（`client/src/lib/tunnelDisplay.ts` 的 `exitUdpText`） |
+| 老值 / 重复 | `shared/exitStrategy.ts` 并进 `shared/loadBalance.ts`；`none` 只在 `normalizeBalanceStrategy` 认成主备，16 处「只用第一个出口」分支删掉；策略说明只留 `BALANCE_STRATEGY_LABELS` 一份 |
+| 共享 TLS 入站 + 按访客固定（GOST） | SNI 分流器给这种规则发 PROXY v2（`server/tlsInboundRuntime.ts` 的 `visitorHeaderRuleIds`），规则的回环 gost 监听收下（`agentHeartbeatGostPlan.ts`），访客地址一路传到本机代理 |
+| tcp / mtcp 出口进程卡死 | 直接探出口机时发一个坏请求等 gost 断开（`agent/failover_exit_group.go` 的 `failoverProbeRelay`，规格 `probeRelay`） |
+| 多跳 GOST 空闲 / 只转 UDP | 没做，缺的东西写在规格 §10 |

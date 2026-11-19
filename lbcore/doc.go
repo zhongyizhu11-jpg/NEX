@@ -28,8 +28,10 @@ forwardx-fxp/ 里各写了一遍，界面上是同一个下拉框，算出来的
     随机        Random               （wrr.go）
     按访客固定  Rendezvous           加权 rendezvous 哈希 + 有界负载 1.25（rendezvous.go）
 
-    另有两件跨分配方式的：SlowStart（刚恢复的成员 60 秒里从 10% 线性加到满份，slowstart.go）、
-    FlapDamper（切得越勤、下一次等得越久，flap.go）。
+    另有三件跨分配方式的：SlowStart（刚恢复的成员 60 秒里从 10% 线性加到满份，slowstart.go）、
+    FlapDamper（切得越勤、下一次等得越久，flap.go）、SwitchPolicy（主备里「B 好到值得换过去吗」：只看质量的
+    成本差出延迟优先的门槛、而且低两成，再连着领先一阵，switch.go）。给人看的 0–100 分（DisplayScore）也从
+    同一个成本换算，不参与决定。
 
 两边都从总入口 Pick（strategy.go）进来：同一个名字在两边就是同一段代码。
 每个文件开头写了那个算法做什么、为什么选它、参数和默认值。
@@ -43,7 +45,10 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
 	利用率最多按             95% 算（留 5% 余量）  MaxUtilisation
 	PeakEWMA 时间常数        10 秒      DefaultPeakDecay
 	P2C                      候选 > 3 个才抽两个比；≤ 3 个全算
-	延迟优先的门槛           50 毫秒    DefaultLatencyMargin
+	延迟优先的门槛           50 毫秒    DefaultLatencyMargin（主备择优也用它）
+	进了「一样快」至少留     1 分钟     DefaultNearHold
+	择优还要低出             两成       DefaultSwitchRatio
+	好得多时只等             10 秒      DefaultSwitchFastHold
 	有界负载的上限           1.25 倍    DefaultHashLoadFactor
 	慢启动                   60 秒、从 10% 起   DefaultSlowStart
 	软信号最多摘掉           五成       DefaultMaxSoftEject
@@ -72,9 +77,8 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
 
 # 仍然有意保留的差别
 
-  - 主备里「现在走哪条」的粘性、切回、择优、时段表是线路组自己的状态机（agent/failover_selection.go），
-    出口组的主备每次按 First 现挑。两边共用的是健康信号怎么排序和抖动抑制。
-  - 「延迟优先」只有出口组有（线路组的「整链最优」是主备里的择优，不是按连接分）。
+  - 主备里「现在走哪条」的粘性、切回、时段表是 Agent 的状态机（agent/failover_selection.go，线路组和 GOST 出口组
+    共用），NEX 出口组的主备每次按 First 现挑。共用的是健康信号怎么排序、抖动抑制和择优的判断（SwitchPolicy）。
   - FXP 叠加连接按会话固定出口用的是没有上限的哈希（RendezvousOptions{LoadFactor: -1}）：
     那个结果要几台中继各自算出同一个，各台看到的负载不一样。
 */
