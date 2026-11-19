@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { BALANCE_SENSITIVITY_PRESETS, BALANCE_STRATEGIES, DEFAULT_BALANCE_DETECT, GOST_BALANCE_MAX_EXITS, UNIFIED_BALANCE_AGENT_VERSION, agentSupportsUnifiedBalance } from "../shared/loadBalance";
 import { buildGostBalanceProxySpec, gostBalanceProbeTiming, gostBalanceProxyStrategy, gostBalanceTargetWeights } from "./gostBalancePlan";
-import { tunnelBalanceAgentIssues } from "./tunnelBalanceAgent";
+import { tunnelBalanceAgentIssues, tunnelRelayRuntimeIssues } from "./tunnelBalanceAgent";
 
 /*
   交给入口机本机代理的规格（server/gostBalancePlan.ts）。整条心跳走下来生成的东西在 gostBalanceHeartbeat.test.ts，
@@ -143,4 +143,23 @@ test("需要升级 Agent：GOST 链路开了负载均衡、有额外出口、入
   assert.deepEqual(tunnelBalanceAgentIssues({ ...tunnel, loadBalanceEnabled: 0 }, [1], 2, hosts), []);
   assert.deepEqual(tunnelBalanceAgentIssues({ ...tunnel, mode: "forwardx" }, [1], 2, hosts), [], "NEX 隧道由 FXP 挑，不看这个");
   assert.deepEqual(tunnelBalanceAgentIssues({ ...tunnel, mode: "nginx_stream" }, [1], 2, hosts), [], "nginx 隧道用它自己的 upstream");
+});
+
+test("需要升级运行时：GOST 并联中转的入口机运行时低于 nex6 才提示（只走第一台中转）", () => {
+  const hosts = new Map<number, { id: number; name: string; runtimeVersion: string | null }>([
+    [1, { id: 1, name: "入口甲", runtimeVersion: "3.2.6-nex5" }],
+    [2, { id: 2, name: "入口乙", runtimeVersion: "3.2.6-nex6" }],
+    [3, { id: 3, name: "入口丙", runtimeVersion: null }],
+  ]);
+  const hops = [{ hostId: 1 }, { hostId: 6 }, { hostId: 7 }, { hostId: 8 }];
+  const tunnel = { mode: "tls", relayMode: "failover" };
+  const issues = tunnelRelayRuntimeIssues(tunnel, hops, [1], hosts);
+  assert.equal(issues.length, 1);
+  assert.match(issues[0].message, /入口甲 的 GOST 运行时（3\.2\.6-nex5）低于 nex6/);
+  assert.match(issues[0].message, /需要升级运行时$/);
+  assert.deepEqual(tunnelRelayRuntimeIssues(tunnel, hops, [2], hosts), []);
+  assert.match(tunnelRelayRuntimeIssues(tunnel, hops, [3], hosts)[0].message, /（未知）/, "报不上来的按旧的算");
+  assert.deepEqual(tunnelRelayRuntimeIssues({ ...tunnel, relayMode: "chain" }, hops, [1], hosts), [], "顺序中转没有选择器");
+  assert.deepEqual(tunnelRelayRuntimeIssues(tunnel, hops.slice(0, 3), [1], hosts), [], "只有一台中转");
+  assert.deepEqual(tunnelRelayRuntimeIssues({ ...tunnel, mode: "forwardx" }, hops, [1], hosts), [], "NEX 隧道由 FXP 选中转");
 });

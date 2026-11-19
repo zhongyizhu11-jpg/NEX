@@ -8,7 +8,7 @@ import { planGostTunnelHopRelay, planGostTunnelRuleProtocol } from "./gostTunnel
 import { buildCountingChainCmds, shQuote, stopManagedServiceCmd, writeManagedServiceCmd } from "./agentActionCommands";
 import { endpointHostPort } from "./forwardRuntimeConfigs";
 import { forwardRuleProtocols } from "@shared/forwardTypes";
-import { isTunnelRelayFailover, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
+import { gostRuntimeSupportsRelaySelector, isTunnelRelayFailover, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
 import { buildGostEgressChain, gostEgressChainName, ruleEgressRuntime } from "./ssEgress";
 import { isSniRuntimeRule } from "./tlsInboundRuntime";
 import { AGENT_DYNAMIC_CACHE_MAX, tunnelRouteLogCache } from "./agentHeartbeatState";
@@ -122,6 +122,13 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     tunnelForwardProtos,
     tunnelProxyProtocolPlan,
   } = deps;
+  /*
+    并联中转要这台入口机的运行时 ≥ nex6（shared/tunnelRelay.ts GOST_RELAY_SELECTOR_MIN_NEX_BUILD）：更旧的运行时上
+    选择器把中转全摘掉时会直连目标、绕过隧道。那时只下发第一台中转（单节点、不带选择器、不重试），链路和规则上
+    提示「需要升级运行时」（server/tunnelBalanceAgent.ts）。
+  */
+  const relaySelectorAllowed = gostRuntimeSupportsRelaySelector((host as { runtimeVersion?: unknown } | null)?.runtimeVersion);
+  const parallelRelays = (tunnel: HeartbeatRow, tunnelHops: HeartbeatRow[]) => relaySelectorAllowed && tunnelRelayUsesParallelRelays(tunnel, tunnelHops);
   // Shadowsocks 出口链：每条带出口的规则每个协议一条（chain-egress-<规则>-<协议>），和隧道链一起写进 chains。
   const egressGostChains: any[] = [];
   const gostServiceConfig = (await Promise.all(gostRules
@@ -136,7 +143,7 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
         const useMultiHopEntry =
           isMultiHopTunnel
           && isCurrentHostTunnelEntry(tunnel);
-        const relayFailover = useMultiHopEntry && tunnelRelayUsesParallelRelays(tunnel, tunnelHops);
+        const relayFailover = useMultiHopEntry && parallelRelays(tunnel, tunnelHops as HeartbeatRow[]);
         // 并联中转（中转故障切换）：一台中转拨不通就换下一台重拨，拨号别等默认的长超时。出口那一跳永远只有一个
         // 节点（几台出口由本机代理挑，见下面的 balanceGostChains），不靠 gost 重试。
         const routeRetries = relayFailover ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0;
@@ -281,6 +288,19 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
   */
   const buildRelayHops = async (r: { id?: number | null }, tunnel: HeartbeatRow, tunnelHops: HeartbeatRow[], suffix: string, routeParts?: string[]) => {
     const hops: Array<Record<string, unknown>> = [];
+    if (isTunnelRelayFailover(tunnel, tunnelHops) && !relaySelectorAllowed) {
+      // 旧运行时：只走第一台中转，没有选择器（中转挂了这条规则就不通，不会绕过隧道直连）。
+      const primary = tunnelRelayCandidates(tunnelHops)[0];
+      const hopDialHost = primary ? await getHopDialAddress(primary, tunnel) : null;
+      if (!primary || !hopDialHost || !Number(primary.listenPort)) return null;
+      const hopAddr = endpointHostPort(hopDialHost, primary.listenPort);
+      routeParts?.push(`relay#1:${Number(primary.hostId)}@${hopAddr}`);
+      hops.push({
+        name: `hop-tunnel-${r.id}-relay-primary${suffix}`,
+        nodes: [gostTunnelNode(`relay-${r.id}-${Number(primary.seq)}${suffix}`, hopAddr, gostTunnelTransportType(tunnel.mode), tunnel)],
+      });
+      return hops;
+    }
     if (isTunnelRelayFailover(tunnel, tunnelHops)) {
       const relayNodes = await Promise.all(tunnelRelayCandidates(tunnelHops).map(async (hop: HeartbeatRow, index: number) => {
         const hopDialHost = await getHopDialAddress(hop, tunnel);
@@ -325,7 +345,7 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     const tunnelHops = tunnel ? tunnelHopsByTunnelId.get(Number(tunnel.id)) as HeartbeatRow[] | undefined : undefined;
     const multiHop = !!tunnel && Array.isArray(tunnelHops) && tunnelHops.length >= 3;
     // 并联中转：一台中转拨不通，这条本机连接换下一台中转重拨（出口还是这一台）
-    const relayRetries = multiHop && tunnelRelayUsesParallelRelays(tunnel, tunnelHops) ? tunnelRelayCandidates(tunnelHops!).length - 1 : 0;
+    const relayRetries = multiHop && parallelRelays(tunnel!, tunnelHops!) ? tunnelRelayCandidates(tunnelHops!).length - 1 : 0;
     for (const exit of balance.exits) {
       const chainName = `chain-tunnel-${r.id}-x${exit.hostId}`;
       const relayHops = multiHop ? await buildRelayHops(r, tunnel!, tunnelHops!, `-x${exit.hostId}`) : [];

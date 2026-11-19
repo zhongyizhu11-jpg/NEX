@@ -1,4 +1,4 @@
-import { tunnelBalanceAgentIssues } from "../tunnelBalanceAgent";
+import { tunnelBalanceAgentIssues, tunnelRelayRuntimeIssues } from "../tunnelBalanceAgent";
 import { sameNetworkAddress } from "@shared/ipAddress";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { dbBool } from "../repositories/repositoryUtils";
@@ -687,6 +687,13 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
         ? enabledGroupHostIds(endpointGroupById.get(Number(tunnel.entryGroupId || 0)))
         : [tunnel.entryHostId],
       (extraExitNodesByTunnel.get(Number(tunnel.id)) || []).filter((node) => node.isEnabled).length,
+      hostMap,
+    ));
+    // GOST 并联中转、入口机运行时低于 nex6：只走第一台中转，同一个位置写「需要升级运行时」
+    fxpIssues.push(...tunnelRelayRuntimeIssues(
+      tunnel,
+      hopsByTunnelId.get(Number(tunnel.id)) || [],
+      [tunnel.entryHostId],
       hostMap,
     ));
     const latestLatency = latestLatencyByTunnel.get(Number(tunnel.id));
