@@ -26,7 +26,7 @@ test("成员可用时段：进出时段自动停用 / 恢复，手动停用不�
     await schema.ensureDatabaseSchema();
     console.info = () => {};
     console.warn = () => {};
-    const repo = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const repo = await import(moduleUrl("server/db.ts"));
     const sweep = await import(moduleUrl("server/forwardGroupMemberSchedule.ts"));
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const query = (sql, params = []) => runtime.queryRaw(sql, params);
@@ -126,7 +126,7 @@ const scheduleScriptHead = String.raw`
     await schema.ensureDatabaseSchema();
     console.info = () => {};
     console.warn = () => {};
-    const repo = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const repo = await import(moduleUrl("server/db.ts"));
     const sweep = await import(moduleUrl("server/forwardGroupMemberSchedule.ts"));
     const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);

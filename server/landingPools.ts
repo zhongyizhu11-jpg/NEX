@@ -408,7 +408,7 @@ async function refreshLandingDependents(pool: NodePool, nodeIds: number[], moved
       if (dbBool(rule.failoverEnabled) && rule.routePaths) {
         if (membershipChanged) await reexpandRouteLinesForRules([Number(rule.id)], reason);
         if (dbBool(rule.isForwardGroupTemplate) && Number(rule.forwardGroupId || 0) > 0) {
-          const { syncForwardGroupRules } = await import("./repositories/forwardGroupRepository");
+          const { syncForwardGroupRules } = await import("./forwardGroups/ruleSync");
           await syncForwardGroupRules(Number(rule.forwardGroupId));
         } else {
           await syncRouteRelayRulesForRule(Number(rule.id), { reason });

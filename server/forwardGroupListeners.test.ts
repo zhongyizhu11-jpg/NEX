@@ -42,7 +42,7 @@ test("forward group sync creates an enabled child listener for every enabled mem
         "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning",
       ], [100, 1, "template", "realm", "tcp", 10, 1, 16000, "203.0.113.10", 80, 1, 1, 0]);
 
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       await forwardGroups.syncForwardGroupRules(10);
       const children = await runtime.queryRaw(
         'SELECT "forwardGroupMemberId", "hostId", "sourcePort", "forwardType", "proxyProtocolSend", "proxyProtocolVersion", "isEnabled", "pendingDelete" FROM "forward_rules" WHERE "forwardGroupId" = ? AND "isForwardGroupTemplate" = 0 ORDER BY "forwardGroupMemberId"',
@@ -110,7 +110,7 @@ test("legacy failover groups keep child runtime fields until explicitly opted in
         "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning",
       ], [100, 1, "template", "realm", "tcp", 10, 1, 16000, "203.0.113.10", 80, 1, 1, 1]);
 
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       await forwardGroups.syncForwardGroupRules(10, { preserveRuntime: true });
       let children = await runtime.queryRaw(
         'SELECT "id", "forwardType", "proxyProtocolSend" FROM "forward_rules" WHERE "forwardGroupId" = ? AND "isForwardGroupTemplate" = 0',
@@ -285,7 +285,7 @@ test("forward chain allocates independent downstream listener ports", () => {
         [200, 1, "chain template", "iptables", "tcp", 20, 1, 12005, "203.0.113.80", 443, 1, 1, 0],
       );
 
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       const metrics = await import(moduleUrl("server/repositories/metricsRepository.ts"));
       await forwardGroups.validateForwardGroupRuleConfig(20, {
         sourcePort: 12005,
@@ -497,7 +497,7 @@ test("forward chain synchronization is atomic and skips unnecessary allocations"
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       const taskLocks = await import(moduleUrl("server/keyedTaskLock.ts"));
       await insert(
         "users",

@@ -99,7 +99,7 @@ export async function reexpandRouteLinesForRules(ruleIds: readonly number[], rea
     try {
       const rule = await getForwardRuleById(Number(ruleId)) as any;
       if (!rule || dbBool(rule.pendingDelete) || !routeGroupOf(rule)) continue;
-      // 转发组的子规则照抄模板（forwardGroupRepository.childRouteColumns）：只展开模板，子规则跟着组同步走。
+      // 转发组的子规则照抄模板（forwardGroups/ruleSync.ts 的 childRouteColumns）：只展开模板，子规则跟着组同步走。
       if (Number(rule.forwardGroupRuleId || 0) > 0) continue;
       const lines: RouteLine[] = routeLinesOf(rule);
       if (lines.length === 0) continue;
@@ -128,7 +128,7 @@ export async function reexpandRouteLinesForRules(ruleIds: readonly number[], rea
         ...legacyFailoverColumns(group, rule),
       } as any);
       if (dbBool(rule.isForwardGroupTemplate) && Number(rule.forwardGroupId || 0) > 0) {
-        const { syncForwardGroupRules } = await import("./repositories/forwardGroupRepository");
+        const { syncForwardGroupRules } = await import("./forwardGroups/ruleSync");
         await syncForwardGroupRules(Number(rule.forwardGroupId));
       } else {
         await syncRouteRelayRulesForRule(Number(rule.id), { reason });

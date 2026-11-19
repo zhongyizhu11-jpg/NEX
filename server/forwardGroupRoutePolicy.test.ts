@@ -107,7 +107,7 @@ function runScenario(): Outcome {
       "routeMode", "routePaths", "failoverSeconds", "recoverSeconds", "autoFailback",
     ], [310, 1, "直连", "gost", "tcp", 10, 1, 17010, "203.0.113.20", 80, 1, 1, 0, 1, "fallback", JSON.stringify([{ targetIp: "198.51.100.9", targetPort: 80 }]), "failover", directPaths, 60, 120, 1]);
 
-    const forwardGroups = await import(url("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(url("server/db.ts"));
     await forwardGroups.syncForwardGroupRules(10);
     // 当成 Agent 已经把子规则跑起来了（热更新只对跑着的生效）。
     await exec('UPDATE forward_rules SET "isRunning" = 1 WHERE "forwardGroupRuleId" IN (300, 310)');

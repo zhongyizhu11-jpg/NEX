@@ -20,7 +20,7 @@ test("forward resource renames propagate without restarting unchanged runtimes",
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
 
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
@@ -225,7 +225,7 @@ test("forward-group test history matches the exact group id", () => {
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
 
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const insertTest = async (id, groupId, status, updatedAt) => {
       await runtime.executeRaw(
         'INSERT INTO "forward_tests" ("id", "ruleId", "hostId", "userId", "status", "message", "createdAt", "updatedAt") VALUES (?, 0, 1, ?, ?, ?, ?, ?)',

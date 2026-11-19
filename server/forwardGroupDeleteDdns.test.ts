@@ -30,7 +30,7 @@ test("删除主备组 / 入口组：清掉面板发布的解析记录，别人�
     console.warn = () => {};
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
     const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
-    const repo = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const repo = await import(moduleUrl("server/db.ts"));
     const panelLogger = await import(moduleUrl("server/_core/panelLogger.ts"));
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const query = (sql, params = []) => runtime.queryRaw(sql, params);

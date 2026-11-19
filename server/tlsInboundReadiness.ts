@@ -12,7 +12,7 @@
  *   4. Agent 报回来的路由表版本号就是面板最近下发的那张（tlsInboundRuntime.ts）。
  *
  * 只挡「切过去 / 加进去」，不挡「留在原地」：面板刚重启时谁都还没确认，已经在用的入口照旧在用，
- * 等下一次心跳确认了就恢复正常判断（调用方负责只拿它筛候选，见 forwardGroupRepository.ts）。
+ * 等下一次心跳确认了就恢复正常判断（调用方负责只拿它筛候选，见 forwardGroups/evaluateDriver.ts、ddnsEntryGroup.ts）。
  */
 
 import { and, eq, inArray } from "drizzle-orm";

@@ -119,7 +119,7 @@ test("SQLite quota state survives restart; resets/configuration/rollback retain 
     const metrics = await mod("server/repositories/metricsRepository.ts");
     const hosts = await mod("server/repositories/hostRepository.ts");
     const policy = await mod("server/hostTrafficPolicy.ts");
-    const groups = await mod("server/repositories/forwardGroupRepository.ts");
+    const groups = await mod("server/db.ts");
     const excluded = async () => { policy.invalidateHostTrafficPolicyCache(); return [...await policy.getTrafficExcludedHostIds()]; };
     const now = Math.floor(Date.now()/1000);
     await runtime.executeRaw("INSERT INTO users (id, username, password, role) VALUES (1, 'quota-admin', 'not-used', 'admin')");

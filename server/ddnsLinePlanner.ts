@@ -5,7 +5,7 @@ import type { DdnsLineFallbackMode, DdnsLineRef, DdnsLineSource, DdnsLineStateEn
 
   输入是组里每个启用成员此刻的状态（健康 / 观察期 / 等结果 / 不可用 / 流量到阈值）、它分到的线路、
   上一轮每条线路发布了什么；输出是每条非默认线路该发布的记录值，或者该删掉。默认线路仍由
-  forwardGroupRepository 原来那套逻辑发布（保留最后一条、事件、通知都在那里），这里只告诉它
+  转发组评估（server/forwardGroups/ddnsPublish.ts）原来那套逻辑发布（保留最后一条、事件、通知都在那里），这里只告诉它
   默认线路上是哪些成员。
 
   为什么成员的健康判断不在这里做：故障观察时间、恢复稳定时间、Agent 离线宽限这些都已经在组的

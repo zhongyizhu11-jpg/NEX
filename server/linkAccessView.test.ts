@@ -12,7 +12,7 @@ import {
   type LinkAccessScope,
 } from "./linkAccessView";
 import { publicLinkAvailabilitySummary } from "./linkAvailabilitySummary";
-import { filterForwardGroupFieldsForUse } from "./repositories/forwardGroupRepository";
+import { filterForwardGroupFieldsForUse } from "./forwardGroups/portPolicy";
 
 const scope: LinkAccessScope = {
   hostIds: new Set([1]),

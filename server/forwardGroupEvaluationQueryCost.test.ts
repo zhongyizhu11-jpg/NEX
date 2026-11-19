@@ -79,7 +79,7 @@ function runProbe(): Probe {
     await failoverGroup(3, 1, 5);
     await failoverGroup(4, 30, 20);
 
-    const groups = await import(url("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(url("server/db.ts"));
     const cost = {};
     const values = {};
     for (const [label, gid] of [["入口5", 1], ["入口20", 2], ["主备5", 3], ["主备20", 4]]) {

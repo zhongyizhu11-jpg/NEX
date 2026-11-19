@@ -18,7 +18,7 @@ test("forward access recovery restores only rules paused by eligibility", () => 
     const schema = await import(moduleUrl("server/dbSchema.ts"));
     const users = await import(moduleUrl("server/repositories/userRepository.ts"));
     const recovery = await import(moduleUrl("server/repositories/userForwardAccessRecovery.ts"));
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const tunnels = await import(moduleUrl("server/repositories/tunnelRepository.ts"));
     const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
     const q = (name) => '"' + name + '"';

@@ -19,7 +19,7 @@ test("confirmed Agent offline overrides fresh forwarding health and triggers DDN
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const hostStatus = await import(moduleUrl("server/hostStatusNotifier.ts"));
 
       const q = (name) => '"' + name + '"';
@@ -152,7 +152,7 @@ test("presence-capable hosts stay eligible during panel startup grace", () => {
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const fastLiveness = await import(moduleUrl("server/agentFastLiveness.ts"));
       const now = Math.floor(Date.now() / 1000);
 

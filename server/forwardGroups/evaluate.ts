@@ -6,7 +6,7 @@
     · entryMemberInclusion        —— 入口组的一个成员这一轮进不进解析（恢复要稳一阵才加回来）
     · planEntryGroupRecordSet     —— 入口组这一轮发哪些值（全挂时保留上一轮的整组）
 
-  forwardGroupRepository.ts 里的评估照这些结论去读写库、发布解析。
+  evaluateDriver.ts / ddnsEntryGroup.ts 照这些结论去读写库、发布解析。
 */
 
 /** 一个观察点此刻对一个成员的看法。 */

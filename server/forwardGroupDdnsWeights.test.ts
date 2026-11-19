@@ -59,7 +59,7 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
       const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       await settings.setSettings({
         ddnsEnabled: "true",
         ddnsProvider: "tencentcloud",

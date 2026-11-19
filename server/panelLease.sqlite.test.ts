@@ -45,7 +45,7 @@ test("SQLite：两个实例只有一个跑巡检，非持有者的评估交给�
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
       const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       const fast = await import(moduleUrl("server/agentFastLiveness.ts"));
       const leaseModule = await import(moduleUrl("server/panelLease.ts"));
       const work = await import(moduleUrl("server/panelWorkRequests.ts"));

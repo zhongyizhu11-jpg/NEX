@@ -85,7 +85,7 @@ test("forward group switches after its configured heartbeat failure window", () 
       const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
       const ddns = await import(moduleUrl("server/ddns.ts"));
       const hosts = await import(moduleUrl("server/repositories/hostRepository.ts"));
-      const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(moduleUrl("server/db.ts"));
       const forwardGroupHealth = await import(moduleUrl("server/forwardGroupHealthRecheck.ts"));
       const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
       const address = webhook.address();
@@ -734,7 +734,7 @@ test("entry group health windows suppress transient DDNS flaps", () => {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
       const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const activity = await import(moduleUrl("server/agentActivity.ts"));
       const address = webhook.address();
       await settings.setSettings({
@@ -848,7 +848,7 @@ test("failover groups return to the highest-priority recovered member after mult
     const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
     const runtime = await import(moduleUrl("server/dbRuntime.ts"));
     const schema = await import(moduleUrl("server/dbSchema.ts"));
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
     const requests = [];
     const webhook = http.createServer((request, response) => {

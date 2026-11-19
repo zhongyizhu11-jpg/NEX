@@ -91,7 +91,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     await schema.ensureDatabaseSchema();
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
     const ddns = await import(moduleUrl("server/ddns.ts"));
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     await settings.setSettings({
       ddnsEnabled: "true",
       ddnsProvider: "tencentcloud",
@@ -317,7 +317,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
     const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     const base = {
       ddnsEnabled: "true",
       ddnsTtl: "600",

@@ -27,7 +27,7 @@ test("出口组改检测参数 / 分配方式 / 后几台的顺序不把链路�
     await schema.ensureDatabaseSchema();
     console.info = () => {};
     console.warn = () => {};
-    const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(moduleUrl("server/db.ts"));
     const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
     const tunnelStatus = await import(moduleUrl("server/tunnelRuntimeStatus.ts"));
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);

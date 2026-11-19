@@ -6,7 +6,7 @@ import {
   healthCheckTargetPlaceholder,
   normalizeForwardGroupHealthCheckMethod,
 } from "../shared/forwardGroupHealthCheck";
-import { normalizeChinaHealthTarget } from "./repositories/forwardGroupRepository";
+import { normalizeChinaHealthTarget } from "./forwardGroups/health";
 
 test("health check method defaults to TCPing and only accepts a known value", () => {
   assert.equal(normalizeForwardGroupHealthCheckMethod("ping"), "ping");

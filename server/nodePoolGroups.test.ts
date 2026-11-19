@@ -148,7 +148,7 @@ test("主备组跟着节点池：池里去掉活动成员后马上重选", () =>
       );
       const pools = await import(url("server/nodePools.ts"));
       const follow = await import(url("server/nodePoolGroups.ts"));
-      const repo = await import(url("server/repositories/forwardGroupRepository.ts"));
+      const repo = await import(url("server/db.ts"));
       const poolId = await pools.createNodePool({ userId: 1, name: "入口池", role: "landing", hostIds: [1, 2] });
       await follow.setGroupPool(40, poolId);
       await repo.runForwardGroupFailover(40);

@@ -20,7 +20,7 @@ test("forward group and tunnel controlled toggles preserve independent restore c
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
 
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
       const placeholders = values.map(() => "?").join(", ");
@@ -151,7 +151,7 @@ test("managed forward children recover stale automatic-disable state from enable
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
 
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
       await runtime.executeRaw(
@@ -305,7 +305,7 @@ test("forward chain rules deploy downstream first and external entries last", ()
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
 
-    const forwardGroups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(moduleUrl("server/db.ts"));
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
       await runtime.executeRaw(

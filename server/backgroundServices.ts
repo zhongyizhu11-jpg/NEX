@@ -5,7 +5,7 @@ import { onPanelBackgroundLeaseChange, startPanelBackgroundLease, stopPanelBackg
 import { startPanelWorkPoller } from "./panelWorkRequests";
 import { startAgentPresenceElsewhere } from "./agentPresenceElsewhere";
 import { addShutdownTask } from "./dbWriteBatcher";
-import { noteForwardGroupDatabaseRecovered, runForwardGroupFailoverSweep } from "./repositories/forwardGroupRepository";
+import { noteForwardGroupDatabaseRecovered, runForwardGroupFailoverSweep } from "./forwardGroups/evaluateDriver";
 
 let backgroundServicesStarted = false;
 

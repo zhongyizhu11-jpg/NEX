@@ -8,7 +8,7 @@ import { MAX_PEER_OBSERVERS_PER_MEMBER, MAX_PEER_PROBE_PORTS_PER_MEMBER } from "
       组、成员、主机地址变了就作废（invalidate），另有一个短 TTL 兜底（规则端口变化这类不逐个挂钩的）。
     · planPeerObservers —— 外部观察：每个成员由哪几台别的机器来探。
 
-  真正读库建拓扑的函数在 forwardGroupRepository.ts（它要用那里的一堆成员 / 主机辅助函数）。
+  真正读库建拓扑的函数在 probeTopology.ts（它要用 common.ts 里的成员 / 主机辅助函数）。
 */
 
 type TimeSource = () => number;

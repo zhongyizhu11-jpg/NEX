@@ -178,7 +178,7 @@ test("隧道成员的转发组建模板：最后把隧道标成待下发时失�
 
 test("新建转发组：成员写失败时组行也不留下", () => {
   runInDatabase(String.raw`
-    const groups = await import(url("server/repositories/forwardGroupRepository.ts"));
+    const groups = await import(url("server/db.ts"));
     await exec("CREATE TRIGGER fail_member BEFORE INSERT ON forward_group_members WHEN NEW.\"hostId\" = 2 BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
     const groupsBefore = await count("SELECT COUNT(*) AS n FROM forward_groups");
     const membersBefore = await count("SELECT COUNT(*) AS n FROM forward_group_members");
@@ -259,7 +259,7 @@ test("事务里排的定时器提交后才跑：不再被当成在事务里", ()
           const insideTimer = runtime.isDatabaseTransactionActive();
           let ranImmediately = false;
           await runtime.afterDatabaseCommit(() => { ranImmediately = true; });
-          const groups = await import(url("server/repositories/forwardGroupRepository.ts"));
+          const groups = await import(url("server/db.ts"));
           // 只能在事务外调；上下文没失效的话这里会抛「must be acquired before starting a database transaction」
           await groups.syncForwardGroupRules(10);
           return { insideTimer, ranImmediately };
