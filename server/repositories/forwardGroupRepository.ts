@@ -2636,39 +2636,6 @@ export async function getForwardGroupHealthConfigs(groupIds: number[]) {
   }).from(forwardGroups).where(inArray(forwardGroups.id, ids));
 }
 
-export async function getForwardGroupChinaHealthProbesForHost(hostId: number) {
-  const groups = await getForwardGroups() as any[];
-  const probes: ForwardGroupChinaHealthProbe[] = [];
-  for (const group of groups) {
-    if (!dbBool(group?.isEnabled) || !supportsChinaHealthMode(forwardGroupModeOf(group)) || !dbBool(group?.chinaHealthCheckEnabled)) continue;
-    const healthMethod = normalizeForwardGroupHealthCheckMethod(group.chinaHealthCheckMethod);
-    let target;
-    try {
-      target = normalizeChinaHealthTarget(group.chinaHealthCheckTarget, healthMethod);
-    } catch (error) {
-      appendPanelLog("warn", `[ForwardGroup] china health target invalid group=${group.id} target=${String(group.chinaHealthCheckTarget || "-")}: ${error instanceof Error ? error.message : String(error)}`);
-      continue;
-    }
-    for (const member of sortedMembers(group, true) as any[]) {
-      const entryHostId = await memberEntryHostId(member).catch(() => 0);
-      if (Number(entryHostId) !== Number(hostId)) continue;
-      probes.push({
-        groupId: Number(group.id),
-        memberId: Number(member.id),
-        fromHostId: Number(entryHostId),
-        groupMode: forwardGroupModeOf(group) === "entry" ? "entry" : "failover",
-        targetIp: target.host,
-        targetPort: target.port,
-        method: healthMethod,
-        probeType: "china",
-        failoverSeconds: Math.max(10, Number(group.failoverSeconds || 60)),
-        recoverSeconds: Math.max(10, Number(group.recoverSeconds || 120)),
-      });
-    }
-  }
-  return probes;
-}
-
 /** 上报已经按探测拓扑核对过（组启用、模式对、成员属于这台主机）时带上：不用再把组和成员读一遍来核对。 */
 type VerifiedHealthProbe = { groupMode?: unknown; failoverSeconds?: unknown; recoverSeconds?: unknown };
 

@@ -118,7 +118,7 @@ export type ReadinessHost = {
   hostId: number;
   /** 这台机器最近一次到面板的时刻（毫秒）；没见过是 null / 0。 */
   lastSeenAt: number | null;
-  /** 多久不来算离线（支持快速存活的 90 秒，老 Agent 150 秒）。 */
+  /** 多久不来算离线（带快速存活上报的主机 90 秒）；0 = 这台不参与宽限（从没连过面板的机器）。 */
   offlineThresholdMs: number;
 };
 

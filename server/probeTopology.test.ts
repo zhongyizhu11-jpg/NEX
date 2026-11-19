@@ -145,8 +145,9 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
       assert.equal(externalChain.probes[1].targetIp, "edge-3.example.test");
       assert.equal(externalChain.probes.length, 2, "disabled chain members must not create probes");
 
-      const legacyChinaProbes = await groups.getForwardGroupChinaHealthProbesForHost(1);
-      assert.deepEqual(snapshot.chinaHealthProbes, legacyChinaProbes);
+      // 主备组 / 入口组各自标着自己的类型（上报处理按它决定恢复时间怎么算）
+      assert.deepEqual(Array.from(new Set(snapshot.chinaHealthProbes.map((probe) => probe.groupMode))).sort(), ["entry", "failover"]);
+      assert.deepEqual(snapshot.peerHealthProbes, [], "没有可探端口的组不安排外部观察");
       assert.deepEqual(snapshot.chinaHealthProbes.map((probe) => probe.memberId).sort((a, b) => a - b), [101, 301, 302, 321]);
       const methodOf = (memberId) => snapshot.chinaHealthProbes.find((probe) => probe.memberId === memberId);
       assert.deepEqual([methodOf(101).method, methodOf(101).targetPort], ["tcp", 81]);
