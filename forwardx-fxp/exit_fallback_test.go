@@ -135,7 +135,7 @@ func TestDownEndpointIsReprobedAtAFixedShortInterval(t *testing.T) {
 		before := time.Now()
 		state.markFailure(errTestEndpointDown)
 		state.mu.Lock()
-		wait := state.retryAfter.Sub(before)
+		wait := state.tcp.retryAfter.Sub(before)
 		state.mu.Unlock()
 		if wait < fxpRecoverProbeGap-50*time.Millisecond || wait > fxpRecoverProbeGap+time.Second {
 			t.Fatalf("第 %d 次失败后应该 %v 后再探，实际 %v", round+1, fxpRecoverProbeGap, wait)
@@ -186,7 +186,7 @@ func TestEndpointReadmissionIsQuickUnlessItFlaps(t *testing.T) {
 	}
 	// 坏满了抖动抑制要求的时长：放回来。
 	state.mu.Lock()
-	state.downAt = time.Now().Add(-fxpEndpointFlapPolicy.Base - time.Second)
+	state.tcp.downAt = time.Now().Add(-fxpEndpointFlapPolicy.Base - time.Second)
 	state.mu.Unlock()
 	state.probeSucceeded()
 	if !state.isHealthy() {
@@ -231,7 +231,7 @@ func TestExitSelectorKeepsAFailedEndpointOffTheUserPath(t *testing.T) {
 		t.Fatalf("探通之后没有回到首选：index=%d ok=%v", back, ok)
 	}
 	selector.states[0].mu.Lock()
-	failures := selector.states[0].failures
+	failures := selector.states[0].tcp.failures
 	selector.states[0].mu.Unlock()
 	if failures != 0 {
 		t.Fatalf("恢复健康之后失败计数没清零：%d", failures)

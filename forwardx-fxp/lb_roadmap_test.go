@@ -352,13 +352,13 @@ func TestResolvingAnAddressDoesNotReviveADeadEndpoint(t *testing.T) {
 	selector.markFailure(0, errTestEndpointDown)
 	state := selector.states[0]
 	state.mu.Lock()
-	failures, retryAfter := state.failures, state.retryAfter
+	failures, retryAfter := state.tcp.failures, state.tcp.retryAfter
 	state.mu.Unlock()
 	selector.markResolved(0)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.healthy || state.failures != failures || !state.retryAfter.Equal(retryAfter) {
-		t.Fatalf("解析成功把连不上的出口改回了健康 / 清了退避：healthy=%v failures=%d→%d", state.healthy, failures, state.failures)
+	if !state.tcp.down || state.tcp.failures != failures || !state.tcp.retryAfter.Equal(retryAfter) {
+		t.Fatalf("解析成功把连不上的出口改回了健康 / 清了退避：healthy=%v failures=%d→%d", !state.tcp.down, failures, state.tcp.failures)
 	}
 }
 

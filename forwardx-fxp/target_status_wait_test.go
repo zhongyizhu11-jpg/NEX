@@ -236,7 +236,7 @@ func TestOneMissingTargetStatusIsOnlyASuspect(t *testing.T) {
 	}
 	state := selector.states[0]
 	state.mu.Lock()
-	healthy, suspect := state.healthy, state.suspect
+	healthy, suspect := !state.tcp.down, state.tcp.suspect
 	state.mu.Unlock()
 	if !healthy {
 		t.Fatal("一次等不到结果就把出口判坏了：应该只记一次可疑")

@@ -13,7 +13,7 @@ func TestEndpointPoolTargetFollowsBurstUpToMax(t *testing.T) {
 		t.Fatalf("fxpPoolMaxSize = %d, want 64", fxpPoolMaxSize)
 	}
 	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
-	state := &fxpEndpointState{healthy: true}
+	state := &fxpEndpointState{}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -43,7 +43,6 @@ func TestEndpointPoolDoesNotDialPastMax(t *testing.T) {
 	now := time.Now()
 	state := &fxpEndpointState{
 		id:           fxpEndpointID{host: "127.0.0.1", port: 1, key: "pool-max-key"},
-		healthy:      true,
 		dialCfgKnown: true,
 	}
 	state.mu.Lock()
@@ -67,7 +66,7 @@ func TestEndpointPoolDoesNotDialPastMax(t *testing.T) {
 // 池里的连接照旧在 fxpPoolMaxIdleAge 之后换掉，上限变大不改变这一点。
 func TestEndpointPoolExpiresIdleConnectionsAtMaxIdleAge(t *testing.T) {
 	now := time.Now()
-	state := &fxpEndpointState{healthy: true, lastTake: now}
+	state := &fxpEndpointState{lastTake: now}
 	fresh, freshPeer := net.Pipe()
 	stale, stalePeer := net.Pipe()
 	defer freshPeer.Close()

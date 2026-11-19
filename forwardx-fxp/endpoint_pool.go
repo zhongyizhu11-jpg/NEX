@@ -93,6 +93,99 @@ func fxpProbeTuningFor(cfg config) fxpProbeTuning {
 */
 var fxpEndpointFlapPolicy = lbcore.FlapPolicy{Window: time.Hour, Threshold: 4, Base: 30 * time.Second, Max: 5 * time.Minute}
 
+/*
+sideHealth：出口一侧判好判坏的账。TCP 那一侧（握手、后台探测、用户连接）和 UDP 那一侧（UDP 探活）各一份，各判各的。
+
+  - 健康时连着失败 tuning.fail 次（suspect 数到够）才判坏；fail 是当场判坏（用户连接握手失败）。
+  - 判坏之后每隔 tuning.recoverGap 再试（retryAfter），连着成功 tuning.recover 次、而且抖动抑制不压着才恢复。
+  - 抖动抑制（flap）也各记各的：以前两侧的中断记在同一份账上，一次真正的断开（TCP、UDP 一起断）记两次，
+    断两次就凑够「一小时 4 次」，之后每次恢复都要多等 30 秒起（F3）。
+*/
+type sideHealth struct {
+	down bool
+	// failures：判坏之后又失败了几次；successes：判坏之后连着成功了几次；suspect：健康时连着失败了几次。
+	failures   int
+	successes  int
+	suspect    int
+	downAt     time.Time
+	retryAfter time.Time
+	flap       lbcore.FlapDamper
+}
+
+func newSideHealth() sideHealth {
+	return sideHealth{flap: lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy}}
+}
+
+// sideEvent：observe / fail 这一下有没有让这一侧变了状态。
+type sideEvent uint8
+
+const (
+	sideUnchanged sideEvent = iota
+	sideWentDown
+	sideRecovered
+)
+
+// observe 记一次探测的结果（ok = 通了）。
+func (h *sideHealth) observe(ok bool, now time.Time, tuning fxpProbeTuning) sideEvent {
+	if ok {
+		h.suspect = 0
+		if !h.down {
+			return sideUnchanged
+		}
+		h.successes++
+		if h.successes >= tuning.recover && !h.flap.Holding(now, h.downAt, 0, false) {
+			h.up()
+			return sideRecovered
+		}
+		h.retryAfter = now.Add(tuning.recoverGap)
+		return sideUnchanged
+	}
+	if !h.down {
+		h.suspect++
+		if h.suspect < tuning.fail {
+			return sideUnchanged
+		}
+	}
+	return h.fail(now, tuning)
+}
+
+/*
+fail：当场判坏（用户连接握手失败；或者 observe 数够了可疑）。
+
+多久之后再探：固定的 recoverGap（默认 2 秒），不再越探越慢（阶段 2）。以前每多失败一次翻一倍、最长 2 分钟，
+出口恢复之后要等退避到期才探第一下，实验室里恢复了 20 秒的出口 9 条新连接一条都没分到。
+当初放慢是因为探测压在用户连接上、一次要等满握手超时；现在探测都在后台协程里，等多久只是那个协程的事。
+来回断的出口由抖动抑制管（fxpEndpointFlapPolicy），不靠探得慢。
+*/
+func (h *sideHealth) fail(now time.Time, tuning fxpProbeTuning) sideEvent {
+	wasUp := !h.down
+	h.down = true
+	h.failures++
+	h.successes = 0
+	h.suspect = 0
+	h.retryAfter = now.Add(tuning.recoverGap)
+	if !wasUp {
+		return sideUnchanged
+	}
+	h.downAt = now
+	h.flap.Note(now)
+	return sideWentDown
+}
+
+// up：恢复（探测连着通够了，或者用户流量走通了 —— 后者不受抖动抑制限制，那是真凭实据）。
+func (h *sideHealth) up() {
+	h.down = false
+	h.failures = 0
+	h.successes = 0
+	h.suspect = 0
+	h.retryAfter = time.Time{}
+}
+
+// cooling：判坏了，而且还没到下一次该试的时候。
+func (h *sideHealth) cooling(now time.Time) bool {
+	return h.down && !h.retryAfter.IsZero() && now.Before(h.retryAfter)
+}
+
 type fxpEndpointID struct {
 	host string
 	port int
@@ -117,11 +210,8 @@ type fxpEndpointState struct {
 	dialCfg      config
 	dialCfgKnown bool
 
-	healthy     bool
-	failures    int
-	successes   int
-	suspect     int
-	retryAfter  time.Time
+	// tcp：TCP 那一侧的好坏（握手、后台探测、用户连接，sideHealth）。
+	tcp         sideHealth
 	probing     bool
 	confirmedAt time.Time
 	watchers    int
@@ -132,16 +222,15 @@ type fxpEndpointState struct {
 	indexKnown bool
 	// load：这个端点的负载记在哪一份上（exit_load.go）。
 	load *fxpHostLoad
-	// tuning：探测参数（fxpProbeTuning）。downAt / outages：最近一次判坏的时刻、最近一小时判坏的时刻（抖动抑制）。
-	tuning  fxpProbeTuning
-	downAt  time.Time
-	outages []time.Time
+	// tuning：探测参数（fxpProbeTuning），两侧共用。
+	tuning fxpProbeTuning
 	/*
 		UDP 那一侧（阶段 2 起单独记）：有几个 UDP 运行时在盯、对端的 UDP 端口、挂着几条 UDP 会话。
-		udpPongSeen 对端回过探活包 —— 回过之后 UDP 通不通就以探活为准（udpDown），和 TCP 那一侧各判各的：
+		udpPongSeen 对端回过探活包 —— 回过之后 UDP 通不通就以探活为准（udp，sideHealth），和 TCP 那一侧各判各的：
 		只有 UDP 被拦的出口，TCP 照常用、UDP 新会话不给它；反过来也一样。udpConfirmedAt / udpMissAt 是最近一次
 		收到应答 / 一轮没等到应答的时刻（UDP 会话据此判断「我没回包」是出口的事还是应用协议本来就单向）。
 	*/
+	udp            sideHealth
 	udpWatchers    int
 	udpPort        int
 	udpSessions    int
@@ -149,11 +238,6 @@ type fxpEndpointState struct {
 	udpProbing     bool
 	udpProbedAt    time.Time
 	udpRounds      int
-	udpDown        bool
-	udpSuspect     int
-	udpSuccesses   int
-	udpDownAt      time.Time
-	udpRetryAfter  time.Time
 	udpConfirmedAt time.Time
 	udpMissAt      time.Time
 	udpUnverified  bool
@@ -180,12 +264,16 @@ func fxpEndpointStateFor(endpoint exitEndpoint) *fxpEndpointState {
 	fxpEndpoints.mu.Lock()
 	state := fxpEndpoints.states[id]
 	if state == nil {
-		state = &fxpEndpointState{id: id, healthy: true, tuning: defaultFXPProbeTuning()}
+		state = newFXPEndpointState(id)
 		fxpEndpoints.states[id] = state
 	}
 	fxpEndpoints.mu.Unlock()
 	fxpEndpoints.once.Do(func() { go fxpEndpointMaintenanceLoop() })
 	return state
+}
+
+func newFXPEndpointState(id fxpEndpointID) *fxpEndpointState {
+	return &fxpEndpointState{id: id, tcp: newSideHealth(), udp: newSideHealth(), tuning: defaultFXPProbeTuning()}
 }
 
 // resetFXPEndpointRegistry 丢掉所有端点状态并关掉池里的连接。只给测试用：
@@ -229,7 +317,7 @@ func (s *fxpEndpointState) label() string {
 func (s *fxpEndpointState) isHealthy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.healthy
+	return !s.tcp.down
 }
 
 // markResolveFailure：地址解析不出来。和别的失败一样记，但记下「是解析造成的」—— 只有这种失败，
@@ -237,7 +325,7 @@ func (s *fxpEndpointState) isHealthy() bool {
 func (s *fxpEndpointState) markResolveFailure(err error) {
 	s.markFailure(err)
 	s.mu.Lock()
-	if !s.healthy {
+	if s.tcp.down {
 		s.resolveFailed = true
 	}
 	s.mu.Unlock()
@@ -246,7 +334,7 @@ func (s *fxpEndpointState) markResolveFailure(err error) {
 // resolveSucceeded：地址解析出来了。只说明 DNS 好了，不说明对端活着：上一次失败是解析造成的才恢复。
 func (s *fxpEndpointState) resolveSucceeded() {
 	s.mu.Lock()
-	clear := !s.healthy && s.resolveFailed
+	clear := s.tcp.down && s.resolveFailed
 	s.mu.Unlock()
 	if clear {
 		s.markHealthy()
@@ -283,21 +371,13 @@ func (s *fxpEndpointState) hostLoad() *fxpHostLoad {
 // markHealthy 是用户流量走通了：立刻算健康。
 func (s *fxpEndpointState) markHealthy() {
 	s.mu.Lock()
-	wasHealthy := s.healthy
-	s.healthy = true
-	s.failures = 0
-	s.successes = 0
-	s.suspect = 0
-	s.resolveFailed = false
-	s.retryAfter = time.Time{}
-	s.confirmedAt = time.Now()
-	index := s.index
-	s.mu.Unlock()
-	if !wasHealthy {
-		log.Printf("exit endpoint recovered index=%d endpoint=%s", index, s.label())
-		// 刚恢复的出口慢慢加量（exit_load.go），别一下子把新连接全塞给它。
-		s.hostLoad().markRecovered(time.Now())
+	event := sideUnchanged
+	if s.tcp.down {
+		event = sideRecovered
 	}
+	s.tcp.up()
+	s.confirmedAt = time.Now()
+	s.noteTCPEventLocked(event, nil)
 }
 
 // confirmedHealthy：这个端点现在健康，而且最近 within 之内有东西证明它活着（探测、握手、预热）。
@@ -305,13 +385,13 @@ func (s *fxpEndpointState) markHealthy() {
 func (s *fxpEndpointState) confirmedHealthy(now time.Time, within time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.healthy && !s.confirmedAt.IsZero() && now.Sub(s.confirmedAt) <= within
+	return !s.tcp.down && !s.confirmedAt.IsZero() && now.Sub(s.confirmedAt) <= within
 }
 
 func (s *fxpEndpointState) claimProbe(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.healthy || s.probing || s.retryAfter.IsZero() || now.Before(s.retryAfter) {
+	if !s.tcp.down || s.probing || s.tcp.retryAfter.IsZero() || now.Before(s.tcp.retryAfter) {
 		return false
 	}
 	s.probing = true
@@ -417,7 +497,7 @@ func (s *fxpEndpointState) poolTargetLocked(now time.Time) int {
 func (s *fxpEndpointState) ensureFill() {
 	now := time.Now()
 	s.mu.Lock()
-	if !s.dialCfgKnown || !s.healthy || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
+	if !s.dialCfgKnown || s.tcp.down || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
 		s.mu.Unlock()
 		return
 	}
@@ -467,8 +547,8 @@ func (s *fxpEndpointState) fillOne(cfg config) {
 	s.fillFailures = 0
 	s.fillRetryAt = time.Time{}
 	s.confirmedAt = now
-	s.suspect = 0
-	if !s.healthy || len(s.idle) >= fxpPoolMaxSize {
+	s.tcp.suspect = 0
+	if s.tcp.down || len(s.idle) >= fxpPoolMaxSize {
 		s.mu.Unlock()
 		_ = conn.Close()
 		return
@@ -519,9 +599,9 @@ func (s *fxpEndpointState) maintain(now time.Time) {
 	probe := false
 	if s.watchers > 0 && s.dialCfgKnown && !s.probing {
 		switch {
-		case !s.healthy:
-			probe = !s.retryAfter.IsZero() && !now.Before(s.retryAfter)
-		case s.suspect > 0:
+		case s.tcp.down:
+			probe = !s.tcp.retryAfter.IsZero() && !now.Before(s.tcp.retryAfter)
+		case s.tcp.suspect > 0:
 			probe = true
 		default:
 			// 延迟样本旧了也探（路线图 X10）：「多久没确认」会被池子补连接清掉，不能只看它。
@@ -539,9 +619,9 @@ func (s *fxpEndpointState) maintain(now time.Time) {
 		case !s.udpPongSeen:
 			// 对端还没回过探活包：头几轮照常问，一直不回就隔久一点再问（它升级了、UDP 放行了就能发现）。
 			udpProbe = s.udpProbedAt.IsZero() || since >= fxpUDPUnverifiedProbeEvery || (s.udpRounds < fxpUDPUnverifiedRounds && since >= s.tuning.recoverGap)
-		case s.udpDown:
-			udpProbe = !now.Before(s.udpRetryAfter)
-		case s.udpSuspect > 0:
+		case s.udp.down:
+			udpProbe = !now.Before(s.udp.retryAfter)
+		case s.udp.suspect > 0:
 			udpProbe = true
 		case s.udpSessions > 0:
 			udpProbe = since >= fxpUDPProbeActiveEvery
@@ -581,52 +661,47 @@ udp 为 true 是给 UDP 会话问的：对端回过 UDP 探活包，就以探活
 func (s *fxpEndpointState) reachable(udp bool, now time.Time) (ok bool, cooling bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	side := &s.tcp
 	if udp && s.udpPongSeen {
-		if !s.udpDown {
-			return true, false
-		}
-		return false, now.Before(s.udpRetryAfter)
+		side = &s.udp
 	}
-	if s.healthy {
-		return true, false
-	}
-	return false, !s.retryAfter.IsZero() && now.Before(s.retryAfter)
+	return !side.down, side.cooling(now)
 }
 
 func (s *fxpEndpointState) markFailure(err error) {
-	now := time.Now()
 	s.mu.Lock()
-	wasHealthy := s.healthy
-	s.healthy = false
-	s.failures++
-	s.successes = 0
-	s.suspect = 0
+	// 不是解析造成的失败：之后解析成功也清不掉它（markResolveFailure 在这之后再标上）。
 	s.resolveFailed = false
-	/*
-		多久之后再探：固定的 recoverGap（默认 2 秒），不再越探越慢（阶段 2）。以前每多失败一次翻一倍、最长 2 分钟，
-		出口恢复之后要等退避到期才探第一下，实验室里恢复了 20 秒的出口 9 条新连接一条都没分到。
-		当初放慢是因为探测压在用户连接上、一次要等满握手超时；现在探测都在后台协程里，等多久只是那个协程的事。
-		来回断的出口由抖动抑制管（fxpEndpointFlapPolicy），不靠探得慢。
-	*/
-	delay := s.tuning.recoverGap
-	s.retryAfter = now.Add(delay)
-	if wasHealthy {
-		s.downAt = now
-		damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
-		damper.Note(now)
-		s.outages = damper.Events
+	s.noteTCPEventLocked(s.tcp.fail(time.Now(), s.tuning), err)
+}
+
+/*
+noteTCPEventLocked：TCP 那一侧刚变坏 / 刚恢复时的善后。调用方持锁，这里放锁。
+
+变坏：池里那些连接多半也是死的，关掉，别再发给用户。恢复：刚恢复的出口慢慢加量（exit_load.go），别一下子把新连接
+全塞给它。两种都打一行日志（Agent 按它记出口事件，格式串抄在 agent/testdata/fxp_endpoint_log_sample.txt，改了要一起改）。
+*/
+func (s *fxpEndpointState) noteTCPEventLocked(event sideEvent, err error) {
+	var idle []pooledSecureConn
+	switch event {
+	case sideWentDown:
+		idle = s.idle
+		s.idle = nil
+	case sideRecovered:
+		s.resolveFailed = false
 	}
-	// 死掉的端点，池里那些连接多半也是死的，别再发给用户。
-	idle := s.idle
-	s.idle = nil
-	index := s.index
+	index, delay := s.index, s.tuning.recoverGap
 	s.mu.Unlock()
 	for _, pooled := range idle {
 		_ = pooled.conn.Close()
 	}
-	if wasHealthy {
-		// index 是这个端点在出口列表里的位置（Agent 按这行日志记出口事件，格式里要有 index=）。
+	// index= 是这个端点在出口列表里排第几，给人看的；Agent 的正则有没有它都认。
+	switch event {
+	case sideWentDown:
 		log.Printf("exit endpoint unhealthy index=%d endpoint=%s retryIn=%s reason=%v", index, s.label(), delay, err)
+	case sideRecovered:
+		log.Printf("exit endpoint recovered index=%d endpoint=%s", index, s.label())
+		s.hostLoad().markRecovered(time.Now())
 	}
 }
 
@@ -636,34 +711,17 @@ func (s *fxpEndpointState) probeSucceeded() {
 	now := time.Now()
 	s.mu.Lock()
 	s.confirmedAt = now
-	s.suspect = 0
-	if s.healthy {
-		s.mu.Unlock()
-		return
-	}
-	s.successes++
-	damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
-	if s.successes < s.tuning.recover || damper.Holding(now, s.downAt, 0, false) {
-		s.retryAfter = now.Add(s.tuning.recoverGap)
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-	s.markHealthy()
+	s.noteTCPEventLocked(s.tcp.observe(true, now, s.tuning), nil)
 }
 
-// probeFailed 是后台探测失败。健康的端点要连着失败几次才判死，一次丢包不切线路。
+// probeFailed 是后台探测失败（或者等不到出口回结果）。健康的端点要连着失败几次才判死，一次丢包不切线路。
 func (s *fxpEndpointState) probeFailed(err error) {
 	s.mu.Lock()
-	if s.healthy {
-		s.suspect++
-		if s.suspect < s.tuning.fail {
-			s.mu.Unlock()
-			return
-		}
+	event := s.tcp.observe(false, time.Now(), s.tuning)
+	if s.tcp.down {
+		s.resolveFailed = false
 	}
-	s.mu.Unlock()
-	s.markFailure(err)
+	s.noteTCPEventLocked(event, err)
 }
 
 // runProbe 在后台完整握一次手、发一个 probe hello 就关。对端认得 probe，
@@ -689,7 +747,7 @@ func (s *fxpEndpointState) runProbe(cfg config) {
 			s.probeSucceeded()
 		}
 		s.mu.Lock()
-		again, gap := !s.healthy && s.watchers > 0, s.tuning.recoverGap
+		again, gap := s.tcp.down && s.watchers > 0, s.tuning.recoverGap
 		s.mu.Unlock()
 		if !again {
 			return
@@ -850,23 +908,14 @@ func (s *fxpEndpointState) udpProbeResult(err error) (again bool, gap time.Durat
 	s.udpRounds++
 	switch {
 	case err == nil:
-		wasUnverified := s.udpUnverified
-		s.udpPongSeen, s.udpUnverified = true, false
-		s.udpConfirmedAt = now
-		s.udpSuspect = 0
-		if wasUnverified {
+		if s.udpUnverified {
 			logLine = fmt.Sprintf("exit endpoint answers udp pings now index=%d endpoint=%s", s.index, s.label())
 		}
-		if s.udpDown {
-			s.udpSuccesses++
-			damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
-			if s.udpSuccesses >= s.tuning.recover && !damper.Holding(now, s.udpDownAt, 0, false) {
-				s.udpDown = false
-				recovered = true
-				logLine = fmt.Sprintf("exit endpoint udp recovered index=%d endpoint=%s", s.index, s.label())
-			} else {
-				s.udpRetryAfter = now.Add(s.tuning.recoverGap)
-			}
+		s.udpPongSeen, s.udpUnverified = true, false
+		s.udpConfirmedAt = now
+		if s.udp.observe(true, now, s.tuning) == sideRecovered {
+			recovered = true
+			logLine = fmt.Sprintf("exit endpoint udp recovered index=%d endpoint=%s", s.index, s.label())
 		}
 	case !s.udpPongSeen:
 		// 从没回过：没有结论。问够了轮数就标成「没验证过」，说一次。
@@ -876,24 +925,14 @@ func (s *fxpEndpointState) udpProbeResult(err error) (again bool, gap time.Durat
 		}
 	default:
 		s.udpMissAt = now
-		s.udpSuccesses = 0
-		if s.udpDown {
-			s.udpRetryAfter = now.Add(s.tuning.recoverGap)
-			break
-		}
-		s.udpSuspect++
-		if s.udpSuspect < s.tuning.fail {
+		if s.udp.observe(false, now, s.tuning) == sideWentDown {
+			logLine = fmt.Sprintf("exit endpoint udp unreachable index=%d endpoint=%s reason=%v", s.index, s.label(), err)
+		} else if !s.udp.down {
+			// 一轮没回、还没到判坏的次数：紧接着再发一轮。
 			again = true
-			break
 		}
-		s.udpDown, s.udpDownAt, s.udpSuspect = true, now, 0
-		s.udpRetryAfter = now.Add(s.tuning.recoverGap)
-		damper := lbcore.FlapDamper{Policy: fxpEndpointFlapPolicy, Events: s.outages}
-		damper.Note(now)
-		s.outages = damper.Events
-		logLine = fmt.Sprintf("exit endpoint udp unreachable index=%d endpoint=%s reason=%v", s.index, s.label(), err)
 	}
-	if !again && s.udpDown && s.udpWatchers > 0 {
+	if !again && s.udp.down && s.udpWatchers > 0 {
 		// 还不通、还有人盯着：这个协程接着探。
 		again, gap = true, s.tuning.recoverGap
 	}
@@ -922,7 +961,7 @@ func (s *fxpEndpointState) udpReportState() string {
 		return "unverified"
 	case !s.udpPongSeen:
 		return ""
-	case s.udpDown:
+	case s.udp.down:
 		return "down"
 	}
 	return "ok"

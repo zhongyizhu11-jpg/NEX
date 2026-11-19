@@ -199,7 +199,7 @@
 | 谁 | 记什么 | 窗口 / 门槛 / 驻留 | 出处 |
 |---|---|---|---|
 | 线路组、GOST 出口组 | 自动切换（人工指定、演练、开机 90 s 预热期内的不记） | 1 h 内第 3 次起压 5 min，每多一次翻倍，最多 1 h；挂了逃生不受限 | `agent/failover_selection.go:103-120` |
-| FXP 出口本身 | 断开 | 1 h 内第 4 次起，下一次恢复要从断开算坏满 30 s，翻倍，最多 5 min | `forwardx-fxp/endpoint_pool.go:94` |
+| FXP 出口本身 | 断开（TCP 那一侧、UDP 那一侧各记各的：一次两侧一起断的中断每侧各记一次，不是两次） | 每一侧 1 h 内第 4 次断开起，下一次恢复要从断开算坏满 30 s，翻倍，最多 5 min | `forwardx-fxp/endpoint_pool.go` 的 `fxpEndpointFlapPolicy`、`sideHealth` |
 | FXP 出口到目标 | 中断（好 → 坏） | 1 h 内第 4 次起，恢复要坏满 5 min（不翻倍） | `forwardx-fxp/target_health.go:295` |
 | DNS 组 | 自动切换 / 拿掉加回 | 1 h 内 3 次起 5 min，翻倍，最多 1 h | `server/forwardGroupFlapHold.ts:13` |
 
