@@ -154,6 +154,8 @@ func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, 
 		_ = conn.Close()
 		return multipathDialResult{key: key, cfgIndex: cfgIndex, err: fmt.Errorf("leg %d (%s) hello: %w", wireIndex, label, err)}
 	}
+	// 这条腿从此承载会话：不再受 TCP_USER_TIMEOUT 管（F1，见 commitSession）。腿断了由多路径自己发现、重拨。
+	sec.commitSession()
 	leg := newMultipathLeg(wireIndex, sec, label)
 	leg.traffic = newMultipathLegTraffic(cfg, legCfg)
 	leg.healthKey = key
@@ -259,6 +261,7 @@ func handleExitMultipath(sec *secureConn, hello helloFrame, cfg config) error {
 		return fmt.Errorf("multipath leg index %d out of range", hello.MultipathLegIndex)
 	}
 	sessionKey := multipathExitSessionKey(cfg.TunnelID, sessionID)
+	sec.commitSession()
 	leg := newMultipathLeg(hello.MultipathLegIndex, sec, fmt.Sprintf("peer-%s", sec.conn.RemoteAddr()))
 	// 回程（下载）是出口在分：按入口带过来的这一路线路带宽定初值。
 	leg.pace.seedCapacity(hello.MultipathLegCapacityMbps)

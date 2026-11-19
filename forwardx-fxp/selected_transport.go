@@ -200,6 +200,10 @@ func (t *selectedTransport) useLocked(conn net.Conn, sec *secureConn, endpoint e
 	// 这台出口会回「连上目标没有」时，结果到之前都不算提交：内容留着，连不上就换下一台重放。
 	t.statusPending = t.wantStatus && t.selector.endpointReportsTarget(index)
 	t.committed = committed && !t.statusPending
+	if t.committed {
+		// 重放缓存先留着：失败切换时 failoverLocked 还要把它写到这条新连接上，写完才丢。
+		sec.commitSession()
+	}
 	// 换了端点（失败重放）就把活动连接从旧主机挪到新主机。
 	t.load.close()
 	t.load = nil
@@ -221,12 +225,21 @@ func (t *selectedTransport) handleAck(sec *secureConn, index int, err error) {
 	if t.sec == sec {
 		t.acked = true
 		if !t.statusPending {
-			t.committed = true
-			t.replay = nil
-			t.replayBytes = 0
+			t.commitLocked()
 		}
 	}
 	t.mu.Unlock()
+}
+
+/*
+commitLocked：这条会话不会再换出口了 —— 重放缓存丢掉，到出口的这条连接清掉 TCP_USER_TIMEOUT（F1，见
+secureConn.commitSession）：访客停下来不读、出口那一头窗口是零，也不能被内核判死。调用方持锁。
+*/
+func (t *selectedTransport) commitLocked() {
+	t.committed = true
+	t.replay = nil
+	t.replayBytes = 0
+	t.sec.commitSession()
 }
 
 // requestTargetStatus：hello 里带了 targetStatus。在 start 之前调，按当前这台出口会不会回报决定要不要等。
@@ -254,9 +267,7 @@ func (t *selectedTransport) takeTargetStatusLocked(frames [][]byte, from int) ([
 	if !ok {
 		// 标了会回报、却直接来了数据：当它没回，照常走。
 		if t.acked {
-			t.committed = true
-			t.replay = nil
-			t.replayBytes = 0
+			t.commitLocked()
 		}
 		return frames, nil
 	}
@@ -268,9 +279,7 @@ func (t *selectedTransport) takeTargetStatusLocked(frames [][]byte, from int) ([
 		return frames, &targetStatusError{message: status.Error}
 	}
 	if t.acked {
-		t.committed = true
-		t.replay = nil
-		t.replayBytes = 0
+		t.commitLocked()
 	}
 	return frames, nil
 }

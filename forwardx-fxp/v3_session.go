@@ -195,7 +195,10 @@ func dialV3Fresh(host string, port int, cfg config) (net.Conn, *secureConn, erro
 	shaper := linkShaperHandle("up", cfg)
 	if !v3MuxEnabled(cfg) {
 		// 关的是底下的 TCP：连接池按它「偷看」空闲连接活没活（见 pooledSecureConnAlive）。
-		return raw, newV3SecureConn(inner, shaper, raw), nil
+		sec := newV3SecureConn(inner, shaper, raw)
+		// 不复用：这条物理连接是这一条会话独占的，会话交出去时清掉它的 TCP_USER_TIMEOUT（commitSession）。
+		sec.userTimeoutRaw = raw
+		return raw, sec, nil
 	}
 	session := v3.NewSession(inner, v3.SessionOptions{Client: true, IdleTimeout: v3ClientIdleTimeout})
 	stream, err := session.Open()
@@ -289,7 +292,9 @@ func serveV3Inbound(role string, conn net.Conn, cfg config, in *fxpInbound, hand
 	peeked := &v3PeekedConn{InnerConn: inner, first: first, pending: true}
 	switch first {
 	case 0:
-		return handler(newV3SecureConn(peeked, shaper, conn), in)
+		sec := newV3SecureConn(peeked, shaper, conn)
+		sec.userTimeoutRaw = conn
+		return handler(sec, in)
 	case v3.FrameOpen:
 		shaper.attach(conn)
 		tuneV3SessionSocket(conn)
