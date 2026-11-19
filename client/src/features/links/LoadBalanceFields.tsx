@@ -250,7 +250,7 @@ export function BalanceDetectPanel({
           <SettingRow title="延迟优先：差多少算一样快" hint="只对延迟优先起作用">
             <Stepper label="一样快的门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} min={BALANCE_DETECT_LIMITS.latencyMarginMs.min} max={BALANCE_DETECT_LIMITS.latencyMarginMs.max} step={BALANCE_DETECT_LIMITS.latencyMarginMs.step} unit="ms" />
           </SettingRow>
-          <SettingRow title="抖动超过多少算抖" hint="延迟上下浮动的幅度">
+          <SettingRow title="抖动超过多少算抖" hint="延迟上下浮动的幅度；这三项只对 NEX 隧道起作用">
             <Stepper label="抖动门槛" value={value.jitterMs} onChange={(jitterMs) => patch({ jitterMs })} min={BALANCE_DETECT_LIMITS.jitterMs.min} max={BALANCE_DETECT_LIMITS.jitterMs.max} step={BALANCE_DETECT_LIMITS.jitterMs.step} unit="ms" />
           </SettingRow>
           <SettingRow title="持续多久才处理" hint="偶尔抖一下不动">

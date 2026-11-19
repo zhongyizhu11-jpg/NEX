@@ -252,7 +252,8 @@ export function describeBalanceEffect(input: {
   }
   if (detect.jitterAction !== "ignore") {
     const action = detect.jitterAction === "reduce" ? `把它降到 ${Math.round(1 / BALANCE_JITTER_REDUCED_SHARE)} 分之 1` : "切走";
-    parts.push(`抖动超过 ${detect.jitterMs}ms 持续 ${detect.jitterHoldSeconds} 秒，就${action}`);
+    // 抖动这三项只有 NEX 隧道的 FXP 按它少分 / 切走；GOST 的抖动、丢包已经在自动 / 延迟优先的成本里
+    parts.push(`抖动超过 ${detect.jitterMs}ms 持续 ${detect.jitterHoldSeconds} 秒，就${action}${input.dns ? "" : "（NEX 隧道）"}`);
   }
   parts.push(`恢复要连续通 ${detect.recoverThreshold} 次${detect.slowStart ? "，1 分钟内慢慢加回满份" : ""}`);
   return `${parts.join("；")}。`;
