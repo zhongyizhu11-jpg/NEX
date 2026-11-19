@@ -6619,9 +6619,11 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
 
     let healthy = healthStatus === "healthy";
     let failureFinal = false;
+    let externallyUnhealthy = false;
     if (healthy && external && (external.state === "failing" || external.state === "down")) {
       // 成员自己报告正常，但别的机器连不上它的入口端口：访客也连不上。持续满观察时间（failingSince 起算）就拿掉。
       healthy = false;
+      externallyUnhealthy = true;
       observedFailureSince = external.failingSince ? new Date(external.failingSince) : healthNow;
       failureFinal = external.down;
       if (external.down) externalDownCount += 1;
@@ -6664,7 +6666,14 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     const include = decision.include;
 
     const sameTime = (left: unknown, right: Date | null) => (toDate(left)?.getTime() ?? null) === (right?.getTime() ?? null);
-    const nextHealthStatus = healthy ? "healthy" : "unhealthy";
+    /*
+      不开国内检测时 healthStatus 这一列同时是「成员 Agent 自己报的」：只因为外部观察才判不健康的，不把它改掉
+      （改了下一轮就读不到 Agent 报的是健康了，外部观察恢复后也回不来，要等 Agent 下一次上报才改回去）。
+      故障 / 恢复的计时照常写。
+    */
+    const nextHealthStatus = healthy
+      ? "healthy"
+      : externallyUnhealthy && !chinaHealthEnabled ? String(member.healthStatus || "healthy") : "unhealthy";
     if (
       String(member.healthStatus || "unknown") !== nextHealthStatus
       || !sameTime(member.failureSince, failureSince)
@@ -6676,6 +6685,8 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
         healthySince,
         updatedAt: healthNow,
       } as any).where(eq(forwardGroupMembers.id, member.id));
+      // 这一列是评估自己刚改的，不算「评估期间来了新的上报」：发布前核对时按改后的比。
+      if (!chinaHealthEnabled) initialHealthSnapshot.set(memberId, `${nextHealthStatus}:${toDate(checkedAt)?.getTime() || 0}`);
     }
 
     if (decision.holdReason === "recovering") recoveringCount += 1;
