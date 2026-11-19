@@ -1,6 +1,8 @@
-# FXP 出口状态变化的两行日志格式串，逐字抄自 forwardx-fxp/endpoint_pool.go
-# （exitEndpointState 的 markFailure / markSuccess 里的 log.Printf）。
+# FXP 出口状态变化的四行日志格式串，逐字抄自 forwardx-fxp/endpoint_pool.go
+# （exitEndpointState 的 markFailure / markSuccess 里的 log.Printf：出口本身；UDP 探测那里的 fmt.Sprintf：UDP 那一侧）。
 # Agent 的 fxpEndpointLogPattern（agent/fxp_endpoint_events.go）靠它们认出口事件；
-# FXP 改这两行日志时，这里、正则、TestFXPEndpointEventsMatchCurrentFXPLogFormat 要一起改。
+# FXP 改这几行日志时，这里、正则、TestFXPEndpointEventsMatchCurrentFXPLogFormat 要一起改。
 exit endpoint unhealthy index=%d endpoint=%s retryIn=%s reason=%v
 exit endpoint recovered index=%d endpoint=%s
+exit endpoint udp unreachable index=%d endpoint=%s reason=%v
+exit endpoint udp recovered index=%d endpoint=%s
