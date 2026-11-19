@@ -23,8 +23,7 @@ import {
 } from "./peerObservations";
 import { peerProbePortKey, type PeerProbePort } from "./topology";
 import { ForwardGroupMode, LooseRow, forwardGroupFailoverDelayMs, forwardGroupRecoverDelayMs, memberEntryHostId, normalizeHostAddressKey, normalizeIpCandidate, supportsChinaHealthMode } from "./common";
-import { chinaReachableSinceByMember } from "./ddnsEntryGroup";
-import { scheduleForwardGroupFailover } from "./evaluateDriver";
+import { scheduleForwardGroupFailover } from "./evaluationQueue";
 import { getForwardGroupById } from "../repositories/forwardGroupRepository";
 import { ForwardGroupProbeTopologySnapshot, forwardGroupProbeTopology, peerObserverOnline } from "./probeTopology";
 
@@ -77,6 +76,14 @@ export function normalizeChinaHealthTarget(raw: unknown, method?: unknown) {
   if (!needsPort) return { host, port: 0, text: textHost, method: probeMethod };
   return { host, port, text: `${textHost}:${port}`, method: probeMethod };
 }
+
+/*
+  国内检测「原始结果连得上」是从什么时候开始的（面板看到的，进程内存）。成员 Agent 自己要连续正常满
+  recoverSeconds 才报 healthy，但它重启后状态是空的，第一个正常样本就报 healthy —— 入口组把成员加回来
+  之前要「连续健康满 recoverSeconds」，这段时间只认面板自己看到的：Agent 稳了一阵才报的 healthy，
+  面板这边早就在数了，不用再等一遍；Agent 刚重启就报的，从现在数起。
+*/
+export const chinaReachableSinceByMember = new Map<number, number>();
 
 export type ForwardGroupMemberPeerObserver = PeerObserverView & {
   name: string;

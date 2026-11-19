@@ -11,12 +11,9 @@ import { DEFAULT_DDNS_TTL, type DdnsSettings } from "../ddns";
 import { prepareForwardGroupDdnsLines } from "../forwardGroupDdnsLines";
 import { getDb, nowDate } from "../dbRuntime";
 import { getForwardGroupTemplateRules } from "../repositories/forwardRuleRepository";
-import { getHostsByIds } from "../repositories/hostRepository";
-import { getLatestHostMetricSnapshots } from "../repositories/metricsRepository";
 import {
   applyAggregationToDdnsValues,
   buildEntryGroupAggregationPlan,
-  hostThroughputMbpsFromSnapshots,
   isBandwidthAggregationGroup,
   resolveAggregationSettings,
   type AggregationMemberRow,
@@ -47,9 +44,10 @@ import {
 import type { BandwidthAggregationPlan } from "../../shared/bandwidthAggregation";
 import { ForwardGroupFailoverOptions, ForwardGroupRecordType, LineGroupRow, LooseRow, forwardGroupFailoverDelayMs, forwardGroupRecoverDelayMs, groupSwitchNotifyEnabled, insertForwardGroupEvent, memberEntryHostId, normalizeForwardGroupRecordType, recordTypeRequirementLabel, sortedMembers, switchNotifySuppressed, toDate, updateForwardGroupRuntimeIfChanged } from "./common";
 import { ForwardGroupLineHook, createForwardGroupLineHook, ddnsValueSetSignature, exactDdnsReconciliationDue, memberDdnsValue, publishForwardGroupDdnsValues, rememberExactDdnsReconciliation, syncForwardGroupLinesAfterDefault } from "./ddnsPublish";
-import { forwardGroupHealthRechecks, scheduleForwardGroupFailover } from "./evaluateDriver";
+import { forwardGroupHealthRechecks, scheduleForwardGroupFailover } from "./evaluationQueue";
 import { deferProviderWrite } from "./evaluateScope";
-import { evaluateMemberPeerHealth } from "./health";
+import { chinaReachableSinceByMember, evaluateMemberPeerHealth } from "./health";
+import { memberThroughputMbps, withHostLineBandwidth } from "./bandwidth";
 import { MemberAgentLiveness, agentHealthSampleIsCurrent, resolveMemberAgentLiveness } from "./liveness";
 
 /** 这个组这一轮的记录权重：发不发、发什么、要不要因为权重变了重写一次记录。 */
@@ -90,34 +88,6 @@ function resolveEntryGroupDdnsWeighting(
 
 function ddnsWeightStateJson(ddnsSettings: DdnsSettings, domain: string, recordType: string, weights: DdnsWeights | null, mirrorWeighted: boolean) {
   return weights ? JSON.stringify({ provider: ddnsSettings.provider, domain: domain.toLowerCase(), recordType, weights, mirrorWeighted }) : null;
-}
-
-/** Live uplink throughput, in Mbps, for the hosts behind a set of members. */
-export async function memberThroughputMbps(members: AggregationMemberRow[]) {
-  const hostIds = Array.from(new Set(members
-    .map((member) => Number(member.hostId || 0))
-    .filter((hostId) => Number.isInteger(hostId) && hostId > 0)));
-  if (hostIds.length === 0) return new Map<number, number>();
-  const snapshots = await getLatestHostMetricSnapshots(hostIds).catch(() => []);
-  return hostThroughputMbpsFromSnapshots(snapshots as any[]);
-}
-
-/**
- * Build the bandwidth aggregation plan for an entry group and apply it to the
- * DDNS values about to be published.
- *
- * Returns `null` for groups that did not opt into aggregation so the caller
- * keeps its existing behaviour untouched.
- */
-/** 成员上没填「上行 Mbps」时，用主机上的「线路带宽」（一台机器只填一处）。 */
-export async function withHostLineBandwidth<T extends { hostId: number; bandwidthMbps?: number | null }>(members: T[]): Promise<T[]> {
-  const missing = Array.from(new Set(members.filter((member) => !(Number(member.bandwidthMbps) > 0) && member.hostId > 0).map((member) => member.hostId)));
-  if (missing.length === 0) return members;
-  const rows = await getHostsByIds(missing).catch(() => []) as any[];
-  const lineById = new Map(rows.map((row) => [Number(row.id), Math.max(0, Number(row.lineBandwidthMbps) || 0)]));
-  return members.map((member) => (Number(member.bandwidthMbps) > 0 || !lineById.get(member.hostId)
-    ? member
-    : { ...member, bandwidthMbps: lineById.get(member.hostId)! }));
 }
 
 async function resolveEntryGroupAggregation(
@@ -310,14 +280,6 @@ async function holdEntryGroupDdns(
     throw error;
   }
 }
-
-/*
-  国内检测「原始结果连得上」是从什么时候开始的（面板看到的，进程内存）。成员 Agent 自己要连续正常满
-  recoverSeconds 才报 healthy，但它重启后状态是空的，第一个正常样本就报 healthy —— 入口组把成员加回来
-  之前要「连续健康满 recoverSeconds」，这段时间只认面板自己看到的：Agent 稳了一阵才报的 healthy，
-  面板这边早就在数了，不用再等一遍；Agent 刚重启就报的，从现在数起。
-*/
-export const chinaReachableSinceByMember = new Map<number, number>();
 
 async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: DdnsSettings, options: ForwardGroupFailoverOptions = {}, lines: ForwardGroupLineHook | null = null) {
   const db = await getDb();

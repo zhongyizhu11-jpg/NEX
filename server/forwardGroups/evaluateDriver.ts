@@ -27,9 +27,7 @@ import { getForwardGroupChildRulesForMember, getForwardGroupTemplateRules } from
 import { getHosts, getHostsByIds } from "../repositories/hostRepository";
 import {
   ForwardGroupEvaluationBatchError,
-  ForwardGroupEvaluationQueue,
   FORWARD_GROUP_CHINA_HEALTH_FRESHNESS_TTL_MS,
-  ForwardGroupHealthRecheckScheduler,
   FORWARD_GROUP_AGENT_HEALTH_FRESHNESS_TTL_MS,
   forwardGroupChinaHealthStateAt,
   nextForwardGroupChinaHealthExpiryAt,
@@ -48,6 +46,7 @@ import {
   staleSampleWithinReadinessGrace,
 } from "./readiness";
 import { ForwardGroupPublishQueue, ddnsProviderAccountKey } from "./publish";
+import { FORWARD_GROUP_EVALUATION_RETRY_BASE_MS, FORWARD_GROUP_EVALUATION_RETRY_MAX_MS, forwardGroupHealthRechecks, scheduleForwardGroupFailover, setForwardGroupEvaluationRunner } from "./evaluationQueue";
 import { databaseHealth } from "../databaseHealthState";
 import { isPanelBackgroundLeaseHolder } from "../panelLease";
 import { registerPanelWorkHandler, requestPanelWork } from "../panelWorkRequests";
@@ -61,27 +60,9 @@ import { forwardGroupProbeTopology, invalidateForwardGroupProbeTopology } from "
 import { syncForwardGroupRules } from "./ruleSync";
 import { withForwardGroupEvaluationLock } from "../panelKeyedLock";
 
-const FORWARD_GROUP_EVALUATION_DEBOUNCE_MS = 250;
-
-const FORWARD_GROUP_EVALUATION_RETRY_BASE_MS = 1_000;
-
-const FORWARD_GROUP_EVALUATION_RETRY_MAX_MS = 30_000;
-
-const forwardGroupEvaluationQueue = new ForwardGroupEvaluationQueue(
-  (groupIds) => runForwardGroupFailoverByIds(groupIds, { skipRuleSync: true, deferPublish: true }),
-  {
-    debounceMs: FORWARD_GROUP_EVALUATION_DEBOUNCE_MS,
-    retryBaseMs: FORWARD_GROUP_EVALUATION_RETRY_BASE_MS,
-    retryMaxMs: FORWARD_GROUP_EVALUATION_RETRY_MAX_MS,
-    onError: (error, retryDelayMs) => {
-      console.warn(`[ForwardGroup] queued health evaluation failed; retrying in ${retryDelayMs}ms: ${error instanceof Error ? error.message : String(error)}`);
-    },
-  },
-);
-
-export function scheduleForwardGroupFailover(groupIds: number[]) {
-  return forwardGroupEvaluationQueue.enqueue(groupIds);
-}
+export { forwardGroupHealthRechecks, scheduleForwardGroupFailover } from "./evaluationQueue";
+// 评估队列（evaluationQueue.ts）排进来的组由这里跑：只算结论，要写服务商的交给发布队列。
+setForwardGroupEvaluationRunner((groupIds) => runForwardGroupFailoverByIds(groupIds, { skipRuleSync: true, deferPublish: true }));
 
 /*
   发布队列：评估算出要写服务商的组在这里按服务商账号排队发布（一个账号同时最多 2 个组）。发布时重新评估一遍
@@ -104,16 +85,6 @@ const forwardGroupPublishQueue = new ForwardGroupPublishQueue(
 export function waitForForwardGroupPublishIdle() {
   return forwardGroupPublishQueue.whenIdle();
 }
-
-export const forwardGroupHealthRechecks = new ForwardGroupHealthRecheckScheduler(
-  (groupId) => { scheduleForwardGroupFailover([groupId]); },
-  Date.now,
-  setTimeout,
-  clearTimeout,
-  (error) => {
-    console.warn(`[ForwardGroup] delayed health evaluation failed: ${error instanceof Error ? error.message : String(error)}`);
-  },
-);
 
 /*
   主机的快速存活状态预热完了没有（按库里的主机和版本号登记，见 agentFastLiveness.ts 的 primeHosts）。没有快速存活状态的

@@ -67,7 +67,7 @@ import { dbBool, sqlBool } from "./repositoryUtils";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { ForwardGroupMode, ForwardGroupRecordType, chainEntryMembers, ddnsValueForHostByRecordType, entryAddressForHost, entryGroupMembersFor, forwardChainTargetLabel, insertForwardGroupEvent, ipv6AddressForConnectHost, isCollectionGroupMode, isSafeHostAddress, memberEntryHostId, memberListenHostIds, normalizeForwardGroupRecordType, privateAddressForHost, recordTypeRequirementLabel, sortedMembers, targetHostIdForMember } from "../forwardGroups/common";
-import { memberThroughputMbps } from "../forwardGroups/ddnsEntryGroup";
+import { memberThroughputMbps } from "../forwardGroups/bandwidth";
 import { clearForwardGroupPublishedDdns, exactDdnsReconciledGroups, memberDdnsValue } from "../forwardGroups/ddnsPublish";
 import { forwardGroupHealthRechecks, runForwardGroupFailover, scheduleForwardGroupFailover } from "../forwardGroups/evaluateDriver";
 import { resolveMemberAgentLiveness } from "../forwardGroups/liveness";

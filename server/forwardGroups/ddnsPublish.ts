@@ -28,7 +28,7 @@ import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
 import { clearDdnsRecordWeights, ddnsWeightSupport, deleteWeightedDdnsRecords, publishWeightedDdnsRecords } from "../ddnsWeightedRecords";
 import { parseDdnsWeightState, type DdnsWeights } from "../../shared/ddnsWeights";
 import { ForwardGroupFailoverOptions, ForwardGroupRecordType, LineGroupRow, LineMemberRow, ddnsValueForHostByRecordType, describeDdnsTarget, forwardGroupMemberLabel, groupSwitchNotifyEnabled, insertForwardGroupEvent, normalizeForwardGroupRecordType, sortedMembers, toDate, updateForwardGroupRuntimeIfChanged } from "./common";
-import { memberThroughputMbps, withHostLineBandwidth } from "./ddnsEntryGroup";
+import { memberThroughputMbps, withHostLineBandwidth } from "./bandwidth";
 import { deferProviderWrite, evaluationHost, evaluationTunnel } from "./evaluateScope";
 import { resolveMemberAgentLiveness } from "./liveness";
 
