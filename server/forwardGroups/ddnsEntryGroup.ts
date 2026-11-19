@@ -43,6 +43,7 @@ import {
   ddnsWeightsFromAggregationPlan,
   describeDdnsWeights,
   parseDdnsWeightState,
+  type DdnsWeights,
 } from "../../shared/ddnsWeights";
 import type { BandwidthAggregationPlan } from "../../shared/bandwidthAggregation";
 import { ForwardGroupFailoverOptions, ForwardGroupRecordType, LineGroupRow, LooseRow, forwardGroupFailoverDelayMs, forwardGroupRecoverDelayMs, groupSwitchNotifyEnabled, insertForwardGroupEvent, memberEntryHostId, normalizeForwardGroupRecordType, recordTypeRequirementLabel, sortedMembers, switchNotifySuppressed, toDate, updateForwardGroupRuntimeIfChanged } from "./common";
@@ -75,14 +76,21 @@ function resolveEntryGroupDdnsWeighting(
     if (ddnsWeightsEqual(previousHere.weights, weights, tolerance)) weights = previousHere.weights;
   }
   const clearWeights = !weights && !!previousHere;
+  const previousMirrorWeighted = !!previousHere?.mirrorWeighted;
   return {
     weights,
     clearWeights,
+    previousMirrorWeighted,
     /** 值的集合没变也要写一次服务商（权重变了、或者要把权重收掉）。 */
     writeNeeded: weights ? !previousHere || !ddnsWeightsEqual(previousHere.weights, weights) : clearWeights,
-    nextState: weights ? JSON.stringify({ provider: ddnsSettings.provider, domain, recordType, weights }) : null,
+    /** 发布后记的状态；mirrorWeighted 是这次双栈副记录有没有按权重发（没写服务商时沿用上一次的）。 */
+    nextState: (mirrorWeighted: boolean = previousMirrorWeighted) => ddnsWeightStateJson(ddnsSettings, domain, recordType, weights, mirrorWeighted),
     note: weights ? `；按权重解析 ${describeDdnsWeights(weights, values)}` : "",
   };
+}
+
+function ddnsWeightStateJson(ddnsSettings: DdnsSettings, domain: string, recordType: string, weights: DdnsWeights | null, mirrorWeighted: boolean) {
+  return weights ? JSON.stringify({ provider: ddnsSettings.provider, domain: domain.toLowerCase(), recordType, weights, mirrorWeighted }) : null;
 }
 
 /** Live uplink throughput, in Mbps, for the hosts behind a set of members. */
@@ -234,15 +242,29 @@ async function holdEntryGroupDdns(
   const ddnsReady = ddnsSettings.enabled && ddnsSettings.provider !== "disabled";
   const ttl = Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL);
   const previousWeights = parseDdnsWeightState(group.ddnsWeightState);
-  const weightsHere = previousWeights && previousWeights.provider === ddnsSettings.provider
-    && previousWeights.domain === domain.toLowerCase() && previousWeights.recordType === recordType ? previousWeights.weights : null;
+  const stateHere = previousWeights && previousWeights.provider === ddnsSettings.provider
+    && previousWeights.domain === domain.toLowerCase() && previousWeights.recordType === recordType ? previousWeights : null;
+  const weightsHere = stateHere?.weights ?? null;
+  const previousMirrorWeighted = !!stateHere?.mirrorWeighted;
 
   if (plan.mode === "empty") {
     if ((previousValue || options.forceSync) && ddnsReady && domain) {
       if (deferProviderWrite()) return "deferred" as const;
-      await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: [], ttl }, { clearWeights: !!weightsHere }).catch((error) => {
-        console.warn(`[ForwardGroup] removing traffic-excluded DDNS values failed group=${groupId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
+      try {
+        await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: [], ttl }, { clearWeights: !!weightsHere, previousMirrorWeighted });
+      } catch (error) {
+        /*
+          没清掉：记着的值和权重状态都留着（它们说的正是服务商那边现在的样子），抛出去让发布队列退避重试。
+          以前吞掉错误、照样把状态清空 —— 下一轮以为记录早没了，再也不去清。
+        */
+        const message = error instanceof Error ? error.message : String(error);
+        await updateForwardGroupRuntimeIfChanged(db, group, {
+          lastStatus: "error",
+          lastMessage: `没有可用成员（流量到阈值的主机已暂停参与），清空解析失败，稍后重试：${message}`,
+        });
+        await insertForwardGroupEvent(groupId, null, "ddns-error", `清空入口组解析失败：${message}；domain=${domain} type=${recordType} 原记录=${previousValue || "-"}`);
+        throw error;
+      }
     }
     await updateForwardGroupRuntimeIfChanged(db, group, {
       activeMemberId: null,
@@ -286,11 +308,11 @@ async function holdEntryGroupDdns(
     : null;
   if (deferProviderWrite()) return "deferred" as const;
   try {
-    await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: retained, ttl }, { weights: heldWeights, clearWeights: !heldWeights && !!weightsHere });
+    const published = await publishForwardGroupDdnsValues(group, { groupId, domain, recordType, values: retained, ttl }, { weights: heldWeights, clearWeights: !heldWeights && !!weightsHere, previousMirrorWeighted });
     rememberExactDdnsReconciliation(group, joined);
     await db.update(forwardGroups).set({
       lastDdnsValue: joined,
-      ddnsWeightState: heldWeights ? JSON.stringify({ provider: ddnsSettings.provider, domain: domain.toLowerCase(), recordType, weights: heldWeights }) : null,
+      ddnsWeightState: ddnsWeightStateJson(ddnsSettings, domain, recordType, heldWeights, published.mirrorWeighted),
       lastDdnsAt: nowDate(),
       lastFailoverAt: nowDate(),
       lastStatus: "down",
@@ -737,7 +759,7 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
       lastStatus: "healthy",
       lastMessage: `入口组 DDNS 已是最新；${publishedValues.length} 个入口${excludedSuffix}${aggregationSuffix}${weighting.note}${holdSuffix}${peerSuffix}`,
       // 记着的权重状态对不上现在的服务商 / 域名了（没法去那边收）：只把状态丢掉。
-      ...(String(group.ddnsWeightState ?? "") !== String(weighting.nextState ?? "") ? { ddnsWeightState: weighting.nextState } : {}),
+      ...(String(group.ddnsWeightState ?? "") !== String(weighting.nextState() ?? "") ? { ddnsWeightState: weighting.nextState() } : {}),
     });
     if (lines) lines.settled = true;
     return;
@@ -749,13 +771,13 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
   }
   if (deferProviderWrite()) return;
   try {
-    await publishForwardGroupDdnsValues(group, {
+    const published = await publishForwardGroupDdnsValues(group, {
       groupId: Number(group.id),
       domain: String(group.domain || ""),
       recordType,
       values: publishedValues,
       ttl: Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL),
-    }, { weights: weighting.weights, clearWeights: weighting.clearWeights });
+    }, { weights: weighting.weights, clearWeights: weighting.clearWeights, previousMirrorWeighted: weighting.previousMirrorWeighted });
     if (!(await agentSelectionStillCurrent())) {
       retryChangedAgentSelection();
       return;
@@ -764,7 +786,7 @@ async function syncEntryGroupDefaultDdns(group: LineGroupRow, ddnsSettings: Ddns
     await db.update(forwardGroups).set({
       activeMemberId,
       lastDdnsValue: joined,
-      ddnsWeightState: weighting.nextState,
+      ddnsWeightState: weighting.nextState(published.mirrorWeighted),
       lastDdnsAt: nowDate(),
       lastFailoverAt: nowDate(),
       lastStatus: "healthy",

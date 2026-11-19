@@ -25,7 +25,7 @@ import {
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
 import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
 import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
-import { clearDdnsRecordWeights, ddnsWeightSupport, publishWeightedDdnsRecords } from "../ddnsWeightedRecords";
+import { clearDdnsRecordWeights, ddnsWeightSupport, deleteWeightedDdnsRecords, publishWeightedDdnsRecords } from "../ddnsWeightedRecords";
 import { parseDdnsWeightState, type DdnsWeights } from "../../shared/ddnsWeights";
 import { ForwardGroupFailoverOptions, ForwardGroupRecordType, LineGroupRow, LineMemberRow, ddnsValueForHostByRecordType, describeDdnsTarget, forwardGroupMemberLabel, groupSwitchNotifyEnabled, insertForwardGroupEvent, normalizeForwardGroupRecordType, sortedMembers, toDate, updateForwardGroupRuntimeIfChanged } from "./common";
 import { memberThroughputMbps, withHostLineBandwidth } from "./ddnsEntryGroup";
@@ -74,20 +74,25 @@ async function forwardGroupMirrorValues(group: ForwardGroupDdnsTarget, primaryTy
   入口组「按权重解析」（shared/ddnsWeights.ts）：weights 给了就按服务商的记录权重发布；clearWeights 是
   「之前按权重发过、这次不按了」，先把服务商那边的权重设置收掉再照常发布。两样都没给 —— 绝大多数组 ——
   走的还是原来那两行，一个请求都不多。
+  收权重只在记着的状态说「上一次是按权重发的」时才做（主记录看 clearWeights，双栈副记录看
+  previousMirrorWeighted）：发不了权重的记录（只剩一个值、副记录凑不齐）每次发布都去收一遍，
+  阿里云那边就是每次一个无条件的写请求。
 */
-type ForwardGroupDdnsWeighting = { weights?: DdnsWeights | null; clearWeights?: boolean };
+type ForwardGroupDdnsWeighting = { weights?: DdnsWeights | null; clearWeights?: boolean; previousMirrorWeighted?: boolean };
 
-export async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput, weighting: ForwardGroupDdnsWeighting = {}) {
+/** 返回双栈副记录这次是不是按权重发的（记进 ddnsWeightState，下一次决定要不要收）。 */
+export async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarget, input: DdnsRecordValuesInput, weighting: ForwardGroupDdnsWeighting = {}): Promise<{ mirrorWeighted: boolean }> {
   const mirrorType = forwardGroupMirrorRecordType(group);
-  if (!weighting.weights && !weighting.clearWeights) {
+  if (!weighting.weights && !weighting.clearWeights && !weighting.previousMirrorWeighted) {
     await updateDdnsRecordValues(input);
-    if (!mirrorType) return;
+    if (!mirrorType) return { mirrorWeighted: false };
     const primaryType = normalizeForwardGroupRecordType(input.recordType);
     await updateDdnsRecordValues({ ...input, recordType: mirrorType, values: await forwardGroupMirrorValues(group, primaryType, mirrorType, input.values) });
-    return;
+    return { mirrorWeighted: false };
   }
   const settings = await getDdnsSettings();
-  const write = async (recordInput: DdnsRecordValuesInput, weights: DdnsWeights | null) => {
+  /** 按权重发了返回 true；没按权重时，clearFirst 才先收服务商那边的权重。 */
+  const write = async (recordInput: DdnsRecordValuesInput, weights: DdnsWeights | null, clearFirst: boolean) => {
     if (weights && recordInput.values.length >= 2) {
       await publishWeightedDdnsRecords(settings, {
         domain: recordInput.domain,
@@ -96,13 +101,14 @@ export async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarge
         weights,
         ttl: recordInput.ttl,
       });
-      return;
+      return true;
     }
-    await clearDdnsRecordWeights(settings, { domain: recordInput.domain, recordType: recordInput.recordType, values: recordInput.values, ttl: recordInput.ttl });
+    if (clearFirst) await clearDdnsRecordWeights(settings, { domain: recordInput.domain, recordType: recordInput.recordType, values: recordInput.values, ttl: recordInput.ttl });
     await updateDdnsRecordValues(recordInput);
+    return false;
   };
-  await write(input, weighting.weights || null);
-  if (!mirrorType) return;
+  await write(input, weighting.weights || null, !!weighting.clearWeights);
+  if (!mirrorType) return { mirrorWeighted: false };
   // 双栈副记录跟着同一批成员走：权重也按成员带过去（副记录上凑不齐的就不带权重）。
   const primaryType = normalizeForwardGroupRecordType(input.recordType);
   const pairs = await forwardGroupMirrorPairs(group, primaryType, mirrorType);
@@ -116,7 +122,8 @@ export async function publishForwardGroupDdnsValues(group: ForwardGroupDdnsTarge
     }
     if (mirrorValues.some((value) => !(value in mirrorWeights!))) mirrorWeights = null;
   }
-  await write({ ...input, recordType: mirrorType, values: mirrorValues }, mirrorWeights);
+  const mirrorWeighted = await write({ ...input, recordType: mirrorType, values: mirrorValues }, mirrorWeights, !!weighting.previousMirrorWeighted);
+  return { mirrorWeighted };
 }
 
 /*
@@ -160,16 +167,19 @@ export async function clearForwardGroupPublishedDdns(group: ForwardGroupDdnsTarg
   }
   const recordType = normalizeForwardGroupRecordType(group.recordType);
   const ttl = Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL);
+  const weightState = parseDdnsWeightState((group as { ddnsWeightState?: unknown }).ddnsWeightState);
+  const publishedWeighted = !!weightState && weightState.provider === ddnsSettings.provider
+    && weightState.domain === domain.toLowerCase() && ddnsWeightSupport(ddnsSettings).supported;
+  const removePublished = (type: string, values: string[]) => (publishedWeighted
+    ? deleteWeightedDdnsRecords(ddnsSettings, { domain, recordType: type, values, ttl })
+    : updateDdnsRecordValues({ groupId, domain, recordType: type, values: [], removeOnlyValues: values, ttl }));
   if (publishedValues.length > 0) {
     try {
-      // 按权重发布过的组：先把服务商那边的权重设置收掉（华为云是合回一个记录集），再按值删。
-      const weightState = parseDdnsWeightState((group as { ddnsWeightState?: unknown }).ddnsWeightState);
-      if (weightState && weightState.provider === ddnsSettings.provider && weightState.domain === domain.toLowerCase() && ddnsWeightSupport(ddnsSettings).supported) {
-        await clearDdnsRecordWeights(ddnsSettings, { domain, recordType: weightState.recordType, values: publishedValues, ttl }).catch((error) => {
-          failed("记录权重设置", error);
-        });
-      }
-      await updateDdnsRecordValues({ groupId, domain, recordType, values: [], removeOnlyValues: publishedValues, ttl });
+      /*
+        按权重发布过的组：记录是一个值一条（华为云一个值一个记录集），按值删就行 —— 不先「收权重」：
+        收权重会把这个名字上的记录集合并 / 改动，连别人加的也算进去。
+      */
+      await removePublished(recordType, publishedValues);
       appendPanelLog("info", `[DDNS] 转发组已删除，面板发布的解析记录已清理；${label} type=${recordType} values=${publishedValues.join(",")}`);
     } catch (error) {
       failed(`${recordType} 记录（${publishedValues.join(",")}）`, error);
@@ -178,7 +188,7 @@ export async function clearForwardGroupPublishedDdns(group: ForwardGroupDdnsTarg
     if (mirrorType) {
       try {
         const mirrorValues = await forwardGroupMirrorValues(group, recordType, mirrorType, publishedValues);
-        if (mirrorValues.length > 0) await updateDdnsRecordValues({ groupId, domain, recordType: mirrorType, values: [], removeOnlyValues: mirrorValues, ttl });
+        if (mirrorValues.length > 0) await removePublished(mirrorType, mirrorValues);
       } catch (error) {
         failed(`双栈 ${mirrorType} 记录`, error);
       }

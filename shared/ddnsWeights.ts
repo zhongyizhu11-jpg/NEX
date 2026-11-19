@@ -96,6 +96,8 @@ export type DdnsWeightState = {
   domain: string;
   recordType: string;
   weights: DdnsWeights;
+  /** 双栈副记录上一次是不是也按权重发的（没记的老状态按「是」算：最多多收一次权重）。 */
+  mirrorWeighted: boolean;
 };
 
 export function parseDdnsWeightState(raw: unknown): DdnsWeightState | null {
@@ -115,6 +117,7 @@ export function parseDdnsWeightState(raw: unknown): DdnsWeightState | null {
       domain: String(item.domain || "").trim().toLowerCase(),
       recordType: String(item.recordType || "A").trim().toUpperCase(),
       weights,
+      mirrorWeighted: item.mirrorWeighted !== false,
     };
   } catch {
     return null;
