@@ -78,7 +78,7 @@ NearSet 记着每个成员上一次在不在「一样快」的那一组里、从
 驻留不拦逃生：成员健不健康不归它管（那是 Candidates 的事，不健康的根本进不了 candidates），
 组里一个都不剩时直接按这一刻的延迟重算。
 
-参数：Margin 默认 50ms（DefaultLatencyMargin），Hold 默认 0（不驻留）。
+参数：Margin 默认 50ms（DefaultLatencyMargin）；Hold 零值是不驻留，线路组和出口组都填 DefaultNearHold（1 分钟）。
 状态按成员下标排，调用方自己加锁。成员表变了就换一个新的 NearSet（零值可用）。
 */
 type NearSet struct {
@@ -89,6 +89,9 @@ type NearSet struct {
 
 // DefaultLatencyMargin：差 50ms 以内当一样快。
 const DefaultLatencyMargin = 50.0
+
+// DefaultNearHold：进了「一样快」的那一组至少留 1 分钟（线路组、GOST 出口组、NEX 出口组都用它）。
+const DefaultNearHold = time.Minute
 
 // NearPolicy 是延迟优先的两个参数。
 type NearPolicy struct {

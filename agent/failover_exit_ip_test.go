@@ -126,12 +126,12 @@ func TestEscapeSameExitIPNeverCrossesTiers(t *testing.T) {
 	}
 }
 
-func TestEscapeSameExitIPRespectsScoreMargin(t *testing.T) {
-	// 开不开整链最优都一样：分都在算，平手按分差判断。
+func TestEscapeSameExitIPRespectsLatencyMargin(t *testing.T) {
+	// 开不开整链最优都一样：成本都在算，平手按「一样快」的门槛（50ms）判断。
 	for _, preferFastest := range []bool{false, true} {
 		build := func(sameExitLossOf100 int) *failoverProxy {
 			proxy := routeTestProxy(failoverSpec{
-				Strategy: "fallback", AutoFailback: true, PreferFastest: preferFastest, ScoreMargin: 10, ScoreHoldSeconds: 180,
+				Strategy: "fallback", AutoFailback: true, PreferFastest: preferFastest, ScoreHoldSeconds: 180,
 				Targets: exitIPTargets(3, "203.0.113.9", "203.0.113.10", "203.0.113.9"),
 			})
 			at := time.Now().Add(-10 * time.Minute)
@@ -145,8 +145,8 @@ func TestEscapeSameExitIPRespectsScoreMargin(t *testing.T) {
 			return proxy
 		}
 
-		// 同出口的那条丢包 6%：分差远超 10 分，不算平手 → 换到顺序里的 1（和以前一样）。
-		far := build(6)
+		// 同出口的那条丢包 10%：成本 60 × 2 = 120，比 60 高出 60ms，不算平手 → 换到顺序里的 1（和以前一样）。
+		far := build(10)
 		far.mu.Lock()
 		far.updateFallbackActiveAtLocked(time.Now(), "health check")
 		if far.activeIndex != 1 {
@@ -154,7 +154,7 @@ func TestEscapeSameExitIPRespectsScoreMargin(t *testing.T) {
 		}
 		far.mu.Unlock()
 
-		// 同出口的那条丢包 1%：分差在门槛内 → 换到同出口的 2。
+		// 同出口的那条丢包 1%：成本 66，在门槛内 → 换到同出口的 2。
 		near := build(1)
 		near.mu.Lock()
 		near.updateFallbackActiveAtLocked(time.Now(), "health check")

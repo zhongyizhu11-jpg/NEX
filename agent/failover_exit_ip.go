@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 /*
 故障切换优先同出口 IP（2.2.251，面板 2.3.520）。
@@ -11,8 +14,9 @@ import "strings"
 
 什么叫同样够格：
   - 分层规格里只在和原本该换去的那条同一层里挑（备用组再像也不越级）；
-  - 评分要落在这一层最高分减 ScoreMargin 之内；一条都打不出分（刚起来还没探）时都算平手，
-    有打出分的时候没分的不算（不能把「没探过」当成「一样好」）；
+  - 成本（lbcore.QualityCost，和择优、延迟优先同一个数）要和这一层最低的差不到「一样快」的门槛
+    （latencyMarginLocked，默认 50ms）；一条都量不出（刚起来还没探）时都算平手，有量出来的时候没量过的不算
+    （不能把「没探过」当成「一样好」）；
   - 人工指定、时段表定的首选健康就直接走它，这里不插手。
 
 只是平手时的取舍：没有出口 IP、或者没有一条候选和它一样时，和以前逐字一样 —— 按顺序挑第一条健康的。
@@ -69,17 +73,21 @@ func (p *failoverProxy) escapePickLocked(order []int, failed int, explicit int, 
 			}
 		}
 	}
-	// 评分差得太多就不算平手（不管开没开整链最优，分都在算）。一条都没分时都算。
-	best, scoredAny := 0, false
-	for _, index := range equals {
-		if score, ok := p.scoreLocked(index); ok && (!scoredAny || score > best) {
-			best, scoredAny = score, true
+	// 成本差得太多就不算平手（不管开没开整链最优）。一条都量不出时都算。
+	now := time.Now()
+	costs := make([]float64, len(equals))
+	best := 0.0
+	for position, index := range equals {
+		costs[position] = p.qualityCostLocked(index, now)
+		if cost := costs[position]; cost > 0 && (best == 0 || cost < best) {
+			best = cost
 		}
 	}
-	if scoredAny {
+	if best > 0 {
+		margin := p.latencyMarginLocked()
 		filtered := make([]int, 0, len(equals))
-		for _, index := range equals {
-			if score, ok := p.scoreLocked(index); ok && best-score <= p.spec.ScoreMargin {
+		for position, index := range equals {
+			if cost := costs[position]; cost > 0 && cost-best <= margin {
 				filtered = append(filtered, index)
 			}
 		}

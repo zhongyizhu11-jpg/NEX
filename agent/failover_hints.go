@@ -23,12 +23,12 @@ type failoverTargetHints struct {
 	// 面板从中转机的探测得知这条路径的中转挂了：按不可用处理，直到面板把它清掉。
 	Down       bool   `json:"down,omitempty"`
 	DownReason string `json:"downReason,omitempty"`
-	// 面板算好的、这条路径在下游各段中转上的延迟之和（毫秒）。评分和自动择优按
-	// 「本机探测延迟 + 它」比整条链路；上报的 latencyMs 仍只是第一段。
+	// 面板算好的、这条路径在下游各段中转上的延迟之和（毫秒）。成本（自动、延迟优先、择优）按
+	// 「本机探测延迟 + 它」算整条链路；上报的 latencyMs 仍只是第一段。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
 	// 面板算好的、这条路径沿途主机（中转机、落地是 NEX 主机时的那台）里最忙那台的负载，0–100
-	// （CPU 和带宽占用取大；2.2.251 起）。评分按它扣分（routeLoadPenalty：70% 以下不扣，
-	// 95% 起扣满 15 分），「自动」分法按它压权重。0 = 不知道，不扣。
+	// （CPU 和带宽占用取大；2.2.251 起）。成本按它留的余量算（lbcore.Quality.Utilisation：成本 ÷ (1 − 负载)，
+	// 负载最多按 95% 算）：「自动」少分给它，择优时让一让。0 = 不知道，不算。
 	LoadPct int `json:"loadPct,omitempty"`
 	// 这条路径最后从哪个 IP 出去（2.2.251，面板 2.3.520「故障切换优先同出口 IP」）：落地是 NEX 主机时是那台的
 	// 出口地址（面板看到的心跳来源，没有就是登记的 IPv4 / IPv6），落地是手填地址时就是那个地址。当前这条挂了
