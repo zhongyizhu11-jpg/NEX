@@ -358,6 +358,11 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
             用在 {pool.lines} 条线路{pool.pick ? ` · 挑法：${pool.pick}` : ""}
             {pool.followers.length ? ` · ${pool.followers.join("、")} 的成员跟着这个池` : ""}
           </LineHint>
+          {pool.followerWarnings?.length ? (
+            <LineHint>
+              <span className="text-[var(--fx-warn-text)]" data-testid="node-pool-follower-warning">成员没同步：{pool.followerWarnings.join("；")}</span>
+            </LineHint>
+          ) : null}
         </LineCard>
       )}
       </SortableList>
