@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"hash/fnv"
+	"math"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -217,4 +220,59 @@ func (p *failoverProxy) exitPinPickLocked(candidates []int, udp bool) int {
 		}
 	}
 	return -1
+}
+
+// mix64 把 64 位哈希再搅一遍（splitmix64 的终混）：输入只差一位，输出每一位都有一半的机会变。
+func mix64(x uint64) uint64 {
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	x ^= x >> 31
+	return x
+}
+
+/*
+exitRendezvousPickLocked 出口组的「按访客固定」：加权 rendezvous 哈希，每台出口按「访客 + 出口主机号」算一个分，
+分最高的拿走。一台出口坏了只有原来落在它上面的访客换出口；份数不乘慢启动（恢复那一分钟里访客不被来回挪）。
+
+不用线路组那一个（route_group_balance.go 的 rendezvousPickLocked）有两个原因：
+  - 它拿 FNV-1a 的结果直接取高 53 位当随机数。FNV 的高位只被靠前的字节搅到，而出口组几条目标的名字只有末尾
+    两个字符不一样（127.0.0.1:47004#0 / :47005#1 / :47006#2）—— 同一个访客对三台出口算出来的随机数几乎相等，
+    于是份数最大的那台几乎通吃。真实 gost 上实测 8 : 5 : 3 的三台，12 个访客全落在第一台；一万个访客是
+    9094 / 399 / 507。份数一样时也歪（2688 / 2462 / 4850）。这里在 FNV 后面加一道终混（mix64），同样的输入是
+    4945 / 3143 / 1912 和 3295 / 3387 / 3318。
+  - 它的键里有目标的下标和本机端口，出口换个顺序、面板重新分一次本机端口，所有访客都换出口。这里用出口的
+    主机号，访客跟着「那台机器」走。
+
+没有访客地址时按监听端口算（所有连接落在同一台上，和线路组一样）。candidates 非空，调用方持有 p.mu。
+*/
+func (p *failoverProxy) exitRendezvousPickLocked(candidates []int, key string) int {
+	if key == "" {
+		key = strconv.Itoa(p.sourcePort)
+	}
+	weights := p.spreadWeightsLocked(candidates, time.Now(), false)
+	best, bestScore := -1, 0.0
+	for i, index := range candidates {
+		if weights[i] <= 0 {
+			continue
+		}
+		node := strconv.Itoa(index)
+		if report := p.spec.BalanceReport; report != nil && index < len(report.HostIDs) {
+			node = strconv.Itoa(report.HostIDs[index])
+		}
+		hash := fnv.New64a()
+		_, _ = hash.Write([]byte(key))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte("exit-host-" + node))
+		u := (float64(mix64(hash.Sum64())>>11) + 0.5) / float64(uint64(1)<<53)
+		score := -weights[i] / math.Log(u)
+		if best < 0 || score > bestScore {
+			best, bestScore = index, score
+		}
+	}
+	if best < 0 {
+		return candidates[0]
+	}
+	return best
 }

@@ -114,6 +114,19 @@ func (p *failoverProxy) checkHealth() {
 	if p.spec.ProbeTimeoutMs > 0 {
 		probeTimeout = time.Duration(p.spec.ProbeTimeoutMs) * time.Millisecond
 	}
+	/*
+		带探测节奏的规格（固定节拍）：「持续够久」那道门槛留 15% 的余量。面板把它算成「间隔 × (次数 − 1)」，而每轮
+		间隔有 ±10% 的抖动 —— 不留余量的话，抖到 0.9 倍的那一半时候「2 秒一轮、2 次判坏」差 0.2 秒不够数，要多等一整轮
+		（真实 gost 上实测：进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
+	*/
+	fixedTick := p.spec.ProbeIntervalSeconds > 0
+	gateReached := func(elapsed time.Duration, seconds int) bool {
+		gate := time.Duration(seconds) * time.Second
+		if fixedTick {
+			gate = gate * 85 / 100
+		}
+		return elapsed >= gate
+	}
 	// 出口组：直接探出口机，经出口复核判坏过的还要经出口探通（failover_exit_group.go）。
 	exitGroup := p.exitGroupLocked()
 	throughFailed := append([]bool(nil), p.exitThroughFailed...)
@@ -170,7 +183,7 @@ func (p *failoverProxy) checkHealth() {
 			if !p.targetHealth[i] {
 				if p.recoveredSince[i].IsZero() {
 					p.recoveredSince[i] = now
-				} else if now.Sub(p.recoveredSince[i]) >= time.Duration(recoverSeconds)*time.Second {
+				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) {
 					p.targetHealth[i] = true
 					p.recoveredSince[i] = time.Time{}
 					if i < len(p.exitThroughFailed) {
@@ -196,7 +209,7 @@ func (p *failoverProxy) checkHealth() {
 			}
 			// 两道门槛都要过：探测连续失败够 FailureThreshold 次，而且持续异常够 FailoverSeconds 秒。
 			// 只看探测这本账（A2）：真实连接拨通了不清它 —— 拨得通第一跳不等于探测目标还活着。
-			if p.statsLocked(i).probeFailures >= failureThreshold && now.Sub(p.failureSince[i]) >= time.Duration(failoverSeconds)*time.Second {
+			if p.statsLocked(i).probeFailures >= failureThreshold && gateReached(now.Sub(p.failureSince[i]), failoverSeconds) {
 				p.targetHealth[i] = false
 				p.failureSince[i] = time.Time{}
 				logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=health check", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)

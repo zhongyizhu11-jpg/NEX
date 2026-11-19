@@ -120,8 +120,23 @@ type agentBalancePickSample struct {
 
 // recentShares 记下这一刻的累计数，返回最近一分钟里每台分到的比例（没有新连接、或者出口数变了返回 nil）。
 func (state *agentBalanceRuleState) recentShares(now time.Time, picks []int) []float64 {
-	if len(state.history) > 0 && len(state.history[0].picks) != len(picks) {
-		state.history = nil
+	/*
+		从头算的三种情况：这条规则第一次见、出口数变了、累计数变小了（代理重建，计数从 0 起）。从头算时拿全 0 当
+		基准 —— 代理刚起来，到现在为止分出去的都算「最近」。不这样的话，重建前的累计数会被当成基准，重建后
+		头一分钟的比例全是错的（端到端测试里见过：三台各分了三成，报的却是 100% / 0 / 0）。
+	*/
+	restart := len(state.history) == 0 || len(state.history[0].picks) != len(picks)
+	if !restart {
+		last := state.history[len(state.history)-1].picks
+		for i := range picks {
+			if picks[i] < last[i] {
+				restart = true
+				break
+			}
+		}
+	}
+	if restart {
+		state.history = []agentBalancePickSample{{at: now, picks: make([]int, len(picks))}}
 	}
 	state.history = append(state.history, agentBalancePickSample{at: now, picks: append([]int(nil), picks...)})
 	// 留一份刚好够老的当基准，更老的丢掉。

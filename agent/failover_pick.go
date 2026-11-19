@@ -45,6 +45,11 @@ func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bo
 	if pinned := p.exitPinPickLocked(candidates, udp); pinned >= 0 {
 		return p.spec.Targets[pinned], pinned
 	}
+	// 出口组的按访客固定用自己的哈希（exitRendezvousPickLocked 说明了为什么不能用线路组那一个）。
+	if p.exitGroupLocked() && p.spec.Strategy == "ip_hash" {
+		index := p.exitRendezvousPickLocked(candidates, hashKey)
+		return p.spec.Targets[index], index
+	}
 	request := failoverPickRequest{candidates: candidates, hashKey: hashKey, exclude: exclude, udp: udp}
 	strategy := failoverStrategyFor(p.spec.Strategy)
 	// 这一次是给 UDP 会话挑：慢启动看 UDP 那一侧的恢复时刻（slowStartLocked）。整个挑选都在 p.mu 里。
