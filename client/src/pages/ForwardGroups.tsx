@@ -2212,7 +2212,7 @@ export function ForwardGroupsContent({
                     {renderGroupMembers(group)}
                     {group.peerProbe?.outdatedHosts?.length ? (
                       <p className="text-meta text-[var(--fx-warn-text)]" title="外部观察要让别的机器替面板去探成员的入口端口，Agent 太旧的机器当不了观察点" data-testid="group-peer-probe-outdated">
-                        需要升级 Agent：{group.peerProbe.outdatedHosts.map((host: any) => host.name).join("、")} 还当不了外部观察的观察点
+                        需要升级 Agent：{group.peerProbe.outdatedHosts.map((host: { name: string }) => host.name).join("、")} 还当不了外部观察的观察点
                       </p>
                     ) : null}
                     {Number(group.poolId || 0) > 0 ? (
@@ -2724,8 +2724,8 @@ export function ForwardGroupsContent({
                           <SelectTrigger aria-label="添加观察主机" className="h-8 w-full sm:w-64"><SelectValue placeholder="添加观察主机（成员少、或者想从别的网络看）" /></SelectTrigger>
                           <SelectContent>
                             {(hosts || [])
-                              .filter((host: any) => !form.peerObserverHostIds.includes(Number(host.id)) && !form.members.some((member) => Number(member.hostId) === Number(host.id)))
-                              .map((host: any) => <SelectItem key={host.id} value={String(host.id)}>{host.name}</SelectItem>)}
+                              .filter((host: { id: number }) => !form.peerObserverHostIds.includes(Number(host.id)) && !form.members.some((member) => Number(member.hostId) === Number(host.id)))
+                              .map((host: { id: number; name: string }) => <SelectItem key={host.id} value={String(host.id)}>{host.name}</SelectItem>)}
                           </SelectContent>
                         </Select>
                       ) : null}
