@@ -59,7 +59,7 @@ pnpm test:all                   # 全部测试（自动发现 *.test.ts / *.test
 pnpm build                      # 前端 + 后端构建
 ```
 
-改了 Go 代码（`agent/`、`forwardx-fxp/`）时，在对应目录再跑：
+改了 Go 代码（`agent/`、`forwardx-fxp/`、两边共用的挑选算法 `lbcore/`）时，在对应目录再跑（改了 `lbcore/` 三个目录都跑）：
 
 ```bash
 gofmt -l . && go vet ./... && go test ./...
