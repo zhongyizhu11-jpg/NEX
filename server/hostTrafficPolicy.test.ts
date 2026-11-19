@@ -125,6 +125,10 @@ test("SQLite quota state survives restart; resets/configuration/rollback retain 
     await runtime.executeRaw("INSERT INTO users (id, username, password, role) VALUES (1, 'quota-admin', 'not-used', 'admin')");
     await runtime.executeRaw('INSERT INTO hosts (id,name,ip,ipv4,"hostType","userId","isOnline","lastHeartbeat","trafficLimit","trafficMeasureMode","trafficFailoverEnabled","trafficFailoverThresholdPercent") VALUES (1,?,?,?,?,?,?,?,?,?,?,?)', ["primary", "192.0.2.1", "192.0.2.1", "slave", 1, 1, now, 1000, "outbound", 1, 90]);
     await runtime.executeRaw('INSERT INTO hosts (id,name,ip,ipv4,"hostType","userId","isOnline","lastHeartbeat") VALUES (2,?,?,?,?,?,?,?)', ["backup", "192.0.2.2", "192.0.2.2", "slave", 1, 1, now]);
+    // 两台都连着面板（有快速存活状态，见 server/forwardGroups/liveness.ts）
+    const fast = await mod("server/agentFastLiveness.ts");
+    fast.registerPresenceCapableHost(1);
+    fast.registerPresenceCapableHost(2);
     policy.invalidateHostTrafficPolicyCache();
     await metrics.recordHostTrafficSample(1, {bytesIn: 10000, bytesOut: 10000});
     assert.deepEqual(await excluded(), []);

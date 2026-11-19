@@ -76,6 +76,8 @@ test("删除主备组 / 入口组：清掉面板发布的解析记录，别人�
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'x', 'admin')");
     for (const [id, ip] of [[1, "198.51.100.1"], [2, "198.51.100.2"]]) {
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, 1, 1, ?)', [id, "h" + id, ip, ip, now]);
+      // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
     const addGroup = async (id, mode, domain, autoResolve = 1) => {
       await exec(

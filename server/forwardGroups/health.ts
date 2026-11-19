@@ -258,8 +258,8 @@ export async function attachForwardGroupPeerHealth<T extends { id?: unknown; gro
         const health = memberPeerHealth(snapshot, {
           groupId: Number(group.id),
           memberId: Number(member.id),
-          // 列表上没有完整的存活判定：确认离线才算离线，其余按在线（只影响「面板连不上，访客可达」那句提示）。
-          agentOnline: fastState ? !fastState.confirmedOffline : member?.host?.isOnline !== false,
+          // 和评估同一条规矩（liveness.ts）：没有快速存活状态的主机算离线，确认离线的也是（只影响「面板连不上，访客可达」那句提示）。
+          agentOnline: !!fastState && !fastState.confirmedOffline,
           failoverMs: forwardGroupFailoverDelayMs(group),
           previouslyDown: parseStoredExternalHealth(member.externalHealth).down,
           now,

@@ -1,9 +1,9 @@
 /*
-  评估时成员主机「在不在线」：只认快速存活状态（agentFastLiveness.ts）和流量暂停，给出可用 / 不可用、从什么时候起、
-  上一次掉线 / 回来的时刻和一个签名（签名变了说明评估期间主机状态变过，这一轮的选择作废）。
+  评估时成员主机「在不在线」：只认快速存活状态（agentFastLiveness.ts，没有这份状态的主机算离线）和流量暂停，
+  给出可用 / 不可用、从什么时候起、上一次掉线 / 回来的时刻和一个签名（签名变了说明评估期间主机状态变过，
+  这一轮的选择作废）。
 */
 
-import { HOST_ONLINE_TTL_MS } from "../repositories/hostRepository";
 import { getTunnelExitNodes, getTunnelHops } from "../repositories/tunnelRepository";
 import { dbBool } from "../repositories/repositoryUtils";
 import { getLastAuthenticatedAgentActivity } from "../agentActivity";
@@ -58,25 +58,22 @@ export async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()
   const trafficExcluded = hostTrafficExcluded(host as any) || await tunnelMemberTrafficExcluded(member).catch(() => false);
   const fastState = hostId > 0 ? getPresenceCapableHostLivenessSnapshot(hostId) : null;
   const authenticatedAt = hostId > 0 ? getLastAuthenticatedAgentActivity(hostId) || 0 : 0;
-  const heartbeatAt = toDate((host as any)?.lastHeartbeat)?.getTime() || 0;
-  // Once a host advertises lightweight presence, only that explicit signal is
-  // allowed to move its failure window. A delayed log/traffic report is still
-  // useful to the legacy 150-second UI fallback, but must not postpone DDNS
-  // failover after the presence loop has stopped.
+  /*
+    只认快速存活状态：Agent 2.2.264 起是必需的，连着面板的 Agent 每 5 秒报一次 presence，第一次来就登记
+    （agentFastLiveness.ts）。登记了的，在启动宽限里算「说不准、先当在线」，之后只有它自己的沉默期限能判离线；
+    别的面板实例见过它（多实例部署）也算在 lastSeenElsewhereAt 里。
+    没有这份状态的就是离线 —— 从没连过面板的机器（面板启动时按库里的版本号预热，连都没连过的不在里面），
+    或者主机被删 / 重置后还没重新连上来的。不再按库里的心跳时刻另算一套在线（原来的 150 秒兼容窗口）。
+    面板刚启动、预热还没做完的那几秒由 evaluateDriver.ts 的就绪宽限挡住，不会因此把解析换走。
+  */
   const lastSeenAt = fastState
-    ? Number(fastState.lastSeenAt || 0)
-    : Math.max(authenticatedAt, heartbeatAt);
-  const legacyActivityRecently = lastSeenAt > 0 && nowMs - Math.min(lastSeenAt, nowMs) <= HOST_ONLINE_TTL_MS;
+    ? Math.max(Number(fastState.lastSeenAt || 0), Number(fastState.lastSeenElsewhereAt || 0))
+    : 0;
   const lifecycleAt = toDate((host as any)?.createdAt)?.getTime()
     || toDate((host as any)?.updatedAt)?.getTime()
     || nowMs;
   const confirmedOffline = fastState?.confirmedOffline === true;
-  // A registered presence-capable host remains indeterminate/available during
-  // startup grace. Only its generation-safe timer may confirm it offline.
-  // Legacy hosts have no such timer, so their last known activity keeps the
-  // existing 150-second compatibility window. A lone DB status flag is not a
-  // hard health signal while that activity is still fresh.
-  const agentOnline = !!host && (fastState ? !confirmedOffline : legacyActivityRecently);
+  const agentOnline = !!host && !!fastState && !confirmedOffline;
   const available = agentOnline && !trafficExcluded;
   const failureAt = lastSeenAt > 0 ? Math.min(lastSeenAt, nowMs) : Math.min(lifecycleAt, nowMs);
   const lastOfflineAt = Number(fastState?.lastOfflineAt || 0) || null;
@@ -88,7 +85,7 @@ export async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()
     lastOfflineAt,
     lastRestoredAt: Number(fastState?.lastRestoredAt || 0) || null,
     agentOnline,
-    lastSeenAt: Math.max(0, lastSeenAt, authenticatedAt),
+    lastSeenAt: fastState ? Math.max(0, lastSeenAt, authenticatedAt) : 0,
     // 只有带快速存活上报的主机（这一版要求的 Agent 都带）才有「内存里的存活状态重启后不作数」的问题；
     // 没有这份状态的（从没连过面板的机器）不用等，阈值是 0。
     offlineThresholdMs: fastState ? AGENT_FAST_LIVENESS_SILENCE_MS : 0,

@@ -77,6 +77,8 @@ test("入口组按权重解析：带权重发布、不变不写、改权重只�
       const B = "198.51.100.20";
       for (const [id, ip] of [[1, A], [2, B]]) {
         await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "entry-" + id, ip, ip, 1, 1, now]);
+        // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+        (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
       }
       const entryGroup = async (id, domain, weighted) => {
         await insert(

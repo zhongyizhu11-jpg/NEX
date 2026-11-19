@@ -116,10 +116,19 @@ export const forwardGroupHealthRechecks = new ForwardGroupHealthRecheckScheduler
   },
 );
 
+/*
+  主机的快速存活状态预热完了没有（按库里的主机和版本号登记，见 agentFastLiveness.ts 的 primeHosts）。没有快速存活状态的
+  主机在评估里算离线（liveness.ts），所以预热完成之前、就绪宽限之内不自动换解析（holdForwardGroupForReadiness）——
+  不然面板刚起来那几秒（或者预热查库失败、还在重试时）所有成员都会被当成离线。
+*/
+let hostLivenessPrimed = false;
+
 export async function primeForwardGroupHostLivenessDeadlines() {
   // 面板从这一刻起算「就绪」：之后一小段时间里不自动把解析换走，等成员主机重新上报（见 forwardGroups/readiness.ts）。
   markForwardGroupPanelReady();
-  return primePresenceCapableHosts(await getHosts() as any[]);
+  const primed = primePresenceCapableHosts(await getHosts() as any[]);
+  hostLivenessPrimed = true;
+  return primed;
 }
 
 /** 数据库故障恢复：故障期间 Agent 的请求全被拒了，内存里的存活状态不作数，重新给一段就绪宽限。 */
@@ -562,6 +571,15 @@ async function holdForwardGroupForReadiness(group: LooseRow, options: ForwardGro
   const now = Date.now();
   if (now >= readyAt + AGENT_FAST_LIVENESS_SILENCE_MS) return false;
   if (!String(group?.lastDdnsValue || "").trim()) return false;
+  if (!hostLivenessPrimed) {
+    const db = await getDb();
+    await updateForwardGroupRuntimeIfChanged(db, group, {
+      lastStatus: "unknown",
+      lastMessage: "面板刚启动：主机在线状态还没加载完，暂不变更现有 DDNS 解析",
+    });
+    forwardGroupHealthRechecks.replace(Number(group.id), Math.min(now + 3_000, readyAt + AGENT_FAST_LIVENESS_SILENCE_MS));
+    return true;
+  }
   const hostsToWait: Array<{ hostId: number; lastSeenAt: number; offlineThresholdMs: number }> = [];
   for (const member of sortedMembers(group, true) as LooseRow[]) {
     const liveness = await resolveMemberAgentLiveness(member, now);
