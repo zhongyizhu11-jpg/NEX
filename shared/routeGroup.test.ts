@@ -219,6 +219,7 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地"), "中转异常：东京中转 → 落地");
   assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地; same exit ip"), "中转异常：东京中转 → 落地，换到同出口 IP 的备用");
   assert.equal(describeRouteReason("relay down: maintenance: HK2"), "HK2 维护中");
+  assert.equal(describeRouteReason("relay down: quota: HK2"), "HK2 流量到阈值，已暂停");
   assert.equal(describeRouteReason("relay down: node offline: JP01"), "JP01 离线");
   assert.equal(describeRouteReason("relay down: paused"), "已手动暂停");
   assert.equal(describeRouteReason("relay down"), "中转异常");
