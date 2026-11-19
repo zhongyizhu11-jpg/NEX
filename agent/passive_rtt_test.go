@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -179,7 +181,8 @@ func TestRouteHopDownExitProbesBackOffAndUseOneConnection(t *testing.T) {
 			_ = server.Close()
 			return client, nil
 		}
-		return nil, errors.New("timeout")
+		// 目标主动拒绝（高防拦了这台出口）：这种才放慢到 60 秒
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
 	}
 	runner.scanner = nil
 	spec := &routeHopProbeSpec{IntervalMs: 2000, FailThreshold: 2, RecoverOks: 3, Passive: true}

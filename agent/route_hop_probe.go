@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io"
 	"math"
 	"net"
 	"sort"
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -79,6 +82,8 @@ type routeHopProbeState struct {
 	passiveMinMs float64
 	// 重传比例最近一次有新样本（两次扫描之间发了够多的包）的时刻。
 	passiveLossAt time.Time
+	// 连着几轮不通都是目标主动拒绝（RST）：只有这种才放慢到 60 秒（routeHopProbeInterval）。
+	rejectStreak int
 }
 
 type routeHopSample struct {
@@ -87,6 +92,8 @@ type routeHopSample struct {
 	// passive：这一次来自真实连接（内核 RTT），varMs 是内核算的 RTT 波动
 	passive bool
 	varMs   float64
+	// 不通的这一轮是被目标主动拒的（RST），不是超时 / 不可达
+	rejected bool
 }
 
 const routeHopProbeWindow = 30
@@ -360,19 +367,53 @@ func (r *routeHopProbeRunner) sync(probes []ruleLatencyProbe) {
 }
 
 /*
-routeHopProbeInterval（2.2.261 起）：负载均衡「出口到目标」那几条（Passive）判成连不上以后，间隔每多失败一次
-翻一倍，最长 60 秒，每次只连 1 次。用户：「这么久了不会一直没恢复吧，机器是正常的」—— 目标是高防时，一直每
-2 秒连三次、连上就断，像扫描，会让对方一直拦着这台出口的 IP，永远恢复不了；慢下来让拦截有机会过期。恢复最多
-晚一分钟发现。线路组的下一跳（自己的中转机）照旧按原节奏探，切回要快。
+routeHopProbeInterval：负载均衡「出口到目标」那几条（Passive）判成连不上以后探多勤（每次只连 1 次）。分两种：
+
+  - 目标主动拒绝（RST、连上就被关，routeHopDialRejected）—— 2.2.261 起的退避：间隔每多失败一次翻一倍，最长
+    60 秒。用户：「这么久了不会一直没恢复吧，机器是正常的」—— 目标是高防时，一直每 2 秒连三次、连上就断，像
+    扫描，会让对方一直拦着这台出口的 IP，永远恢复不了；慢下来让拦截有机会过期。恢复最多晚一分钟发现。
+  - 超时、网络不可达（出口自己的网络断了 / 被黑洞，对方根本没看到这台出口的连接）：不放慢，最多两倍节拍（默认
+    4 秒）。实测（2.2.264）：三台出口一起断过一阵以后全在 60 秒的退避里，恢复了也要一分钟才报「通了」；这期间
+    面板拿到的「连不上」全是旧的 —— 先报恢复的那台一来，另外两台好好的出口被摘掉；后来单独断又恢复的出口要
+    半分钟才放回。这种情况连得再勤也不会惹到目标（包到不了它那儿）。
+  - 判坏以后通了一次：按原节拍确认恢复（连续 RecoverOks 次通才算好，只多这几次连接），不再按退避的间隔等。
+
+线路组的下一跳（自己的中转机）照旧按原节奏探，切回要快。面板另外按上报的 ageMs / intervalMs 判断「连不上」这条
+结论是不是已经旧了（server/exitTargetHealth.ts 的 exitTargetDownStale），旧的不拿来摘出口。
 */
 const routeHopProbeBackoffMax = 60 * time.Second
 
+// routeHopDialRejected 这次连接是不是被目标主动拒了（RST / 连上就被关）—— 和「超时、网络不可达」分开：
+// 前者是对方在拦这台出口，后者多半是出口自己的网络断了（见 routeHopProbeInterval）。
+func routeHopDialRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, io.EOF) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "connection refused") || strings.Contains(text, "connection reset")
+}
+
 func routeHopProbeInterval(state *routeHopProbeState) time.Duration {
 	interval := time.Duration(state.spec.IntervalMs) * time.Millisecond
-	if !state.spec.Passive || !state.down {
+	if !state.spec.Passive || !state.down || state.oks > 0 {
 		return interval
 	}
-	extra := state.fails - state.spec.FailThreshold
+	if state.rejectStreak == 0 {
+		// 超时 / 不可达：最多两倍节拍
+		if interval*2 > routeHopProbeBackoffMax {
+			return routeHopProbeBackoffMax
+		}
+		return interval * 2
+	}
+	extra := state.rejectStreak - state.spec.FailThreshold
 	if extra < 0 {
 		extra = 0
 	}
@@ -473,6 +514,7 @@ func (r *routeHopProbeRunner) probe(state *routeHopProbeState) {
 	}
 	best := -1.0
 	successes := 0
+	rejected := false
 	// 一轮总共最多花 timeout：黑洞目标第一次连接就把它用完了，不再接着连第二、第三次（以前一轮 3×超时，
 	// 判坏要多等好几秒，名额也被占着）。
 	roundStarted := r.now()
@@ -491,6 +533,9 @@ func (r *routeHopProbeRunner) probe(state *routeHopProbeState) {
 			_ = conn.Close()
 		}
 		if err != nil || elapsed >= cutoff {
+			if routeHopDialRejected(err) {
+				rejected = true
+			}
 			continue
 		}
 		successes++
@@ -500,7 +545,7 @@ func (r *routeHopProbeRunner) probe(state *routeHopProbeState) {
 		}
 	}
 	if successes == 0 {
-		r.recordSample(state, routeHopSample{ok: false})
+		r.recordSample(state, routeHopSample{ok: false, rejected: rejected})
 		return
 	}
 	r.recordSample(state, routeHopSample{ms: best, ok: true})
@@ -534,10 +579,16 @@ func (r *routeHopProbeRunner) recordSample(state *routeHopProbeState, sample rou
 	if ok {
 		state.oks++
 		state.fails = 0
+		state.rejectStreak = 0
 		state.latencyMs = latencyMs
 	} else {
 		state.fails++
 		state.oks = 0
+		if sample.rejected {
+			state.rejectStreak++
+		} else {
+			state.rejectStreak = 0
+		}
 	}
 	if r.states[state.key] != state {
 		return
@@ -622,6 +673,16 @@ func (r *routeHopProbeRunner) pendingReport() *routeHopPendingReport {
 				} else {
 					item["source"] = "probe"
 				}
+			}
+			// 负载均衡「出口到目标」那几条：这条结论是多久前探的、现在多久探一次（含退避）。面板拿它判断「连不上」
+			// 是不是旧的（全局故障刚过时各台都还在退避里），旧的不拿来摘出口。
+			if state.spec.Passive && !state.lastResult.IsZero() {
+				age := now.Sub(state.lastResult).Milliseconds()
+				if age < 0 {
+					age = 0
+				}
+				item["ageMs"] = age
+				item["intervalMs"] = routeHopProbeInterval(state).Milliseconds()
 			}
 			results = append(results, item)
 		}
