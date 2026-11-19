@@ -10,8 +10,8 @@ import (
 /*
 FXP 出口状态变化的日志行。现行格式（forwardx-fxp/endpoint_pool.go）：
 
-	exit endpoint unhealthy endpoint=%s retryIn=%s reason=%v
-	exit endpoint recovered endpoint=%s
+	exit endpoint unhealthy index=%d endpoint=%s retryIn=%s reason=%v
+	exit endpoint recovered index=%d endpoint=%s
 
 老版本 FXP 在 endpoint= 前面还有一个 index=N，没有 retryIn。两种都认（A14）：以前这里写死了要 index=N，
 FXP 去掉这个字段以后一行都匹配不上，出口事件一直是空的，面板上看不到「哪台出口什么时候断过」。

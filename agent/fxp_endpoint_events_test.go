@@ -56,14 +56,14 @@ func TestFXPEndpointEventsMatchCurrentFXPLogFormat(t *testing.T) {
 	spec := fxpSpec{Role: "entry", TunnelID: 3, RuleID: 8}
 	const endpoint = "203.0.113.8:62444"
 	// FXP 用 log.Printf：前面带日期时间
-	unhealthy := "2026/11/18 12:00:00 " + fmt.Sprintf(formats[0], endpoint, 5*time.Second, errors.New("dial tcp 203.0.113.8:62444: i/o timeout"))
+	unhealthy := "2026/11/18 12:00:00 " + fmt.Sprintf(formats[0], 1, endpoint, 5*time.Second, errors.New("dial tcp 203.0.113.8:62444: i/o timeout"))
 	recordFXPEndpointLog(spec, unhealthy)
 	events := fxpEndpointEventsSnapshot()
 	if len(events) != 1 || events[0].Status != "unhealthy" || events[0].Endpoint != endpoint || !strings.Contains(events[0].Message, "i/o timeout") || strings.Contains(events[0].Message, "retryIn") {
 		t.Fatalf("现行格式的「出口异常」没解析对（%q）：%#v", unhealthy, events)
 	}
 	startedAt := events[0].StartedAt
-	recordFXPEndpointLog(spec, "2026/11/18 12:00:07 "+fmt.Sprintf(formats[1], endpoint))
+	recordFXPEndpointLog(spec, "2026/11/18 12:00:07 "+fmt.Sprintf(formats[1], 1, endpoint))
 	events = fxpEndpointEventsSnapshot()
 	if len(events) != 1 || events[0].Status != "recovered" || events[0].Endpoint != endpoint || events[0].StartedAt != startedAt {
 		t.Fatalf("现行格式的「出口恢复」没解析对：%#v", events)

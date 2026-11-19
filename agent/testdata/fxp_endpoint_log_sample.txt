@@ -2,5 +2,5 @@
 # （exitEndpointState 的 markFailure / markSuccess 里的 log.Printf）。
 # Agent 的 fxpEndpointLogPattern（agent/fxp_endpoint_events.go）靠它们认出口事件；
 # FXP 改这两行日志时，这里、正则、TestFXPEndpointEventsMatchCurrentFXPLogFormat 要一起改。
-exit endpoint unhealthy endpoint=%s retryIn=%s reason=%v
-exit endpoint recovered endpoint=%s
+exit endpoint unhealthy index=%d endpoint=%s retryIn=%s reason=%v
+exit endpoint recovered index=%d endpoint=%s
