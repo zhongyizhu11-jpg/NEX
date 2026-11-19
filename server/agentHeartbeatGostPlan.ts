@@ -49,8 +49,11 @@ export type GostRuntimePlanDeps = {
   dnsRuntimeRefreshCmd: (label: string) => string;
   failoverTargetAddr: (rule: HeartbeatRow, proxyDirection?: "send" | "exitSend") => string;
   getHopDialAddress: (hop: HeartbeatRow, tunnel?: HeartbeatRow) => Promise<string>;
-  /** GOST 链路负载均衡由入口本机代理挑的规则（2.3.539，见 agentHeartbeatRoute 的 gostBalancePlans） */
-  gostBalancePlans: Map<number, { failoverPort: number; exits: Array<{ hostId: number; localPort: number; node: HeartbeatRow }>; udp: boolean }>;
+  /**
+   * GOST 链路负载均衡由入口本机代理挑的规则（见 agentHeartbeatRoute 的 gostBalancePlans、server/gostBalancePlan.ts）。
+   * targetAddr 是出口该拨的目标（和不走代理时入口服务的 forwarder 同一个）；proxyVersion 是 TCP 上给代理的 PROXY 头版本。
+   */
+  gostBalancePlans: Map<number, { failoverPort: number; exits: Array<{ hostId: number; localPort: number; node: HeartbeatRow }>; targetAddr: string; proxyVersion: 1 | 2 }>;
   gostRateLimiters: HeartbeatRow[];
   gostRelayFailoverHopMetadata: { strategy: string; maxFails: number; failTimeout: string; };
   gostRules: HeartbeatRow[];
@@ -209,14 +212,20 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
           }
         } else if (!useMultiHopEntry && (!tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0)) {
           return null;
-        } else if (proto === "tcp" && gostBalancePlans.has(Number(r.id))) {
+        } else if (gostBalancePlans.has(Number(r.id))) {
           /*
-            GOST 链路负载均衡（2.3.539）：端口照旧由 gost 听（计数、限速、连接数限制都在这里），收下的连接交给本机
+            GOST 链路负载均衡：端口照旧由 gost 听（计数、限速、连接数限制都在这里），收下的连接 / UDP 会话交给本机
             代理（Agent 的 failoverProxy），它在「每台出口一个本机 gost 端口」之间挑。出口切换只改代理的提示，不改
             这里的配置，正在走的连接不断。
+
+            handler 总是带 proxyProtocol：gost 连上代理就先发一个 PROXY 头，代理从里面读访客地址（按访客固定、
+            「连上就被关」算谁的账）。规则本来就往目标发头（入口发送）时代理原样转给出口；否则代理读完扔掉
+            （规格里的 proxyProtocolStrip）。「入口接收」还是这个公网监听的事（上面的 service.metadata），gost 把
+            收到的头里的访客地址写进它发给代理的头。UDP 固定用 v2：gost 给每个新会话先发一个只有头的包
+            （v1 是文本协议，没有 UDP），代理认出来记下访客、不转发（agent/route_group_udp_visitor.go）。
           */
           const balance = gostBalancePlans.get(Number(r.id))!;
-          service.handler = { type: proto, ...(handlerProxyMetadata ? { metadata: handlerProxyMetadata } : {}) };
+          service.handler = { type: proto, metadata: gostProxyProtocolMetadata(proto === "udp" ? 2 : balance.proxyVersion) };
           service.forwarder = {
             nodes: [{
               name: `balance-${r.id}`,
@@ -268,20 +277,39 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
       egressGostChains.push(buildGostEgressChain(helper.ruleId, proto, helper.runtime));
     }
   }
-  // GOST 链路负载均衡：每台出口一个本机 gost 端口（只听 127.0.0.1），各挂一条只走那台出口的链；本机代理拨它们。
+  /*
+    GOST 链路负载均衡：每台出口一个本机 gost 端口（只听 127.0.0.1，TCP、UDP 同一个号），各挂一条只走那台出口的
+    单节点链；本机代理拨它们。
+      · forwarder 是出口该拨的目标（和不走代理时入口服务的一样）：relay 隧道里「出口拨哪儿」是入口在请求里说的，
+        没有它出口不知道往哪儿拨（2.3.539 那一版就缺这个）。
+      · 链里只有一个节点、没有选择器：gost 的「节点全被摘掉 → 路由为空 → 入口机直连目标」那条路在这里不存在。
+        拨不通出口就是把本机这条连接关掉，代理当场换下一台。
+      · dialTimeout 3 秒：出口被黑洞时 3 秒后关本机连接（代理的「连上就被关」保护期是 8 秒，够它换路重发）。
+      · 限速、计数只在前面那个公网端口上算一次，这里不挂。
+  */
   const balanceGostChains: Array<Record<string, unknown>> = [];
-  for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown }>) {
+  for (const r of gostRules as Array<{ id?: number | null; isEnabled?: unknown; protocol?: string | null }>) {
     const balance = gostBalancePlans.get(Number(r?.id || 0));
     if (!balance || !runtimeBool(r.isEnabled)) continue;
     for (const exit of balance.exits) {
       const chainName = `chain-tunnel-${r.id}-x${exit.hostId}`;
-      gostServiceConfig.push({
-        name: `fwx-${r.id}-tcp-x${exit.hostId}`,
-        addr: endpointHostPort("127.0.0.1", exit.localPort),
-        handler: { type: "tcp", chain: chainName },
-        listener: buildGostRuleListener("tcp"),
-        metadata: { dialTimeout: "3s" },
-      });
+      for (const proto of tunnelForwardProtos(String(r.protocol || "tcp"))) {
+        gostServiceConfig.push({
+          name: `fwx-${r.id}-${proto}-x${exit.hostId}`,
+          addr: endpointHostPort("127.0.0.1", exit.localPort),
+          handler: { type: proto, chain: chainName },
+          listener: buildGostRuleListener(proto),
+          metadata: { dialTimeout: "3s" },
+          forwarder: {
+            nodes: [{
+              name: `target-${r.id}`,
+              addr: balance.targetAddr,
+              connector: { type: proto },
+              dialer: { type: proto },
+            }],
+          },
+        });
+      }
       balanceGostChains.push({ name: chainName, hops: [{ name: `hop-tunnel-${r.id}-x${exit.hostId}`, nodes: [exit.node] }] });
     }
   }
@@ -290,9 +318,8 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
     .map(async (r: any) => {
       const tunnel = tunnelById.get((r as any).tunnelId) as any;
       if (!isGostTunnelMode(tunnel)) return null;
-      // 负载均衡由本机代理挑、又没有 UDP 的规则：原来那条几台出口的链没人用了，不生成（免得出口一翻转它跟着变）
-      const balancePlan = gostBalancePlans.get(Number(r.id));
-      if (balancePlan && !balancePlan.udp) return null;
+      // 负载均衡由本机代理挑的规则（TCP、UDP 都是）：原来那条几台出口带选择器的链没人用了，不生成
+      if (gostBalancePlans.has(Number(r.id))) return null;
       const tunnelExitHost = tunnel ? tunnelExitEndpointById.get(tunnel.id)?.host : "";
       if (!tunnel || !tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0) return null;
       const tunnelHops = tunnelHopsByTunnelId.get(Number(tunnel.id));

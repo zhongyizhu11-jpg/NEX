@@ -155,7 +155,8 @@ import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "@shared/hostIp
 import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { recordHostRateSample } from "./hostRateBuckets";
 import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrategy";
-import { balanceDetectForRuntime, FXP_BALANCE_REPORT_VERSION, GOST_BALANCE_PROXY_AGENT_VERSION } from "@shared/loadBalance";
+import { balanceDetectForRuntime, FXP_BALANCE_REPORT_VERSION, GOST_BALANCE_MAX_EXITS, GOST_BALANCE_PROXY_AGENT_VERSION } from "@shared/loadBalance";
+import { buildGostBalanceProxySpec, type GostBalanceExit, type GostBalanceProxySpec } from "./gostBalancePlan";
 import { isAgentVersionAtLeast } from "@shared/version";
 import { exitTargetExcludedHostIds, exitTargetProbeSpec, exitTargetStatesForRule, latencyOrderedExitHostIds, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
 import {
@@ -1954,25 +1955,33 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
     /*
-      GOST 链路负载均衡（2.3.539，用户选的「入口自己测、自己切」）：入口机上这条规则的端口后面放本机代理，每台出口
-      一个本机 gost 端口（只走那台出口）。代理按分配方式分新连接、出口没回话就关的当场换下一台；出口到目标不通由
-      出口机的探测经面板给提示。切换不改 gost 配置，正在走的连接不断。这里先按粗条件给要的规则分本机端口，
-      细的条件（PROXY 头、协议守卫这些）在 gostBalancePlanForRule 里判，判下来不用的端口空着无妨。
+      GOST 链路负载均衡由入口机的本机代理挑（Agent 2.2.264 起真正启用，见 server/gostBalancePlan.ts）：入口机上这条
+      规则的端口后面放本机代理，每台出口一个本机 gost 端口（只走那台出口）。TCP、UDP 都这样走。代理按分配方式分新
+      连接 / 新 UDP 会话，自己探出口机、自己切；出口到目标不通由出口机的探测经面板给提示，或者真实连接被关以后
+      经出口复核。切换不改 gost 配置，正在走的连接不断。
+
+      这里先按粗条件给要的规则分本机端口（出口数），细的条件在下面 gostBalancePlans 里判，判下来不用的端口空着无妨。
+      留在 gost 节点选择器上的（运行时 nex6 起选择器摘空也不会绕过隧道直连目标）：
+        · 入口机的 Agent 低于 GOST_BALANCE_PROXY_AGENT_VERSION；
+        · 多跳（带中转）的 GOST 链路：入口只连得到中转，探不到出口机本身，经出口探的结论又受中转的拨号超时拖累，
+          做不到「几秒内本地摘掉坏出口」；
+        · 入口是入口组的链路、共享 TLS 入站（SNI 分流）上的规则：没有在真实环境里验证过，先不动；
+        · 出口超过 GOST_BALANCE_MAX_EXITS 台；
+        · 规则带线路组、而这台入口机同时又是这条规则的出口之一（两个调度器要同一个本机端口）。
     */
     const gostBalanceAgentReady = isAgentVersionAtLeast(effectiveAgentVersion, GOST_BALANCE_PROXY_AGENT_VERSION);
     const gostBalanceExitCounts = new Map<number, number>();
     type BalanceRuleLite = { id: number; tunnelId?: number | null; forwardType?: string | null; failoverEnabled?: unknown; protocol?: string | null; pendingDelete?: unknown; isEnabled?: unknown };
-    type BalanceTunnelLite = { id: number; mode?: string | null; isEnabled?: unknown; entryHostId?: number | null; entryGroupId?: number | null; loadBalanceEnabled?: unknown; loadBalanceStrategy?: string | null; balanceDetect?: string | null; exitHostId?: number | null };
+    type BalanceTunnelLite = { id: number; mode?: string | null; isEnabled?: unknown; entryHostId?: number | null; entryGroupId?: number | null; loadBalanceEnabled?: unknown; loadBalanceStrategy?: string | null; balanceDetect?: string | null; exitHostId?: number | null; balancePinHostId?: number | null };
     if (gostBalanceAgentReady) {
-      for (const rule of agentAllRules as unknown as BalanceRuleLite[]) {
+      for (const rule of gostRules as unknown as BalanceRuleLite[]) {
         const tunnel = Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) as BalanceTunnelLite | undefined : null;
         if (!tunnel || !isGostTunnelMode(tunnel) || !tunnelBalancesExits(tunnel)) continue;
-        if (rule.forwardType !== "gost" || rule.failoverEnabled || !isForwardRuleProtocolTcpEnabled(rule.protocol)) continue;
         if (Number(tunnel.entryHostId || 0) !== Number(host.id) || Number(tunnel.entryGroupId || 0) > 0) continue;
         if ((tunnelHopsByTunnelId.get(Number(tunnel.id)) || []).length >= 3) continue;
         const extra = ((tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []) as Array<{ isEnabled?: unknown; hostId?: number | null }>).filter((node) => runtimeBool(node?.isEnabled, true) && Number(node?.hostId || 0) > 0);
         const count = 1 + extra.length;
-        if (count >= 2) gostBalanceExitCounts.set(Number(rule.id), count);
+        if (count >= 2 && count <= GOST_BALANCE_MAX_EXITS) gostBalanceExitCounts.set(Number(rule.id), count);
       }
     }
     const protocolGuardPorts = allocateProtocolGuardPorts(
@@ -3157,80 +3166,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return keptNodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: String(weights[index]) } }));
     };
     /*
-      GOST 链路负载均衡由入口本机代理挑（2.3.539）：这条规则在这台入口机上用不用、每台出口的本机端口和 gost 节点、
-      交给 Agent 的代理规格。用不了的（老 Agent、入口组、多跳、开了 PROXY 头、协议守卫、共享 TLS 入站、端口没分到）
-      返回 null，照旧走 gost 自己的节点选择。
+      GOST 链路负载均衡由入口本机代理挑：这条规则在这台入口机上用不用、每台出口的本机端口和 gost 节点、出口该拨的
+      目标、交给 Agent 的代理规格（server/gostBalancePlan.ts）。用不了的照旧走 gost 自己的节点选择（哪些用不了见上面
+      分端口那里的清单）。gostBalancePlans 在这里只是声明：里面要用 gostTunnelExitTargetAddr，等它定义以后再填。
     */
-    type GostBalanceExit = { hostId: number; localPort: number; dialHost: string; listenPort: number; node: ReturnType<typeof gostTunnelNode> };
-    const gostBalancePlans = new Map<number, { failoverPort: number; exits: GostBalanceExit[]; udp: boolean; spec: Record<string, unknown> }>();
-    for (const rule of agentAllRules as unknown as BalanceRuleLite[]) {
-      const count = gostBalanceExitCounts.get(Number(rule?.id || 0));
-      if (!count || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
-      const tunnel = tunnelById.get(Number(rule.tunnelId)) as (BalanceTunnelLite & Parameters<typeof tunnelSecretSeed>[0]) | undefined;
-      if (!tunnel || !runtimeBool(tunnel.isEnabled) || isSniRuntimeRule(rule as unknown as Parameters<typeof isSniRuntimeRule>[0])) continue;
-      if (proxyProtocolEnabled(rule, "entryReceive") || proxyProtocolEnabled(rule, "entrySend")) continue;
-      const protocolPlan = planGostTunnelRuleProtocol({ protocol: rule.protocol, tunnelId: Number(tunnel.id), ruleId: Number(rule.id), secretSeed: tunnelSecretSeed(tunnel) });
-      if (protocolPlan.entryNeedsTarget) continue;
-      const ports = protocolGuardPortsForRule(rule).balanceExitPorts || [];
-      const exits: GostBalanceExit[] = [];
-      for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel)) {
-        const dialHost = endpoint.primary
-          ? (tunnelExitEndpointById.get(tunnel.id)?.host || await tunnelExitHostAddress(tunnel))
-          : await getExtraExitDialAddress(endpoint.node, tunnel);
-        if (!dialHost || endpoint.listenPort <= 0) continue;
-        const exitKey = endpoint.primary ? 0 : (endpoint.exitSeq || endpoint.exitNodeId);
-        exits.push({
-          hostId: Number(endpoint.exitHostId),
-          localPort: 0,
-          dialHost: String(dialHost),
-          listenPort: Number(endpoint.listenPort),
-          node: gostTunnelNode(`exit-${rule.id}-${exitKey}`, endpointHostPort(dialHost, endpoint.listenPort), gostTunnelTransportType(tunnel.mode), tunnel, protocolPlan.chainConnector),
-        });
-      }
-      if (exits.length < 2 || ports.length < exits.length || new Set(exits.map((exit) => exit.hostId)).size !== exits.length) continue;
-      exits.forEach((exit, index) => { exit.localPort = ports[index]; });
-      const hostIds = exits.map((exit) => exit.hostId);
-      const detect = tunnelBalanceDetect(tunnel);
-      const strategy = normalizeExitGroupStrategy(tunnel.loadBalanceStrategy);
-      const fresh = new Map(exitTargetStatesForRule(Number(rule.id)).map((state) => [state.hostId, state]));
-      const excluded = exitTargetExcludedHostIds(Number(rule.id), hostIds);
-      const rawWeights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, hostIds, tunnel);
-      const pinHostId = await pinnedExitHostId(tunnel);
-      const pinIndex = pinHostId > 0 ? hostIds.indexOf(pinHostId) : -1;
-      const failoverPort = failoverProxyPort(rule);
-      const spec = {
-        enabled: true,
-        listenPort: failoverPort,
-        bindAddress: "127.0.0.1",
-        protocol: "tcp",
-        // 本机代理认的分配方式：延迟优先 = 按顺序用 + 自动择优（明显更快、而且持续一阵才换，不来回跳）
-        strategy: strategy === "latency" || strategy === "none" ? "fallback" : strategy,
-        preferFastest: strategy === "latency",
-        targets: exits.map((exit, index) => {
-          const state = fresh.get(exit.hostId);
-          const median = state && !state.down ? (state.medianMs ?? state.latencyMs) : null;
-          return {
-            targetIp: "127.0.0.1",
-            targetPort: exit.localPort,
-            // 探出口机本身（入口到出口这一段）；出口到目标那一段由出口机自己探，经面板给提示
-            probeIp: exit.dialHost,
-            probePort: exit.listenPort,
-            ...(rawWeights ? { weight: Math.max(1, Math.min(100, Math.round(Number(rawWeights[index]) || 1))) } : {}),
-            ...(excluded.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
-            ...(median != null && median > 0 ? { extraLatencyMs: Math.round(median) } : {}),
-          };
-        }),
-        failoverSeconds: Math.max(2, detect.intervalSeconds * detect.failThreshold),
-        recoverSeconds: Math.max(4, detect.intervalSeconds * detect.recoverThreshold),
-        autoFailback: true,
-        minHoldSeconds: 60,
-        pinnedIndex: pinIndex >= 0 ? pinIndex : null,
-        pinnedUntil: 0,
-        failureThreshold: detect.failThreshold,
-        balanceReport: { tunnelId: Number(tunnel.id), hostIds },
-      };
-      gostBalancePlans.set(Number(rule.id), { failoverPort, exits, udp: forwardRuleProtocols(rule.protocol).includes("udp"), spec });
-    }
+    type GostBalancePlan = { failoverPort: number; exits: Array<GostBalanceExit & { node: ReturnType<typeof gostTunnelNode> }>; targetAddr: string; proxyVersion: 1 | 2; spec: GostBalanceProxySpec };
+    const gostBalancePlans = new Map<number, GostBalancePlan>();
     const gostRelayFailoverHopMetadata = { strategy: "fifo", maxFails: 1, failTimeout: "5s" };
     const gostTunnelExitTargetAddr = async (rule: any, tunnel: any) => {
       const policy = await tunnelProtocolPolicy(tunnel);
@@ -3255,6 +3196,64 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const endpoint = tunnelExitSchedulerEndpoint(rule);
       return endpointHostPort(endpoint.targetIp, endpoint.targetPort);
     };
+    for (const rule of gostRules as unknown as BalanceRuleLite[]) {
+      const count = gostBalanceExitCounts.get(Number(rule?.id || 0));
+      if (!count || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
+      const tunnel = tunnelById.get(Number(rule.tunnelId)) as (BalanceTunnelLite & Parameters<typeof tunnelSecretSeed>[0]) | undefined;
+      if (!tunnel || !runtimeBool(tunnel.isEnabled) || isSniRuntimeRule(rule as unknown as Parameters<typeof isSniRuntimeRule>[0])) continue;
+      // 规则带线路组时调度器跑在出口上；这台入口机自己又是出口之一的话，两个调度器要同一个本机端口，不接
+      if (rule.failoverEnabled && isCurrentHostTunnelExitForRule(rule, tunnel)) continue;
+      const protocolPlan = planGostTunnelRuleProtocol({ protocol: rule.protocol, tunnelId: Number(tunnel.id), ruleId: Number(rule.id), secretSeed: tunnelSecretSeed(tunnel) });
+      const ports = protocolGuardPortsForRule(rule).balanceExitPorts || [];
+      const exits: GostBalancePlan["exits"] = [];
+      for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel)) {
+        const dialHost = endpoint.primary
+          ? (tunnelExitEndpointById.get(tunnel.id)?.host || await tunnelExitHostAddress(tunnel))
+          : await getExtraExitDialAddress(endpoint.node, tunnel);
+        if (!dialHost || endpoint.listenPort <= 0) continue;
+        const exitKey = endpoint.primary ? 0 : (endpoint.exitSeq || endpoint.exitNodeId);
+        exits.push({
+          hostId: Number(endpoint.exitHostId),
+          localPort: 0,
+          dialHost: String(dialHost),
+          listenPort: Number(endpoint.listenPort),
+          node: gostTunnelNode(`exit-${rule.id}-${exitKey}`, endpointHostPort(dialHost, endpoint.listenPort), gostTunnelTransportType(tunnel.mode), tunnel, protocolPlan.chainConnector),
+        });
+      }
+      if (exits.length < 2 || exits.length > GOST_BALANCE_MAX_EXITS || ports.length < exits.length || new Set(exits.map((exit) => exit.hostId)).size !== exits.length) continue;
+      exits.forEach((exit, index) => { exit.localPort = ports[index]; });
+      const hostIds = exits.map((exit) => exit.hostId);
+      const strategy = normalizeExitGroupStrategy(tunnel.loadBalanceStrategy);
+      const fresh = new Map(exitTargetStatesForRule(Number(rule.id)).map((state) => [state.hostId, state]));
+      const extraLatencyMs = new Map<number, number>();
+      for (const exit of exits) {
+        const state = fresh.get(exit.hostId);
+        const median = state && !state.down ? (state.medianMs ?? state.latencyMs) : null;
+        if (median != null && median > 0) extraLatencyMs.set(exit.hostId, median);
+      }
+      // 份数和 FXP 用的同一个来源：按权重先看手填的份数，再看线路带宽；按访客固定按线路带宽加权（FXP 那边也是）。
+      const weights = strategy === "ip_hash"
+        ? exitGroupWeights("weighted", await exitBandwidthsForHostIds(hostIds))
+        : await exitWeightsForHostIds(tunnel.loadBalanceStrategy, hostIds, tunnel);
+      const failoverPort = failoverProxyPort(rule);
+      const proxyVersion = proxyProtocolVersion(rule);
+      const spec = buildGostBalanceProxySpec({
+        listenPort: failoverPort,
+        protocol: normalizeForwardRuleProtocol(rule.protocol),
+        strategy: tunnel.loadBalanceStrategy,
+        detect: tunnelBalanceDetect(tunnel),
+        tunnelId: Number(tunnel.id),
+        exits,
+        weights,
+        // 手动指定原样交给代理（不在这里看那台在不在线）：指定的那台坏了，代理当场不理它，不用等面板发现。
+        pinHostId: Number(tunnel.balancePinHostId || 0),
+        downHostIds: exitTargetExcludedHostIds(Number(rule.id), hostIds),
+        extraLatencyMs,
+        proxyHeaderForward: proxyProtocolEnabled(rule, "entrySend"),
+        proxyProtocolVersion: proxyVersion,
+      });
+      gostBalancePlans.set(Number(rule.id), { failoverPort, exits, targetAddr: await gostTunnelExitTargetAddr(rule, tunnel), proxyVersion, spec });
+    }
     /*
       填「按访客固定」要剥头的 gost 端口转发名单（routeHeaderStripRuleIds 的来历见那里）。条件：
       gost 直连、不过协议守卫（守卫在前面时 gost 看到的访客是守卫自己）、有 TCP、规则本身不发

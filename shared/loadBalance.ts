@@ -253,8 +253,16 @@ export const FXP_TARGET_AWARE_VERSION = "2.2.142";
 /** FXP 从这一版起：入口把每条规则每台出口的真实状态报给面板（forwardx-fxp/balance_report.go）。 */
 export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
 
-/** Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切，并报真实状态（agent/balance_report.go）。 */
-export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.262";
+/**
+ * 入口机的 Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切（TCP 和 UDP），并报真实状态
+ * （server/gostBalancePlan.ts、agent/failover_exit_group.go）。更老的入口照旧用 gost 自己的节点选择器。
+ * 只有这一处：2.2.262 / 2.2.263 的 Agent 虽然有这个代理，但目标上限、探测节奏、UDP 访客地址、经出口复核都没有，
+ * 面板那时也从没下发过（见 gostBalancePlan.ts 开头）。
+ */
+export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.264";
+
+/** 本机代理最多替几台出口挑（Agent 的 failoverMaxTargets）；出口再多的链路照旧用 gost 的节点选择器。 */
+export const GOST_BALANCE_MAX_EXITS = 20;
 
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */
 export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect = DEFAULT_BALANCE_DETECT) {
