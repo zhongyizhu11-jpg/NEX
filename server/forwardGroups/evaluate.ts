@@ -59,7 +59,7 @@ export type ExternalHealthDecision = {
  * 规则：
  *   (a) 成员自己的 Agent 离线，而且没有观察点此刻连得上它 —— 按原来的离线处理（这里不改结论，
  *       reachableWhileAgentOffline = false，调用方照旧走离线那条路）；有观察点连得上就继续发布。
- *   (b) 至少 2 个观察点（可用的不足 2 个时是全部）持续 failoverMs 连不上 —— 判不可用。每一票都要求：
+ *   (b) 至少 2 个观察点（在线的观察点不足 2 个时是全部在线的）持续 failoverMs 连不上 —— 判不可用。每一票都要求：
  *       观察点在线、结果新鲜、以前连通过这个成员、此刻连得上别的成员或参照目标。
  *   恢复：判了不可用之后，要等观察点重新连上（state 回到 reachable）才解除；之后由调用方的
  *   healthySince + recoverMs 管「稳够久才加回来」。观察点一个都不可用时解除保持，退回只看成员自己。
@@ -76,7 +76,12 @@ export function decideExternalHealth(input: {
   const usable = observers.filter((observer) => observer.online && observer.reachable !== null);
   const reachers = usable.filter((observer) => observer.reachable === true);
   const validFailers = usable.filter((observer) => observer.reachable === false && observer.everReached && observer.crossCheckOk);
-  const votesNeeded = usable.length >= 2 ? 2 : usable.length;
+  /*
+    票数门槛按「安排了、而且在线」的观察点算，不按「这一刻有结果」的算（评审 F3）：在线观察点的结果缺了
+    （还没报、过期了、多实例时报在了别的实例上）只能让结论更难成立，不能把门槛降成 1 票。
+  */
+  const assignedOnline = observers.filter((observer) => observer.online).length;
+  const votesNeeded = assignedOnline >= 2 ? 2 : assignedOnline;
   const base = {
     reachableCount: reachers.length,
     usableCount: usable.length,

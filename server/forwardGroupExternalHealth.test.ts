@@ -259,3 +259,67 @@ test("就绪宽限：面板刚启动时，先回来的成员不能把解析抢�
     assert.equal(requests.at(-1).domain, "restart-entry.example.test");
   `);
 });
+
+test("多实例：观察点连在非持有实例上，结果交给持有实例，持有实例照样凑够两票拿掉成员", () => {
+  runIsolatedScript("group-external-health-forward", String.raw`
+    const ips = { 1: "198.51.100.10", 2: "198.51.100.20", 3: "198.51.100.30" };
+    for (const id of [1, 2, 3]) {
+      await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat", "agentVersion"], [id, "entry-" + id, ips[id], ips[id], 1, 1, now, "2.2.264"]);
+      fast.registerPresenceCapableHost(id);
+    }
+    await insert(
+      "forward_groups",
+      ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "failoverSeconds", "recoverSeconds"],
+      [70, "observed-entry", "host", "entry", "peer-multi.example.test", "A", "0.0.0.0", 1, 1, 10, 10],
+    );
+    for (const [id, hostId, priority] of [[701, 1, 0], [702, 2, 1], [703, 3, 2]]) {
+      await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled", "healthStatus", "lastCheckedAt"], [id, 70, "host", hostId, priority, 1, "healthy", now]);
+    }
+    await insert("tunnels", ["id", "name", "entryHostId", "exitHostId", "entryGroupId", "mode", "listenPort", "secret", "userId", "isEnabled"], [9, "t", 1, 3, 70, "tls", 30000, "s", 1, 1]);
+    await insert(
+      "forward_rules",
+      ["id", "hostId", "name", "forwardType", "protocol", "tunnelId", "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning"],
+      [900, 1, "web", "gost", "tcp", 9, 8443, "203.0.113.10", 80, 1, 1, 1],
+    );
+    const leaseModule = await import(moduleUrl("server/panelLease.ts"));
+    const work = await import(moduleUrl("server/panelWorkRequests.ts"));
+    const peers = await import(moduleUrl("server/forwardGroups/peerObservations.ts"));
+    const store = new leaseModule.SqlPanelLeaseStore();
+    const quiet = { info: () => {}, warn: () => {} };
+    const makeLease = (instanceId) => new leaseModule.PanelLease({ store, instanceId, logger: quiet, setTimer: () => ({ unref() {} }), clearTimer: () => {} });
+    const holder = makeLease("holder");
+    const other = makeLease("other");
+    await holder.start();
+    await other.start();
+    await holder.tick();
+    leaseModule.setPanelBackgroundLeaseForTests(holder);
+    await groups.runForwardGroupFailover(70);
+    assert.deepEqual(requests.at(-1).values, [ips[1], ips[2], ips[3]]);
+
+    const report = (memberId, ok) => ({ groupId: 70, memberId, probeType: "peer", method: "tcp", targetIp: ips[memberId - 700], targetPort: 8443, isTimeout: !ok, latencyMs: ok ? 12 : 0 });
+    const reference = { groupId: 70, probeType: "peer", method: "tcp", targetIp: "www.189.cn", targetPort: 80, isTimeout: false, latencyMs: 30 };
+    // 观察点 2、3 连着持有实例：都连通过成员 1
+    await groups.ingestForwardGroupPeerReports(2, [report(701, true), report(703, true), reference]);
+    await groups.ingestForwardGroupPeerReports(3, [report(701, true), report(702, true), reference]);
+    // 之后观察点 3 换连到了非持有实例：它报的「连不上成员 1」（20 秒前起）只进了那个实例
+    await groups.ingestForwardGroupPeerReports(2, [report(701, false)], Date.now() - 20_000);
+    leaseModule.setPanelBackgroundLeaseForTests(other);
+    const before = requests.length;
+    assert.equal(await groups.ingestForwardGroupPeerReports(3, [report(701, false), report(702, true), reference], Date.now() - 20_000), 3);
+    const pending = await runtime.queryRaw('SELECT "name" FROM "panel_work_requests" ORDER BY "name"');
+    assert.deepEqual(pending.map((row) => row.name), ["forward-group-peer-report:3:70:0", "forward-group-peer-report:3:70:701", "forward-group-peer-report:3:70:702"], "非持有实例收到的结果没交给持有者");
+    // 持有实例的内存里没有这一份（两个进程各有各的内存）：把它改回持有实例最后看到的样子（25 秒前连得上）
+    peers.forwardGroupPeerObservations.record({ observerHostId: 3, groupId: 70, memberId: 701, portKey: "tcp:8443", ok: true, now: Date.now() - 25_000 });
+    assert.equal(peers.forwardGroupPeerObservations.view(3, 70, 701, Date.now()).reachable, true);
+    leaseModule.setPanelBackgroundLeaseForTests(holder);
+    assert.equal(await work.drainPanelWorkRequests(), 3);
+    const view = peers.forwardGroupPeerObservations.view(3, 70, 701, Date.now());
+    assert.equal(view.reachable, false);
+    assert.ok(Date.now() - view.since >= 19_000, "观察时刻按请求年龄还原（不是持有者收到的时刻）");
+    const deadline = Date.now() + 10_000;
+    while (requests.length === before && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    await groups.waitForForwardGroupPublishIdle();
+    assert.deepEqual(requests.at(-1).values, [ips[2], ips[3]], "两个观察点持续连不上成员 1：持有实例要拿掉它");
+    leaseModule.setPanelBackgroundLeaseForTests(null);
+  `);
+});

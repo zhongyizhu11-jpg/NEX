@@ -12,7 +12,10 @@ import { defaultHealthCheckPort, defaultHealthCheckTarget, healthCheckTargetNeed
 import { dbBool } from "../repositories/repositoryUtils";
 import { getPresenceCapableHostLivenessSnapshot } from "../agentFastLiveness";
 import { decideExternalHealth, externalHealthLabel, type ExternalHealthDecision, type PeerObserverView } from "./evaluate";
+import { isPanelBackgroundLeaseHolder } from "../panelLease";
+import { registerPanelWorkHandler, requestPanelWork } from "../panelWorkRequests";
 import {
+  PEER_OBSERVATION_TTL_MS,
   PEER_REFERENCE_MEMBER_ID,
   forwardGroupPeerObservations,
   parseStoredExternalHealth,
@@ -175,11 +178,7 @@ function sameProbeAddress(left: unknown, right: unknown) {
   return normalizeHostAddressKey(left) === normalizeHostAddressKey(right);
 }
 
-/**
- * 观察点报上来的外部观察结果（TCPing 上报里 probeType = "peer" 的那些）。只进内存；结论变了就重新评估那个组。
- * 上报必须对得上拓扑里的安排：这台机器确实被安排探这个成员的这个地址和端口，否则丢掉。返回收下的条数。
- */
-export async function ingestForwardGroupPeerReports(hostIdValue: unknown, reports: ReadonlyArray<{
+type PeerReport = {
   groupId?: unknown;
   memberId?: unknown;
   targetIp?: unknown;
@@ -187,11 +186,38 @@ export async function ingestForwardGroupPeerReports(hostIdValue: unknown, report
   method?: unknown;
   isTimeout?: unknown;
   latencyMs?: unknown;
-}>, now = Date.now()) {
+};
+
+const PEER_REPORT_WORK = "forward-group-peer-report";
+
+/*
+  多实例部署（server/panelLease.ts）：观察点的 Agent 只连一个实例，结果只进那个实例的内存。评估只在持有实例上做 ——
+  别的实例收到的结果不交过去，持有者那边这个观察点就一直「没有结果」，票数门槛也跟着掉成 1（评审 F3）。
+  所以非持有实例收下的结果按「观察点 + 组 + 成员」写进 panel_work_requests 交给持有者（同一个成员只留最新一批），
+  带着「这批是多久以前观察到的」；持有者按库的时钟算出的请求年龄还原观察时刻，太旧（超过结果有效期）的不收。
+  非持有实例自己也照样记一份（它那边的界面要显示），但不排评估（持有者收下后会排）。
+*/
+registerPanelWorkHandler(PEER_REPORT_WORK, async (key, payload, context) => {
+  const observerHostId = Number(String(key).split(":")[0] || 0);
+  const body = (payload || {}) as { observedAgoMs?: unknown; reports?: unknown };
+  if (!(observerHostId > 0) || !Array.isArray(body.reports)) return;
+  const ageMs = Math.max(0, context.ageMs) + Math.max(0, Number(body.observedAgoMs) || 0);
+  if (ageMs > PEER_OBSERVATION_TTL_MS) return;
+  await ingestForwardGroupPeerReports(observerHostId, body.reports as PeerReport[], Date.now() - ageMs);
+});
+
+/**
+ * 观察点报上来的外部观察结果（TCPing 上报里 probeType = "peer" 的那些）。只进内存；结论变了就重新评估那个组。
+ * 上报必须对得上拓扑里的安排：这台机器确实被安排探这个成员的这个地址和端口，否则丢掉。返回收下的条数。
+ * 不是持有实例时另外交给持有者（见上面）。
+ */
+export async function ingestForwardGroupPeerReports(hostIdValue: unknown, reports: ReadonlyArray<PeerReport>, now = Date.now()) {
   const hostId = Number(hostIdValue || 0);
   if (!(hostId > 0) || reports.length === 0) return 0;
   const snapshot = await forwardGroupProbeTopology.get();
   const changedGroupIds = new Set<number>();
+  const holder = isPanelBackgroundLeaseHolder();
+  const forwardByTarget = new Map<string, PeerReport[]>();
   let accepted = 0;
   for (const report of reports) {
     const groupId = Number(report.groupId || 0);
@@ -212,6 +238,12 @@ export async function ingestForwardGroupPeerReports(hostIdValue: unknown, report
       expectedPorts = new Set(assignment.ports.map(peerProbePortKey));
     }
     accepted += 1;
+    if (!holder) {
+      const key = `${hostId}:${groupId}:${memberId}`;
+      const list = forwardByTarget.get(key) || [];
+      list.push({ groupId, memberId, targetIp: report.targetIp, targetPort: port, method, isTimeout: report.isTimeout === true, latencyMs: report.latencyMs });
+      forwardByTarget.set(key, list);
+    }
     const latency = Number(report.latencyMs);
     const changed = forwardGroupPeerObservations.record({
       observerHostId: hostId,
@@ -224,6 +256,11 @@ export async function ingestForwardGroupPeerReports(hostIdValue: unknown, report
       now,
     });
     if (changed) changedGroupIds.add(groupId);
+  }
+  if (!holder) {
+    const observedAgoMs = Math.max(0, Date.now() - now);
+    for (const [key, list] of forwardByTarget) await requestPanelWork(PEER_REPORT_WORK, key, { observedAgoMs, reports: list });
+    return accepted;
   }
   if (changedGroupIds.size > 0) scheduleForwardGroupFailover(Array.from(changedGroupIds));
   return accepted;

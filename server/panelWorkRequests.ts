@@ -29,7 +29,9 @@ export const PANEL_WORK_CLAIM_MS = 2 * 60_000;
 export const PANEL_WORK_RETRY_BASE_MS = 2_000;
 export const PANEL_WORK_RETRY_MAX_MS = 60_000;
 
-type Handler = (key: string, payload: unknown) => Promise<void> | void;
+/** ageMs：从请求写进来到现在过了多久（库的时钟算，和各实例的时钟差无关）。 */
+export type PanelWorkContext = { ageMs: number };
+type Handler = (key: string, payload: unknown, context: PanelWorkContext) => Promise<void> | void;
 const handlers = new Map<string, Handler>();
 
 export function registerPanelWorkHandler(kind: string, handler: Handler) {
@@ -75,7 +77,7 @@ export async function requestPanelWork(kind: string, key: string | number, paylo
   await executeRaw(sql, [name, body]);
 }
 
-type RequestRow = { name: string; payload: string | null; requestedAt: number; attempts: number };
+type RequestRow = { name: string; payload: string | null; requestedAt: number; attempts: number; ageMs: number };
 
 /** 取一批到点的、认领、执行（只有持有者调）。返回执行成功了几件。 */
 export async function drainPanelWorkRequests(options: { limit?: number } = {}) {
@@ -87,9 +89,15 @@ export async function drainPanelWorkRequests(options: { limit?: number } = {}) {
   const expired = await executeRaw(`DELETE FROM ${table} WHERE ${q("requestedAt")} < ${now} - ?`, [PANEL_WORK_REQUEST_MAX_AGE_MS]);
   if (rawAffectedRows(expired) > 0) console.warn(`[PanelWork] dropped ${rawAffectedRows(expired)} request(s) older than ${PANEL_WORK_REQUEST_MAX_AGE_MS / 60_000} minutes`);
   const rows = (await queryRaw<RequestRow>(
-    `SELECT ${q("name")}, ${q("payload")}, ${q("requestedAt")}, ${q("attempts")} FROM ${table}
+    `SELECT ${q("name")}, ${q("payload")}, ${q("requestedAt")}, ${q("attempts")}, ${now} - ${q("requestedAt")} AS ${q("ageMs")} FROM ${table}
       WHERE ${q("nextAttemptAt")} <= ${now} ORDER BY ${q("requestedAt")} LIMIT ${limit}`,
-  )).map((row) => ({ name: String(row.name), payload: row.payload, requestedAt: Number(row.requestedAt) || 0, attempts: Number(row.attempts) || 0 }));
+  )).map((row) => ({
+    name: String(row.name),
+    payload: row.payload,
+    requestedAt: Number(row.requestedAt) || 0,
+    attempts: Number(row.attempts) || 0,
+    ageMs: Math.max(0, Number(row.ageMs) || 0),
+  }));
   let executed = 0;
   for (const row of rows) {
     const match = `${q("name")} = ? AND ${q("requestedAt")} = ?`;
@@ -114,7 +122,7 @@ export async function drainPanelWorkRequests(options: { limit?: number } = {}) {
       payload = null;
     }
     try {
-      await handler(key, payload);
+      await handler(key, payload, { ageMs: row.ageMs });
       executed += 1;
       await executeRaw(`DELETE FROM ${table} WHERE ${match}`, [row.name, row.requestedAt]);
     } catch (error) {

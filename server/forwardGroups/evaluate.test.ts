@@ -45,7 +45,19 @@ test("三个观察点里只有一个连不上：不够两票，不判", () => {
   assert.equal(decision.down, false);
 });
 
-test("只有一个可用观察点时，它一票就够（可用的不足两个 = 全部）", () => {
+test("在线观察点里有结果的只剩一个（别的还没报 / 过期 / 报在别的实例上）：门槛还是两票，不降成一票", () => {
+  const decision = decideExternalHealth({
+    agentOnline: true,
+    observers: [failing(2, 600_000), observer({ hostId: 3, reachable: null, since: null }), observer({ hostId: 4, reachable: null, since: null })],
+    failoverMs: FAILOVER,
+    now: NOW,
+  });
+  assert.equal(decision.votesNeeded, 2);
+  assert.equal(decision.down, false, "缺了结果反而让一个观察点就能把成员判成不可用");
+  assert.equal(decision.state, "inconclusive");
+});
+
+test("只有一个在线观察点时，它一票就够（在线的不足两个 = 全部在线的）", () => {
   const decision = decideExternalHealth({ agentOnline: true, observers: [failing(2, 61_000), observer({ hostId: 3, online: false })], failoverMs: FAILOVER, now: NOW });
   assert.equal(decision.votesNeeded, 1);
   assert.equal(decision.state, "down");
