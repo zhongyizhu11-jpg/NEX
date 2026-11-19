@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -228,8 +229,9 @@ func TestEndpointHealthLogsCarryTheIndex(t *testing.T) {
 	}
 }
 
-// X3(c)：只开了 UDP 的老出口（不回探活包、也没有 TCP 监听）没有任何信号，不能因为探不通就判死。
-func TestUDPOnlyOldExitWithoutTCPIsNeverJudgedDead(t *testing.T) {
+// 从没回过 UDP 探活包的出口（版本过旧，或者 UDP 一直不通）：没有信号，不判它坏；问过两轮就标成「没验证过」
+// 报给面板，UDP 新会话优先给验证过的出口。不再悄悄退回去探它的 TCP 端口（阶段 2：这一版要求各台都升级）。
+func TestExitThatNeverAnswersUDPPingsIsFlaggedNotJudgedDead(t *testing.T) {
 	resetFXPEndpointRegistry()
 	fxpUDPPingHook = func(string, int, config) error { return errors.New("no reply") }
 	defer func() { fxpUDPPingHook = nil }()
@@ -237,43 +239,241 @@ func TestUDPOnlyOldExitWithoutTCPIsNeverJudgedDead(t *testing.T) {
 	selector := newExitEndpointSelector(
 		[]exitEndpoint{{Host: "127.0.0.1", Port: freeTCPUDPPort(t)}},
 		exitEndpoint{Host: "127.0.0.1", Port: closedPort},
-		"fallback",
+		"round_robin",
 	)
-	release := selector.activateUDP(config{Role: "relay", TunnelID: 351, Key: "k"})
+	release := selector.activateUDP(config{Role: "entry", TunnelID: 351, Key: "k"})
 	defer release()
 	state := selector.states[0]
-	now := time.Now()
-	for i := 0; i < 180; i++ {
-		state.maintain(now.Add(time.Duration(i) * time.Second))
-		time.Sleep(2 * time.Millisecond)
+	rounds := func() int {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.udpRounds
 	}
-	time.Sleep(100 * time.Millisecond)
-	if !state.isHealthy() {
-		t.Fatal("没有任何信号的老出口被判成了连不上")
+	// 把「上一次问」拨到 ago 之前，再让维护循环看一眼。
+	tick := func(ago time.Duration) {
+		state.mu.Lock()
+		state.udpProbedAt = time.Now().Add(-ago)
+		state.mu.Unlock()
+		state.maintain(time.Now())
+		time.Sleep(30 * time.Millisecond)
 	}
-	// 它回过一次探活包之后就以探活为准：连着两轮不回算挂。
-	fxpUDPPingHook = func(string, int, config) error { return nil }
-	state.runUDPProbe(config{}, closedPort)
-	fxpUDPPingHook = func(string, int, config) error { return errors.New("no reply") }
-	state.runUDPProbe(config{}, closedPort)
-	if !state.isHealthy() {
+	state.maintain(time.Now()) // 第一轮：马上问
+	time.Sleep(30 * time.Millisecond)
+	tick(3 * time.Second) // 头两轮按平常的间隔问
+	if got := rounds(); got < 2 {
+		t.Fatalf("头两轮应该照常问：%d", got)
+	}
+	if ok, _ := state.reachable(true, time.Now()); !ok || !state.isHealthy() {
+		t.Fatal("没有任何信号的出口被判成了连不上")
+	}
+	if !state.udpUnverifiedNow() || state.udpReportState() != "unverified" {
+		t.Fatalf("问过两轮都没回，应该标成没验证过：%q", state.udpReportState())
+	}
+	// 一直不回的隔 30 秒才再问一次，不是每秒都问。
+	before := rounds()
+	tick(10 * time.Second)
+	if rounds() != before {
+		t.Fatal("一直不回的不该 10 秒就再问")
+	}
+	tick(31 * time.Second)
+	if rounds() != before+1 {
+		t.Fatal("隔了 30 秒应该再问一次（它升级了、UDP 放行了才发现得了）")
+	}
+	// 另一台回过探活包：UDP 新会话都给验证过的那台（没验证过的算软信号，两台里摘掉一台）。
+	other := selector.states[1]
+	other.udpProbeResult(nil)
+	for i := 0; i < 10; i++ {
+		_, index, ok := selector.pickUDP(nil)
+		if !ok || index != 1 {
+			t.Fatalf("UDP 新会话应该给验证过的出口：index=%d ok=%v", index, ok)
+		}
+		selector.unpick(index)
+	}
+	// TCP 连接不看这个。
+	seen := map[int]bool{}
+	for i := 0; i < 10; i++ {
+		_, index, _ := selector.pick(nil)
+		seen[index] = true
+		selector.unpick(index)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("TCP 连接两台都该分到：%v", seen)
+	}
+	// 上报里写明。
+	selector.mu.Lock()
+	exits := selector.balanceSnapshotLocked(time.Now())
+	selector.mu.Unlock()
+	if !exits[0].PeerOutdated || exits[0].UDPState != "unverified" || exits[1].PeerOutdated || exits[1].UDPState != "ok" {
+		t.Fatalf("上报应该标出没回过探活包的那台：%+v", exits)
+	}
+	// 它后来回了（升级了）：标记撤掉。
+	state.udpProbeResult(nil)
+	if state.udpUnverifiedNow() || state.udpReportState() != "ok" {
+		t.Fatal("回过探活包之后不该还标着没验证过")
+	}
+}
+
+// UDP 那一侧和 TCP 各判各的（阶段 2）：回过探活包的出口，连着两轮不回判成 UDP 不通 —— TCP 照常用，UDP 新会话不给它；
+// 连着三轮回了才恢复。只有 UDP 被拦的出口以前发现不了（同一条规则 TCP+UDP 都开时只跑 TCP 探测）。
+func TestUDPReachabilityIsTrackedSeparatelyFromTCP(t *testing.T) {
+	resetFXPEndpointRegistry()
+	selector := newExitEndpointSelector(
+		[]exitEndpoint{{Host: "127.0.0.1", Port: 30072}},
+		exitEndpoint{Host: "127.0.0.1", Port: 30071},
+		"fallback",
+	)
+	state, now := selector.states[0], time.Now()
+	state.udpProbeResult(nil)
+	selector.states[1].udpProbeResult(nil)
+	noReply := errors.New("no reply")
+	if again, _ := state.udpProbeResult(noReply); !again {
+		t.Fatal("第一轮没回：应该紧接着再探一轮，不等下一个节拍")
+	}
+	if ok, _ := state.reachable(true, now); !ok {
 		t.Fatal("一轮不回不算挂")
 	}
-	state.runUDPProbe(config{}, closedPort)
-	if state.isHealthy() {
-		t.Fatal("回过探活包的出口连着两轮不回，应该判成连不上")
+	if again, _ := state.udpProbeResult(noReply); again {
+		t.Fatal("已经判坏了，不用紧接着再探")
 	}
-	// 再连着三轮回了才算恢复。
-	fxpUDPPingHook = func(string, int, config) error { return nil }
+	if ok, _ := state.reachable(true, time.Now()); ok {
+		t.Fatal("回过探活包的出口连着两轮不回，UDP 应该判成不通")
+	}
+	if ok, _ := state.reachable(false, time.Now()); !ok || !state.isHealthy() {
+		t.Fatal("UDP 不通不该连累 TCP 那一侧")
+	}
+	// 挑出口：TCP 还是主出口，UDP 换到备用。
+	if _, index, _ := selector.pick(nil); index != 0 {
+		t.Fatalf("TCP 新连接应该还走主出口：%d", index)
+	}
+	if _, index, _ := selector.pickUDP(nil); index != 1 {
+		t.Fatalf("UDP 新会话应该换到备用：%d", index)
+	}
+	state.mu.Lock()
+	state.udpWatchers = 1 // 有 UDP 规则在用它才报 UDP 那一侧
+	state.mu.Unlock()
+	if state.udpReportState() != "down" {
+		t.Fatalf("上报：%q", state.udpReportState())
+	}
+	// 反过来：TCP 那一侧被判坏，UDP 探活在回 —— UDP 会话照常用它。
+	other := selector.states[1]
+	other.markFailure(errTestEndpointDown)
+	if ok, _ := other.reachable(true, time.Now()); !ok {
+		t.Fatal("TCP 不通不该连累回着探活的 UDP 那一侧")
+	}
+	// 恢复：连着三轮回了才算。
 	for i := 0; i < fxpRecoverProbes-1; i++ {
-		state.runUDPProbe(config{}, closedPort)
-		if state.isHealthy() {
+		state.udpProbeResult(nil)
+		if ok, _ := state.reachable(true, time.Now()); ok {
 			t.Fatal("恢复要连着三轮都回")
 		}
 	}
-	state.runUDPProbe(config{}, closedPort)
-	if !state.isHealthy() {
+	state.udpProbeResult(nil)
+	if ok, _ := state.reachable(true, time.Now()); !ok {
 		t.Fatal("连着三轮回了应该恢复")
+	}
+	if snap := state.hostLoad().snapshot(time.Now()); snap.slowStart > 0.2 {
+		t.Fatalf("刚恢复的出口应该慢慢加量：%v", snap.slowStart)
+	}
+}
+
+// 挂着 UDP 会话的出口每秒探一轮，闲着的 5 秒一轮。
+func TestUDPPingCadenceFollowsActiveSessions(t *testing.T) {
+	resetFXPEndpointRegistry()
+	var pings atomic.Int64
+	fxpUDPPingHook = func(string, int, config) error { pings.Add(1); return nil }
+	defer func() { fxpUDPPingHook = nil }()
+	selector := newExitEndpointSelector(
+		[]exitEndpoint{{Host: "127.0.0.1", Port: 30082}},
+		exitEndpoint{Host: "127.0.0.1", Port: 30081},
+		"fallback",
+	)
+	release := selector.activateUDP(config{Role: "entry", TunnelID: 352, Key: "k"})
+	defer release()
+	state := selector.states[0]
+	run := func(seconds int) int64 {
+		before := pings.Load()
+		for i := 0; i < seconds; i++ {
+			state.mu.Lock()
+			state.udpProbedAt = state.udpProbedAt.Add(-time.Second)
+			state.mu.Unlock()
+			state.maintain(time.Now())
+			time.Sleep(5 * time.Millisecond)
+		}
+		return pings.Load() - before
+	}
+	run(1) // 第一轮：马上问
+	if idle := run(20); idle < 3 || idle > 5 {
+		t.Fatalf("闲着的出口 20 秒应该探 4 轮上下，实际 %d", idle)
+	}
+	state.udpSessionOpened()
+	if active := run(20); active < 18 {
+		t.Fatalf("挂着会话的出口应该每秒探一轮，20 秒探了 %d 轮", active)
+	}
+	state.udpSessionClosed()
+	if idle := run(20); idle > 5 {
+		t.Fatalf("会话没了应该回到 5 秒一轮，20 秒探了 %d 轮", idle)
+	}
+}
+
+// 会回探活包的出口上，一条会话中途没了回包：这期间探活回过 → 出口好好的，是应用协议单向，再久也不换；
+// 这期间有一轮探活没回、一次应答都没收到 → 发了 4 个包、过了 2 秒就换（不等两轮探活判坏）。
+func TestUDPSessionSilenceNeedsAMissedPingToMove(t *testing.T) {
+	resetFXPEndpointRegistry()
+	selector := newExitEndpointSelector(
+		[]exitEndpoint{{Host: "127.0.0.1", Port: 30092}},
+		exitEndpoint{Host: "127.0.0.1", Port: 30091},
+		"fallback",
+	)
+	state := selector.states[0]
+	state.udpProbeResult(nil)
+	selector.states[1].udpProbeResult(nil)
+	start := time.Now()
+	session := &udpDirectEntrySession{selector: selector, endpointIndex: 0, createdAt: start.Add(-time.Minute).UnixNano()}
+	// 有来有回的一条会话。
+	session.noteClientDatagram(start.Add(-30 * time.Second).UnixNano())
+	session.noteReply()
+	// 从 start 起访客连着发、没有回包。
+	for i := 0; i < 6; i++ {
+		session.noteClientDatagram(start.Add(time.Duration(i) * 400 * time.Millisecond).UnixNano())
+	}
+	setPing := func(confirmed, missed time.Duration) {
+		state.mu.Lock()
+		state.udpConfirmedAt, state.udpMissAt = start.Add(confirmed), start.Add(missed)
+		state.mu.Unlock()
+	}
+	check := func(at time.Duration) string {
+		session.healthCheckedAt = 0
+		return session.repickReason(start.Add(at).UnixNano())
+	}
+	setPing(-500*time.Millisecond, -time.Hour)
+	if reason := check(2500 * time.Millisecond); reason != "" {
+		t.Fatalf("还没有哪一轮探活没回：不换，得到 %q", reason)
+	}
+	setPing(time.Second, -time.Hour)
+	if reason := check(30 * time.Second); reason != "" {
+		t.Fatalf("没回包之后探活回过：出口好好的，单向协议不换，得到 %q", reason)
+	}
+	setPing(-500*time.Millisecond, 1500*time.Millisecond)
+	if reason := check(1900 * time.Millisecond); reason != "" {
+		t.Fatalf("还不到 2 秒：%q", reason)
+	}
+	if reason := check(2100 * time.Millisecond); reason != "no replies" {
+		t.Fatalf("发了 6 个包、2 秒没回、这期间探活也没回：应该换，得到 %q", reason)
+	}
+	// 收到回包就清零。
+	session.noteReply()
+	if reason := check(3 * time.Second); reason != "" {
+		t.Fatalf("有回包了：%q", reason)
+	}
+	// 没有别的连得上的出口：不折腾。
+	for i := 0; i < 6; i++ {
+		session.noteClientDatagram(start.Add(4*time.Second + time.Duration(i)*400*time.Millisecond).UnixNano())
+	}
+	setPing(-500*time.Millisecond, 5*time.Second)
+	selector.states[1].udpProbeResult(errors.New("no reply"))
+	selector.states[1].udpProbeResult(errors.New("no reply"))
+	if reason := check(7 * time.Second); reason != "" {
+		t.Fatalf("没有别的出口可换：%q", reason)
 	}
 }
 

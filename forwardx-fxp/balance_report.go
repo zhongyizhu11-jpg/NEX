@@ -50,6 +50,11 @@ type balanceExitReport struct {
 	JitterMs float64 `json:"jitterMs,omitempty"`
 	LossPct  float64 `json:"lossPct,omitempty"`
 	Samples  int     `json:"samples,omitempty"`
+	// UDPState：这台出口的 UDP 那一侧（只有 UDP 规则在用它时才有）。ok 探活在回；down 探活连着没回，UDP 新会话不给它；
+	// unverified 从没回过探活包 —— 对端版本过旧（或者 UDP 一直不通），UDP 的健康只能跟着 TCP 探测走。
+	UDPState string `json:"udpState,omitempty"`
+	// PeerOutdated：对端版本过旧（现在只有一种情况：不回 UDP 探活包）。面板据此写「对端版本过旧」。
+	PeerOutdated bool `json:"peerOutdated,omitempty"`
 }
 
 type balanceEvent struct {
@@ -78,6 +83,8 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 		if !s.states[i].isHealthy() {
 			item.State, item.Reason = "down", "exit"
 		}
+		item.UDPState = s.states[i].udpReportState()
+		item.PeerOutdated = item.UDPState == "unverified"
 		if s.endpointReportsTarget(i) {
 			health := s.target.health[i]
 			stats := health.stats()

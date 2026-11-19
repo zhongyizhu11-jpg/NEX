@@ -246,12 +246,8 @@ const (
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
 	fxpRuntimeVersion             = "2.2.146"
-	fxpFallbackRetry              = 5 * time.Second
-	// A node that stays down is re-probed on a growing delay, because probing a
-	// peer that accepts but never answers costs a whole handshake timeout.
-	fxpFallbackRetryMax = 2 * time.Minute
-	fxpFallbackDial     = 3 * time.Second
-	fxpShutdownDrain    = 5 * time.Second
+	fxpFallbackDial               = 3 * time.Second
+	fxpShutdownDrain              = 5 * time.Second
 
 	// Exit and relay ports are reachable by other nodes and must remain bounded
 	// even when user-facing access limits are disabled. The active limits are
@@ -382,21 +378,6 @@ func (s *exitEndpointSelector) randomValue() (uint64, error) {
 		return s.random()
 	}
 	return randomUint64()
-}
-
-// fallbackRetryDelay backs off a repeatedly failing endpoint.
-//
-// 重新探一次挂掉的出口不是免费的：连得上但不回话的对端，一次探测要等满整个
-// 握手超时。固定 5 秒去探，等于把大部分时间都花在探一个死节点上。
-func fallbackRetryDelay(failures int) time.Duration {
-	delay := fxpFallbackRetry
-	for i := 1; i < failures && delay < fxpFallbackRetryMax; i++ {
-		delay *= 2
-	}
-	if delay > fxpFallbackRetryMax {
-		delay = fxpFallbackRetryMax
-	}
-	return delay
 }
 
 func newConnGate(maxConnections, maxIPs int) *connGate {
@@ -711,18 +692,20 @@ func (s *exitEndpointSelector) markHealthy(index int) {
 	if s == nil || index < 0 || index >= len(s.states) {
 		return
 	}
-	s.states[index].noteTCPSeen()
 	s.states[index].markHealthy()
 }
 
-// hasHealthyAlternative：除了 index 这台，还有没有别的出口本身是健康的（UDP 会话换出口前先问一句，
-// 没有就不折腾 —— 换来换去还是它）。
-func (s *exitEndpointSelector) hasHealthyAlternative(index int) bool {
+// hasReachableAlternative：除了 index 这台，还有没有别的出口本身连得上（UDP 会话换出口前先问一句，
+// 没有就不折腾 —— 换来换去还是它）。udp 为 true 看 UDP 那一侧。
+func (s *exitEndpointSelector) hasReachableAlternative(index int, udp bool, now time.Time) bool {
 	if s == nil {
 		return false
 	}
 	for i, state := range s.states {
-		if i != index && state.isHealthy() {
+		if i == index {
+			continue
+		}
+		if ok, _ := state.reachable(udp, now); ok {
 			return true
 		}
 	}

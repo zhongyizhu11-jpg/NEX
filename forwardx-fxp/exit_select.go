@@ -92,16 +92,21 @@ func (s *exitEndpointSelector) healthLocked(now time.Time, udp bool, fallback bo
 	for i, state := range s.states {
 		ok, cooling := state.reachable(udp, now)
 		health := lbcore.Health{Dead: !ok, Cooling: cooling}
+		// UDP 会话：从没回过 UDP 探活包的出口（版本过旧 / UDP 一直不通）算软信号 —— 有验证过的就先用验证过的，
+		// 摘除有上限，不会因此没出口可用。
+		if udp && ok && state.udpUnverifiedNow() {
+			health.Soft = true
+		}
 		if ok && s.endpointReportsTarget(i) {
 			target := s.target.health[i]
 			health.DownstreamDown = target.down
 			switch {
 			case target.down:
 			case fallback:
-				health.Soft = (target.unstable && s.target.detect.action != "ignore") ||
+				health.Soft = health.Soft || (target.unstable && s.target.detect.action != "ignore") ||
 					(!target.upAt.IsZero() && now.Sub(target.upAt) < fxpTargetFailbackStable)
 			default:
-				health.Soft = target.unstable && s.target.detect.action == "switch"
+				health.Soft = health.Soft || (target.unstable && s.target.detect.action == "switch")
 			}
 		}
 		s.healthBuf[i] = health

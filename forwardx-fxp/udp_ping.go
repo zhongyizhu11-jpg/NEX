@@ -23,8 +23,8 @@ UDP 直连的三种控制包（负载均衡整治，路线图 X3）。包头、�
 和老版本混用：没有这三种包的老出口 / 中转只认类型 1、2，别的在解析包头时就被丢掉，不回、不报错、
 不影响会话。所以：
 
-  - 探活：对端从没回过应答，就当它不支持，不拿「没回」下结论（退回去探它的 TCP 端口，见
-    endpoint_pool.go 的 watchUDP）；回过一次之后才以探活为准。
+  - 探活：对端从没回过应答，就没有结论，不拿「没回」判它坏；回过一次之后才以探活为准。这一版要求各台都升级，
+    一直不回的会被标成「没验证过」并报给面板（见 endpoint_pool.go 的 watchUDP），不再悄悄退回去探 TCP 端口。
   - 访客地址：老中转收不到，照旧按会话号挑出口；新中转没等到（丢了、乱序到了数据包后面）也按会话号。
     只影响「按访客固定」在中转上固定到哪台，不影响通不通。新入口多发的这两个小包，老的下一跳直接丢。
 
@@ -37,8 +37,9 @@ const (
 	fxpUDPTypeClient = byte(5)
 
 	fxpUDPPingPayloadSize = 8
-	// 一轮探活发两次、各等这么久：单个包丢了不算没回。
-	fxpUDPPingAttempts = 2
+	// 一轮探活最多等 fxpUDPPingWait，中间每隔 fxpUDPPingWait ÷ fxpUDPPingAttempts 没等到应答就再发一个：
+	// 丢一两个包不算没回。正常的出口第一个包就回了，一轮只花一个往返。
+	fxpUDPPingAttempts = 3
 	fxpUDPPingWait     = time.Second
 	// 访客地址在第一个数据包之前发几遍（小包，丢一个还有一个）。
 	fxpUDPClientHintCopies = 2
@@ -74,6 +75,7 @@ func fxpUDPPing(host string, port int, cfg config) error {
 	}
 	reply := make([]byte, 2048)
 	var lastErr error = errors.New("udp ping: no reply")
+	roundEnds := time.Now().Add(fxpUDPPingWait)
 	for attempt := 0; attempt < fxpUDPPingAttempts; attempt++ {
 		// 每次重新封：包头里的发出时间要新鲜，序号也换一个。
 		wire, err := sealFXPUDPPacket(fxpUDPPacket{
@@ -86,18 +88,31 @@ func fxpUDPPing(host string, port int, cfg config) error {
 		if err != nil {
 			return err
 		}
+		// 这一个包等到下一个包该发的时候；最后一个等到这一轮结束。
+		deadline := roundEnds
+		if attempt < fxpUDPPingAttempts-1 {
+			deadline = time.Now().Add(fxpUDPPingWait / fxpUDPPingAttempts)
+		}
 		if _, err := conn.Write(wire); err != nil {
 			// 对端端口没人听时这里（或下面的读）会拿到 ICMP 带回来的拒绝。
 			lastErr = err
-			time.Sleep(fxpUDPPingWait / 4)
+			if wait := time.Until(deadline); wait > 0 {
+				time.Sleep(wait)
+			}
 			continue
 		}
-		deadline := time.Now().Add(fxpUDPPingWait)
 		for {
 			_ = conn.SetReadDeadline(deadline)
 			n, err := conn.Read(reply)
 			if err != nil {
 				lastErr = err
+				var netErr net.Error
+				if !errors.As(err, &netErr) || !netErr.Timeout() {
+					// 不是等超时（比如 ICMP 拒绝）：别空转，等到该发下一个的时候。
+					if wait := time.Until(deadline); wait > 0 {
+						time.Sleep(wait)
+					}
+				}
 				break
 			}
 			packet, err := openFXPUDPPacket(reply[:n], cfg.TunnelID, cfg.Key)

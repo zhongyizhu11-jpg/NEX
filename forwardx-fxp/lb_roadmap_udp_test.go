@@ -230,17 +230,22 @@ func TestUDPOnlyRuleDetectsADeadExit(t *testing.T) {
 	}
 	// 让探测先认识这台出口（它会回 UDP 探活包）。
 	time.Sleep(2500 * time.Millisecond)
+	// UDP 那一侧单独记（阶段 2）：看的是 reachable(true)，不是 TCP 那一侧的 isHealthy。
 	state := fxpEndpointStateFor(exitEndpoint{Host: "127.0.0.1", Port: ports[0], Key: key})
-	if !state.isHealthy() {
+	udpUp := func() bool {
+		ok, _ := state.reachable(true, time.Now())
+		return ok
+	}
+	if !udpUp() {
 		t.Fatal("出口好好的，不该被判成连不上")
 	}
 	close(dones[0])
 	killed := time.Now()
-	for state.isHealthy() {
-		if time.Since(killed) > 15*time.Second {
-			t.Fatal("只有 UDP 的规则：出口没了 15 秒还没被发现")
+	for udpUp() {
+		if time.Since(killed) > 5*time.Second {
+			t.Fatal("只有 UDP 的规则：出口没了 5 秒还没被发现")
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	t.Logf("出口没了 %v 后被判成连不上", time.Since(killed).Round(100*time.Millisecond))
 	// 判坏之后访客的包换到另一台。
