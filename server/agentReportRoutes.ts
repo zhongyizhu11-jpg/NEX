@@ -1568,8 +1568,16 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
     // Old Agents send no cumulative metadata. Keep their existing gate savings
     // instead of reloading topology for every suppressed report.
     const counterTunnelReports = parsedTunnelResults.filter((report) => acceptedTunnelReports.has(report) || hasAgentProbeCounter(report));
-    const counterGroupReports = parsedForwardGroupResults.filter((report) => acceptedGroupReports.has(report)
-      || (hasAgentProbeCounter(report) && !["china", "entry"].includes(String(report.probeType || ""))));
+    // 外部观察的结果（probeType = "peer"）只进内存里的观察结果表，不走下面按组读库的那条路，也不受上报闸门影响。
+    const peerGroupReports = parsedForwardGroupResults.filter((report) => String(report.probeType || "") === "peer");
+    if (peerGroupReports.length > 0) {
+      await db.ingestForwardGroupPeerReports(Number(host.id), peerGroupReports).catch((error) => {
+        console.warn(`[Agent TCPing] forward group peer reports host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+    const counterGroupReports = parsedForwardGroupResults.filter((report) => String(report.probeType || "") !== "peer"
+      && (acceptedGroupReports.has(report)
+        || (hasAgentProbeCounter(report) && !["china", "entry"].includes(String(report.probeType || "")))));
     if (results.length === 0 && counterTunnelReports.length === 0 && counterGroupReports.length === 0 && serviceResults.length === 0) {
       res.json({ success: true });
       return;
@@ -1849,9 +1857,14 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       forwardGroupResultsById.set(groupId, rows);
     }
     await mapWithConcurrency(Array.from(forwardGroupResultsById.entries()), 12, async ([groupId, reports]) => {
-      const group = await db.getForwardGroupById(groupId) as any;
-      if (!group?.isEnabled) return;
-      const chainProbes = String(group.groupMode || "failover") === "chain"
+      /*
+        健康上报（国内检测 / 入口自检）已经按探测拓扑核对过：拓扑里有这一条，就说明组启用着、模式对、成员属于这台
+        主机。直接改那一个成员、排一次评估，不再先把整个组和成员读出来核对一遍（P7）。只有转发链的延迟上报才读组。
+      */
+      const needsGroup = reports.some((report) => !["china", "entry"].includes(String(report.probeType || "")));
+      const group = needsGroup ? await db.getForwardGroupById(groupId) as any : null;
+      if (needsGroup && !group?.isEnabled) return;
+      const chainProbes = group && String(group.groupMode || "failover") === "chain"
         ? await db.getForwardGroupChainProbes(groupId)
         : [];
       const topologyKey = forwardGroupProbeTopologyKey(groupId, chainProbes);
@@ -1869,7 +1882,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             latencyMs: typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null,
             isTimeout: !!report.isTimeout,
             healthStatus: report.healthStatus,
-          });
+          }, expected);
           continue;
         }
         if (String(report.probeType || "") === "entry") {
@@ -1881,10 +1894,10 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             memberId: Number(report.memberId || 0),
             hostId: Number(host.id),
             healthStatus: report.healthStatus,
-          });
+          }, { ...expected, groupMode: "entry" });
           continue;
         }
-        if (String(group.groupMode || "failover") !== "chain") continue;
+        if (!group || String(group.groupMode || "failover") !== "chain") continue;
         if (report.topologyKey && report.topologyKey !== topologyKey) continue;
         const hopIndex = Number(report.hopIndex);
         const hopCount = Number(report.hopCount);

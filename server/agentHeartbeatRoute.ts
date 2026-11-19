@@ -4716,6 +4716,24 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         recoverSeconds: Math.max(10, Number(probe.recoverSeconds || 120)),
       });
     }
+    // 外部观察：这台机器替面板去探别的成员对外的入口端口（memberId = 0 是参照目标）。结果按原始通断报，面板自己判。
+    for (const probe of forwardGroupProbeTopology.peerHealthProbes) {
+      const key = `peer:${probe.groupId}:${probe.memberId}:${probe.targetIp}:${probe.targetPort}:${probe.method}`;
+      forwardGroupProbeMap.set(key, {
+        groupId: probe.groupId,
+        memberId: probe.memberId,
+        probeType: "peer",
+        targetIp: probe.targetIp,
+        targetPort: probe.targetPort,
+        method: normalizeForwardGroupHealthCheckMethod(probe.method),
+        hopIndex: 0,
+        hopCount: 1,
+        probeKey: `forward-group:${Number(probe.groupId)}:host:${Number(host.id)}:peer:${Number(probe.memberId)}:${String(probe.targetIp).toLowerCase()}:${Number(probe.targetPort) || 0}:${String(probe.method)}`,
+        topologyKey: `forward-group:${Number(probe.groupId)}:peer:${Number(probe.memberId)}`,
+        failoverSeconds: Math.max(10, Number(probe.failoverSeconds || 60)),
+        recoverSeconds: Math.max(10, Number(probe.recoverSeconds || 120)),
+      });
+    }
     const forwardGroupProbes = Array.from(forwardGroupProbeMap.values());
     const ruleLatencyProbes = (agentAllRules as any[])
       .filter((rule: any) => {

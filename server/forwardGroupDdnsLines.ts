@@ -110,6 +110,11 @@ export type ForwardGroupLineSyncInput = {
   members: LinePlannerMember[];
   forceSync?: boolean;
   rank?: LinePlanInput["rank"];
+  /**
+   * 评估只算结论时用（见 forwardGroupRepository 的 deferProviderWrite）：走到要写服务商的地方先问一句，
+   * 返回 true 就不写、状态也不动，等发布队列那一轮再来。
+   */
+  deferNetwork?: () => boolean;
   recordEvent: (type: string, message: string, memberId?: number | null) => Promise<void>;
 };
 
@@ -159,6 +164,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
     previousLines = {};
   } else if (previousState && (previousState.domain !== domain || previousState.recordType !== recordType)) {
     // 组改了域名或记录类型：旧名字 / 旧类型上的线路记录按记下的 ID 先清掉，再按新的发布。
+    if (Object.keys(previousLines).length > 0 && input.deferNetwork?.()) return previousState;
     for (const entry of Object.values(previousLines)) {
       try {
         const result = await deleteDdnsLineRecords(settings, {
@@ -202,6 +208,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
     const reconcileKey = `${groupId}:${ctx.provider}:${key}`;
     if (entry.action === "delete") {
       if (!previous) continue;
+      if (input.deferNetwork?.()) return previousState;
       try {
         const result = await deleteDdnsLineRecords(settings, { domain, recordType, line: entry.line, recordIds: previous.recordIds });
         reconciledLines.delete(reconcileKey);
@@ -223,6 +230,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
       nextLines[key] = { ...previous, name: entry.line.name, memberIds: entry.memberIds, source: entry.source || "members" };
       continue;
     }
+    if (input.deferNetwork?.()) return previousState;
     try {
       const result = await publishDdnsLineRecords(settings, { domain, recordType, line: entry.line, values: entry.values, ttl });
       reconciledLines.set(reconcileKey, signature);

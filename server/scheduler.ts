@@ -915,7 +915,8 @@ export async function runDiscordReminders() {
 
 async function runForwardGroupFailover() {
   try {
-    await db.runForwardGroupFailoverSweep();
+    // 定时巡检只算结论：要写服务商的组交给发布队列，一家服务商慢了不拖住整轮巡检。
+    await db.runForwardGroupFailoverSweep({ deferPublish: true });
   } catch (error) {
     console.error("[Scheduler] Forward group failover error:", error);
   }

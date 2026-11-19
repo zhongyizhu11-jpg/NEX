@@ -11,6 +11,7 @@
  *
  * 老值 none（只用第一个出口）在界面上显示成主备：坏了自动换下一台，比原来只用第一台更好。
  */
+import { isAgentVersionAtLeast } from "./version";
 
 export const BALANCE_STRATEGIES = [
   "auto",
@@ -255,6 +256,16 @@ export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
 
 /** Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切，并报真实状态（agent/balance_report.go）。 */
 export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.262";
+
+/**
+ * 这一轮负载均衡改造要求的 Agent 版本：这一版起所有主机都得跑它，面板不再给更老的 Agent 留另一套路径。
+ * 转发组 / 入口组的外部观察（别的机器探成员入口）只用这一版及以上的主机当观察点。
+ */
+export const UNIFIED_BALANCE_AGENT_VERSION = "2.2.264";
+
+export function agentSupportsUnifiedBalance(version: string | null | undefined) {
+  return isAgentVersionAtLeast(version, UNIFIED_BALANCE_AGENT_VERSION);
+}
 
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */
 export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect = DEFAULT_BALANCE_DETECT) {

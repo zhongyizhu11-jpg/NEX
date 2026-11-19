@@ -8,8 +8,6 @@
   只存结论，不判定：判定在 evaluate.ts 的 decideExternalHealth。
 */
 
-/** 能当观察点的 Agent 最低版本：探测间隔按组的故障 / 恢复时间收紧、每分钟报一次全量是这一版加的。 */
-export const FORWARD_GROUP_PEER_PROBE_MIN_AGENT_VERSION = "2.2.264";
 /** 一个观察点的结果多久没更新就不算数（Agent 每 60 秒报一次全量，留两轮半）。 */
 export const PEER_OBSERVATION_TTL_MS = 150_000;
 export const MAX_PEER_OBSERVERS_PER_MEMBER = 3;
