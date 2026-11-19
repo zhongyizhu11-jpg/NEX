@@ -6,7 +6,7 @@ import { clearTunnelRuntimeStatusForHosts } from "./tunnelRuntimeStatus";
 /*
   手动指定的出口掉线 / 回来时，马上让入口重新拿配置（C1）。
 
-  下发时「指定的那台离线就不理它、照常自动分」（agentHeartbeatRoute 的 pinnedExitHostId）—— 可那是下一次
+  下发时「指定的那台离线就不理它、照常自动分」（agentHeartbeatRoute 的 pinnedExitHostId，NEX 和 GOST 隧道都是）—— 可那是下一次
   下发时才看的。指定的出口掉线之后没有任何东西去催入口，入口手里还是「只走这一台」的那份配置，流量全进
   黑洞，直到入口自己下一次整份心跳（最长约 5 分钟）。回来的时候同理：入口要等很久才重新只走它。
 

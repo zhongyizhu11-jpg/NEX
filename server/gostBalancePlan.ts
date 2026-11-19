@@ -1,4 +1,6 @@
 import { BALANCE_MIN_HOLD_SECONDS, type BalanceDetect, GOST_BALANCE_MAX_EXITS, normalizeExitGroupStrategy } from "@shared/loadBalance";
+import { normalizeForwardRuleProtocol } from "@shared/forwardTypes";
+import { dbBool } from "./repositories/repositoryUtils";
 
 /*
   GOST 隧道的出口组交给入口机的本机代理挑（入口机的 Agent 要能执行统一调度：shared/loadBalance.ts 的 agentSupportsUnifiedBalance）。
@@ -15,8 +17,9 @@ import { BALANCE_MIN_HOLD_SECONDS, type BalanceDetect, GOST_BALANCE_MAX_EXITS, n
       → 127.0.0.1:每台出口一个本机 gost 端口（单节点链，没有选择器；forwarder 是出口该拨的目标）
       → 出口机的 relay → 目标
 
-  这个文件只管「交给 Agent 的规格」：分配方式怎么对应、探测节奏、权重、手动指定、面板提示。gost 那一半在
-  server/agentHeartbeatGostPlan.ts，哪些规则用得上在 agentHeartbeatRoute.ts 的 gostBalancePlans。
+  这个文件管「哪些规则用本机代理挑、每条交给 Agent 的规格」（planGostBalanceRules：每台出口的本机端口和
+  gost 节点、出口该拨的目标、分配方式、探测节奏、权重、手动指定）。gost 那一半在 server/agentHeartbeatGostPlan.ts；
+  心跳处理函数只把它要用的那些查询交进来（GostBalancePlanningDeps）。
   Agent 那边怎么判健康见 agent/failover_exit_group.go。
 */
 
@@ -48,7 +51,10 @@ export type GostBalanceSpecInput = {
   exits: readonly GostBalanceExit[];
   /** 每台出口的份数，和 exits 一一对应；null = 一样大。和 FXP 用的同一个来源（手填份数 / 线路带宽）。 */
   weights: readonly number[] | null;
-  /** 手动指定的出口主机（tunnels.balancePinHostId）；0 = 没指定。不看它在不在线：指定的那台坏了由代理当场不理它。 */
+  /**
+   * 手动指定的出口主机（tunnels.balancePinHostId，已经按「在不在线」筛过：离线的给 0，照常自动分 —— 和 NEX 隧道
+   * 一样，见 planGostBalanceRules）；0 = 没指定。在线却连不上的那台由代理当场不理它。
+   */
   pinHostId: number;
   /** 面板从出口机的探测得知「到目标不通」的出口 */
   downHostIds: ReadonlySet<number>;
@@ -58,15 +64,6 @@ export type GostBalanceSpecInput = {
   proxyHeaderForward: boolean;
   proxyProtocolVersion: 1 | 2;
 };
-
-/**
- * 面板的分配方式原样交给调度器：八种名字在 Agent 和 FXP 里是同一段算法（lbcore，见 docs/dev/scheduler-spec.md）。
- * 主备（fallback）是「按顺序用第一台，坏了换下一台，好了切回（切过去至少待 1 分钟）」；延迟优先在「一样快」
- * （整链差不到「检测与切换」里那个毫秒数）的几台里按自动分，和 NEX 隧道一样。
- */
-export function gostBalanceProxyStrategy(value: unknown): string {
-  return normalizeExitGroupStrategy(value);
-}
 
 /** 份数压进调度器认的 1–100，比例不变（手填的份数可以比 100 大）。 */
 export function gostBalanceTargetWeights(weights: readonly number[] | null, count: number): number[] | null {
@@ -101,7 +98,12 @@ export function gostBalanceProbeTiming(detect: BalanceDetect) {
 export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
   const exits = input.exits.slice(0, GOST_BALANCE_MAX_EXITS);
   const hostIds = exits.map((exit) => exit.hostId);
-  const strategy = gostBalanceProxyStrategy(input.strategy);
+  /*
+    面板的分配方式原样交给调度器：八种名字在 Agent 和 FXP 里是同一段算法（lbcore，见 docs/dev/scheduler-spec.md）。
+    主备（fallback）是「按顺序用第一台，坏了换下一台，好了切回（切过去至少待 1 分钟）」；延迟优先在「一样快」
+    （整链差不到「检测与切换」里那个毫秒数）的几台里按自动分，和 NEX 隧道一样。
+  */
+  const strategy = normalizeExitGroupStrategy(input.strategy);
   const weights = gostBalanceTargetWeights(input.weights, exits.length);
   const timing = gostBalanceProbeTiming(input.detect);
   const pinIndex = input.pinHostId > 0 ? hostIds.indexOf(input.pinHostId) : -1;
@@ -150,3 +152,120 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
 }
 
 export type GostBalanceProxySpec = ReturnType<typeof buildGostBalanceProxySpec>;
+
+type BalanceRule = { id: number; tunnelId?: number | null; protocol?: string | null; pendingDelete?: unknown; isEnabled?: unknown; failoverEnabled?: unknown };
+type BalanceTunnel = { id: number; isEnabled?: unknown; loadBalanceStrategy?: string | null; balancePinHostId?: number | null };
+type BalanceExitEndpoint = { primary: boolean; listenPort: number; exitHostId: number; exitSeq?: number | null; exitNodeId?: number | null; node?: unknown };
+
+export type GostBalanceRulePlan<N> = {
+  failoverPort: number;
+  exits: Array<GostBalanceExit & { node: N }>;
+  targetAddr: string;
+  proxyVersion: 1 | 2;
+  spec: GostBalanceProxySpec;
+};
+
+/** 心跳处理函数交进来的查询（都是它这一轮已经有的东西）。 */
+export type GostBalancePlanningDeps<R extends BalanceRule, T extends BalanceTunnel, N> = {
+  /** 粗条件下分了本机端口的规则 → 出口数（agentHeartbeatRoute 的 gostBalanceExitCounts）。 */
+  exitCounts: ReadonlyMap<number, number>;
+  tunnelOf: (rule: R) => T | undefined;
+  hopsOf: (tunnel: T) => unknown[];
+  /** 这台入口机同时是这条规则的出口之一（规则带线路组时两个调度器要同一个本机端口，不接）。 */
+  isCurrentHostExitForRule: (rule: R, tunnel: T) => boolean;
+  chainConnectorFor: (rule: R, tunnel: T) => unknown;
+  balanceExitPorts: (rule: R) => number[];
+  hopDialAddress: (hop: unknown, tunnel: T) => Promise<string | null | undefined>;
+  primaryExitHost: (tunnel: T) => Promise<string | null | undefined>;
+  extraExitDialAddress: (node: unknown, tunnel: T) => Promise<string | null | undefined>;
+  exitEndpoints: (rule: R, tunnel: T) => BalanceExitEndpoint[];
+  transportOf: (tunnel: T) => string;
+  buildNode: (name: string, addr: string, transport: string, tunnel: T, connector: unknown) => N;
+  endpointAddr: (host: string, port: number) => string;
+  exitTargetStates: (ruleId: number) => Array<{ hostId: number; down?: boolean; medianMs?: number | null; latencyMs?: number | null }>;
+  exitTargetExcludedHostIds: (ruleId: number, hostIds: number[]) => ReadonlySet<number>;
+  /** 份数（和 FXP 同一个来源）；按访客固定按线路带宽加权。 */
+  weightsFor: (strategy: string, hostIds: number[], tunnel: T) => Promise<number[] | null>;
+  failoverPort: (rule: R) => number;
+  proxyVersion: (rule: R) => 1 | 2;
+  detectFor: (tunnel: T) => BalanceDetect;
+  /** 手动指定、而且那台在线的出口主机（离线 / 没指定是 0）。 */
+  pinnedExitHostId: (tunnel: T) => Promise<number>;
+  proxyHeaderForward: (rule: R) => boolean;
+  exitTargetAddr: (rule: R, tunnel: T) => Promise<string>;
+};
+
+/**
+ * 这台入口机上哪些 GOST 隧道规则交给本机代理挑出口、每条的计划（以前是心跳处理函数里的一大段）。
+ * 用不了的（出口不到两台、端口不够、出口重复）不在结果里：那些规则只下发主出口一台。
+ */
+export async function planGostBalanceRules<R extends BalanceRule, T extends BalanceTunnel, N>(
+  rules: readonly R[],
+  deps: GostBalancePlanningDeps<R, T, N>,
+): Promise<Map<number, GostBalanceRulePlan<N>>> {
+  const plans = new Map<number, GostBalanceRulePlan<N>>();
+  for (const rule of rules) {
+    const count = deps.exitCounts.get(Number(rule?.id || 0));
+    if (!count || dbBool(rule.pendingDelete) || !dbBool(rule.isEnabled)) continue;
+    const tunnel = deps.tunnelOf(rule);
+    if (!tunnel || !dbBool(tunnel.isEnabled)) continue;
+    if (rule.failoverEnabled && deps.isCurrentHostExitForRule(rule, tunnel)) continue;
+    const connector = deps.chainConnectorFor(rule, tunnel);
+    const ports = deps.balanceExitPorts(rule) || [];
+    // 多跳：出口在中转后面。主出口的地址是最后一跳的拨号地址（中转去拨它），入口机探不到它（viaRelay）。
+    const hops = deps.hopsOf(tunnel) || [];
+    const viaRelay = hops.length >= 3;
+    const lastHopHost = viaRelay ? await deps.hopDialAddress(hops[hops.length - 1], tunnel) : "";
+    // 不加密的 tcp / mtcp：入口直接探出口机时还要等 gost 回话（进程卡死、只有内核在接连接也判得出来）
+    const transport = deps.transportOf(tunnel);
+    const probeRelay = transport === "tcp" || transport === "mtcp";
+    const exits: GostBalanceRulePlan<N>["exits"] = [];
+    for (const endpoint of deps.exitEndpoints(rule, tunnel).slice(0, GOST_BALANCE_MAX_EXITS)) {
+      const dialHost = endpoint.primary
+        ? (lastHopHost || await deps.primaryExitHost(tunnel))
+        : await deps.extraExitDialAddress(endpoint.node, tunnel);
+      if (!dialHost || endpoint.listenPort <= 0) continue;
+      const exitKey = endpoint.primary ? 0 : (endpoint.exitSeq || endpoint.exitNodeId);
+      exits.push({
+        hostId: Number(endpoint.exitHostId),
+        localPort: 0,
+        dialHost: String(dialHost),
+        listenPort: Number(endpoint.listenPort),
+        viaRelay,
+        probeRelay,
+        node: deps.buildNode(`exit-${rule.id}-${exitKey}`, deps.endpointAddr(String(dialHost), endpoint.listenPort), transport, tunnel, connector),
+      });
+    }
+    if (exits.length < 2 || ports.length < exits.length || new Set(exits.map((exit) => exit.hostId)).size !== exits.length) continue;
+    exits.forEach((exit, index) => { exit.localPort = ports[index]; });
+    const hostIds = exits.map((exit) => exit.hostId);
+    const strategy = normalizeExitGroupStrategy(tunnel.loadBalanceStrategy);
+    const fresh = new Map(deps.exitTargetStates(Number(rule.id)).map((state) => [state.hostId, state]));
+    const extraLatencyMs = new Map<number, number>();
+    for (const exit of exits) {
+      const state = fresh.get(exit.hostId);
+      const median = state && !state.down ? (state.medianMs ?? state.latencyMs) : null;
+      if (median != null && median > 0) extraLatencyMs.set(exit.hostId, median);
+    }
+    const failoverPort = deps.failoverPort(rule);
+    const proxyVersion = deps.proxyVersion(rule);
+    const spec = buildGostBalanceProxySpec({
+      listenPort: failoverPort,
+      protocol: normalizeForwardRuleProtocol(rule.protocol),
+      strategy: tunnel.loadBalanceStrategy,
+      detect: deps.detectFor(tunnel),
+      tunnelId: Number(tunnel.id),
+      exits,
+      weights: await deps.weightsFor(strategy, hostIds, tunnel),
+      // 手动指定的那台离线时不理它、照常自动分（和 NEX 隧道同一条规矩）；在线却连不上的由代理当场不理它。
+      pinHostId: await deps.pinnedExitHostId(tunnel),
+      downHostIds: deps.exitTargetExcludedHostIds(Number(rule.id), hostIds),
+      extraLatencyMs,
+      proxyHeaderForward: deps.proxyHeaderForward(rule),
+      proxyProtocolVersion: proxyVersion,
+    });
+    plans.set(Number(rule.id), { failoverPort, exits, targetAddr: await deps.exitTargetAddr(rule, tunnel), proxyVersion, spec });
+  }
+  return plans;
+}
+
