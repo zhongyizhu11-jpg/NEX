@@ -2,6 +2,7 @@ import { removeManagedServiceCmd, shQuote } from "./agentActionCommands";
 import { REALM_CONFIG_DIR } from "./forwardRuntimeConfigs";
 import { isForwardRuleProtocolTcpEnabled } from "@shared/forwardTypes";
 import { forwardRateTiersForAgent } from "../shared/forwardRateLimit";
+import { GOST_BALANCE_MAX_EXITS } from "@shared/loadBalance";
 
 /*
   协议守卫（Guard：协议拦截、限速、PROXY protocol 的前置进程）：内部端口的分配、
@@ -76,7 +77,7 @@ export function allocateProtocolGuardPorts(
     GOST 链路负载均衡的本机端口放在最后另分一轮：已有规则的守卫 / 调度器端口不因为多了这些而挪动。
   */
   for (const ruleId of ruleIds) {
-    const count = Math.max(0, Math.min(16, Math.floor(Number(balanceExitCounts.get(ruleId) || 0))));
+    const count = Math.max(0, Math.min(GOST_BALANCE_MAX_EXITS, Math.floor(Number(balanceExitCounts.get(ruleId) || 0))));
     if (count < 2) continue;
     const plan = plans.get(ruleId);
     if (!plan) continue;

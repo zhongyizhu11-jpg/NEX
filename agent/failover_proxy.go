@@ -90,7 +90,18 @@ type failoverProxy struct {
 	healthFlight   chan struct{}
 	// 客户端连进来以后有没有拨通一条路径（最近 10 分钟，按分钟一格）：线路详情「入站」那一段。
 	inbound routeInboundWindow
+	// 出口组（failover_exit_group.go）：每条目标累计分到多少条新连接 / 新 UDP 会话（报给面板的 picks）；
+	// 经出口复核过「连上就被关」的目标（exitThroughFailed，恢复要经出口探得通）和正在复核的（exitConfirming）。
+	pickCounts        []uint64
+	exitThroughFailed []bool
+	exitConfirming    []bool
+	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
+	// 访客是谁」，建会话时拿它当哈希键（route_group_udp_visitor.go）。
+	udpVisitors map[netip.AddrPort]failoverUDPVisitor
 }
+
+// 一个代理最多几条目标：出口组上限 20 台（面板 shared/loadBalance.ts 的 GOST_BALANCE_MAX_EXITS）。以前是 11。
+const failoverMaxTargets = 20
 
 func failoverID(ruleID int, sourcePort int) string {
 	return strconv.Itoa(ruleID) + ":" + strconv.Itoa(sourcePort)
@@ -141,6 +152,10 @@ func failoverSignature(spec failoverSpec) string {
 		}
 		parts = append(parts, "balance:"+strconv.Itoa(spec.BalanceReport.TunnelID)+":"+strings.Join(ids, ","))
 	}
+	// 同上：不带探测节奏 / 不关慢启动时签名不变
+	if spec.ProbeIntervalSeconds > 0 || spec.ProbeTimeoutMs > 0 || spec.NoSlowStart {
+		parts = append(parts, "probe:"+strconv.Itoa(spec.ProbeIntervalSeconds)+":"+strconv.Itoa(spec.ProbeTimeoutMs)+":"+strconv.FormatBool(spec.NoSlowStart))
+	}
 	for _, target := range spec.Targets {
 		// 运行时提示（failoverTargetHints：中转异常、下游延迟、沿途负载、出口 IP）面板随时会变，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
@@ -156,6 +171,9 @@ func failoverSignature(spec failoverSpec) string {
 		if target.ProbeUdpEcho {
 			// 同上：不带时签名不变。探法变了得进签名，在跑的代理才会原地换上新规格（样本照旧带过去）。
 			weight += "e"
+		}
+		if target.ViaRelay {
+			weight += "r"
 		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
@@ -219,11 +237,36 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		spec.PinnedUntil = 0
 	}
 	spec.Schedule = normalizeFailoverSchedule(spec.Schedule)
+	if spec.ProbeIntervalSeconds < 0 {
+		spec.ProbeIntervalSeconds = 0
+	}
+	if spec.ProbeIntervalSeconds > 60 {
+		spec.ProbeIntervalSeconds = 60
+	}
+	if spec.ProbeTimeoutMs != 0 && spec.ProbeTimeoutMs < 200 {
+		spec.ProbeTimeoutMs = 200
+	}
+	if spec.ProbeTimeoutMs > 5000 {
+		spec.ProbeTimeoutMs = 5000
+	}
+	/*
+		出口组的主机号（BalanceReport.HostIDs）和目标一一对应：目标被清掉（地址不合法）或截断（超过上限）时主机号
+		跟着同一个下标走。以前只截目标（11 条）、不动主机号，两边长度对不上，整份上报就不发了；更糟的是中间清掉
+		一条时后面的主机号全部错位。对不上的（面板给的两边长度就不一样）整个不要，不拿错位的数据报。
+	*/
+	var reportHostIDs []int
+	alignHostIDs := spec.BalanceReport != nil && len(spec.BalanceReport.HostIDs) == len(spec.Targets)
+	if spec.BalanceReport != nil && !alignHostIDs {
+		spec.BalanceReport = nil
+	}
 	cleaned := make([]failoverTarget, 0, len(spec.Targets))
-	for _, target := range spec.Targets {
+	for position, target := range spec.Targets {
 		target.TargetIP = strings.TrimSpace(target.TargetIP)
 		if target.TargetIP == "" || target.TargetPort <= 0 || target.TargetPort > 65535 {
 			continue
+		}
+		if alignHostIDs {
+			reportHostIDs = append(reportHostIDs, spec.BalanceReport.HostIDs[position])
 		}
 		// 探测目标填得不合法时退回「探出站地址本身」，也就是老行为 —— 不能因为
 		// 一个填错的探测地址就让这条出站永远探不通、被当成挂了。
@@ -260,11 +303,19 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 			target.Line = &line
 		}
 		cleaned = append(cleaned, target)
-		if len(cleaned) >= 11 {
+		if len(cleaned) >= failoverMaxTargets {
 			break
 		}
 	}
 	spec.Targets = cleaned
+	if alignHostIDs {
+		// 复制一份：别和调用方的规格共用同一个切片。
+		spec.BalanceReport = &failoverBalanceReport{TunnelID: spec.BalanceReport.TunnelID, HostIDs: reportHostIDs}
+	}
+	if spec.PinnedIndex != nil && *spec.PinnedIndex >= len(spec.Targets) {
+		spec.PinnedIndex = nil
+		spec.PinnedUntil = 0
+	}
 	return spec
 }
 
@@ -493,6 +544,15 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	}
 	if len(p.inflight) != n {
 		p.inflight = make([]int, n)
+	}
+	if len(p.pickCounts) != n {
+		p.pickCounts = make([]uint64, n)
+	}
+	if len(p.exitThroughFailed) != n {
+		p.exitThroughFailed = make([]bool, n)
+	}
+	if len(p.exitConfirming) != n {
+		p.exitConfirming = make([]bool, n)
 	}
 	p.udpSide.ensure(n)
 	if p.activeIndex < 0 || p.activeIndex >= n {
@@ -743,6 +803,9 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 	trackedIndex := index
 	upstream, index, outcome := p.guardedStart(client, upstream, index, visitor, attempted, prefix)
 	if outcome != failoverGuardRelay {
+		if outcome == failoverGuardDelivered {
+			p.notePick(trackedIndex)
+		}
 		p.untrackConn(trackedIndex, client)
 		// 上游回了东西、已经原样交给客户端并收尾（failoverGuardDelivered）算成功：这条连接没丢。
 		p.inbound.record(outcome == failoverGuardDelivered, time.Now())
@@ -752,6 +815,8 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		p.untrackConn(trackedIndex, client)
 		p.trackConn(index, client)
 	}
+	// 这条连接最后落在这条目标上（保护期里换过路的算换到的那条）：出口组报给面板的「分到多少」数它。
+	p.notePick(index)
 	p.inbound.record(true, time.Now())
 	defer upstream.Close()
 	defer p.untrackConn(index, client)

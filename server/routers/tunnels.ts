@@ -1,3 +1,4 @@
+import { tunnelBalanceAgentIssues } from "../tunnelBalanceAgent";
 import { sameNetworkAddress } from "@shared/ipAddress";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { dbBool } from "../repositories/repositoryUtils";
@@ -679,6 +680,15 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
         ...enabledGroupHostIds(endpointGroupById.get(Number(tunnel.exitGroupId || 0))),
       ],
     }), hostMap);
+    // GOST 链路开了负载均衡、入口机的 Agent 还不能执行统一调度：只走主出口，同一个位置写「需要升级 Agent」
+    fxpIssues.push(...tunnelBalanceAgentIssues(
+      tunnel,
+      Number(tunnel.entryGroupId || 0) > 0
+        ? enabledGroupHostIds(endpointGroupById.get(Number(tunnel.entryGroupId || 0)))
+        : [tunnel.entryHostId],
+      (extraExitNodesByTunnel.get(Number(tunnel.id)) || []).filter((node) => node.isEnabled).length,
+      hostMap,
+    ));
     const latestLatency = latestLatencyByTunnel.get(Number(tunnel.id));
     const latestLatencySeries = latestLatencySeriesByTunnel.get(Number(tunnel.id)) || [];
     const fallbackLatency = typeof (tunnel as any).lastLatencyMs === "number" && Number.isFinite((tunnel as any).lastLatencyMs)

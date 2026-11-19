@@ -225,6 +225,13 @@ func (p *failoverProxy) serveUDPBatch(listener *udpBatchConn, backoff *serveLoop
 // forwardUDPRun 把同一来源连着的 [from, to) 几个包写到它的会话上游；几个包就一次 sendmmsg。
 // 上游刚被关掉（强制切换断旧连接、或者刚好被回收）就和 forwardUDPPacket 一样丢掉会话重挑一次。
 func (p *failoverProxy) forwardUDPRun(key netip.AddrPort, batch *udpBatch, from int, to int) {
+	// 前面的 gost 给新会话先发的那个只有 PROXY 头的包：记下访客是谁，不转发（route_group_udp_visitor.go）。
+	for from < to && p.consumeUDPVisitorHeader(key, batch.packet(from)) {
+		from++
+	}
+	if from >= to {
+		return
+	}
 	// 回声探测报先挑出来回掉；探测用的是自己的套接字，一串里要么全是探测报，要么一个都没有。
 	probes := 0
 	for i := from; i < to; i++ {
@@ -277,6 +284,10 @@ func failoverUDPSessionKey(client netip.AddrPort) netip.AddrPort {
 }
 
 func (p *failoverProxy) forwardUDPPacket(key netip.AddrPort, packet []byte) {
+	// 同 forwardUDPRun：只有 PROXY 头的包不转发。
+	if p.consumeUDPVisitorHeader(key, packet) {
+		return
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		session := p.udpSessionFor(key)
 		if session == nil {
@@ -315,7 +326,8 @@ func (p *failoverProxy) udpSessionFor(key netip.AddrPort) *failoverUDPSession {
 		return nil
 	}
 	// 只有新会话才需要字符串形式（「按访客固定」的哈希键），热路径上不再每个包都格式化一次。
-	upstream, index := p.dialUDPPath(key.String())
+	// 知道访客是谁（前面发过 PROXY 头）就按访客地址哈希，和 TCP 那边同一个键；不知道还是按来源地址。
+	upstream, index := p.dialUDPPath(p.udpHashKey(key))
 	if upstream == nil {
 		return nil
 	}
@@ -351,6 +363,7 @@ func (p *failoverProxy) udpSessionFor(key netip.AddrPort) *failoverUDPSession {
 			logf("failover udp session limit reached rule=%d source=%d sessions=%d; recycling the idlest", p.ruleID, p.sourcePort, failoverUDPMaxSessions)
 		}
 	}
+	p.notePick(index)
 	runUDPRelaySession(func() { p.copyUDPToClient(session) })
 	return session
 }
@@ -532,6 +545,7 @@ func (p *failoverProxy) reapIdleUDPSessions(now time.Time) int {
 			delete(p.udpSessions, key)
 		}
 	}
+	p.pruneUDPVisitorsLocked(now)
 	p.udpMu.Unlock()
 	for _, session := range idle {
 		p.untrackConn(session.index, session.upstream)
@@ -558,11 +572,16 @@ UDP 服务，拨 TCP 只会一直失败，所有路径都会被判成挂了。�
 （failoverProbeUDP）；填了探测地址就照填的拨 TCP：用户填它，就是要探落地上某个确定开着的 TCP 端口。
 */
 func failoverProbeTarget(protocol string, target failoverTarget) (int, bool) {
+	return failoverProbeTargetWithin(protocol, target, failoverProbeDefaultTimeout)
+}
+
+// failoverProbeTargetWithin 同上，拨 TCP 探测时最多等 timeout。
+func failoverProbeTargetWithin(protocol string, target failoverTarget, timeout time.Duration) (int, bool) {
 	if protocol == "udp" && !target.hasExplicitProbe() {
 		return failoverProbeUDP(target)
 	}
 	host, port := target.probeEndpoint()
-	return tcpLatency(host, port, 2*time.Second)
+	return tcpLatency(host, port, timeout)
 }
 
 /*

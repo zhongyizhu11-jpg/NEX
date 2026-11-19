@@ -48,8 +48,13 @@ func failoverTCPDialContext(ctx context.Context, network, address string) (net.C
 
 // probeFailoverTargets 有界并行地探测所有路径，结果按路径下标返回。
 func probeFailoverTargets(protocol string, targets []failoverTarget) ([]int, []bool) {
+	return probeFailoverTargetsWithin(protocol, targets, failoverProbeDefaultTimeout)
+}
+
+// probeFailoverTargetsWithin 同上，拨 TCP 探测时最多等 timeout（规格的 ProbeTimeoutMs）。
+func probeFailoverTargetsWithin(protocol string, targets []failoverTarget, timeout time.Duration) ([]int, []bool) {
 	return probeFailoverTargetsWith(targets, func(target failoverTarget) (int, bool) {
-		return failoverProbeTarget(protocol, target)
+		return failoverProbeTargetWithin(protocol, target, timeout)
 	})
 }
 

@@ -31,7 +31,32 @@ func jitterDuration(interval time.Duration) time.Duration {
 func (p *failoverProxy) healthInterval() time.Duration {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.spec.ProbeIntervalSeconds > 0 {
+		return time.Duration(p.spec.ProbeIntervalSeconds) * time.Second
+	}
 	return failoverHealthInterval(p.spec.FailoverSeconds)
+}
+
+/*
+nextHealthDelay 这一轮探完以后隔多久探下一轮。started 是这一轮开始的时刻。
+
+老规矩（规格没带 ProbeIntervalSeconds）：从探完开始算一个间隔。出口组带了探测节奏，按固定节拍：间隔从这一轮
+**开始**算，探得慢（黑洞的出口要等满超时）不会把下一轮往后推 —— 不然「2 秒一轮、2 次判坏」实际是
+2 + 超时 + 2 + 超时。再慢也至少歇四分之一个间隔。
+*/
+func (p *failoverProxy) nextHealthDelay(started time.Time) time.Duration {
+	interval := jitterDuration(p.healthInterval())
+	p.mu.RLock()
+	fixedTick := p.spec.ProbeIntervalSeconds > 0
+	p.mu.RUnlock()
+	if !fixedTick {
+		return interval
+	}
+	delay := interval - time.Since(started)
+	if floor := interval / 4; delay < floor {
+		delay = floor
+	}
+	return delay
 }
 
 func (p *failoverProxy) healthLoop() {
@@ -43,9 +68,10 @@ func (p *failoverProxy) healthLoop() {
 		case <-p.done:
 			return
 		case <-timer.C:
+			started := time.Now()
 			p.checkHealthShared()
 			// 面板改了「异常多久切」（热更新，代理不重建）：下一轮就按新的间隔
-			timer.Reset(jitterDuration(p.healthInterval()))
+			timer.Reset(p.nextHealthDelay(started))
 		}
 	}
 }
@@ -84,6 +110,26 @@ func (p *failoverProxy) checkHealth() {
 	failureThreshold := p.spec.FailureThreshold
 	protocol := failoverProtocol(p.spec)
 	specSignature := failoverSignature(p.spec)
+	probeTimeout := failoverProbeDefaultTimeout
+	if p.spec.ProbeTimeoutMs > 0 {
+		probeTimeout = time.Duration(p.spec.ProbeTimeoutMs) * time.Millisecond
+	}
+	/*
+		带探测节奏的规格（固定节拍）：「持续够久」那道门槛留 15% 的余量。面板把它算成「间隔 × (次数 − 1)」，而每轮
+		间隔有 ±10% 的抖动 —— 不留余量的话，抖到 0.9 倍的那一半时候「2 秒一轮、2 次判坏」差 0.2 秒不够数，要多等一整轮
+		（真实 gost 上实测：进程死掉 6 秒、黑洞 7 秒才摘，本来该是 4、5 秒）。次数那道门槛照旧。
+	*/
+	fixedTick := p.spec.ProbeIntervalSeconds > 0
+	gateReached := func(elapsed time.Duration, seconds int) bool {
+		gate := time.Duration(seconds) * time.Second
+		if fixedTick {
+			gate = gate * 85 / 100
+		}
+		return elapsed >= gate
+	}
+	// 出口组：直接探出口机，经出口复核判坏过的还要经出口探通（failover_exit_group.go）。
+	exitGroup := p.exitGroupLocked()
+	throughFailed := append([]bool(nil), p.exitThroughFailed...)
 	p.mu.RUnlock()
 	if len(targets) == 0 {
 		return
@@ -93,7 +139,7 @@ func (p *failoverProxy) checkHealth() {
 	var udpLatencies []int
 	var udpVerdicts []udpProbeVerdict
 	udpDone := make(chan struct{})
-	if protocol == "both" {
+	if protocol == "both" && !exitGroup {
 		go func() {
 			defer close(udpDone)
 			udpLatencies, udpVerdicts = probeFailoverTargetsUDP(targets)
@@ -101,7 +147,13 @@ func (p *failoverProxy) checkHealth() {
 	} else {
 		close(udpDone)
 	}
-	latencies, results := probeFailoverTargets(protocol, targets)
+	var latencies []int
+	var results []bool
+	if exitGroup {
+		latencies, results = probeExitGroupTargets(protocol, targets, probeTimeout, throughFailed)
+	} else {
+		latencies, results = probeFailoverTargetsWithin(protocol, targets, probeTimeout)
+	}
 	<-udpDone
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -131,10 +183,15 @@ func (p *failoverProxy) checkHealth() {
 			if !p.targetHealth[i] {
 				if p.recoveredSince[i].IsZero() {
 					p.recoveredSince[i] = now
-				} else if now.Sub(p.recoveredSince[i]) >= time.Duration(recoverSeconds)*time.Second {
+				} else if gateReached(now.Sub(p.recoveredSince[i]), recoverSeconds) {
 					p.targetHealth[i] = true
 					p.recoveredSince[i] = time.Time{}
-					p.markSlowStartLocked(i, now)
+					if i < len(p.exitThroughFailed) {
+						p.exitThroughFailed[i] = false
+					}
+					if !p.spec.NoSlowStart {
+						p.markSlowStartLocked(i, now)
+					}
 					// 恢复了：拨号那本账也从头来，不然恢复前攒的失败会让它再拨坏一次就又被判坏。
 					p.statsLocked(i).dialFailures = 0
 					logf("failover target recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
@@ -152,7 +209,7 @@ func (p *failoverProxy) checkHealth() {
 			}
 			// 两道门槛都要过：探测连续失败够 FailureThreshold 次，而且持续异常够 FailoverSeconds 秒。
 			// 只看探测这本账（A2）：真实连接拨通了不清它 —— 拨得通第一跳不等于探测目标还活着。
-			if p.statsLocked(i).probeFailures >= failureThreshold && now.Sub(p.failureSince[i]) >= time.Duration(failoverSeconds)*time.Second {
+			if p.statsLocked(i).probeFailures >= failureThreshold && gateReached(now.Sub(p.failureSince[i]), failoverSeconds) {
 				p.targetHealth[i] = false
 				p.failureSince[i] = time.Time{}
 				logf("failover target unhealthy rule=%d source=%d index=%d target=%s:%d reason=health check", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)

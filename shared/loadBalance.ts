@@ -12,6 +12,8 @@
  * 老值 none（只用第一个出口）在界面上显示成主备：坏了自动换下一台，比原来只用第一台更好。
  */
 
+import { isAgentVersionAtLeast } from "./version";
+
 export const BALANCE_STRATEGIES = [
   "auto",
   "fallback",
@@ -27,7 +29,7 @@ export type BalanceStrategy = (typeof BALANCE_STRATEGIES)[number];
 
 /*
   2.3.539（用户：「自动包含综合，其他方式单选，各自独立」）：最上面一个「自动」（综合看延迟、抖动、负载和带宽），
-  其余各自独立，放在「其他方式」里单选。每种方式在 NEX 隧道（入口 FXP）和 GOST 链路（入口本机代理）上都是真的那样分，
+  其余各自独立，放在「其他方式」里单选。八种方式在 NEX 隧道（入口 FXP）和 GOST 链路（入口机 Agent 的本机代理）上都是真的那样分，
   坏了的出口所有方式都会自动避开。
 */
 export const BALANCE_COMMON_STRATEGIES: readonly BalanceStrategy[] = ["auto"];
@@ -215,7 +217,8 @@ function ratioText(weights: readonly number[]) {
 
 /**
  * 「实际效果」那一句：改了数字就跟着变。
- * dns：转发组 / 入口组；gost：GOST 隧道（不能当场换出口，约 5～10 秒自动摘掉）。
+ * dns：转发组 / 入口组（靠改解析）。NEX 隧道（入口的 FXP）和 GOST 隧道（入口机 Agent 的本机代理）都是入口自己探、
+ * 自己切，这句话对两种都成立；Nginx 隧道不经统一调度，界面上另写一句「基础支持」（nginxBalanceBasicSupportNote）。
  */
 export function describeBalanceEffect(input: {
   strategy: unknown;
@@ -223,13 +226,11 @@ export function describeBalanceEffect(input: {
   weights?: readonly number[];
   memberNames?: readonly string[];
   dns?: boolean;
-  gost?: boolean;
 }) {
   const { detect } = input;
   const strategy = normalizeBalanceStrategy(input.strategy);
   const parts: string[] = [];
   parts.push(`每 ${detect.intervalSeconds} 秒探一次，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内${input.dns ? "改解析" : "切走"}`);
-  if (input.gost && !input.dns) parts.push("GOST 隧道不能在一条连接里当场换出口，连不上目标的出口约 5～10 秒内自动摘掉");
   if (strategy === "weighted") {
     const ratio = ratioText(input.weights || []);
     const names = (input.memberNames || []).filter(Boolean);
@@ -253,8 +254,35 @@ export const FXP_TARGET_AWARE_VERSION = "2.2.142";
 /** FXP 从这一版起：入口把每条规则每台出口的真实状态报给面板（forwardx-fxp/balance_report.go）。 */
 export const FXP_BALANCE_REPORT_VERSION = "2.2.145";
 
-/** Agent 从这一版起：GOST 链路几台出口由入口机的本机代理挑、自己切，并报真实状态（agent/balance_report.go）。 */
-export const GOST_BALANCE_PROXY_AGENT_VERSION = "2.2.262";
+/**
+ * 统一调度要求的 Agent 版本：从这一版起，负载均衡都由 Agent 自己的调度器执行。
+ *
+ * GOST 链路的几台出口由入口机的本机代理挑、自己探、自己切（TCP 和 UDP），并报真实状态
+ * （server/gostBalancePlan.ts、agent/failover_exit_group.go）。**没有老路可退**：入口机的 Agent 更老时，面板只下发
+ * 主出口一台（单节点、没有选择器），链路和规则上标「需要升级 Agent」（server/tunnelBalanceAgent.ts）。以前 gost 自己的
+ * 节点选择器那条路（面板排节点顺序、摘节点、防绕过的兜底节点）已经整个删掉。
+ *
+ * 版本门槛只有这一处，判断只用下面的 agentSupportsUnifiedBalance。
+ */
+export const UNIFIED_BALANCE_AGENT_VERSION = "2.2.264";
+
+/** 这台主机的 Agent 能不能执行统一调度（版本不低于 UNIFIED_BALANCE_AGENT_VERSION；没报版本的算不能）。 */
+export function agentSupportsUnifiedBalance(agentVersion: unknown): boolean {
+  return isAgentVersionAtLeast(String(agentVersion ?? ""), UNIFIED_BALANCE_AGENT_VERSION);
+}
+
+/**
+ * Nginx 隧道的负载均衡是「基础支持」：出口由入口机的 nginx upstream 自己分，不经 Agent 的统一调度。
+ * 链路的负载均衡弹窗里原样写出来（和 NEX / GOST 差在哪、哪些设置对它不起作用）。不是 Nginx 隧道返回 null。
+ */
+export function nginxBalanceBasicSupportNote(mode: unknown): string | null {
+  return String(mode ?? "").trim().toLowerCase() === "nginx_stream"
+    ? "基础支持：Nginx 隧道的出口由入口机的 nginx 自己分，不经统一调度。它只看出口机连不连得上，不看出口到目标通不通；「自动」「延迟优先」在它上面是「连接数最少 + 线路带宽」；检测灵敏度、手动指定出口对它不起作用。"
+    : null;
+}
+
+/** 本机代理最多替几台出口挑（Agent 的 failoverMaxTargets）；超出的出口不下发（按顺序取前这么多台）。 */
+export const GOST_BALANCE_MAX_EXITS = 20;
 
 /** 交给 FXP 的检测参数（字段和 FXP 的 balanceDetectConfig 一样）。 */
 export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect = DEFAULT_BALANCE_DETECT) {

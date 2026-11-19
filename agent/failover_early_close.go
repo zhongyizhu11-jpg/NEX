@@ -370,6 +370,11 @@ func (p *failoverProxy) markEarlyClose(index int, visitor string) {
 	if failoverVisitorKnown(visitor) && len(state.visitors) < 16 {
 		state.visitors[visitor] = true
 	}
+	// 出口组：不靠「两个不同访客」，经这台出口再探一次，又被关才判坏（failover_exit_group.go）。
+	if p.exitGroupLocked() {
+		p.startExitConfirmLocked(index)
+		return
+	}
 	count, distinct := state.count, len(state.visitors)
 	threshold := p.spec.FailureThreshold
 	if threshold < 1 {

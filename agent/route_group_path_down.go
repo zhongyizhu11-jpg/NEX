@@ -27,7 +27,8 @@ func (p *failoverProxy) onTargetDownLocked(index int, mainSide bool, udpSide boo
 	}
 	protocol := failoverProtocol(p.spec)
 	tcpDown := mainSide && protocol != "udp"
-	udpDown := udpSide || (mainSide && protocol != "both")
+	// 不分侧的规格（只转 UDP、出口组）主健康就是 UDP 的健康。
+	udpDown := udpSide || (mainSide && !p.udpSeparateLocked())
 	closedTCP, closedUDP := 0, 0
 	if udpDown {
 		closedUDP = p.closeConnsWhereLocked(index, true)

@@ -7,7 +7,7 @@ import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
-import { BALANCE_ANTI_FLAP, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
+import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
 import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
 
 /*
@@ -266,7 +266,6 @@ function finiteOrNull(value: unknown) {
 export function resetExitTargetStates() {
   statesByRule.clear();
   tunnelMetaById.clear();
-  latencyLeaderByRule.clear();
   excludedMemoByRule.clear();
   lastFlipAt.clear();
   flipPushesInstance?.clear();
@@ -490,20 +489,6 @@ export async function ingestExitTargetReports(input: {
         }
       }
     }
-    // GOST「延迟优先」：最快的那台换了（过了滞后门槛），入口要重新拿配置才会按新顺序走
-    if (normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) === "latency" && exitIds.length > 1) {
-      /*
-        「上一次最快的是谁」每评估一次就记一次（C2）。以前只有生成 GOST 配置的那条路在记，而它在三种情况下
-        不记：每台都连不上目标（没有分数）、手动指定了出口、只有 TCP 的规则走本机代理（那条 GOST 链根本不
-        生成）。记的不动、这里每次算出来的又和它不一样，于是之后每来一份上报就推一次。
-      */
-      const leader = latencyLeaderByRule.get(ruleId)?.hostId;
-      const nextLeader = latencyOrderedExitHostIds(ruleId, exitIds, detect, { nowMs, remember: "always" })[0];
-      if (leader != null && nextLeader != null && nextLeader !== leader) {
-        push = true;
-        appendPanelLog("info", `[LoadBalance] rule=${rule.id} 延迟优先换到出口 ${nextLeader}（tunnel=${tunnel.id}）`);
-      }
-    }
     if (!push) continue;
     for (const entryHostId of await entryHostIdsOf(tunnel)) {
       const current = refreshRequests.get(entryHostId);
@@ -577,69 +562,10 @@ function exitTargetScore(state: ExitTargetState | undefined) {
 }
 
 /*
-  GOST「延迟优先」：GOST 只会按顺序用（fifo，前面的连不上换下一台），面板按每台出口到这条规则目标的
-  延迟 + 抖动排好顺序给它。带一点滞后：新的最快那台要比现在排第一的快过「延迟差多少才换」（默认 50ms）
-  才换到前面 —— 不然两台差不多快时每次探测都在换顺序，GOST 跟着热更新。
+  GOST「延迟优先」谁排第一、什么时候换，由入口机的本机代理自己定（Agent 的自动择优：整链延迟明显更好、而且持续够久
+  才换，带最短驻留和抖动抑制）。面板以前在这里给 gost 排节点顺序、记「上一次最快的是谁」、换了就催入口重新拿配置，
+  那一套连同 gost 的节点选择器一起删掉了。
 */
-/*
-  还带内置的防来回乱切（shared/loadBalance.ts 的 BALANCE_ANTI_FLAP，文档 guide/groups.md 写的那句）：
-    · 切过去至少用 minHoldSeconds（1 分钟）：刚换上来的那台，哪怕别的又快过门槛了，也先用满这一分钟；
-    · 一小时里换了 maxSwitchesPerHour（3）次以上：放慢，每次至少用 slowedHoldSeconds（5 分钟）。
-  现在排第一的那台连不上 / 没数据 / 不稳时不受这两条限制 —— 那是逃生，不是择优。
-*/
-type LatencyLeader = { hostId: number; since: number; switches: number[]; at: number };
-const latencyLeaderByRule = new Map<number, LatencyLeader>();
-
-function latencyLeaderHoldMs(leader: LatencyLeader, nowMs: number) {
-  // 一开始定下来的那台（since = 0）不是「切过去的」，不用驻留。
-  if (leader.since <= 0) return 0;
-  const recent = leader.switches.filter((at) => nowMs - at < 3600_000).length;
-  return (recent >= BALANCE_ANTI_FLAP.maxSwitchesPerHour ? BALANCE_ANTI_FLAP.slowedHoldSeconds : BALANCE_ANTI_FLAP.minHoldSeconds) * 1000;
-}
-
-function rememberLatencyLeader(ruleId: number, hostId: number, nowMs: number) {
-  const leader = latencyLeaderByRule.get(ruleId);
-  if (!leader) {
-    latencyLeaderByRule.set(ruleId, { hostId, since: 0, switches: [], at: nowMs });
-    return;
-  }
-  leader.at = nowMs;
-  if (leader.hostId === hostId) return;
-  leader.hostId = hostId;
-  leader.since = nowMs;
-  leader.switches = [...leader.switches.filter((at) => nowMs - at < 3600_000), nowMs];
-}
-
-export function latencyOrderedExitHostIds(
-  ruleId: number,
-  hostIds: readonly number[],
-  detect: BalanceDetect,
-  /** remember：true（默认）= 排第一的有数据才记；"always" = 没数据也记（上报那条路用，见 ingestExitTargetReports）；false = 不记。 */
-  options: { nowMs?: number; remember?: boolean | "always" } = {},
-): number[] {
-  const nowMs = options.nowMs ?? Date.now();
-  const fresh = new Map(exitTargetStatesForRule(ruleId, nowMs).map((state) => [state.hostId, state]));
-  const penalized = (hostId: number) => detect.jitterAction !== "ignore" && fresh.get(hostId)?.unstable === true;
-  const scored = hostIds.map((hostId, index) => ({ hostId, index, score: exitTargetScore(fresh.get(hostId)), bad: penalized(hostId) }));
-  const rank = (item: (typeof scored)[number]) => [item.score == null ? 2 : item.bad ? 1 : 0, item.score ?? 0, item.index];
-  const ordered = [...scored].sort((left, right) => {
-    const a = rank(left);
-    const b = rank(right);
-    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  });
-  const leader = latencyLeaderByRule.get(Number(ruleId));
-  const current = leader ? ordered.find((item) => item.hostId === leader.hostId) : undefined;
-  const best = ordered[0];
-  if (leader && current && best && current !== best && current.score != null && best.score != null && !current.bad
-    && (best.score > current.score - detect.latencyMarginMs || nowMs - leader.since < latencyLeaderHoldMs(leader, nowMs))) {
-    ordered.splice(ordered.indexOf(current), 1);
-    ordered.unshift(current);
-  }
-  if (ordered[0] && (options.remember === "always" || (options.remember !== false && ordered[0].score != null))) {
-    rememberLatencyLeader(Number(ruleId), ordered[0].hostId, nowMs);
-  }
-  return ordered.map((item) => item.hostId);
-}
 
 /*
   每条 GOST 规则上一次算出来「该摘掉哪几台」（出口机号排好序拼起来）：变了才让入口重新拿配置。
@@ -684,7 +610,6 @@ export function pruneExitTargetMemory(nowMs = Date.now(), force = false) {
     if (byHost.size === 0) statesByRule.delete(ruleId);
   }
   for (const [tunnelId, meta] of tunnelMetaById) if (gone(meta.at)) tunnelMetaById.delete(tunnelId);
-  for (const [ruleId, leader] of latencyLeaderByRule) if (gone(leader.at) && !statesByRule.has(ruleId)) latencyLeaderByRule.delete(ruleId);
   for (const [ruleId, memo] of excludedMemoByRule) if (gone(memo.at)) excludedMemoByRule.delete(ruleId);
   for (const [key, at] of lastFlipAt) if (gone(at)) lastFlipAt.delete(key);
   for (const [key, at] of baselineSeedTried) if (gone(at)) baselineSeedTried.delete(key);
@@ -695,7 +620,7 @@ export function pruneExitTargetMemory(nowMs = Date.now(), force = false) {
 export function exitTargetMemorySizeForTest() {
   let stateCount = 0;
   for (const byHost of statesByRule.values()) stateCount += byHost.size;
-  return { states: stateCount, tunnels: tunnelMetaById.size, leaders: latencyLeaderByRule.size, seeds: baselineSeedTried.size, excluded: excludedMemoByRule.size };
+  return { states: stateCount, tunnels: tunnelMetaById.size, seeds: baselineSeedTried.size, excluded: excludedMemoByRule.size };
 }
 
 /**
@@ -724,19 +649,20 @@ function activeExitsForRule(input: {
   };
   if (strategy === "fallback") return [usable[0]];
   if (strategy === "latency") {
-    if (gost) return [latencyOrderedExitHostIds(input.ruleId, usable, detect, { remember: false })[0]];
     const candidates = dropUnstable(usable);
     const scores = candidates.map((hostId) => exitTargetScore(fresh.get(hostId)));
     const known = scores.filter((score): score is number => score != null);
-    if (known.length === 0) return candidates;
+    // GOST：入口机的本机代理一次只走整链最好的那一台（这里只是入口还没报真实状态时的估计）
+    if (known.length === 0) return gost ? [candidates[0]] : candidates;
     const best = Math.min(...known);
+    if (gost) return [candidates[scores.indexOf(best)]];
     return candidates.filter((_, index) => scores[index] != null && (scores[index] as number) - best <= detect.latencyMarginMs);
   }
   return gost ? usable : dropUnstable(usable);
 }
 
 function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; active: number[]; total: number; names: (ids: number[]) => string; marginMs: number }) {
-  const { strategy, gost, active, names } = input;
+  const { strategy, active, names } = input;
   if (active.length === 0) return null;
   if (input.pinned) return `手动指定：只走 ${names(active)}`;
   const rest = input.total - active.length;
@@ -745,14 +671,13 @@ function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; 
     case "fallback":
       return `主备：走 ${names(active)}${restText}`;
     case "latency":
-      if (gost) return `延迟优先：走 ${names(active)}（到目标最快），连不上自动换下一台`;
       return active.length === 1
         ? `延迟优先：走 ${names(active)}（到目标最快）${restText}`
         : `延迟优先：${names(active)}（差不到 ${input.marginMs}ms，按负载分）${restText}`;
     case "auto":
-      return gost ? `自动：在 ${names(active)} 之间随机分${restText}` : `自动：分给 ${names(active)}，按延迟、抖动和负载挑${restText}`;
+      return `自动：分给 ${names(active)}，按延迟、抖动和负载挑${restText}`;
     case "least_load":
-      return gost ? `按负载：在 ${names(active)} 之间随机分${restText}` : `按负载：分给 ${names(active)}，谁闲给谁${restText}`;
+      return `按负载：分给 ${names(active)}，谁闲给谁${restText}`;
     case "weighted":
       return `按权重：分给 ${names(active)}${restText}`;
     case "round_robin":
@@ -942,7 +867,13 @@ function exitTargetSummaryFromLive(
     if (pinned) how = `手动指定：只走 ${names(active.map((exit) => exit.hostId))}`;
     else if (active.length === 1) how = `${label}：走 ${active[0].hostName}${restText}`;
     else if (totalPicks >= 10) {
-      how = `${label}：${active.map((exit) => `${exit.hostName} ${Math.round((exit.picks / totalPicks) * 100)}%`).join("、")}${restText}`;
+      /*
+        比例优先用入口报的 share（最近这段时间新连接分给谁）：GOST 的 picks 是代理起来以后的累计数，拿它算出来的是
+        「一直以来」的比例，刚换过分配方式、刚摘过一台时和现在对不上。FXP 的 picks 就是这段时间的，两种算法结果一样。
+      */
+      const shareTotal = active.every((exit) => exit.share != null) ? active.reduce((sum, exit) => sum + Number(exit.share), 0) : 0;
+      const percent = (exit: (typeof active)[number]) => Math.round((shareTotal > 0 ? Number(exit.share) / shareTotal : exit.picks / totalPicks) * 100);
+      how = `${label}：${active.map((exit) => `${exit.hostName} ${percent(exit)}%`).join("、")}${restText}`;
     } else how = `${label}：分给 ${names(active.map((exit) => exit.hostId))}${restText}`;
     hows.set(how, (hows.get(how) || 0) + 1);
   }

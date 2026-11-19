@@ -97,7 +97,7 @@ test("gost 运行时：直连规则一条 service，重载命令写 gost.json �
     VERBOSE_AGENT_ACTIONS: false,
     anyTunnelDnsRefresh: () => false,
     applyGostLimiter: (service: any) => service,
-    buildLoadBalancedExitNodes: unused("buildLoadBalancedExitNodes") as any,
+    buildPrimaryExitNode: unused("buildPrimaryExitNode") as any,
     buildProxyRuleDebugCmd: unused("buildProxyRuleDebugCmd"),
     currentHostTunnelExitPortsForRule: () => [],
     dnsRuntimeRefreshCmd: unused("dnsRuntimeRefreshCmd"),
@@ -142,10 +142,10 @@ test("gost 运行时：直连规则一条 service，重载命令写 gost.json �
   assert.ok(Array.isArray(await plan.buildTunnelReloadCmds()));
 });
 
-test("gost 链路负载均衡（2.3.539）：端口交给本机代理，每台出口一个本机 gost 端口，原来那条几台出口的链不再生成", async () => {
+test("gost 链路负载均衡：端口交给本机代理，每台出口一个带目标的本机 gost 端口（TCP、UDP），原来那条几台出口的链不再生成", async () => {
   const { createGostRuntimePlan } = await import("./agentHeartbeatGostPlan");
   const tunnel = { id: 9, mode: "tls", isEnabled: true, entryHostId: 5, exitHostId: 2, loadBalanceEnabled: true, loadBalanceStrategy: "auto" };
-  const rule = { id: 501, forwardType: "gost", isEnabled: true, tunnelId: 9, sourcePort: 37326, targetIp: "hkboil.ddos.top", targetPort: 24895, protocol: "tcp" };
+  const rule = { id: 501, forwardType: "gost", isEnabled: true, tunnelId: 9, sourcePort: 37326, targetIp: "hkboil.ddos.top", targetPort: 24895, protocol: "both" };
   const exits = [
     { hostId: 2, localPort: 47100, node: { name: "exit-501-0", addr: "198.51.100.2:40001" } },
     { hostId: 3, localPort: 47101, node: { name: "exit-501-1", addr: "198.51.100.3:40002" } },
@@ -158,13 +158,13 @@ test("gost 链路负载均衡（2.3.539）：端口交给本机代理，每台�
     VERBOSE_AGENT_ACTIONS: false,
     anyTunnelDnsRefresh: () => false,
     applyGostLimiter: (service: any) => ({ ...service, limiter: "rule-501" }),
-    buildLoadBalancedExitNodes: unused("buildLoadBalancedExitNodes") as any,
+    buildPrimaryExitNode: unused("buildPrimaryExitNode") as any,
     buildProxyRuleDebugCmd: unused("buildProxyRuleDebugCmd"),
     currentHostTunnelExitPortsForRule: () => [],
     dnsRuntimeRefreshCmd: unused("dnsRuntimeRefreshCmd"),
     failoverTargetAddr: unused("failoverTargetAddr") as any,
     getHopDialAddress: unused("getHopDialAddress") as any,
-    gostBalancePlans: new Map([[501, { failoverPort: 41501, exits, udp: false }]]),
+    gostBalancePlans: new Map([[501, { failoverPort: 41501, exits, targetAddr: "hkboil.ddos.top:24895", proxyVersion: 1 as const }]]),
     gostRateLimiters: [],
     gostRelayFailoverHopMetadata: { strategy: "fifo", maxFails: 1, failTimeout: "10s" },
     gostRules: [rule],
@@ -173,6 +173,7 @@ test("gost 链路负载均衡（2.3.539）：端口交给本机代理，每台�
     gostRuntimeSyncCmd: (service: string, configPath: string) => `sync ${service} ${configPath}`,
     gostServiceName: "forwardx-runtime",
     gostServiceUnit: "[Unit]",
+    // 不走代理时入口服务才问它；走代理时目标已经在计划里（targetAddr）
     gostTunnelExitTargetAddr: unused("gostTunnelExitTargetAddr") as any,
     guardBackendPort: unused("guardBackendPort"),
     isCurrentHostTunnelEntry: () => true,
@@ -188,24 +189,43 @@ test("gost 链路负载均衡（2.3.539）：端口交给本机代理，每台�
       { exitNodeId: 11, exitSeq: 1, exitHostId: 3, listenPort: 40002, rulePort: 0, primary: false },
     ],
     tunnelExitRules: [],
-    tunnelForwardProtos: () => ["tcp"],
+    tunnelForwardProtos: () => ["tcp", "udp"],
     tunnelProxyProtocolPlan: () => ({}) as any,
   });
   const services = plan.gostServiceConfig as any[];
-  assert.deepEqual(services.map((item) => item.name), ["fwx-501-tcp", "fwx-501-tcp-x2", "fwx-501-tcp-x3"]);
-  const front = services[0];
+  assert.deepEqual(services.map((item) => item.name), [
+    "fwx-501-tcp", "fwx-501-udp",
+    "fwx-501-tcp-x2", "fwx-501-udp-x2", "fwx-501-tcp-x3", "fwx-501-udp-x3",
+  ]);
+  const [front, frontUdp] = services;
   assert.equal(front.addr, ":37326", "端口照旧由 gost 听（计数、限速在这里）");
   assert.equal(front.limiter, "rule-501");
   assert.equal(front.handler.chain, undefined, "不再挂几台出口的链");
   assert.equal(front.forwarder.nodes[0].addr, "127.0.0.1:41501", "交给本机代理");
-  assert.equal(services[1].addr, "127.0.0.1:47100");
-  assert.equal(services[1].handler.chain, "chain-tunnel-501-x2");
-  assert.equal(services[1].limiter, undefined, "限速只算一次（在前面那个端口上）");
+  assert.deepEqual(front.handler.metadata, { proxyProtocol: "1" }, "先给代理发 PROXY 头（访客地址）");
+  assert.equal(frontUdp.forwarder.nodes[0].addr, "127.0.0.1:41501", "UDP 也交给本机代理");
+  assert.deepEqual(frontUdp.handler.metadata, { proxyProtocol: "2" }, "UDP 的头固定 v2（一个单独的包）");
+  for (const service of services.slice(2)) {
+    assert.match(service.addr, /^127\.0\.0\.1:4710[01]$/);
+    assert.equal(service.forwarder.nodes[0].addr, "hkboil.ddos.top:24895", "每台出口的本机服务都带着出口该拨的目标");
+    assert.equal(service.forwarder.nodes[0].connector.type, service.handler.type);
+    assert.equal(service.limiter, undefined, "限速只算一次（在前面那个端口上）");
+    assert.equal(service.metadata.dialTimeout, "3s");
+    assert.equal(service.handler.metadata, undefined, "出口那一段不再加头：要不要转给目标由代理决定");
+  }
+  assert.equal(services[2].handler.chain, "chain-tunnel-501-x2");
+  assert.equal(services[3].handler.chain, "chain-tunnel-501-x2", "TCP、UDP 共用那台出口的链");
+  assert.equal(services[3].listener.type, "udp");
   const cmds = plan.buildGostReloadCmds();
   assert.ok(cmds.length > 0);
   const written = JSON.parse(Buffer.from(plan.gostManagedConfigs[0].contentBase64, "base64").toString("utf8"));
   assert.deepEqual(written.chains.map((chain: any) => chain.name), ["chain-tunnel-501-x2", "chain-tunnel-501-x3"]);
   assert.deepEqual(written.chains[1].hops[0].nodes[0].addr, "198.51.100.3:40002");
+  for (const chain of written.chains) {
+    assert.equal(chain.hops.length, 1);
+    assert.equal(chain.hops[0].nodes.length, 1, "单节点");
+    assert.equal(chain.hops[0].selector, undefined, "没有选择器，也就没有「节点摘空后直连目标」");
+  }
 });
 
 test("停用规则的 remove：iptables 规则带上计数链和连接数限制的清理", async () => {

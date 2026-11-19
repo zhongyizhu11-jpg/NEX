@@ -602,6 +602,22 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 			drillEndedAt[i] = p.drillEndedAt[j]
 		}
 	}
+	// 出口组：累计分到多少、经出口复核判坏的标记也跟着同一条目标走；正在复核的不带（协程回来按地址重新找下标）。
+	pickCounts := make([]uint64, n)
+	exitThroughFailed := make([]bool, n)
+	for i, target := range spec.Targets {
+		if j, ok := oldIndex[targetStateKey(target)]; ok {
+			if j < len(p.pickCounts) {
+				pickCounts[i] = p.pickCounts[j]
+			}
+			if j < len(p.exitThroughFailed) {
+				exitThroughFailed[i] = p.exitThroughFailed[j]
+			}
+		}
+	}
+	p.pickCounts = pickCounts
+	p.exitThroughFailed = exitThroughFailed
+	p.exitConfirming = make([]bool, n)
 	p.slowStartAt = slowStartAt
 	// 按权重的计数还没用过（nil）就保持没用过：只在 weightedPickLocked（写锁下）第一次用时才开。
 	if p.wrrCurrent != nil {

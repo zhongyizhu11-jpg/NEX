@@ -548,6 +548,9 @@ type failoverTarget struct {
 	// 而不是零长度包 + ping。面板按对端 Agent 的版本给；填了探测地址时不带（照填的拨 TCP）。
 	// 行为参数，进签名；不带时签名逐字不变。
 	ProbeUdpEcho bool `json:"probeUdpEcho,omitempty"`
+	// 出口组里这台出口在中转后面（多跳链路，2.2.264）：入口机连不到它，没法直接探。不探（每轮算通），通不通看
+	// 真实连接「没回就被关」后的经出口复核和面板提示（failover_exit_group.go）。行为参数，进签名。
+	ViaRelay bool `json:"viaRelay,omitempty"`
 	// 面板随规格附带的运行时提示（failover_hints.go）。嵌入进来：JSON 里还是和上面这些字段平级，
 	// 代码里照样写 target.Down、target.LoadPct。
 	failoverTargetHints
@@ -633,6 +636,13 @@ type failoverSpec struct {
 	// GOST 链路的负载均衡（2.2.262 起，面板 2.3.539）：这个代理替隧道入口在几台出口之间挑，每个目标是本机一个只走
 	// 某台出口的 gost 端口。带着它就把每台出口的真实状态报给面板（balance_report.go），HostIDs 和 Targets 一一对应。
 	BalanceReport *failoverBalanceReport `json:"balanceReport,omitempty"`
+	// 探测节奏（2.2.264 起，出口组的规格带）：多久探一轮、一次探测等多久。不带（0）就是老规矩 ——
+	// 间隔 = 「异常多久切」的一半（1–5 秒）、超时 2 秒。带了以后每轮从上一轮**开始**算间隔（固定节拍），
+	// 探得慢也不会把下一轮往后推：出口组要在「几次不通 × 间隔」内把坏出口摘掉（failover_exit_group.go）。
+	ProbeIntervalSeconds int `json:"probeIntervalSeconds,omitempty"`
+	ProbeTimeoutMs       int `json:"probeTimeoutMs,omitempty"`
+	// 刚恢复的目标不做慢启动（面板「检测与切换」里关了「刚恢复的慢慢加量」）。不带 = 照常慢启动。
+	NoSlowStart bool `json:"noSlowStart,omitempty"`
 }
 
 type failoverBalanceReport struct {

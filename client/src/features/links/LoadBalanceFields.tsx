@@ -154,7 +154,8 @@ function SettingRow({ title, hint, children, stacked = false }: { title: string;
 
 /**
  * 「检测与切换」：默认收起，只写一行当前设置；点开原地展开。
- * gost：GOST 隧道（不能当场换出口）；dns：转发组 / 入口组（改解析）—— 只影响「实际效果」那句话。
+ * dns：转发组 / 入口组（改解析）—— 只影响「实际效果」那句话和要不要给灵敏度三档。
+ * 链路 / 出口组：先选一档检测灵敏度（灵敏 / 均衡 / 稳定，默认均衡），逐项的参数收在下面的「高级」里。
  */
 export function BalanceDetectPanel({
   value,
@@ -163,7 +164,6 @@ export function BalanceDetectPanel({
   defaults = DEFAULT_BALANCE_DETECT,
   weights,
   memberNames,
-  gost = false,
   dns = false,
   defaultOpen = false,
 }: {
@@ -173,7 +173,6 @@ export function BalanceDetectPanel({
   defaults?: BalanceDetect;
   weights?: readonly number[];
   memberNames?: readonly string[];
-  gost?: boolean;
   dns?: boolean;
   defaultOpen?: boolean;
 }) {
@@ -215,7 +214,7 @@ export function BalanceDetectPanel({
         onClick={() => setOpen((current) => !current)}
       >
         <span className="min-w-0">
-          <span className={cn("block leading-5", dns ? "text-[14.5px] font-semibold" : "text-[13.5px] font-medium text-muted-foreground")}>{dns ? "检测与切换" : "高级设置"}</span>
+          <span className={cn("block leading-5", dns ? "text-[14.5px] font-semibold" : "text-[13.5px] font-medium text-muted-foreground")}>{dns ? "检测与切换" : "高级"}</span>
           {!open && dns ? <span className="block truncate text-meta leading-5 text-muted-foreground">{describeBalanceDetectShort(value)}</span> : null}
         </span>
         <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open ? "rotate-180" : "-rotate-90")} />
@@ -270,7 +269,7 @@ export function BalanceDetectPanel({
             <Switch aria-label="刚恢复的慢慢加量" checked={value.slowStart} onCheckedChange={(slowStart) => patch({ slowStart })} />
           </SettingRow>
           <p className="mt-2 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-meta leading-5 text-foreground/80">
-            实际效果：{describeBalanceEffect({ strategy, detect: value, weights, memberNames, gost, dns })}
+            实际效果：{describeBalanceEffect({ strategy, detect: value, weights, memberNames, dns })}
           </p>
         </div>
       ) : null}

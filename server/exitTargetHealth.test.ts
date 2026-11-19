@@ -7,7 +7,6 @@ import {
   exitTargetProbeSpec,
   exitTargetSummaryForTunnel,
   exitTargetUnstable,
-  latencyOrderedExitHostIds,
   ruleActiveExit,
   setExitTargetTunnelMetaForTest,
   exitTargetBaseline,
@@ -147,21 +146,6 @@ test("链路弹窗「怎么走」：NEX 延迟优先，差不到门槛的一起�
   assert.equal(summary.how, "延迟优先：A、B（差不到 50ms，按负载分），1 台备用");
 });
 
-test("GOST 延迟优先：按延迟排顺序，差不多快时不来回换", () => {
-  resetExitTargetStates();
-  const detect = { ...DEFAULT_BALANCE_DETECT };
-  setExitTargetStateForTest(state({ hostId: 1, ruleId: 20, medianMs: 40, jitterMs: 0, gost: true }));
-  setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 10, jitterMs: 0, gost: true }));
-  setExitTargetStateForTest(state({ hostId: 3, ruleId: 20, down: true, gost: true }));
-  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [2, 1, 3]);
-  // 1 号变快了一点，但没快过 50ms：还是 2 号在前
-  setExitTargetStateForTest(state({ hostId: 1, ruleId: 20, medianMs: 5, jitterMs: 0, gost: true }));
-  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [2, 1, 3]);
-  // 2 号慢到比 1 号多 50ms 以上：换
-  setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 90, jitterMs: 0, gost: true }));
-  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [1, 2, 3]);
-});
-
 test("平时延迟 = 最低延迟：更低的马上跟下来，更高的只慢慢往上跟", () => {
   resetExitTargetStates();
   const base = Date.now();
@@ -292,38 +276,3 @@ test("不稳：抖动要持续「持续多久才处理」才算，单次抖动�
   C3：文档写的内置防来回乱切（BALANCE_ANTI_FLAP）以前没有任何代码引用。现在用在 GOST「延迟优先」的排序上：
   切过去至少用 1 分钟；一小时换了 3 次以上，每次至少用 5 分钟；排第一的那台连不上时不受限制。
 */
-test("GOST 延迟优先的防来回乱切：切过去至少用 1 分钟，一小时换 3 次以上放慢到 5 分钟，逃生不受限", () => {
-  resetExitTargetStates();
-  const detect = { ...DEFAULT_BALANCE_DETECT };
-  let now = Date.now();
-  const set = (hostId: number, medianMs: number, down = false) => setExitTargetStateForTest(state({ hostId, ruleId: 30, medianMs, latencyMs: medianMs, jitterMs: 0, down, gost: true, at: now, changedAt: now }));
-  const order = () => latencyOrderedExitHostIds(30, [1, 2], detect, { nowMs: now });
-  const swap = (fast: number) => { set(fast, 10); set(fast === 1 ? 2 : 1, 200); };
-
-  swap(2);
-  assert.deepEqual(order(), [2, 1], "一开始定下来的那台不算「切过去的」");
-  now += 1000;
-  swap(1);
-  assert.deepEqual(order(), [1, 2], "第 1 次切换：2 慢了很多，马上换");
-  now += 1000;
-  swap(2);
-  assert.deepEqual(order(), [1, 2], "刚切过去不到 1 分钟：2 又快了也先不换");
-  now += 60_000;
-  swap(2);
-  assert.deepEqual(order(), [2, 1], "用满 1 分钟：换（第 2 次）");
-  now += 61_000;
-  swap(1);
-  assert.deepEqual(order(), [1, 2], "第 3 次");
-  // 一小时里已经换了 3 次：放慢，至少用 5 分钟
-  now += 61_000;
-  swap(2);
-  assert.deepEqual(order(), [1, 2], "换得太勤：1 分钟不够了");
-  now += 240_000;
-  swap(2);
-  assert.deepEqual(order(), [2, 1], "用满 5 分钟才换");
-  // 逃生：排第一的连不上，不等
-  now += 1000;
-  set(2, 10, true);
-  set(1, 200);
-  assert.deepEqual(order(), [1, 2], "现在用的那台连不上：马上换，不受驻留限制");
-});

@@ -6,13 +6,13 @@ import path from "node:path";
 import test from "node:test";
 
 import { EXIT_GROUP_STRATEGIES, EXIT_GROUP_STRATEGY_LABELS, exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "../shared/exitStrategy";
-import { forwardXExitStrategy, gostExitSelector } from "./tunnelExitStrategy";
+import { forwardXExitStrategy } from "./tunnelExitStrategy";
 
 /**
  * 出口组「按权重」：按出口主机的线路带宽分新连接（500M / 300M → 5:3）。
  *
  *   · NEX 隧道：exits 里每个出口带 weight，FXP 按平滑加权轮询分；
- *   · GOST 隧道：份数写进节点 metadata.weight，gost 按它加权随机，每个出口只列一次；
+ *   · GOST 隧道：份数交给入口机的本机代理（server/gostBalancePlan.ts）；入口机的 Agent 太老时只下发主出口一台；
  *   · nginx：server 行写 weight=N。
  *
  * 起一个真的 sqlite 和真的心跳路由跑一遍。
@@ -23,7 +23,6 @@ test("按权重：名字、规整、份数", () => {
   assert.match(EXIT_GROUP_STRATEGY_LABELS.weighted, /^按权重/);
   assert.equal(normalizeExitGroupStrategy("WEIGHTED"), "weighted");
   assert.equal(forwardXExitStrategy("weighted"), "weighted");
-  assert.equal(gostExitSelector("weighted").strategy, "random");
   assert.deepEqual(exitGroupWeights("weighted", [500, 300]), [5, 3]);
   // 不知道带宽、或者带宽一样，就是轮流。
   assert.equal(exitGroupWeights("weighted", [500, 0]), null);
@@ -36,7 +35,6 @@ test("按负载：名字、老的 least_conn 归过来、GOST/nginx 也有份数
   assert.equal(normalizeExitGroupStrategy("least_load"), "least_load");
   assert.equal(normalizeExitGroupStrategy("least_conn"), "least_load");
   assert.equal(forwardXExitStrategy("least_load"), "least_load");
-  assert.equal(gostExitSelector("least_load").strategy, "random");
   assert.deepEqual(exitGroupWeights("least_load", [500, 300]), [5, 3]);
   assert.deepEqual(exitGroupCapacities("least_load", [500, 300]), [500, 300]);
   assert.deepEqual(exitGroupCapacities("ip_hash", [500, 300]), [500, 300]);
@@ -175,12 +173,11 @@ test("NEX 隧道：每个出口带上权重，策略原样交给 FXP", () => {
   assert.deepEqual(outcome.fxpExits.map((exit) => exit.weight), [5, 3], JSON.stringify(outcome.fxpExits));
 });
 
-test("GOST 隧道：每个出口只列一次，份数写在 metadata.weight，按它加权随机；重试够把每个出口都试一遍", () => {
-  assert.equal(outcome.gostSelector, "random");
-  assert.equal(outcome.gostNodes.length, 2, outcome.gostNodes.join("\n"));
-  assert.match(outcome.gostNodes[0], /@203\.0\.113\.1:\d+#5$/);
-  assert.match(outcome.gostNodes[1], /@203\.0\.113\.4:\d+#3$/);
-  assert.equal(outcome.gostRetries, 1);
+test("GOST 隧道 · 入口机的 Agent 还不能执行统一调度：只下发主出口一台，没有选择器（几台出口怎么分见 gostBalanceHeartbeat.test.ts）", () => {
+  assert.equal(outcome.gostSelector, "");
+  assert.equal(outcome.gostNodes.length, 1, outcome.gostNodes.join("\n"));
+  assert.match(outcome.gostNodes[0], /@203\.0\.113\.1:\d+#$/);
+  assert.equal(outcome.gostRetries, 0);
 });
 
 test("nginx：server 行写 weight", () => {
@@ -193,9 +190,9 @@ test("按负载 · NEX 隧道：策略原样交给 FXP，每个出口带线路�
   assert.deepEqual(loadOutcome.fxpExits.map((exit) => exit.capacityMbps), [500, 300], JSON.stringify(loadOutcome.fxpExits));
 });
 
-test("按负载 · GOST 隧道：看不到实时负载，按带宽加权随机", () => {
-  assert.equal(loadOutcome.gostSelector, "random");
-  assert.deepEqual(loadOutcome.gostNodes.map((node) => node.split("#")[1]), ["5", "3"]);
+test("按负载 · GOST 隧道 · 老 Agent 的入口：同样只有主出口一台", () => {
+  assert.equal(loadOutcome.gostSelector, "");
+  assert.equal(loadOutcome.gostNodes.length, 1);
 });
 
 test("按负载 · nginx：least_conn + weight", () => {
