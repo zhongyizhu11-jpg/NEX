@@ -289,7 +289,7 @@ import {
   hostNodeMeta,
   targetGeoNodeMeta,
 } from "@/lib/linkTestNodeMeta";
-import { getTunnelExitNames, getTunnelHopIds, getTunnelRouteText, tunnelHopHostName } from "@/lib/tunnelDisplay";
+import { getTunnelExitNames, getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName } from "@/lib/tunnelDisplay";
 import { StatusDot } from "@/components/network/StatusDot";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import { Sparkline } from "@/components/charts/Sparkline";
@@ -7659,9 +7659,14 @@ function RulesContent() {
         .slice(1)
         .map((hostId: number) => String(tunnelHopHostName(tunnel, hostId, hosts) || "").trim())
         .filter(Boolean);
-      // 主出口连不上目标、流量已经切走（2.3.537）：出口那一段写现在实际走的那台
+      /*
+        负载均衡的链路：出口那一段写入口报上来的在用出口（只走一台写名字，分给几台写「N 台出口」）；
+        还没报的写一共几台，不再只写主出口的名字（看着像只走它）。
+      */
       const via = trafficByRule.get(Number(rule?.id))?.exitTargetVia;
-      if (via && via.length > 0 && names.length > 0) return [...names.slice(0, -1), via.join(" / ")];
+      const balanced = getTunnelLoadBalanceExitNames(tunnel, hosts).length > 0 ? getTunnelExitNames(tunnel, hosts).length : 0;
+      const exitText = via && via.length === 1 ? via[0] : via && via.length > 1 ? `${via.length} 台出口` : balanced > 1 ? `${balanced} 台出口` : null;
+      if (exitText && names.length > 0) return [...names.slice(0, -1), exitText];
       return names;
     }
     const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));

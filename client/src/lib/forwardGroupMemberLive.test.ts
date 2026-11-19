@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { describeMemberLive, groupHasMemberProbes, summarizeGroupLive } from "./forwardGroupMemberLive";
+import { describeMemberLive, groupHasMemberProbes, memberIssueLines, summarizeGroupLive } from "./forwardGroupMemberLive";
 
 const inUse = { groupMode: "failover", isEnabled: true, templateRuleCount: 2, chinaHealthCheckEnabled: true };
 
@@ -12,7 +12,7 @@ test("被规则用着的转发组：按探测结果，健康的带延迟和国�
   assert.equal(describeMemberLive(inUse, { healthStatus: "unknown", host: { isOnline: true } })?.tone, "unknown");
   const china = describeMemberLive(inUse, { healthStatus: "healthy", lastLatencyMs: 30, chinaHealthStatus: "unhealthy", host: { isOnline: true } })!;
   assert.equal(china.tone, "degraded");
-  assert.equal(china.note, "国内不通");
+  assert.equal(china.note, "国内连不上");
 });
 
 test("停用、时段外、主机离线优先；组停用不画点", () => {
@@ -57,7 +57,7 @@ test("外部观察：自己报告和别人看到的分开说", () => {
   // 自己报告正常，外部连不上：观察期是黄的，判定之后是红的
   const failing = describeMemberLive(entry, { ...online, peerHealth: peer({ state: "failing", reachableCount: 0, label: "外部观察 0/2 可达" }) })!;
   assert.equal(failing.tone, "degraded");
-  assert.equal(failing.note, "外部不通");
+  assert.equal(failing.note, "外部连不上");
   const down = describeMemberLive(entry, { ...online, peerHealth: peer({ state: "down", down: true, reachableCount: 0, label: "外部观察 0/2 可达" }) })!;
   assert.equal(down.tone, "down");
   assert.match(down.title, /自己报告：主机在线；外部观察 0\/2 可达/);
@@ -72,5 +72,20 @@ test("外部观察：自己报告和别人看到的分开说", () => {
   // 不带 peerProbe 的组（普通用户的视图、别的组类型）一个字都不变
   assert.deepEqual(describeMemberLive({ groupMode: "entry", isEnabled: true }, online), { tone: "healthy", note: null, title: "主机在线" });
   const summary = summarizeGroupLive(entry, [{ ...online, peerHealth: peer({}) }, { ...online, peerHealth: peer({ state: "failing" }) }])!;
-  assert.equal(summary.title, "启用的 2 个成员里：1 个部分不通");
+  assert.equal(summary.title, "启用的 2 个成员里：1 个部分连不上");
+});
+
+test("卡片上不正常的成员一人一行原因（手机没有悬停）；正常的、停用的不写", () => {
+  const entry = { groupMode: "entry", isEnabled: true, peerProbe: { active: true, outdatedHosts: [] } };
+  const peer = (patch: Record<string, unknown>) => ({ state: "reachable", down: false, reachableCount: 2, usableCount: 2, assignedCount: 2, label: "外部观察 2/2 可达", ...patch });
+  const members = [
+    { name: "HK", host: { isOnline: true }, peerHealth: peer({}) },
+    { name: "JP", host: { isOnline: true }, peerHealth: peer({ state: "down", down: true, reachableCount: 0 }) },
+    { name: "SG", host: { isOnline: false } },
+    { name: "US", isEnabled: false, host: { isOnline: false } },
+  ];
+  assert.deepEqual(memberIssueLines(entry, members, (member) => member.name), [
+    { tone: "down", text: "JP：它自己报告正常，但别的机器连不上它的入口端口，按不可用处理" },
+    { tone: "down", text: "SG：主机离线（面板收不到它的 Agent）" },
+  ]);
 });

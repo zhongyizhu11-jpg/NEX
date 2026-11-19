@@ -147,7 +147,7 @@ import {
   type ForwardGroupHealthCheckMethod,
 } from "@shared/forwardGroupHealthCheck";
 import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
-import { describeMemberLive, summarizeGroupLive, type MemberLiveTone } from "@/lib/forwardGroupMemberLive";
+import { describeMemberLive, memberIssueLines, summarizeGroupLive, type MemberLiveTone } from "@/lib/forwardGroupMemberLive";
 import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
   BANDWIDTH_AGGREGATION_STRATEGY_HINTS,
@@ -2030,7 +2030,9 @@ export function ForwardGroupsContent({
       );
     }
 
+    const issues = memberIssueLines(group, members, (member: any) => memberLabel(member));
     return (
+      <>
       <div className="flex flex-wrap gap-1.5">
         {members.map((member: any, index: number) => {
           const active = isGroupMemberActive(group, member);
@@ -2062,6 +2064,11 @@ export function ForwardGroupsContent({
           );
         })}
       </div>
+      {/* 不正常的成员直接写原因（悬停在手机上看不到） */}
+      {issues.map((issue) => (
+        <p key={issue.text} className="mt-1 text-meta leading-5" style={{ color: issue.tone === "down" ? "var(--fx-down-text)" : "var(--fx-warn-text)" }} data-testid="group-member-issue">{issue.text}</p>
+      ))}
+      </>
     );
   };
 

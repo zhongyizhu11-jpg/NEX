@@ -175,7 +175,7 @@ export function ExitBalanceDialog({
                   <button type="button" aria-label={`${nameOf(hostId)} 下移`} disabled={index === exits.length - 1} onClick={() => move(hostId, 1)}><ChevronDown className="h-4 w-4" /></button>
                 </span>
               ) : null}
-              action={canPin && view.state !== "pinned" && online(hostId) ? (
+              action={canPin && view.state !== "pinned" && view.state !== "down" ? (
                 <Button size="sm" variant="outline" className="h-9" disabled={busy} onClick={() => pinMutation.mutate({ tunnelId: Number(tunnel.id), hostId })}>切到这台</Button>
               ) : null}
             />
