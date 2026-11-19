@@ -524,6 +524,17 @@ func TestNearSetEscapesWhenTheSetIsEmpty(t *testing.T) {
 	}
 }
 
+// 成员表换了顺序：状态跟着成员走，新成员从头来。
+func TestNearSetRemapFollowsMembers(t *testing.T) {
+	var set NearSet
+	now := time.Unix(1_800_000_000, 0)
+	set.Select(nil, latencies(20, 300), []int{0, 1}, NearPolicy{Margin: 50, Hold: time.Minute}, now)
+	moved := set.Remap([]int{1, -1, 0})
+	if moved.Contains(0) || moved.Contains(1) || !moved.Contains(2) {
+		t.Fatalf("慢的挪到 0、新成员在 1、快的挪到 2：%v %v %v", moved.Contains(0), moved.Contains(1), moved.Contains(2))
+	}
+}
+
 // ---- 慢启动 ----
 
 func TestSlowStartRamp(t *testing.T) {

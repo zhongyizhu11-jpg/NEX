@@ -466,8 +466,14 @@ func (p *failoverProxy) precheckIssueLocked(index int) string {
 
 上一版是「一切归零」：健康全部当成好的、活跃线路回到第 0 条。改一下时段表就把正走着
 备线的流量拽回主线，而主线可能正挂着 —— 要等下一轮探测才发现。现在按「拨的地址 +
-探测地址」认出没变的出站，把它们的健康、样本、连接和「现在走哪条」都带过去；真变了的
+探测地址」认出没变的出站（carryIndex），把按路径记的状态都搬到它的新下标上（carried）；真变了的
 才从头来。不在这里重新选路：下一轮探测（5 秒内）会按新规格评估，和以前一样。
+
+所有按路径下标记的状态都在这一处搬，一样不落（A11、F3）：以前慢启动的恢复时刻、按权重的计数、演练撤掉的
+时刻、延迟优先的那一组（lbNear）各有各的遗漏 —— 长度对不上时在别处整个清零重建，长度没变而顺序变了时
+状态留在旧下标上，算到了别的路径头上（慢的那条继承了「在组里」）。在途计数不搬：旧下标发出去的那几笔
+按旧的一代作废（见 failoverReservation.gen），从 0 起。轮流的位置（roundRobinNext）是个不分路径的计数，
+原样留着：起代理时随机定的起步位置（路线图 X4）不能因为改了一下设置就清回 0（F4）。
 
 返回出站列表有没有变（条数、顺序、拨的地址或探测地址）。变了的话调用方在放锁之后
 立刻探一轮（probeNowAndReport），新出站不用空等定时探测。
@@ -475,137 +481,96 @@ func (p *failoverProxy) precheckIssueLocked(index int) string {
 func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) bool {
 	p.ensureHealthStateLocked()
 	targetsChanged := len(spec.Targets) != len(p.spec.Targets)
-	if !targetsChanged {
-		for i := range spec.Targets {
-			if targetStateKey(spec.Targets[i]) != targetStateKey(p.spec.Targets[i]) {
-				targetsChanged = true
-				break
-			}
-		}
+	for i := 0; !targetsChanged && i < len(spec.Targets); i++ {
+		targetsChanged = targetStateKey(spec.Targets[i]) != targetStateKey(p.spec.Targets[i])
 	}
-	oldIndex := map[string]int{}
-	for i, target := range p.spec.Targets {
-		key := targetStateKey(target)
-		if _, seen := oldIndex[key]; !seen {
-			oldIndex[key] = i
-		}
-	}
-	activeKey := ""
-	if p.activeIndex >= 0 && p.activeIndex < len(p.spec.Targets) {
-		activeKey = targetStateKey(p.spec.Targets[p.activeIndex])
-	}
-	n := len(spec.Targets)
-	health := make([]bool, n)
-	failureSince := make([]time.Time, n)
-	recoveredSince := make([]time.Time, n)
-	latency := make([]int, n)
-	stats := make([]*routeTargetStats, n)
-	relayDown := make([]bool, n)
-	relayReason := make([]string, n)
-	conns := make([]map[net.Conn]struct{}, n)
+	from := carryIndex(p.spec.Targets, spec.Targets)
 	newActive := -1
+	for i, j := range from {
+		if j >= 0 && j == p.activeIndex {
+			newActive = i
+		}
+	}
+	p.targetHealth = carried(p.targetHealth, from)
+	p.failureSince = carried(p.failureSince, from)
+	p.recoveredSince = carried(p.recoveredSince, from)
+	p.lastLatencyMs = carried(p.lastLatencyMs, from)
+	p.stats = carried(p.stats, from)
+	p.conns = carried(p.conns, from)
+	p.slowStartAt = carried(p.slowStartAt, from)
+	p.drillEndedAt = carried(p.drillEndedAt, from)
+	p.lbQuality = carried(p.lbQuality, from)
+	p.pickCounts = carried(p.pickCounts, from)
+	p.exitThroughFailed = carried(p.exitThroughFailed, from)
+	// 按权重的计数还没用过（nil）就保持没用过：spreadStateLocked 第一次用时才开、才随机转起步位置。
+	if p.wrrCurrent != nil {
+		p.wrrCurrent = carried(p.wrrCurrent, from)
+	}
+	p.lbNear = p.lbNear.Remap(from)
+	p.udpSide = p.udpSide.carried(from)
+	// 正在复核的不带：复核的协程回来按地址重新找下标（indexOfTargetLocked）。
+	p.exitConfirming = make([]bool, len(spec.Targets))
+	p.inflight = make([]int, len(spec.Targets))
+	p.inflightGen++
+	p.relayDown = make([]bool, len(spec.Targets))
+	p.relayDownReason = make([]string, len(spec.Targets))
 	for i, target := range spec.Targets {
-		health[i] = true
-		stats[i] = &routeTargetStats{}
-		conns[i] = map[net.Conn]struct{}{}
-		key := targetStateKey(target)
-		if j, ok := oldIndex[key]; ok {
-			health[i] = p.targetHealth[j]
-			failureSince[i] = p.failureSince[j]
-			recoveredSince[i] = p.recoveredSince[j]
-			latency[i] = p.lastLatencyMs[j]
-			if p.stats[j] != nil {
-				stats[i] = p.stats[j]
-			}
-			if p.conns[j] != nil {
-				conns[i] = p.conns[j]
-			}
-			if key == activeKey && newActive < 0 {
-				newActive = i
-			}
+		if from[i] < 0 {
+			p.targetHealth[i] = true
 		}
 		// 新规格里带的中转提示以新的为准。
-		relayDown[i] = target.Down
+		p.relayDown[i] = target.Down
 		if target.Down {
-			relayReason[i] = strings.TrimSpace(target.DownReason)
+			p.relayDownReason[i] = strings.TrimSpace(target.DownReason)
 		}
 	}
-	// UDP 那一侧（TCP+UDP 规格）按同一张对照表搬。
-	p.udpSide = p.udpSide.carried(n, func(i int) (int, bool) {
-		j, ok := oldIndex[targetStateKey(spec.Targets[i])]
-		return j, ok
-	})
-	/*
-		慢启动的恢复时刻、平滑加权轮询的计数、演练撤掉的时刻也按同一张对照表搬（A11）。以前不搬：
-		这三个切片长度对不上时在别处被整个清零重建，出站前面插一条，刚恢复那条的慢启动就没了、
-		按权重的序列从头来；长度没变而顺序变了时更糟 —— 状态留在旧下标上，算到了别的路径头上。
-		在途计数不搬：旧下标发出去的那几笔按旧的一代作废（见 failoverReservation.gen），从 0 起。
-	*/
-	slowStartAt := make([]time.Time, n)
-	wrrCurrent := make([]int, n)
-	drillEndedAt := make([]time.Time, n)
-	for i, target := range spec.Targets {
-		j, ok := oldIndex[targetStateKey(target)]
-		if !ok {
-			continue
-		}
-		if j < len(p.slowStartAt) {
-			slowStartAt[i] = p.slowStartAt[j]
-		}
-		if j < len(p.wrrCurrent) {
-			wrrCurrent[i] = p.wrrCurrent[j]
-		}
-		if j < len(p.drillEndedAt) {
-			drillEndedAt[i] = p.drillEndedAt[j]
-		}
-	}
-	// 出口组：累计分到多少、经出口复核判坏的标记也跟着同一条目标走；正在复核的不带（协程回来按地址重新找下标）。
-	pickCounts := make([]uint64, n)
-	exitThroughFailed := make([]bool, n)
-	for i, target := range spec.Targets {
-		if j, ok := oldIndex[targetStateKey(target)]; ok {
-			if j < len(p.pickCounts) {
-				pickCounts[i] = p.pickCounts[j]
-			}
-			if j < len(p.exitThroughFailed) {
-				exitThroughFailed[i] = p.exitThroughFailed[j]
-			}
-		}
-	}
-	p.pickCounts = pickCounts
-	p.exitThroughFailed = exitThroughFailed
-	p.exitConfirming = make([]bool, n)
-	p.slowStartAt = slowStartAt
-	// 按权重的计数还没用过（nil）就保持没用过：只在 weightedPickLocked（写锁下）第一次用时才开。
-	if p.wrrCurrent != nil {
-		p.wrrCurrent = wrrCurrent
-	}
-	p.drillEndedAt = drillEndedAt
-	p.inflight = make([]int, n)
-	p.inflightGen++
 	p.spec = spec
-	p.targetHealth = health
-	p.failureSince = failureSince
-	p.recoveredSince = recoveredSince
-	p.lastLatencyMs = latency
-	p.stats = stats
-	p.relayDown = relayDown
-	p.relayDownReason = relayReason
-	p.conns = conns
 	if newActive >= 0 {
 		p.activeIndex = newActive
 	} else {
 		p.activeIndex = 0
 		p.activeSince = now
 	}
-	p.roundRobinNext = 0
 	p.challenger.Reset()
 	p.prewarmIndex = -1
 	p.precheckFailedIndex = -1
 	p.pinnedLast = -1
-	// 所有按出站条数开的切片在这里（写锁下）一次配齐：之后只拿读锁的路径不会再碰到长度对不上（A12）。
+	// 新出站的样本、连接表，以及别的按出站条数开的切片在这里（写锁下）一次配齐：之后只拿读锁的路径不会再碰到
+	// 长度对不上（A12）。
 	p.ensureHealthStateLocked()
 	return targetsChanged
+}
+
+/*
+carryIndex：新规格的第 i 条是旧规格的第几条（targetStateKey 一样：拨的地址 + 探测地址），-1 = 新出站。
+同一个地址出现几次就按先后一一对上，不会两条新出站搬到同一份旧状态上（共用一张连接表、一份样本）。
+*/
+func carryIndex(old, next []failoverTarget) []int {
+	byKey := map[string][]int{}
+	for j, target := range old {
+		key := targetStateKey(target)
+		byKey[key] = append(byKey[key], j)
+	}
+	from := make([]int, len(next))
+	for i, target := range next {
+		from[i] = -1
+		key := targetStateKey(target)
+		if queue := byKey[key]; len(queue) > 0 {
+			from[i], byKey[key] = queue[0], queue[1:]
+		}
+	}
+	return from
+}
+
+// carried：按 from（carryIndex）把按路径下标排的状态搬到新下标上；新出站是零值。
+func carried[T any](old []T, from []int) []T {
+	out := make([]T, len(from))
+	for i, j := range from {
+		if j >= 0 && j < len(old) {
+			out[i] = old[j]
+		}
+	}
+	return out
 }
 
 // ---- 断旧连接（快速故障转移 / 强制切换） ----

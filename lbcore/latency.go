@@ -81,11 +81,12 @@ NearSet 记着每个成员上一次在不在「一样快」的那一组里、从
 一个成员进了组，至少留这么久才会被请出去 —— 延迟卡在门槛上下时不会每条连接都换一次结论
 （文档里写的「切过去至少用 1 分钟」）。进组不设驻留：一次慢样本把它挤出去，回到门槛以内马上就能回来，
 不会因为一个尖峰空等一分钟（路线图 X10）；回来之后又得留满 Hold，所以来回翻最多每个 Hold 一次。
-驻留不拦逃生：成员健不健康不归它管（那是 Candidates 的事，不健康的根本进不了 candidates），
-组里一个都不剩时直接按这一刻的延迟重算。
+驻留不拦逃生：成员健不健康不归它管（那是 Candidates 的事，不健康的根本进不了 candidates）；驻留只把成员
+留在组里、从不把谁挡在组外，候选里最快的那个永远在组里，所以组不会是空的。
 
 参数：Margin 默认 50ms（DefaultLatencyMargin）；Hold 零值是不驻留，线路组和出口组都填 DefaultNearHold（1 分钟）。
-状态按成员下标排，调用方自己加锁。成员表变了就换一个新的 NearSet（零值可用）。
+状态按成员下标排，调用方自己加锁。成员表变了就换一个新的 NearSet（零值可用），或者用 Remap 按成员搬过去
+（不搬的话换了顺序的成员会继承别人「在组里」的状态）。
 */
 type NearSet struct {
 	in    []bool
@@ -123,7 +124,6 @@ func (n *NearSet) Select(dst []int, members []Member, candidates []int, policy N
 	}
 	n.grow(len(members))
 	margin := policy.margin()
-	mark := len(dst)
 	for _, index := range candidates {
 		latency := members[index].delay()
 		near := latency > 0 && latency-best <= margin
@@ -139,21 +139,20 @@ func (n *NearSet) Select(dst []int, members []Member, candidates []int, policy N
 			dst = append(dst, index)
 		}
 	}
-	if len(dst) > mark {
-		return dst
-	}
-	// 组里一个都不剩（都在驻留期里被留在组外，或者组里的都不在候选里了）：按这一刻的延迟重算，状态跟着改。
-	for _, index := range candidates {
-		latency := members[index].delay()
-		if latency > 0 && latency-best <= margin {
-			n.in[index], n.since[index] = true, now
-			dst = append(dst, index)
+	return dst
+}
+
+// Remap 成员表变了（换了顺序、加了减了）：返回一份按新下标排的状态，新的第 i 个接旧的第 from[i] 个；
+// from[i] < 0 是新成员（还没算过）。
+func (n NearSet) Remap(from []int) NearSet {
+	var out NearSet
+	out.grow(len(from))
+	for i, j := range from {
+		if j >= 0 && j < len(n.in) {
+			out.in[i], out.since[i], out.known[i] = n.in[j], n.since[j], n.known[j]
 		}
 	}
-	if len(dst) == mark {
-		return append(dst, candidates...)
-	}
-	return dst
+	return out
 }
 
 // delay：延迟 + 抖动；不知道延迟返回 0。

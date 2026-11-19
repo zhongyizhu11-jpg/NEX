@@ -251,3 +251,48 @@ func TestRouteLeastLoadSpecIsKept(t *testing.T) {
 		t.Fatalf("least_load 被规整成了 %q", spec.Strategy)
 	}
 }
+
+/*
+F3：换规格时「延迟优先」的那一组（lbNear，按路径下标记的）要跟着路径搬。以前不搬：出站换了个顺序，慢的那条
+挪到了原来快的那条的下标上，就继承了「在组里」，驻留期（1 分钟）里照样分到连接。
+*/
+func TestRouteRebuildCarriesNearSetWithThePath(t *testing.T) {
+	p := balanceTestProxy("latency", 1, 1)
+	p.ensureHealthStateLocked()
+	at := time.Now()
+	p.stats[0].recordProbe(true, 20, at)
+	p.stats[1].recordProbe(true, 300, at)
+	for i := 0; i < 5; i++ {
+		if _, index := p.pickTargetForKey("", nil); index != 0 {
+			t.Fatalf("300ms 的那条不在「一样快」的组里，不该分到：%d", index)
+		}
+	}
+	next := p.spec
+	next.Targets = []failoverTarget{p.spec.Targets[1], p.spec.Targets[0]}
+	p.mu.Lock()
+	p.rebuildForSpecLocked(normalizeFailoverSpec(next), time.Now())
+	p.mu.Unlock()
+	if p.lbNear.Contains(0) || !p.lbNear.Contains(1) {
+		t.Fatalf("换了顺序以后，慢的那条（现在是 0）不在组里、快的（现在是 1）在")
+	}
+	for i := 0; i < 20; i++ {
+		if _, index := p.pickTargetForKey("", nil); index != 1 {
+			t.Fatalf("换了顺序以后慢的那条继承了「在组里」，分到了连接（第 %d 次）", i)
+		}
+	}
+}
+
+// F4：轮流的起步位置是起代理时随机定的（路线图 X4）；换规格不能把它清回 0，不然每次改设置后所有规则又从第一条起步。
+func TestRouteRebuildKeepsRoundRobinStart(t *testing.T) {
+	p := balanceTestProxy("round_robin", 1, 1, 1)
+	p.ensureHealthStateLocked()
+	p.roundRobinNext = 12345
+	next := p.spec
+	next.Targets = append(append([]failoverTarget(nil), p.spec.Targets...), failoverTarget{TargetIP: "127.0.0.9", TargetPort: 1009, Weight: 1})
+	p.mu.Lock()
+	p.rebuildForSpecLocked(normalizeFailoverSpec(next), time.Now())
+	p.mu.Unlock()
+	if p.roundRobinNext != 12345 {
+		t.Fatalf("换规格把轮流的位置清掉了：%d", p.roundRobinNext)
+	}
+}

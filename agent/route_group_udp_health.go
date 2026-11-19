@@ -70,26 +70,22 @@ func (s *failoverUDPSide) ensure(n int) {
 	}
 }
 
-// carried 按「还是同一条出站」（rebuildForSpecLocked 的 oldIndex）把状态搬到新下标上；新出站从头来。
-func (s *failoverUDPSide) carried(n int, from func(i int) (int, bool)) failoverUDPSide {
-	next := failoverUDPSide{}
-	next.ensure(n)
-	for i := 0; i < n; i++ {
-		j, ok := from(i)
-		if !ok || j < 0 || j >= len(s.health) {
-			continue
-		}
-		next.health[i] = s.health[j]
-		next.failureSince[i] = s.failureSince[j]
-		next.recoveredSince[i] = s.recoveredSince[j]
-		next.lastLatencyMs[i] = s.lastLatencyMs[j]
-		if j < len(s.slowStartAt) {
-			next.slowStartAt[i] = s.slowStartAt[j]
-		}
-		if s.stats[j] != nil {
-			next.stats[i] = s.stats[j]
+// carried 按「还是同一条出站」（rebuildForSpecLocked 的 carryIndex）把状态搬到新下标上；新出站从头来（健康）。
+func (s *failoverUDPSide) carried(from []int) failoverUDPSide {
+	next := failoverUDPSide{
+		health:         carried(s.health, from),
+		failureSince:   carried(s.failureSince, from),
+		recoveredSince: carried(s.recoveredSince, from),
+		lastLatencyMs:  carried(s.lastLatencyMs, from),
+		stats:          carried(s.stats, from),
+		slowStartAt:    carried(s.slowStartAt, from),
+	}
+	for i, j := range from {
+		if j < 0 || j >= len(s.health) {
+			next.health[i] = true
 		}
 	}
+	next.ensure(len(from))
 	return next
 }
 
