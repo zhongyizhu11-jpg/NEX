@@ -68,6 +68,8 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     assert.deepEqual(summary.exits.map((exit) => [exit.hostId, exit.down, exit.activeRules]), [[2, 1, 0], [3, 0, 1], [4, 0, 1]]);
     assert.deepEqual(summary.exits.map((exit) => [exit.udpOk, exit.udpDown, exit.udpUnverified, exit.peerOutdated]), [[0, 0, 0, false], [0, 1, 0, false], [0, 0, 1, true]]);
     assert.equal(summary.how, "自动：hep ix 60%、Jinx(29.9y) 40%", "连不上的那台不算备用");
+    // 弹窗每台出口一行：连不上的是哪一段、在用的分到几成（入口报的 share）
+    assert.deepEqual(summary.exits.map((exit) => [exit.reason, exit.share]), [["target", null], [null, 0.6], [null, 0.4]]);
     assert.equal(summary.events?.[0]?.text, "jinx(39.9y) 连不上（到目标），已切走");
 
     // 主出口在用：照旧按主出口，不写「经」
@@ -75,6 +77,11 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     const [plain] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 9, latestLatencyIsTimeout: false }]);
     assert.equal(plain.exitTargetVia, null);
     assert.equal(plain.latestLatencyMs, 9);
+
+    // 出口机本身连不上（不是到目标）：规则卡那句照实说
+    await live.ingestBalanceLiveReport({ hostId: 1, source: "fxp", rules: [{ ...rule, exits: rule.exits.map((exit, index) => (index === 0 ? { ...exit, reason: "exit" } : exit)) }] });
+    const [unreachable] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+    assert.match(String(unreachable.exitTargetNote), /连不上 jinx\(39\.9y\) 这台出口机，已切走/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

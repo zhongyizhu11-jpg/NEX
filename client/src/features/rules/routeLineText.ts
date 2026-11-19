@@ -1,6 +1,6 @@
 import { getFormatLocale } from "@/i18n";
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
-import { describeRouteIssue, normalizeRouteDelivery, routeSwitchWithinSeconds, type RouteMode } from "@shared/routeGroup";
+import { describeRouteIssue, normalizeRouteDelivery, routeStrategyLabel, routeSwitchWithinSeconds } from "@shared/routeGroup";
 import type { RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
 
 /*
@@ -19,16 +19,6 @@ export function chainLatency(path: Path | null | undefined): number | null {
   return roundMs(Number(path.latencyMs) + Number(path.downstreamMs || 0));
 }
 
-/** 线路卡、副标题、工作台 chip 上那几个字。 */
-export const ROUTE_LINE_MODE_LABEL: Record<RouteMode, string> = {
-  failover: "主备顺序",
-  smart: "整链最优",
-  weighted: "按权重",
-  scheduled: "按时段",
-  hybrid: "按时段 · 择优",
-  manual: "人工指定",
-};
-
 /** 坏了几秒内切走：和编辑框「怎么切」下面那句同一个算法（shared/routeGroup 的 routeSwitchWithinSeconds）。 */
 export function routeSwitchSeconds(policy: { failoverSeconds?: number | null; failureThreshold?: number | null } | null | undefined) {
   return routeSwitchWithinSeconds(policy || {});
@@ -39,12 +29,12 @@ export function routeLineSwitchSummary(status: RouteStatus) {
   if (normalizeRouteDelivery(status.delivery) === "aggregate") return "主线路那组一起分担";
   const back = status.policy.autoFailback === false ? "不自动切回" : "恢复后切回";
   switch (status.policy.mode) {
-    case "weighted": return "按权重分 · 坏了先跳过";
-    case "smart": return `挑整链最快的 · ${back}`;
+    case "weighted": return `${routeStrategyLabel(status.policy)} · 坏了先跳过`;
+    case "smart": return `主备 · 挑最快的 · ${back}`;
     case "scheduled":
-    case "hybrid": return "按时段首选 · 坏了往下切";
-    case "manual": return "走指定那条 · 坏了临时切";
-    default: return `按顺序切换 · ${back}`;
+    case "hybrid": return "主备 · 按时段首选";
+    case "manual": return "主备 · 走指定那条";
+    default: return `主备 · ${back}`;
   }
 }
 
@@ -130,8 +120,8 @@ export function routeDestLabel(path: Path) {
 }
 
 /** 副标题：整链最优 · 3 条线路 · 1 条故障已避开。 */
-export function routeLineSubtitle(status: RouteStatus | null, mode: RouteMode) {
-  const parts = [ROUTE_LINE_MODE_LABEL[mode] || ROUTE_LINE_MODE_LABEL.failover];
+export function routeLineSubtitle(status: RouteStatus | null, policy: Parameters<typeof routeStrategyLabel>[0]) {
+  const parts = [routeStrategyLabel(policy)];
   if (!status) return parts.join(" · ");
   const groups = routeLineGroups(status);
   parts.push(`${groups.length} 条线路`);

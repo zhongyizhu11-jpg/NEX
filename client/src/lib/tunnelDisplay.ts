@@ -97,15 +97,65 @@ export function tunnelTestIndicatesTimeout(input: {
   return input.latestLatencyIsTimeout === true;
 }
 
+export type ExitGroupMemberLite = {
+  id: number;
+  hostId?: number | null;
+  memberType?: string | null;
+  priority?: number | null;
+  aggregationWeight?: number | null;
+  isEnabled?: unknown;
+};
+
 /**
- * 一台出口 UDP 那一侧的说法（入口真实上报、规则转 UDP 时才有）：不通 / 没验证过 / 通。没有 UDP 规则返回空串。
- * 几条规则不一样时写条数。
+ * 负载均衡弹窗列哪几台、按什么顺序：出口组按组里的顺序（停用的不算，刚点过 ↑↓ 还没回来的先按点的顺序）；
+ * 没用出口组的按主出口 + 额外出口的 seq。
  */
-export function exitUdpText(item: { udpOk: number; udpDown: number; udpUnverified: number; rules: number }) {
-  const total = item.udpOk + item.udpDown + item.udpUnverified;
-  if (total === 0) return "";
-  const count = (value: number) => (item.rules > 1 && value < total ? `${value} 条规则 ` : "");
-  if (item.udpDown > 0) return `${count(item.udpDown)}UDP 不通，UDP 新会话不走它`;
-  if (item.udpUnverified > 0) return `${count(item.udpUnverified)}UDP 未验证（跟着 TCP 判断）`;
-  return "UDP 通";
+export function tunnelBalanceExits(
+  tunnel: { exitHostId?: unknown; loadBalanceExits?: unknown } | null | undefined,
+  groupMembers: readonly ExitGroupMemberLite[],
+  override: readonly number[] | null = null,
+): Array<{ hostId: number; weight: number | null }> {
+  const exits: Array<{ hostId: number; weight: number | null }> = [];
+  const push = (hostId: number, weight: unknown) => {
+    if (hostId > 0 && !exits.some((exit) => exit.hostId === hostId)) exits.push({ hostId, weight: Number(weight) > 0 ? Number(weight) : null });
+  };
+  if (groupMembers.length > 0) {
+    const serverOrder = groupMembers.map((member) => Number(member.hostId));
+    const useOverride = !!override && override.length === serverOrder.length && override.every((id) => serverOrder.includes(id));
+    const ordered = useOverride ? override!.map((hostId) => groupMembers.find((member) => Number(member.hostId) === hostId)!) : groupMembers;
+    for (const member of ordered) push(Number(member.hostId), member.aggregationWeight);
+    return exits;
+  }
+  push(Number(tunnel?.exitHostId || 0), null);
+  const extra = (Array.isArray(tunnel?.loadBalanceExits) ? tunnel!.loadBalanceExits as unknown[] : [])
+    .map((raw) => (raw && typeof raw === "object" ? raw : {}) as { hostId?: unknown; weight?: unknown; isEnabled?: unknown; seq?: unknown })
+    .filter((exit) => exit.isEnabled !== false)
+    .sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0));
+  for (const exit of extra) push(Number(exit.hostId || 0), exit.weight);
+  return exits;
+}
+
+/**
+ * 弹窗里点 ↑↓：把这台和相邻的那台对调，算出整组成员的新顺序（停用的、非主机的成员留在原位）。
+ * 返回新的出口顺序（给界面先显示）和整组成员 id（给 forwardGroups.reorder）；挪不了返回 null。
+ */
+export function moveExitInGroup(
+  allMembers: readonly ExitGroupMemberLite[],
+  shownHostIds: readonly number[],
+  hostId: number,
+  delta: -1 | 1,
+): { hostIds: number[]; memberIds: number[] } | null {
+  const index = shownHostIds.indexOf(hostId);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= shownHostIds.length) return null;
+  const hostIds = [...shownHostIds];
+  [hostIds[index], hostIds[target]] = [hostIds[target], hostIds[index]];
+  const all = [...allMembers].sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0));
+  const isShownHost = (member: ExitGroupMemberLite) => member.memberType === "host" && hostIds.includes(Number(member.hostId));
+  const byHost = new Map(all.filter(isShownHost).map((member) => [Number(member.hostId), member] as const));
+  const next = [...all];
+  all.map((member, slot) => (isShownHost(member) ? slot : -1)).filter((slot) => slot >= 0)
+    .forEach((slot, order) => { next[slot] = byHost.get(hostIds[order])!; });
+  if (next.some((member) => !member || !(Number(member.id) > 0))) return null;
+  return { hostIds, memberIds: next.map((member) => Number(member.id)) };
 }

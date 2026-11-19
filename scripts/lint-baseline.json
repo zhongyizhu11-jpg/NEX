@@ -92,7 +92,7 @@
     "client/src/pages/Announcements.tsx": 4,
     "client/src/pages/Billing.tsx": 35,
     "client/src/pages/ClientSubscriptions.tsx": 33,
-    "client/src/pages/ForwardGroups.tsx": 100,
+    "client/src/pages/ForwardGroups.tsx": 91,
     "client/src/pages/Home.tsx": 4,
     "client/src/pages/HostMonitor.tsx": 29,
     "client/src/pages/Hosts.tsx": 91,

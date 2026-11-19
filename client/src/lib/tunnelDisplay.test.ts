@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exitUdpText, getTunnelExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "./tunnelDisplay";
+import { moveExitInGroup, tunnelBalanceExits, getTunnelExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "./tunnelDisplay";
 
 const hosts = [
   { id: 1, name: "广州 01" },
@@ -82,10 +82,29 @@ test("uses the aggregate result when one multi-exit branch fails", () => {
   assert.equal(tunnelTestIndicatesTimeout({ details }), false);
 });
 
-test("UDP side of a balanced exit: down / unverified / ok, counted when rules differ, empty without UDP rules", () => {
-  assert.equal(exitUdpText({ udpOk: 0, udpDown: 0, udpUnverified: 0, rules: 2 }), "");
-  assert.equal(exitUdpText({ udpOk: 1, udpDown: 0, udpUnverified: 0, rules: 1 }), "UDP 通");
-  assert.equal(exitUdpText({ udpOk: 0, udpDown: 1, udpUnverified: 0, rules: 1 }), "UDP 不通，UDP 新会话不走它");
-  assert.equal(exitUdpText({ udpOk: 1, udpDown: 1, udpUnverified: 0, rules: 2 }), "1 条规则 UDP 不通，UDP 新会话不走它");
-  assert.equal(exitUdpText({ udpOk: 0, udpDown: 0, udpUnverified: 1, rules: 1 }), "UDP 未验证（跟着 TCP 判断）");
+test("balanced exits: exit-group order (disabled members skipped), pending ↑↓ order wins, plain tunnels by seq", () => {
+  const members = [
+    { id: 11, hostId: 2, memberType: "host", priority: 0, aggregationWeight: 5 },
+    { id: 12, hostId: 3, memberType: "host", priority: 1, aggregationWeight: 0 },
+    { id: 13, hostId: 4, memberType: "host", priority: 2, aggregationWeight: 2 },
+  ];
+  assert.deepEqual(tunnelBalanceExits({}, members), [{ hostId: 2, weight: 5 }, { hostId: 3, weight: null }, { hostId: 4, weight: 2 }]);
+  assert.deepEqual(tunnelBalanceExits({}, members, [4, 2, 3]).map((exit) => exit.hostId), [4, 2, 3]);
+  assert.deepEqual(tunnelBalanceExits({}, members, [4, 2]).map((exit) => exit.hostId), [2, 3, 4], "stale override ignored");
+  assert.deepEqual(
+    tunnelBalanceExits({ exitHostId: 7, loadBalanceExits: [{ hostId: 9, seq: 2 }, { hostId: 8, seq: 1, weight: 3 }, { hostId: 6, isEnabled: false }] }, []),
+    [{ hostId: 7, weight: null }, { hostId: 8, weight: 3 }, { hostId: 9, weight: null }],
+  );
+});
+
+test("moving an exit swaps it with its neighbour and keeps disabled / non-host members in place", () => {
+  const all = [
+    { id: 11, hostId: 2, memberType: "host", priority: 0 },
+    { id: 20, hostId: null, memberType: "tunnel", priority: 1 },
+    { id: 12, hostId: 3, memberType: "host", priority: 2 },
+    { id: 13, hostId: 4, memberType: "host", priority: 3 },
+  ];
+  assert.deepEqual(moveExitInGroup(all, [2, 3, 4], 3, -1), { hostIds: [3, 2, 4], memberIds: [12, 20, 11, 13] });
+  assert.equal(moveExitInGroup(all, [2, 3, 4], 2, -1), null);
+  assert.equal(moveExitInGroup(all, [2, 3, 4], 4, 1), null);
 });
