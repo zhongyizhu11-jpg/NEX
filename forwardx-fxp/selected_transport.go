@@ -180,9 +180,12 @@ func (t *selectedTransport) connectV3Locked(endpoint exitEndpoint, index int, di
 		return false, err
 	}
 	if !reused {
+		// 新拨的物理连接握手做完了，才是「它活着」的证据。借来的（预热连接、复用会话里新开的逻辑流）什么都没证明：
+		// 开一个逻辑流只是往本地队列里放一个 OPEN 帧，出口已经黑洞了照样成功。以前借来的也 markHealthy ——
+		// 上一条连接刚因为「出口不回话」把它判坏，下一条连接一来又把它改回健康，接着撞上去再等 6 秒（阶段 2）。
 		t.selector.observeLatency(index, time.Since(started))
+		t.selector.markHealthy(index)
 	}
-	t.selector.markHealthy(index)
 	t.useLocked(conn, sec, endpoint, index, true)
 	t.selector.probeFailedEndpoint(dialCfg)
 	return true, nil
@@ -443,6 +446,8 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 					// （新连接先不给它，由探测确认回来没有），这条连接换下一台重放（路线图 X11）。
 					err = fmt.Errorf("exit sent no target status within %s: %w", fxpTargetStatusWait, err)
 					t.selector.markFailure(t.index, err)
+					// V3 复用：这台出口手里那几条物理会话多半也是死的，不再往上开新流（已有的流自己跑完 / 超时）。
+					t.retireV3SessionsLocked()
 				}
 				failoverErr := t.failoverLocked(err)
 				t.mu.Unlock()
@@ -464,6 +469,17 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 		if failoverErr != nil {
 			return dst, failoverErr
 		}
+	}
+}
+
+// retireV3SessionsLocked：当前这台出口刚被判成「握手正常、之后不回话」。V3 复用时把它名下的物理会话都标成不再接新流。
+func (t *selectedTransport) retireV3SessionsLocked() {
+	dialCfg := t.cfg
+	if t.endpoint.Key != "" {
+		dialCfg.Key = t.endpoint.Key
+	}
+	if v3MuxEnabled(dialCfg) {
+		v3Outbound.retire(t.endpoint.Host, t.endpoint.Port, dialCfg)
 	}
 }
 

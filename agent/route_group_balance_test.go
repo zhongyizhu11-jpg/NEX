@@ -4,11 +4,38 @@ import (
 	mathrand "math/rand"
 	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
+
+// 真的同时到的一批连接（各在各的协程里挑）：挑中和记在途必须在同一把锁里，不然后来的看不见前面的，又压到同一条上。
+func TestRouteLeastLoadConcurrentBurstIsSpread(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		p := balanceTestProxy("least_load", 50, 30, 20)
+		p.ensureHealthStateLocked()
+		counts := make([]int32, 3)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < 100; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, index, _ := p.pickReserved("", nil, false)
+				atomic.AddInt32(&counts[index], 1)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if counts[0] < 48 || counts[0] > 52 || counts[1] < 28 || counts[1] > 32 || counts[2] < 18 || counts[2] > 22 {
+			t.Fatalf("第 %d 轮：100 条同时到的连接应该按 50:30:20 分，实际 %v", round+1, counts)
+		}
+	}
+}
 
 func balanceTestProxy(strategy string, weights ...int) *failoverProxy {
 	targets := make([]failoverTarget, len(weights))

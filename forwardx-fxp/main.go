@@ -2936,6 +2936,16 @@ func (c *secureConn) appendSealedFrameLocked(dst []byte, plain []byte) []byte {
 // 有效，和 readFrame 一样。
 func (c *secureConn) readFrames(dst [][]byte, max int) ([][]byte, error) {
 	if c.logical {
+		if !c.firstFrameDeadline.IsZero() {
+			/*
+				V3 的连接也要这道截止时间（阶段 2）。以前只有 V1 的加密帧那条路设了，V3 走到这里直接读，没有截止时间：
+				出口握手正常、之后不回「连上目标没有」（出口黑洞了，而手里这条预热连接 / 复用会话看起来还活着）时，
+				这条连接永远等下去，客户端只能自己超时 —— 实验室里 V3 黑洞一台出口时 30 条里失败的那一条。
+				conn 是内层连接（不复用），或者复用会话里的一个逻辑流：逻辑流的读超时是它自己的
+				（v3.Stream.SetReadDeadline），不碰物理连接，同一会话里别的流不受影响。
+			*/
+			_ = c.conn.SetReadDeadline(c.firstFrameDeadline)
+		}
 		frame, err := c.readLogicalFrame()
 		if err != nil {
 			return dst, err

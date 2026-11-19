@@ -331,12 +331,6 @@ func (p *failoverProxy) reserveLocked(index int) failoverReservation {
 	return failoverReservation{index: index, gen: p.inflightGen, held: true}
 }
 
-func (p *failoverProxy) reserve(index int) failoverReservation {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.reserveLocked(index)
-}
-
 func (p *failoverProxy) releaseReservationLocked(reservation failoverReservation) {
 	if !reservation.held || reservation.gen != p.inflightGen {
 		return

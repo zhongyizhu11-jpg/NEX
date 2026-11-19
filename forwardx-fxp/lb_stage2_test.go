@@ -406,6 +406,83 @@ func TestExitIsReadmittedWithinTenSecondsAfterABlackhole(t *testing.T) {
 	}
 }
 
+// (c)(d) 一台出口变成黑洞（握手早就做完的预热连接 / 复用会话看起来还活着），接着开 30 条 TCP 连接：一条都不该失败。
+// V1 一直是「第一条等 6 秒换出口，其余立刻」；V3 以前有一条永远等下去（逻辑帧没有截止时间），而且借来的连接会把
+// 刚判坏的出口又改回健康。
+func TestBlackholedExitNeverFailsANewTCPConnection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("要等真实时间")
+	}
+	on, off := true, false
+	for _, mode := range []struct {
+		name  string
+		apply func(c *config)
+	}{
+		{"v1", func(c *config) {}},
+		{"v3-nomux", func(c *config) { c.TransportVersion, c.V3Transport, c.V3Multiplex = "v3", "tls", &off }},
+		{"v3-mux", func(c *config) { c.TransportVersion, c.V3Transport, c.V3Multiplex = "v3", "tls", &on }},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			resetFXPEndpointRegistry()
+			const tunnelID, ruleID, key = 431, 432, "stage2-v3-key"
+			target := startEchoTCPTarget(t)
+			done := make(chan struct{})
+			defer close(done)
+			gates := make([]*tcpBlackholeGate, 3)
+			exits := make([]exitEndpoint, 3)
+			for i := range gates {
+				port := freeTCPUDPPort(t)
+				exitCfg := config{Role: "exit", TunnelID: tunnelID, ListenPort: port, Protocol: "tcp", Key: key, StreamTargets: loopbackStreamTargets(ruleID, target)}
+				mode.apply(&exitCfg)
+				go func() { _ = runExit(done, exitCfg) }()
+				waitForTCP(t, port)
+				gates[i] = startTCPBlackholeGate(t, port)
+				exits[i] = exitEndpoint{Host: "127.0.0.1", Port: gates[i].port(), Key: key, TargetStatus: true}
+			}
+			entryPort := freeTCPUDPPort(t)
+			entryCfg := config{Role: "entry", TunnelID: tunnelID, RuleID: ruleID, ListenPort: entryPort, Protocol: "tcp",
+				ExitHost: "127.0.0.1", ExitPort: exits[0].Port, ExitStrategy: "round_robin", Exits: exits,
+				TargetIP: "127.0.0.1", TargetPort: target, Key: key}
+			mode.apply(&entryCfg)
+			go func() { _ = runEntry(done, entryCfg) }()
+			waitForTCP(t, entryPort)
+			for i := 0; i < 9; i++ {
+				if _, err := roadmapEcho(t, entryPort, "", "warm-up", 5*time.Second); err != nil {
+					t.Fatalf("预热第 %d 条就不通：%v", i+1, err)
+				}
+			}
+			// 等预热连接 / 复用会话备好，再把第二台变成黑洞。
+			time.Sleep(1500 * time.Millisecond)
+			gates[1].drop.Store(true)
+			failed, slow := 0, 0
+			var longest time.Duration
+			for i := 0; i < 30; i++ {
+				elapsed, err := roadmapEcho(t, entryPort, "", "after-blackhole", 20*time.Second)
+				if err != nil {
+					failed++
+					t.Logf("第 %d 条失败（%v）：%v", i+1, elapsed.Round(time.Millisecond), err)
+				}
+				if elapsed > time.Second {
+					slow++
+				}
+				if elapsed > longest {
+					longest = elapsed
+				}
+			}
+			t.Logf("(d) %s：一台出口黑洞后 30 条新连接：失败 %d 条，等了 1 秒以上的 %d 条，最久 %v", mode.name, failed, slow, longest.Round(10*time.Millisecond))
+			if failed != 0 {
+				t.Fatalf("有 %d 条连接失败了，应该换出口重放", failed)
+			}
+			if longest > fxpTargetStatusWait+3*time.Second {
+				t.Fatalf("最久的一条等了 %v，应该在等结果的截止时间（%v）附近就换出口", longest, fxpTargetStatusWait)
+			}
+			if slow > 3 {
+				t.Fatalf("判坏之后不该再有连接撞上去等：%d 条等了 1 秒以上", slow)
+			}
+		})
+	}
+}
+
 var errStage2 = errors.New("stage2")
 
 func stage2Echo(t *testing.T, conn net.Conn, payload string, wait time.Duration) (string, error) {
