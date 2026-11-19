@@ -230,6 +230,16 @@ func (l *fxpHostLoad) observeLatency(d time.Duration, now time.Time) {
 	l.latencyAt = now
 }
 
+// latencyEstimate：量到的握手耗时（指数平均）；还没量过是 0。
+func (l *fxpHostLoad) latencyEstimate() time.Duration {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return time.Duration(l.latency * float64(time.Millisecond))
+}
+
 // noteLatencyUsed：有选择器正拿这台的延迟去比（按负载 / 自动 / 延迟优先）。
 func (l *fxpHostLoad) noteLatencyUsed(now time.Time) {
 	if l != nil {

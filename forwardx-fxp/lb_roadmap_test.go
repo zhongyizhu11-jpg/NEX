@@ -582,7 +582,6 @@ func TestTargetStatusWaitHasADeadline(t *testing.T) {
 	if elapsed > 9*time.Second {
 		t.Fatalf("等结果等了 %v，应该有截止时间", elapsed.Round(time.Millisecond))
 	}
-	if fxpEndpointStateFor(exitEndpoint{Host: "127.0.0.1", Port: ports[0], Key: key}).isHealthy() {
-		t.Fatal("不回结果的出口应该记一次出口失败")
-	}
+	// 等不到结果记在出口头上的是一次「可疑」，不是当场判坏（F2，见 TestOneMissingTargetStatusIsOnlyASuspect）；
+	// 这台出口握手照常通，后台探测会把可疑清掉，这里不看它的健康。
 }

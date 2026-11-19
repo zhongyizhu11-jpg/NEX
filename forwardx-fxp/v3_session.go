@@ -155,7 +155,11 @@ func dialV3Inner(host string, port int, cfg config) (net.Conn, *v3.InnerConn, er
 
 // v3ClientHandshake 在 raw 上套外层、做内层握手，整个过程受握手超时约束。
 func v3ClientHandshake(raw net.Conn, cfg config) (*v3.InnerConn, error) {
-	if err := setFXPConnDeadline(raw, fxpHandshakeTimeout); err != nil {
+	timeout := fxpHandshakeTimeout
+	if cfg.v3HandshakeTimeout > 0 {
+		timeout = cfg.v3HandshakeTimeout
+	}
+	if err := setFXPConnDeadline(raw, timeout); err != nil {
 		return nil, err
 	}
 	wrapped, err := wrapV3Client(raw, cfg)

@@ -700,6 +700,14 @@ func (s *exitEndpointSelector) observeLatency(index int, d time.Duration) {
 	s.loads[index].observeLatency(d, time.Now())
 }
 
+// probeFailed：这台出口有一次可疑（后台探测没通、等不到出口回结果）。健康的要连着几次才判坏（fxpEndpointState.probeFailed）。
+func (s *exitEndpointSelector) probeFailed(index int, err error) {
+	if s == nil || index < 0 || index >= len(s.states) {
+		return
+	}
+	s.states[index].probeFailed(err)
+}
+
 func (s *exitEndpointSelector) markFailure(index int, err error) {
 	if s == nil || index < 0 || index >= len(s.states) {
 		return

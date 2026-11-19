@@ -17,13 +17,24 @@ const (
 	// 超过了就放弃透明切换，这条连接跟着当前出口走到底。
 	fxpReplayBufferMax = 256 * 1024
 	/*
-		等出口回「连上目标没有」最多等这么久（路线图 X11）。以前这一帧没有截止时间：出口握手正常、
-		之后卡住（进程挂起、回程黑洞），入口就无限期等下去，客户端的连接悬着，这台出口也不会被判坏。
-		出口连目标最多等 4 秒（fxpTargetDialTimeoutDefault）才回话，所以比握手确认的 4 秒多留 2 秒：
-		只等 4 秒的话，「目标连接超时」的结果和入口的超时撞在一起，会被错当成出口的问题。
+		等出口回「连上目标没有」至少等这么久（路线图 X11）：出口拨目标的时限（fxpTargetDialTimeoutDefault，4 秒，
+		出口解析目标域名也算在里面）再加 2 秒余量。只等 4 秒的话，「目标连接超时」的结果和入口的超时撞在一起，
+		会被错当成出口的问题。入口实际等的还要加上量到的到这台出口的往返（targetStatusWaitFor）：结果帧要走一趟回程，
+		往返长的线路上它晚到是常态，不能当成没回。以前这一帧没有截止时间：出口握手正常、之后卡住（进程挂起、
+		回程黑洞），入口就无限期等下去。
 	*/
-	fxpTargetStatusWait = fxpPipelinedAckFast + fxpTargetProbeReplyGrace
+	fxpTargetStatusWait = fxpTargetDialTimeoutDefault + fxpTargetProbeReplyGrace
 )
+
+// targetStatusWaitFor：hello 发出去之后最多等多久出口的结果帧 —— fxpTargetStatusWait 加上量到的到这台出口的握手耗时
+// （exit_load.go 的 latency；按 fxpPipelinedAckFast 封顶，量歪了也不至于等太久）。
+func targetStatusWaitFor(load *fxpHostLoad) time.Duration {
+	rtt := load.latencyEstimate()
+	if rtt > fxpPipelinedAckFast {
+		rtt = fxpPipelinedAckFast
+	}
+	return fxpTargetStatusWait + rtt
+}
 
 /*
 selectedTransport 是入口（和中转）到下一跳的一条会话连接，负责三件事：
@@ -62,7 +73,7 @@ type selectedTransport struct {
 	closed      bool
 	// load 是当前端点所在主机的负载记账（exit_load.go）：这条会话算它的一个活动连接，收发的字节记到它头上。
 	load *fxpHostLoad
-	// statusDeadline：等「连目标的结果」最晚等到什么时候（hello 发出去时起算，见 fxpTargetStatusWait）。
+	// statusDeadline：等「连目标的结果」最晚等到什么时候（hello 发出去时起算，见 targetStatusWaitFor）。
 	statusDeadline time.Time
 }
 
@@ -103,6 +114,14 @@ func (t *selectedTransport) connectLocked() error {
 		}
 		endpointLabel := connStatsEndpoint(endpoint.Host, endpoint.Port)
 		if v3Enabled(dialCfg) {
+			if t.selector.count() > 1 {
+				/*
+					有别的出口可换：现拨的物理连接握手最多等 fxpPipelinedAckFast 就换下一个，和 V1 一样。等不到
+					结果帧只算一次「可疑」（不当场判坏），黑洞了的出口在判坏之前还会再被挑中一次；那一次的
+					复用会话已经被收回（retireV3SessionsLocked），要现拨 —— 等满 10 秒就太久了。
+				*/
+				dialCfg.v3HandshakeTimeout = fxpPipelinedAckFast
+			}
 			done, err := t.connectV3Locked(endpoint, index, dialCfg, endpointLabel)
 			if done {
 				return err
@@ -226,6 +245,14 @@ func (t *selectedTransport) handleAck(sec *secureConn, index int, err error) {
 		t.acked = true
 		if !t.statusPending {
 			t.commitLocked()
+		} else if deadline := time.Now().Add(fxpTargetStatusWait); deadline.After(t.statusDeadline) {
+			/*
+				现拨的流水线连接：hello 是和握手一起发出去的，确认到的这一刻就是量到的这条连接的往返。出口的结果帧
+				最晚在这之后 fxpTargetStatusWait 到（拨目标的时限 + 余量）。还没量过往返的出口（刚启动，第一条连接）
+				靠这一步不被误判。handleAck 是读这条连接的协程在确认时调的，firstFrameDeadline 归它管。
+			*/
+			t.statusDeadline = deadline
+			sec.firstFrameDeadline = deadline
 		}
 	}
 	t.mu.Unlock()
@@ -294,7 +321,7 @@ func (t *selectedTransport) start(frames ...[]byte) error {
 	for _, frame := range frames {
 		t.bufferLocked(frame)
 	}
-	t.statusDeadline = time.Now().Add(fxpTargetStatusWait)
+	t.statusDeadline = time.Now().Add(targetStatusWaitFor(t.load))
 	err := writeSecureFramesWithDeadline(t.sec, frames...)
 	if err == nil {
 		if t.committed {
@@ -337,7 +364,7 @@ func (t *selectedTransport) failoverLocked(cause error) error {
 		if err := t.connectLocked(); err != nil {
 			return fmt.Errorf("%v; failover: %w", cause, err)
 		}
-		t.statusDeadline = time.Now().Add(fxpTargetStatusWait)
+		t.statusDeadline = time.Now().Add(targetStatusWaitFor(t.load))
 		err := writeSecureFramesWithDeadline(t.sec, t.replay...)
 		if err == nil {
 			log.Printf("fxp session failed over tunnel=%d rule=%d from=%s:%d to=%s:%d replayed=%dB reason=%v",
@@ -451,10 +478,15 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 				t.statusPending = false
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
-					// 握手确认了，「连目标的结果」却一直没来：出口卡住了或者回程不通。算这台出口的一次失败
-					// （新连接先不给它，由探测确认回来没有），这条连接换下一台重放（路线图 X11）。
-					err = fmt.Errorf("exit sent no target status within %s: %w", fxpTargetStatusWait, err)
-					t.selector.markFailure(t.index, err)
+					/*
+						握手确认了，「连目标的结果」却一直没来：出口卡住了、回程不通，或者结果帧只是比等待还晚。
+						算这台出口的一次「可疑」（和后台探测失败一样，连着几次才判坏；维护循环马上探它一次），
+						不当场判坏（F2）。这条连接换下一台重放（路线图 X11）—— 到这里出口一个字节都没回过；
+						可它也许已经连上目标、把发过去的内容转出去了（只是结果帧丢了 / 晚了），重放就会让目标收到第二份：
+						这一步不保证「至多一次」（docs/dev/scheduler-spec.md）。
+					*/
+					err = fmt.Errorf("exit sent no target status before the deadline: %w", err)
+					t.selector.probeFailed(t.index, err)
 					// V3 复用：这台出口手里那几条物理会话多半也是死的，不再往上开新流（已有的流自己跑完 / 超时）。
 					t.retireV3SessionsLocked()
 				}

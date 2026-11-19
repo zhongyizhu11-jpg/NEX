@@ -703,10 +703,11 @@ func (s *fxpEndpointState) runProbe(cfg config) {
 /*
 dialEndpointProbe：探测用的拨号。和 dialSecureTCPFresh 一样现拨、握完手，只是握手确认最多等 fxpPipelinedAckFast
 （4 秒），不等满 10 秒：对端接了连接却不回话（进程卡住、回程黑洞）时，一次探测卡 10 秒，出口恢复的那一刻
-正好有一次探测卡在半路的话，要多等这 10 秒才轮到下一次。V3 的握手超时在它自己的拨号里，照旧。
+正好有一次探测卡在半路的话，要多等这 10 秒才轮到下一次。V3 的外层 + 内层握手也一样最多等 fxpPipelinedAckFast。
 */
 func dialEndpointProbe(host string, port int, cfg config) (net.Conn, *secureConn, error) {
 	if v3Enabled(cfg) {
+		cfg.v3HandshakeTimeout = fxpPipelinedAckFast
 		return dialV3Fresh(host, port, cfg)
 	}
 	conn, err := dialNextHop(host, port, secureDialTimeout(cfg), cfg)
@@ -729,6 +730,8 @@ func dialEndpointProbe(host string, port int, cfg config) (net.Conn, *secureConn
 func (s *fxpEndpointState) watch(cfg config) func() {
 	s.mu.Lock()
 	s.noteDialConfigLocked(cfg)
+	// 被盯着的端点都有备选：预热的 V3 物理会话握手也只等 fxpPipelinedAckFast（用户连接可能正等着它）。
+	s.dialCfg.v3HandshakeTimeout = fxpPipelinedAckFast
 	s.tuning = fxpProbeTuningFor(cfg)
 	s.watchers++
 	s.mu.Unlock()
