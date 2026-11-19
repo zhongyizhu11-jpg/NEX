@@ -10,8 +10,7 @@ import {
   runForwardGroupChainSelfTest,
   updateForwardGroupFromInput,
 } from "../services/forwardGroupService";
-import { withKeyedTaskLock } from "../keyedTaskLock";
-import { EXIT_GROUP_STRATEGIES } from "../../shared/exitStrategy";
+import { BALANCE_STRATEGIES } from "../../shared/loadBalance";
 import { FORWARD_GROUP_HEALTH_CHECK_METHODS } from "../../shared/forwardGroupHealthCheck";
 import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
@@ -32,7 +31,7 @@ import {
 } from "../linkAvailabilitySummary";
 
 const failoverStrategySchema = z.enum(["fallback", "round_robin", "random", "ip_hash"]);
-const exitGroupStrategySchema = z.enum(EXIT_GROUP_STRATEGIES);
+const exitGroupStrategySchema = z.enum(BALANCE_STRATEGIES);
 const failoverTargetSchema = z.object({
   targetIp: z.string().min(1).max(253),
   targetPort: z.number().int().min(1).max(65535),
@@ -66,6 +65,9 @@ const memberSchema = z.object({
 });
 
 import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
+import { getDdnsSettings } from "../ddns";
+import { ddnsWeightSupport } from "../ddnsWeightedRecords";
+import { withForwardGroupEditLock } from "../panelKeyedLock";
 
 const forwardGroupQueryCache = createQueryCache(300);
 
@@ -122,6 +124,11 @@ const baseSchema = z.object({
   bandwidthAggregationSlots: z.number().int().min(1).max(MAX_AGGREGATION_RECORD_SLOTS).optional().default(8),
   bandwidthAggregationMinMembers: z.number().int().min(1).max(5).optional().default(1),
   ddnsLineFallback: z.enum(DDNS_LINE_FALLBACK_MODES).optional().default("default"),
+  // 外部观察（别的机器探成员对外的入口端口）和额外指定的观察主机；入口组按服务商记录权重发布。
+  // 都没传（老客户端、脚本）= 新建时外部观察开、其余关，编辑时保持原样。
+  peerProbeEnabled: z.boolean().optional(),
+  peerObserverHostIds: z.array(z.number().int().positive()).max(8).optional(),
+  ddnsWeightEnabled: z.boolean().optional(),
   autoFailback: z.boolean().default(true),
   isEnabled: z.boolean().default(true),
   // 端口转发挂了入口组时可以没有自己的成员，下限由 service 按形态判
@@ -271,7 +278,9 @@ export const forwardGroupsRouter = router({
         visibleItems.map((group: any) => Number(group.id)),
         ctx.user.role === "admin" ? undefined : ctx.user.id,
       );
-      const items = visibleItems.map((group: any) => ({
+      // 外部观察的现状（别的机器看每个成员通不通）只给管理员看：里面有别的主机的名字。
+      const observedItems: typeof visibleItems = accessScope ? visibleItems : await db.attachForwardGroupPeerHealth(visibleItems);
+      const items = observedItems.map((group: any) => ({
         ...group,
         trafficSummary: trafficByGroupId.get(Number(group.id)),
       }));
@@ -387,6 +396,9 @@ export const forwardGroupsRouter = router({
       }
     }),
 
+  /** 现在的 DDNS 服务商能不能按记录权重发布（入口组「按权重解析」不支持时界面置灰并写明原因）。 */
+  ddnsWeightSupport: adminProcedure.query(async () => ddnsWeightSupport(await getDdnsSettings())),
+
   events: adminProcedure
     .input(z.object({ groupId: z.number(), limit: z.number().int().min(1).max(200).default(50) }))
     .query(async ({ input }) => {
@@ -402,7 +414,7 @@ export const forwardGroupsRouter = router({
 
   update: adminProcedure
     .input(baseSchema.extend({ id: z.number() }))
-    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.id}`, async () => {
+    .mutation(async ({ input }) => withForwardGroupEditLock(input.id, async () => {
       const group = await updateForwardGroupFromInput(input.id, input);
       return { success: true, group };
     })),
@@ -410,14 +422,14 @@ export const forwardGroupsRouter = router({
   /** 成员跟着节点池（2.3.497）：poolId = null 取消，成员留着现在这些。 */
   followPool: adminProcedure
     .input(z.object({ groupId: z.number().int().positive(), poolId: z.number().int().positive().nullable() }))
-    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.groupId}`, async () => {
+    .mutation(async ({ input }) => withForwardGroupEditLock(input.groupId, async () => {
       const { setGroupPool } = await import("../nodePoolGroups");
       return setGroupPool(input.groupId, input.poolId);
     })),
 
   toggle: adminProcedure
     .input(z.object({ id: z.number().int().positive(), isEnabled: z.boolean() }))
-    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.id}`, async () => {
+    .mutation(async ({ input }) => withForwardGroupEditLock(input.id, async () => {
       return db.setForwardGroupEnabled(input.id, input.isEnabled);
     })),
 
@@ -431,13 +443,13 @@ export const forwardGroupsRouter = router({
 
   delete: adminProcedure
     .input(z.object({ id: z.number(), confirmRules: z.boolean().optional() }))
-    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.id}`, async () => {
+    .mutation(async ({ input }) => withForwardGroupEditLock(input.id, async () => {
       return deleteForwardGroupWithImpact(input.id, input.confirmRules);
     })),
 
   reorder: adminProcedure
     .input(z.object({ groupId: z.number(), memberIds: z.array(z.number().int().positive()).min(1).max(1000) }))
-    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.groupId}`, async () => {
+    .mutation(async ({ input }) => withForwardGroupEditLock(input.groupId, async () => {
       await db.reorderForwardGroupMembers(input.groupId, input.memberIds);
       await db.runForwardGroupFailover(input.groupId, { forcePriority: true, forceSync: true });
       // 出口组：顺序就是主备顺序、也决定主出口，用这个组的链路要跟着换（syncTunnelExitGroupEndpoints）
@@ -450,7 +462,7 @@ export const forwardGroupsRouter = router({
 
   sync: adminProcedure
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.id}`, async () => {
+    .mutation(async ({ input }) => withForwardGroupEditLock(input.id, async () => {
       await db.syncForwardGroupRules(input.id);
       await db.runForwardGroupFailover(input.id, { forcePriority: true, forceSync: true });
       return { success: true };

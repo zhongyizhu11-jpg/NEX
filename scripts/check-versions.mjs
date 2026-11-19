@@ -63,6 +63,17 @@ if (fxpRuntimeVersion && sharedFxpRuntimeVersion !== fxpRuntimeVersion) {
 if (agentMinWireFxpVersion !== sharedFxpMinWireVersion) {
   errors.push(`agent/fxp_version.go minWireCompatibleFXPVersion ${agentMinWireFxpVersion || "(missing)"} does not match FXP_MIN_WIRE_VERSION ${sharedFxpMinWireVersion}`);
 }
+// Agent 和 FXP 共用的挑选算法在 lbcore/（仓库里的另一个 Go 模块，不单独发版）：两个 go.mod 都得 replace 到旁边的目录，
+// 少了这一行，发布构建会去网上找一个不存在的版本。
+for (const moduleDir of ["agent", "forwardx-fxp"]) {
+  const goMod = read(`${moduleDir}/go.mod`);
+  if (!/^replace github\.com\/zhongyizhu11-jpg\/NEX\/lbcore => \.\.\/lbcore$/m.test(goMod)) {
+    errors.push(`${moduleDir}/go.mod must contain "replace github.com/zhongyizhu11-jpg/NEX/lbcore => ../lbcore"`);
+  }
+}
+if (!fs.existsSync(new URL("lbcore/go.mod", root))) {
+  errors.push("lbcore/go.mod is missing");
+}
 // 不认识 -version 的旧 FXP 靠这条握手 v3 的文案区分能不能握手（Agent 和安装脚本各用一份）。
 if (!sharedHandshakeV3Marker || agentHandshakeV3Marker !== sharedHandshakeV3Marker) {
   errors.push(`agent/fxp_version.go fxpHandshakeV3Marker does not match shared/fxpRuntime.ts FXP_HANDSHAKE_V3_MARKER`);

@@ -87,3 +87,18 @@ func TestRouteHopProbeSnapshotAndDroppedProbes(t *testing.T) {
 		t.Fatalf("probes the panel no longer sends are dropped")
 	}
 }
+
+// report 取一份并当场算作发成功了（真正的循环走 pendingReport + ack）。
+func (r *routeHopProbeRunner) report() []map[string]any {
+	pending := r.pendingReport()
+	if pending == nil {
+		return nil
+	}
+	r.ack(pending, true)
+	return pending.results
+}
+
+// stats：不做过期判断的 statsAt（手搭的状态没有时刻）。
+func (s *routeHopProbeState) stats() routeHopStats {
+	return s.statsAt(time.Time{})
+}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	mathrand "math/rand"
 	"net"
 	"net/netip"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 type failoverProxy struct {
@@ -19,9 +23,17 @@ type failoverProxy struct {
 	activeIndex    int
 	roundRobinNext int
 	// wrrCurrent 是「按权重」的平滑加权轮询计数；slowStartAt 是每条路径从挂掉恢复的时刻，
-	// 之后 routeSlowStartWindow 内按比例慢慢加量（route_group_balance.go）。
-	wrrCurrent     []int
-	slowStartAt    []time.Time
+	// 之后 lbcore.DefaultSlowStart.Window（60 秒）内按比例慢慢加量（route_group_balance.go）。
+	wrrCurrent  []int
+	slowStartAt []time.Time
+	// lbNear：「延迟优先」里哪几条算「一样快」的状态（lbcore.NearSet，route_group_balance.go）。
+	lbNear lbcore.NearSet
+	// lbQuality：每条路径算好的探测抖动（探测窗口没变就不重算，route_group_balance.go）。
+	lbQuality []routeQualityCache
+	// 在途：已经挑中、还在拨的连接数（A8，route_group_balance.go）。inflightGen 每换一次规格加一，
+	// 旧下标发出去的在途不再退到新下标上。
+	inflight       []int
+	inflightGen    uint64
 	targetHealth   []bool
 	failureSince   []time.Time
 	recoveredSince []time.Time
@@ -46,9 +58,8 @@ type failoverProxy struct {
 	// 线路会被重置回第 0 条）也要重新计时 —— 这两种情况不算「切换」，不该拿去
 	// 卡最短驻留，但面板要知道「从什么时候起走的这条」。
 	activeSince time.Time
-	// 自动择优的候选，以及它从什么时候开始一直是候选。
-	fastestCandidate int
-	fastestSince     time.Time
+	// 自动择优的候选，以及它从什么时候开始一直领先（fastestIndexLocked）。
+	challenger lbcore.Challenger
 	// 最近一小时里自动切换（不含人工指定）的时刻：切得太勤就把驻留拉长（flapHoldLocked）。
 	autoSwitchTimes []time.Time
 	// flapWarmupUntil：刚起来的这一段（中继、出口还没全起来）里的自动切换不计入抖动抑制，见 flapWarmup。
@@ -83,7 +94,24 @@ type failoverProxy struct {
 	healthFlight   chan struct{}
 	// 客户端连进来以后有没有拨通一条路径（最近 10 分钟，按分钟一格）：线路详情「入站」那一段。
 	inbound routeInboundWindow
+	// 出口组（failover_exit_group.go）：每条目标累计分到多少条新连接 / 新 UDP 会话（报给面板的 picks）；
+	// 经出口复核过「连上就被关」的目标（exitThroughFailed，恢复要经出口连着探通 exitThroughOKs 次）和正在经出口探的
+	// （exitConfirming：复核或恢复，每台同一时刻一个）。exitSilentCloseUntil：目标自己会关不说话的连接，这之前不拿
+	// 「经出口被关」判出口；exitOthersOpenAt：上一次拿别的出口比、有一台照样开着的时刻（exitCloseIsOwnFault）。
+	pickCounts           []uint64
+	exitThroughFailed    []bool
+	exitThroughOKs       []int
+	exitThroughGen       []uint64 // 直接探失败一次加一：在那之前发起的经出口恢复探测作废（recheckExitThrough）
+	exitConfirming       []bool
+	exitSilentCloseUntil time.Time
+	exitOthersOpenAt     time.Time
+	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
+	// 访客是谁」，建会话时拿它当哈希键（route_group_udp_visitor.go）。
+	udpVisitors map[netip.AddrPort]failoverUDPVisitor
 }
+
+// 一个代理最多几条目标：出口组上限 20 台（面板 shared/loadBalance.ts 的 GOST_BALANCE_MAX_EXITS）。以前是 11。
+const failoverMaxTargets = 20
 
 func failoverID(ruleID int, sourcePort int) string {
 	return strconv.Itoa(ruleID) + ":" + strconv.Itoa(sourcePort)
@@ -113,7 +141,7 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.PreferFastest),
 		failoverScheduleSignature(spec.Schedule),
 		strconv.Itoa(spec.FailureThreshold),
-		strconv.Itoa(spec.ScoreMargin),
+		strconv.Itoa(spec.LatencyMarginMs),
 		strconv.Itoa(spec.ScoreHoldSeconds),
 		strconv.Itoa(spec.PrewarmSeconds),
 		func() string {
@@ -134,6 +162,10 @@ func failoverSignature(spec failoverSpec) string {
 		}
 		parts = append(parts, "balance:"+strconv.Itoa(spec.BalanceReport.TunnelID)+":"+strings.Join(ids, ","))
 	}
+	// 同上：不带探测节奏 / 不关慢启动时签名不变
+	if spec.ProbeIntervalSeconds > 0 || spec.ProbeTimeoutMs > 0 || spec.NoSlowStart {
+		parts = append(parts, "probe:"+strconv.Itoa(spec.ProbeIntervalSeconds)+":"+strconv.Itoa(spec.ProbeTimeoutMs)+":"+strconv.FormatBool(spec.NoSlowStart))
+	}
 	for _, target := range spec.Targets {
 		// 运行时提示（failoverTargetHints：中转异常、下游延迟、沿途负载、出口 IP）面板随时会变，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
@@ -150,6 +182,12 @@ func failoverSignature(spec failoverSpec) string {
 			// 同上：不带时签名不变。探法变了得进签名，在跑的代理才会原地换上新规格（样本照旧带过去）。
 			weight += "e"
 		}
+		if target.ViaRelay {
+			weight += "r"
+		}
+		if target.ProbeRelay {
+			weight += "p"
+		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
 	return strings.Join(parts, "|")
@@ -161,7 +199,7 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	}
 	spec.Protocol = failoverProtocol(spec)
 	switch strings.TrimSpace(spec.Strategy) {
-	case "round_robin", "random", "ip_hash", "weighted", "least_load", "auto", "fallback":
+	case "round_robin", "random", "ip_hash", "weighted", "least_load", "auto", "latency", "fallback":
 		spec.Strategy = strings.TrimSpace(spec.Strategy)
 	default:
 		spec.Strategy = "fallback"
@@ -183,8 +221,8 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	if spec.FailureThreshold > 20 {
 		spec.FailureThreshold = 20
 	}
-	if spec.ScoreMargin <= 0 {
-		spec.ScoreMargin = 10
+	if spec.LatencyMarginMs < 0 {
+		spec.LatencyMarginMs = 0
 	}
 	if spec.ScoreHoldSeconds <= 0 {
 		spec.ScoreHoldSeconds = failoverFastestHoldSeconds
@@ -204,19 +242,51 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	default:
 		spec.Delivery = ""
 	}
-	if spec.PinnedIndex != nil && (*spec.PinnedIndex < 0 || *spec.PinnedIndex >= len(spec.Targets)) {
-		spec.PinnedIndex = nil
-		spec.PinnedUntil = 0
-	}
-	if spec.PinnedIndex == nil {
-		spec.PinnedUntil = 0
-	}
 	spec.Schedule = normalizeFailoverSchedule(spec.Schedule)
+	if spec.ProbeIntervalSeconds < 0 {
+		spec.ProbeIntervalSeconds = 0
+	}
+	if spec.ProbeIntervalSeconds > 60 {
+		spec.ProbeIntervalSeconds = 60
+	}
+	if spec.ProbeTimeoutMs != 0 && spec.ProbeTimeoutMs < 200 {
+		spec.ProbeTimeoutMs = 200
+	}
+	if spec.ProbeTimeoutMs > 5000 {
+		spec.ProbeTimeoutMs = 5000
+	}
+	/*
+		出口组的主机号（BalanceReport.HostIDs）和目标一一对应：目标被清掉（地址不合法）或截断（超过上限）时主机号
+		跟着同一个下标走。以前只截目标（11 条）、不动主机号，两边长度对不上，整份上报就不发了；更糟的是中间清掉
+		一条时后面的主机号全部错位。面板给的两边长度就对不上时主机号整个不要（不拿错位的数据报、也不按主机号哈希），
+		但规格照样是出口组（F8）：以前连 BalanceReport 一起扔掉，出口组悄悄变成线路组 —— 拨本机端口永远成功，
+		出口的健康就再也不判了。
+	*/
+	var reportHostIDs []int
+	alignHostIDs := spec.BalanceReport != nil && len(spec.BalanceReport.HostIDs) == len(spec.Targets)
+	if spec.BalanceReport != nil && !alignHostIDs {
+		if shouldLogAgentReport(fmt.Sprintf("failover-host-ids-mismatch:%d:%d", spec.BalanceReport.TunnelID, spec.ListenPort), time.Hour) {
+			logf("failover exit group spec has %d host ids for %d targets (tunnel=%d listen=%d); exit status will not be reported", len(spec.BalanceReport.HostIDs), len(spec.Targets), spec.BalanceReport.TunnelID, spec.ListenPort)
+		}
+	}
+	// 手动指定指的是哪一条（原规格里的下标）：清掉 / 截掉目标时跟着那一条走，它自己被清掉了就当没指定（F8）。
+	pinned := -1
+	if spec.PinnedIndex != nil {
+		pinned = *spec.PinnedIndex
+	}
+	spec.PinnedIndex = nil
 	cleaned := make([]failoverTarget, 0, len(spec.Targets))
-	for _, target := range spec.Targets {
+	for position, target := range spec.Targets {
 		target.TargetIP = strings.TrimSpace(target.TargetIP)
 		if target.TargetIP == "" || target.TargetPort <= 0 || target.TargetPort > 65535 {
 			continue
+		}
+		if alignHostIDs {
+			reportHostIDs = append(reportHostIDs, spec.BalanceReport.HostIDs[position])
+		}
+		if position == pinned {
+			index := len(cleaned)
+			spec.PinnedIndex = &index
 		}
 		// 探测目标填得不合法时退回「探出站地址本身」，也就是老行为 —— 不能因为
 		// 一个填错的探测地址就让这条出站永远探不通、被当成挂了。
@@ -253,11 +323,18 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 			target.Line = &line
 		}
 		cleaned = append(cleaned, target)
-		if len(cleaned) >= 11 {
+		if len(cleaned) >= failoverMaxTargets {
 			break
 		}
 	}
 	spec.Targets = cleaned
+	if spec.BalanceReport != nil {
+		// 复制一份：别和调用方的规格共用同一个切片。
+		spec.BalanceReport = &failoverBalanceReport{TunnelID: spec.BalanceReport.TunnelID, HostIDs: reportHostIDs}
+	}
+	if spec.PinnedIndex == nil {
+		spec.PinnedUntil = 0
+	}
 	return spec
 }
 
@@ -369,6 +446,7 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 		activeSince:     time.Now(),
 		flapWarmupUntil: time.Now().Add(flapWarmup),
 		rng:             newFailoverRand(ruleID, sourcePort),
+		roundRobinNext:  randomSpreadStart(ruleID, sourcePort),
 		ln:              ln,
 		udp:             udpConn,
 		done:            make(chan struct{}),
@@ -432,7 +510,6 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	n := len(p.spec.Targets)
 	if !p.stateInitialized {
 		p.stateInitialized = true
-		p.fastestCandidate = -1
 		p.prewarmIndex = -1
 		p.precheckFailedIndex = -1
 		p.pinnedLast = -1
@@ -481,6 +558,28 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 			p.conns[i] = map[net.Conn]struct{}{}
 		}
 	}
+	if len(p.slowStartAt) != n {
+		p.slowStartAt = make([]time.Time, n)
+	}
+	if len(p.inflight) != n {
+		p.inflight = make([]int, n)
+	}
+	if len(p.pickCounts) != n {
+		p.pickCounts = make([]uint64, n)
+	}
+	if len(p.exitThroughFailed) != n {
+		p.exitThroughFailed = make([]bool, n)
+	}
+	if len(p.exitConfirming) != n {
+		p.exitConfirming = make([]bool, n)
+	}
+	if len(p.exitThroughOKs) != n {
+		p.exitThroughOKs = make([]int, n)
+	}
+	if len(p.exitThroughGen) != n {
+		p.exitThroughGen = make([]uint64, n)
+	}
+
 	p.udpSide.ensure(n)
 	if p.activeIndex < 0 || p.activeIndex >= n {
 		p.activeIndex = 0
@@ -514,8 +613,8 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 	if summary := p.chainScoreInputLocked(index); summary.hasLatency {
 		toChainMs = int(summary.latencyMs)
 	}
-	if reason == "score" && !p.fastestSince.IsZero() && p.fastestCandidate == index {
-		heldSeconds = int(time.Since(p.fastestSince).Seconds())
+	if reason == "score" && !p.challenger.Since.IsZero() && p.challenger.Index == index {
+		heldSeconds = int(time.Since(p.challenger.Since).Seconds())
 	}
 	p.activeIndex = index
 	p.lastSwitchAt = time.Now()
@@ -671,67 +770,53 @@ func (p *failoverProxy) abandonAfterServeFailure(what string, err error) {
 func (p *failoverProxy) handleConn(client net.Conn) {
 	defer client.Close()
 	visitor, prefix := p.readVisitor(client)
-	var upstream net.Conn
-	var target failoverTarget
-	var index int
-	var err error
+	// 挑中就记一笔在途，拨通后转成连接（A8）：一下子进来的一批连接才不会全压到同一条上。
 	attempted := map[int]bool{}
-	for {
-		target, index = p.pickTargetForKey(visitor, attempted)
-		if index < 0 {
+	upstream, index, reservation, err := p.dialNextPathReserved(visitor, attempted, nil)
+	if errors.Is(err, errFailoverNoPath) {
+		if shouldLogAgentReport(fmt.Sprintf("failover-no-target:%d:%d", p.ruleID, p.sourcePort), agentReportLogInterval) {
 			logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
-			p.inbound.record(false, time.Now())
-			return
 		}
-		// 拨失败的路径在里面记失败、加进 attempted；允许竞速的策略可能实际连上的是另一条。
-		upstream, target, index, err = p.dialFailoverPath(visitor, target, index, attempted, failoverProxyDialTimeout)
-		if err == nil {
-			break
-		}
-		p.mu.RLock()
-		exhausted := len(attempted) >= len(p.spec.Targets)
-		p.mu.RUnlock()
-		if exhausted {
-			break
-		}
+		p.inbound.record(false, time.Now())
+		return
 	}
 	if err != nil {
 		// 每条都拨失败了：重新探一遍再挑一次。这里不能再带 attempted —— 里面已经是全部路径，
 		// 带着它永远挑不出来，这一步等于没有（以前就是这样）。
 		p.checkHealthShared()
-		target, index = p.pickTargetForKey(visitor, nil)
-		if index >= 0 {
-			started := time.Now()
-			upstream, err = failoverDialTCP(context.Background(), target, failoverProxyDialTimeout)
-			if err == nil {
-				p.markDialSuccess(index, time.Since(started))
-			}
-		} else {
+		var target failoverTarget
+		target, index, reservation = p.pickReserved(visitor, nil, false)
+		if index < 0 {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
 			p.inbound.record(false, time.Now())
 			return
 		}
-		if err != nil {
+		started := time.Now()
+		if upstream, err = failoverDialTCP(context.Background(), target, failoverProxyDialTimeout); err != nil {
+			p.releaseReservation(reservation)
 			logf("failover dial failed rule=%d target=%s:%d: %v", p.ruleID, target.TargetIP, target.TargetPort, err)
 			p.inbound.record(false, time.Now())
 			return
 		}
+		p.markDialSuccess(index, time.Since(started))
 	}
 	// 读 PROXY 头时多读到的字节（以及透传模式下的头本身）要先补给路径，再接着原样拷 —— 由保护期接着写：
 	// 上游回第一个字节之前就关了，这条连接当场换下一条路径、把这些字节重发过去（failover_early_close.go）。
-	// 连接从拨通这一刻就记在这条路径名下（按负载分、强制切换都靠它），保护期里换了路再挪过去。
-	p.trackConn(index, client)
-	trackedIndex := index
-	upstream, index, ok := p.guardedStart(client, upstream, index, visitor, attempted, prefix)
-	if !ok {
-		p.untrackConn(trackedIndex, client)
-		p.inbound.record(false, time.Now())
+	// 连接从拨通这一刻就记在这条路径名下（按负载分、强制切换都靠它）；保护期里换了路，earlyReroute 当场把它挪到
+	// 新路径名下，返回的 index 是最后在用的那条（没救了是 -1，untrackConn 按连接找）。
+	p.trackConnReserved(index, client, reservation)
+	upstream, index, outcome := p.guardedStart(client, upstream, index, visitor, attempted, prefix)
+	if outcome != failoverGuardRelay {
+		if outcome == failoverGuardDelivered {
+			p.notePick(index)
+		}
+		p.untrackConn(index, client)
+		// 上游回了东西、已经原样交给客户端并收尾（failoverGuardDelivered）算成功：这条连接没丢。
+		p.inbound.record(outcome == failoverGuardDelivered, time.Now())
 		return
 	}
-	if index != trackedIndex {
-		p.untrackConn(trackedIndex, client)
-		p.trackConn(index, client)
-	}
+	// 这条连接最后落在这条目标上（保护期里换过路的算换到的那条）：出口组报给面板的「分到多少」数它。
+	p.notePick(index)
 	p.inbound.record(true, time.Now())
 	defer upstream.Close()
 	defer p.untrackConn(index, client)

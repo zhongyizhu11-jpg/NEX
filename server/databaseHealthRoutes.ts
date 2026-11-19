@@ -1,5 +1,6 @@
 import type { Express, ErrorRequestHandler, RequestHandler } from "express";
 import { databaseHealth } from "./databaseHealthState";
+import { panelBackgroundLeaseView } from "./panelLeaseView";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../shared/databaseHealth";
 
 /** 前端故障页轮询的就是这个。故障期间面板会一直有请求打过来，重试间隔给 15 秒。 */
@@ -9,7 +10,8 @@ export function registerDatabaseHealthRoutes(app: Express) {
   // 不建登录上下文、不查库：登录态解析和所有业务查询都失败的时候它也得能用。
   app.get("/api/database-health", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, max-age=0");
-    res.json(databaseHealth.snapshot());
+    // backgroundTasks：后台任务租约（server/panelLease.ts）—— 本实例是不是在跑后台任务、谁在跑。只有随机的实例 id，不带主机名。
+    res.json({ ...databaseHealth.snapshot(), backgroundTasks: panelBackgroundLeaseView() });
   });
 }
 

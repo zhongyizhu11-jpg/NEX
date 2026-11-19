@@ -115,3 +115,67 @@ test("出口组跟着节点池：跟上马上同步，池改了跟着改，池�
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+/*
+  P4：主备组跟着节点池，池里去掉的正好是活动成员。以前同步完成员不评估，组的活动成员还指着一个已经
+  不存在的成员（解析也还指着那台），要等下一次健康上报或巡检。现在同步完马上进评估队列。
+*/
+test("主备组跟着节点池：池里去掉活动成员后马上重选", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-pool-follow-failover-"));
+  try {
+    const script = String.raw`
+      import assert from "node:assert/strict";
+      import path from "node:path";
+      import { pathToFileURL } from "node:url";
+      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+      const runtime = await import(url("server/dbRuntime.ts"));
+      const schema = await import(url("server/dbSchema.ts"));
+      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+      await schema.ensureDatabaseSchema();
+      console.info = () => {};
+      console.warn = () => {};
+      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+      const query = (sql, params = []) => runtime.queryRaw(sql, params);
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
+      const now = Math.floor(Date.now() / 1000);
+      for (const [id, ip] of [[1, "198.51.100.1"], [2, "198.51.100.2"], [3, "198.51.100.3"]]) {
+        await exec('INSERT INTO hosts (id, name, ip, ipv4, "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, 1, 1, ?)', [id, "h" + id, ip, ip, now]);
+        // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
+        (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
+      }
+      await exec(
+        'INSERT INTO forward_groups (id, name, "groupType", "groupMode", domain, "recordType", "targetIp", "userId", "isEnabled") VALUES (40, ?, ?, ?, ?, ?, ?, 1, 1)',
+        ["failover", "host", "failover", "pool.example.test", "A", "0.0.0.0"],
+      );
+      const pools = await import(url("server/nodePools.ts"));
+      const follow = await import(url("server/nodePoolGroups.ts"));
+      const repo = await import(url("server/db.ts"));
+      const poolId = await pools.createNodePool({ userId: 1, name: "入口池", role: "landing", hostIds: [1, 2] });
+      await follow.setGroupPool(40, poolId);
+      await repo.runForwardGroupFailover(40);
+      const active = async () => {
+        const row = (await query('SELECT g."activeMemberId", m."hostId" FROM forward_groups g LEFT JOIN forward_group_members m ON m.id = g."activeMemberId" WHERE g.id = 40'))[0];
+        return Number(row.hostId || 0);
+      };
+      assert.equal(await active(), 1);
+      await pools.updateNodePool(poolId, { hostIds: [2, 3] });
+      await follow.syncGroupsFollowingPool(poolId, "test");
+      const deadline = Date.now() + 5000;
+      while (await active() !== 2 && Date.now() < deadline) await sleep(50);
+      assert.equal(await active(), 2, "活动成员被池去掉了：马上换到池里剩下的第一台");
+      console.log("OK");
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "follow.db"), FORWARDX_LOG_DIR: directory },
+      timeout: 120000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /OK/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

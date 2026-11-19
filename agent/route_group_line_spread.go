@@ -1,35 +1,42 @@
 package main
 
 import (
-	"hash/fnv"
 	"strconv"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 /*
 线路里几个落地一起分（2.2.245，面板 2.3.501「落地怎么分」）。
 
 一条线路可以有几个落地（「+ 并列」加的、落地池里的几台）。以前不管怎么配，主备逻辑（稳定优先、整链最优、
-按时段、人工指定都是 fallback）一次只挑一条路径，几个落地里只用一个，其余的候着。现在线路可以选：
+按时段、人工指定都是 fallback）一次只挑一条路径，几个落地里只用一个，其余的候着。现在线路可以选一种分法 ——
+就是 lbcore 的那几种（和整组分、和 NEX 隧道的出口组同一套算法）：
 
-	least_load  按负载分：给现在挂着连接最少的那个落地（经不同中转到同一个落地的几条，连接加在一起算）
+	auto        自动：成本 = 延迟 × 丢包系数 × (这个落地的连接 + 1) ÷ 余量，挑最低的
+	least_load  按负载：给现在挂着连接最少的那个落地
+	latency     延迟优先：只在和最快的差不多快的几个落地里分
 	round_robin 轮流
 	random      随机
-	ip_hash     按访客固定：按「访客 + 落地」算分（加权 rendezvous），一个落地挂了只有原来在它上面的访客换
-	auto        自动（2.2.251）：按最近延迟和面板给的主机负载算有效权重（route_group_balance.go 的 autoWeightsLocked），
-	            随机挑两个落地、取「这个落地的连接数 ÷ 有效权重」更小的那个
+	ip_hash     按访客固定：按「访客 + 落地」算分（加权 rendezvous，不设负载上限），一个落地挂了只有原来在它上面的访客换
+
+连接数都按落地合着算：经不同中转到同一个落地的几条路径，连接加在一起。
 
 主备逻辑照旧决定走哪条线路（activeIndex 落在哪条线路上），这里只在那条线路里面分：每个落地出一条代表 ——
 挑出来的那条代表它自己的落地，别的落地取这条线路上健康、没被排除的里面下标最小的那条（面板展开时已经按
 整链估计 / 顺序排好）。能用的落地不到两个时就是主备挑出来的那条，和以前一样。
 
+有落地挂了时，两处优先挑和它同出口 IP 的落地（2.2.251）：按负载里成本不比它高的、按访客固定里那个访客原本的落地挂了时。
+
 规格里不带 Line / Spread 的目标完全不受影响；面板只在「一次走一条线路」时才带（按权重、聚合 / 复制时
 整组本来就在分）。
 */
 
+// 线路里能选的分法：lbcore 的八种里去掉主备（线路里再主备没有意义）和按权重（落地没有各自的权重）。
 func validLineSpread(spread string) bool {
 	switch spread {
-	case "least_load", "round_robin", "random", "ip_hash", "auto":
+	case lbcore.StrategyLeastLoad, lbcore.StrategyRoundRobin, lbcore.StrategyRandom, lbcore.StrategyIPHash, lbcore.StrategyAuto, lbcore.StrategyLatency:
 		return true
 	}
 	return false
@@ -81,62 +88,52 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 	if len(reps) < 2 {
 		return anchor
 	}
-	switch head.Spread {
-	case "least_load":
-		now := time.Now()
-		start := p.roundRobinNext % len(reps)
-		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
-		// 有落地挂了：负载一样的几个里优先挑和挂掉那个同出口 IP 的（2.2.251）。
-		deadExits := p.lineDeadExitIPsLocked(line, reps, exclude, udp)
-		best, bestCost, bestSameExit := -1, 0.0, false
-		for offset := range reps {
-			index := reps[(start+offset)%len(reps)]
-			landing := p.lineLandingLocked(index)
-			conns := 0
-			for i := range p.spec.Targets {
-				if p.sameLineLocked(i, line) && p.lineLandingLocked(i) == landing {
-					conns += p.connectionsLocked(i)
-				}
-			}
-			// 刚恢复的落地 60 秒内慢慢加量，和整组「按负载」一样。
-			cost := float64(conns+1) / p.slowStartLocked(index, now)
-			sameExit := len(deadExits) > 0 && deadExits[p.exitIPLocked(index)]
-			if best < 0 || cost < bestCost || (cost == bestCost && sameExit && !bestSameExit) {
-				best, bestCost, bestSameExit = index, cost, sameExit
+	now := time.Now()
+	// 同一个落地的连接合着算。
+	landingLoad := func(index int) (active, inflight int) {
+		landing := p.lineLandingLocked(index)
+		for i := range p.spec.Targets {
+			if p.sameLineLocked(i, line) && p.lineLandingLocked(i) == landing {
+				a, f := p.pathLoadLocked(i)
+				active, inflight = active+a, inflight+f
 			}
 		}
-		return best
-	case "auto":
-		// 同一个落地的连接合着算（和按负载分一样），有效权重按代表那条路径的延迟和负载。
-		weights := p.autoWeightsLocked(reps, time.Now())
-		return p.powerOfTwoPickLocked(reps, weights, func(index int) int {
-			landing := p.lineLandingLocked(index)
-			conns := 0
-			for i := range p.spec.Targets {
-				if p.sameLineLocked(i, line) && p.lineLandingLocked(i) == landing {
-					conns += p.connectionsLocked(i)
-				}
-			}
-			return conns
-		})
-	case "round_robin":
-		index := reps[p.roundRobinNext%len(reps)]
-		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
-		return index
-	case "random":
-		if p.rng == nil {
-			p.rng = newFailoverRand(p.ruleID, p.sourcePort)
-		}
-		return reps[p.rng.Intn(len(reps))]
-	case "ip_hash":
-		key := hashKey
-		if key == "" {
-			key = strconv.Itoa(p.sourcePort)
-		}
+		return active, inflight
+	}
+	members := p.membersLocked(reps, head.Spread, now, udp, landingLoad)
+	// 落地没有各自的权重：都按一样大（代表那条路径的权重是整组分时用的，这里不看）。
+	for _, index := range reps {
+		members[index].Weight = 1
+	}
+	key := hashKey
+	var keys []string
+	if head.Spread == lbcore.StrategyIPHash && key != "" {
 		// 按落地算分，不按下标：同一个落地换了中转、主备换了挑出来的那条，访客还落在这个落地上。
-		best := p.rendezvousLandingLocked(reps, key)
-		// 这个访客原本的落地（算上挂了的）用不了：优先换到同出口 IP 的落地上去（2.2.251），没有就照旧。
-		if home := p.rendezvousLandingLocked(p.lineLandingIndicesLocked(line), key); home >= 0 && p.lineLandingLocked(home) != p.lineLandingLocked(best) {
+		keys = p.lineLandingKeysLocked()
+	}
+	state := p.spreadStateLocked(members, reps, false)
+	best := lbcore.Pick(head.Spread, state, members, keys, reps, key, now, p.randLocked(), p.pickOptionsLocked())
+	switch {
+	case head.Spread == lbcore.StrategyLeastLoad:
+		// 有落地挂了：成本不比挑中的高的几个里，优先和挂掉那个同出口 IP 的（2.2.251）。
+		if deadExits := p.lineDeadExitIPsLocked(line, reps, exclude, udp); len(deadExits) > 0 && !deadExits[p.exitIPLocked(best)] {
+			bestCost, _ := lbcore.Cost(members, reps, best, true)
+			for _, index := range reps {
+				if cost, ok := lbcore.Cost(members, reps, index, true); ok && cost <= bestCost && deadExits[p.exitIPLocked(index)] {
+					return index
+				}
+			}
+		}
+	case keys != nil:
+		// 这个访客原本的落地（算上挂了的、不看负载）不在能用的里面：优先换到同出口 IP 的落地上去（2.2.251），没有就照旧。
+		all := p.lineLandingIndicesLocked(line)
+		for _, index := range all {
+			if members[index].Weight == 0 {
+				members[index] = lbcore.Member{Weight: 1, Share: 1}
+			}
+		}
+		home := lbcore.Rendezvous(members, keys, all, key, lbcore.RendezvousOptions{LoadFactor: -1})
+		if home >= 0 && !p.lineHasLandingLocked(reps, home) {
 			if want := p.exitIPLocked(home); want != "" {
 				sameExit := make([]int, 0, len(reps))
 				for _, index := range reps {
@@ -145,13 +142,32 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 					}
 				}
 				if len(sameExit) > 0 {
-					return p.rendezvousLandingLocked(sameExit, key)
+					return lbcore.Rendezvous(members, keys, sameExit, key, lbcore.RendezvousOptions{})
 				}
 			}
 		}
-		return best
 	}
-	return anchor
+	return best
+}
+
+// 每条路径所在落地的标识（按路径下标排），按访客固定算分用。
+func (p *failoverProxy) lineLandingKeysLocked() []string {
+	keys := make([]string, len(p.spec.Targets))
+	for i := range p.spec.Targets {
+		keys[i] = p.lineLandingLocked(i)
+	}
+	return keys
+}
+
+// indices 里有没有 index 那个落地的代表。
+func (p *failoverProxy) lineHasLandingLocked(indices []int, index int) bool {
+	landing := p.lineLandingLocked(index)
+	for _, candidate := range indices {
+		if p.lineLandingLocked(candidate) == landing {
+			return true
+		}
+	}
+	return false
 }
 
 // 这条线路上每个落地出一条代表（不管健不健康），按下标顺序。
@@ -170,21 +186,6 @@ func (p *failoverProxy) lineLandingIndicesLocked(line int) []int {
 		indices = append(indices, i)
 	}
 	return indices
-}
-
-// 按「访客 + 落地」算 rendezvous 分：indices 里分最高的那条；空的是 -1。
-func (p *failoverProxy) rendezvousLandingLocked(indices []int, key string) int {
-	best, bestScore := -1, uint64(0)
-	for _, index := range indices {
-		hash := fnv.New64a()
-		_, _ = hash.Write([]byte(key))
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(p.lineLandingLocked(index)))
-		if score := hash.Sum64(); best < 0 || score > bestScore {
-			best, bestScore = index, score
-		}
-	}
-	return best
 }
 
 // closeOldLineConnsLocked：从一条「一起分」的线路切到别的线路时，旧线路别的落地上的连接按切换方式处理 ——

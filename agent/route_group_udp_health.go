@@ -31,6 +31,14 @@ type failoverUDPSide struct {
 	recoveredSince []time.Time
 	lastLatencyMs  []int
 	stats          []*routeTargetStats
+	// UDP 那一侧从挂掉恢复的时刻：UDP 会话按它慢启动（route_group_balance.go 的 slowStartLocked）。
+	slowStartAt []time.Time
+}
+
+func (s *failoverUDPSide) markSlowStart(index int, now time.Time) {
+	if index >= 0 && index < len(s.slowStartAt) {
+		s.slowStartAt[index] = now
+	}
 }
 
 func (s *failoverUDPSide) ensure(n int) {
@@ -49,6 +57,9 @@ func (s *failoverUDPSide) ensure(n int) {
 	if len(s.lastLatencyMs) != n {
 		s.lastLatencyMs = make([]int, n)
 	}
+	if len(s.slowStartAt) != n {
+		s.slowStartAt = make([]time.Time, n)
+	}
 	if len(s.stats) != n {
 		s.stats = make([]*routeTargetStats, n)
 	}
@@ -59,29 +70,29 @@ func (s *failoverUDPSide) ensure(n int) {
 	}
 }
 
-// carried 按「还是同一条出站」（rebuildForSpecLocked 的 oldIndex）把状态搬到新下标上；新出站从头来。
-func (s *failoverUDPSide) carried(n int, from func(i int) (int, bool)) failoverUDPSide {
-	next := failoverUDPSide{}
-	next.ensure(n)
-	for i := 0; i < n; i++ {
-		j, ok := from(i)
-		if !ok || j < 0 || j >= len(s.health) {
-			continue
-		}
-		next.health[i] = s.health[j]
-		next.failureSince[i] = s.failureSince[j]
-		next.recoveredSince[i] = s.recoveredSince[j]
-		next.lastLatencyMs[i] = s.lastLatencyMs[j]
-		if s.stats[j] != nil {
-			next.stats[i] = s.stats[j]
+// carried 按「还是同一条出站」（rebuildForSpecLocked 的 carryIndex）把状态搬到新下标上；新出站从头来（健康）。
+func (s *failoverUDPSide) carried(from []int) failoverUDPSide {
+	next := failoverUDPSide{
+		health:         carried(s.health, from),
+		failureSince:   carried(s.failureSince, from),
+		recoveredSince: carried(s.recoveredSince, from),
+		lastLatencyMs:  carried(s.lastLatencyMs, from),
+		stats:          carried(s.stats, from),
+		slowStartAt:    carried(s.slowStartAt, from),
+	}
+	for i, j := range from {
+		if j < 0 || j >= len(s.health) {
+			next.health[i] = true
 		}
 	}
+	next.ensure(len(from))
 	return next
 }
 
 // 这份规格要不要把 UDP 那一侧分开判：只有 TCP+UDP。
 func (p *failoverProxy) udpSeparateLocked() bool {
-	return failoverProtocol(p.spec) == "both"
+	// 出口组不分侧：UDP 装在到出口的那条 TCP 连接里走，出口通不通只有一本账（failover_exit_group.go）。
+	return failoverProtocol(p.spec) == "both" && !p.exitGroupLocked()
 }
 
 // 这条出站此刻 UDP 能不能用：UDP 探测通，而且没被面板按「中转异常」标掉。不分侧的规格就是 healthyLocked。
@@ -92,7 +103,10 @@ func (p *failoverProxy) udpUsableLocked(index int) bool {
 	if index < 0 || index >= len(p.spec.Targets) {
 		return false
 	}
-	p.ensureHealthStateLocked()
+	// 不在这里 ensure（读锁下也会调，见 healthyLocked 的说明）；没配齐按「还没探过」。
+	if index >= len(p.udpSide.health) || index >= len(p.relayDown) {
+		return !p.spec.Targets[index].Down
+	}
 	return p.udpSide.health[index] && !p.relayDown[index]
 }
 
@@ -109,7 +123,7 @@ func (p *failoverProxy) usableLocked(index int, udp bool) bool {
 
 TCP 在走的那条 UDP 也通就用它；不通就按人工指定 > 时段表 > 数组顺序找第一条候选，同样够格时优先和 TCP 在走的
 那条同出口 IP 的（escapePickLocked，2.2.251）—— 同一个访客的 TCP 和 UDP 在对端看到的是同一个来源。不调
-preferredLocked：它里面的自动择优会改 fastestCandidate / fastestSince，选路的热路径不该动评估状态。
+preferredLocked：它里面的自动择优会改 challenger（谁在领先、从什么时候起），选路的热路径不该动评估状态。
 */
 func (p *failoverProxy) udpFallbackIndexLocked(candidates []int, exclude map[int]bool) int {
 	inCandidates := func(index int) bool {
@@ -212,6 +226,10 @@ func (p *failoverProxy) applyUDPProbeLocked(results []bool, latencies []int, now
 			} else if now.Sub(side.recoveredSince[i]) >= recoverSeconds {
 				side.health[i] = true
 				side.recoveredSince[i] = time.Time{}
+				// UDP 那一侧刚恢复：UDP 会话也慢慢加量（A11），不动 TCP 那一侧的份额。
+				if !p.spec.NoSlowStart {
+					side.markSlowStart(i, now)
+				}
 				logf("failover target udp recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
 			}
 			continue
@@ -223,9 +241,11 @@ func (p *failoverProxy) applyUDPProbeLocked(results []bool, latencies []int, now
 		if side.failureSince[i].IsZero() {
 			side.failureSince[i] = now
 		}
-		if side.stats[i].consecutiveFailures >= p.spec.FailureThreshold && now.Sub(side.failureSince[i]) >= failoverSeconds {
+		if side.stats[i].probeFailures >= p.spec.FailureThreshold && now.Sub(side.failureSince[i]) >= failoverSeconds {
 			side.health[i] = false
 			side.failureSince[i] = time.Time{}
+			// UDP 那一侧断了：钉在它上面的 UDP 会话关掉，下一个包重新挑（A6）。TCP 连接不动。
+			p.onTargetDownLocked(i, false, true)
 			logf("failover target udp unhealthy rule=%d source=%d index=%d target=%s:%d reason=udp health check", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
 		}
 	}

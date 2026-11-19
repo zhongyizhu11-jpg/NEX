@@ -34,14 +34,11 @@ test("tunnel probe topology follows the active exit strategy", () => {
     loadBalanceEnabled: true,
   };
   const exitNodes = [{ id: 1, hostId: 21, listenPort: 3001, isEnabled: true }];
-  const disabled = tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], exitNodes);
-  assert.equal(
-    disabled,
-    tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], [{ ...exitNodes[0], listenPort: 3999 }]),
-  );
+  // 每种分配方式都会用到备用出口（库里老的 none 是主备），备用出口变了拓扑就变
+  const fallback = tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], exitNodes);
   assert.notEqual(
-    disabled,
-    tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "round_robin" }, [], exitNodes),
+    fallback,
+    tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], [{ ...exitNodes[0], listenPort: 3999 }]),
   );
 });
 
@@ -70,7 +67,7 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
     await schema.ensureDatabaseSchema();
 
     try {
-      const groups = await import(moduleUrl("server/repositories/forwardGroupRepository.ts"));
+      const groups = await import(moduleUrl("server/db.ts"));
       const tunnels = await import(moduleUrl("server/repositories/tunnelRepository.ts"));
       const q = (name) => '"' + name + '"';
       const insert = async (table, columns, values) => {
@@ -145,8 +142,9 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
       assert.equal(externalChain.probes[1].targetIp, "edge-3.example.test");
       assert.equal(externalChain.probes.length, 2, "disabled chain members must not create probes");
 
-      const legacyChinaProbes = await groups.getForwardGroupChinaHealthProbesForHost(1);
-      assert.deepEqual(snapshot.chinaHealthProbes, legacyChinaProbes);
+      // 主备组 / 入口组各自标着自己的类型（上报处理按它决定恢复时间怎么算）
+      assert.deepEqual(Array.from(new Set(snapshot.chinaHealthProbes.map((probe) => probe.groupMode))).sort(), ["entry", "failover"]);
+      assert.deepEqual(snapshot.peerHealthProbes, [], "没有可探端口的组不安排外部观察");
       assert.deepEqual(snapshot.chinaHealthProbes.map((probe) => probe.memberId).sort((a, b) => a - b), [101, 301, 302, 321]);
       const methodOf = (memberId) => snapshot.chinaHealthProbes.find((probe) => probe.memberId === memberId);
       assert.deepEqual([methodOf(101).method, methodOf(101).targetPort], ["tcp", 81]);

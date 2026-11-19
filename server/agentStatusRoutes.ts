@@ -235,8 +235,7 @@ async function applyAgentRuleStatus(host: any, payload: any, lookups?: AgentStat
     const hopHostIds = Array.isArray(hops)
       ? hops.map((hop: any) => Number(hop.hostId)).filter((id: number) => Number.isFinite(id) && id > 0)
       : [];
-    const usesExitCandidates = !!(tunnel as any).loadBalanceEnabled
-      && String((tunnel as any).loadBalanceStrategy || "").toLowerCase() !== "none";
+    const usesExitCandidates = !!(tunnel as any).loadBalanceEnabled;
     const aggregateRuntime = hopHostIds.length >= 3 || isExtraExit || (usesExitCandidates && Number(tunnel.exitHostId) === Number(host.id));
     if (aggregateRuntime) {
       recordTunnelRuntimeHostStatus(tunnelId, host.id, !!isRunning);

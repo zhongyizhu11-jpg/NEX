@@ -62,6 +62,13 @@ export GOCACHE="$GO_CACHE_ROOT"
 export HOME="$GO_HOME_ROOT"
 export XDG_CACHE_HOME="$XDG_CACHE_ROOT"
 
+# Agent 和 FXP 的 go.mod 都把共用的挑选算法 replace 到仓库里的 lbcore/（不单独发版）。只拷了 agent/ 或
+# forwardx-fxp/ 出去编的话，这里先说清楚缺什么，而不是让 go build 报一句找不到模块。
+if [ ! -f "$ROOT_DIR/lbcore/go.mod" ]; then
+  echo "[agent] lbcore/ is missing next to agent/ and forwardx-fxp/ (both go.mod files replace github.com/zhongyizhu11-jpg/NEX/lbcore => ../lbcore)" >&2
+  exit 1
+fi
+
 build_one() {
   local goarch="$1"
   local out="$2"

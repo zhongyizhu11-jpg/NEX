@@ -14,7 +14,7 @@ import {
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { ROUTE_SPREADS } from "@shared/routeGroupModel";
 import { expandRouteLines, newRouteLine, routeLinesFromPaths, type RouteLine } from "@shared/routeLines";
-import { RouteGroupFields, followRoutePath, lineModeHint, routeGroupPayload, routePathIndexFor, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
+import { RouteGroupFields, followRoutePath, lineModeHint, lineStrategyOf, routeGroupPayload, routePathIndexFor, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
 import { SegmentLatencyContext, type SegmentLatencyHook } from "./segmentLatency";
 
 /*
@@ -95,18 +95,21 @@ test("还原出来的线路和路径一一对应：探测地址、落地、权�
   assert.equal(lines[1].weight, 30);
 });
 
-test("怎么切四格，选中的那格下面一句它会怎么做；手动主备、混合是格子下面的勾", () => {
+test("分配方式和出口组同一个下拉框（8 种）；主备下面再问首选哪条（按顺序 / 最快的 / 按时段 / 手动指定）", () => {
   const smart = render(group("smart"));
-  for (const segment of ["稳定优先", "整链最优", "按权重", "按时段"]) assert.match(smart, new RegExp(`role="radio"[^>]*>${segment}<`), `少了「${segment}」`);
-  assert.match(smart, /aria-checked="true"[^>]*>整链最优</);
-  assert.match(smart, /坏了 \d+ 秒内切走 · /, "选中那格下面一行要点");
+  assert.match(smart, /role="combobox"[^>]*aria-label="分配方式"/);
+  assert.match(smart, /先用第一个，连不上才换下一个，恢复稳定后切回/, "主备那一句");
+  for (const segment of ["按顺序", "最快的", "按时段", "手动指定"]) assert.match(smart, new RegExp(`role="radio"[^>]*>${segment}<`), `少了「${segment}」`);
+  assert.match(smart, /aria-checked="true"[^>]*>最快的</);
+  assert.match(smart, /坏了 \d+ 秒内切走 · /, "下面一行要点");
   const hybrid = render(group("hybrid"));
   assert.match(hybrid, /aria-checked="true"[^>]*>按时段</, "混合落在「按时段」那格");
   assert.match(hybrid, /aria-label="时段外挑最快的" data-testid="route-line-hybrid" checked=""|checked=""[^>]*data-testid="route-line-hybrid"/);
-  const manual = render(group("manual"));
-  assert.match(manual, /aria-checked="true"[^>]*>稳定优先</, "手动主备落在「稳定优先」那格");
-  assert.match(manual, /data-testid="route-line-manual"/);
+  assert.match(render(group("manual")), /aria-checked="true"[^>]*>手动指定</);
   assert.doesNotMatch(render(group("failover")), /data-testid="route-line-hybrid"/);
+  assert.doesNotMatch(render(group("weighted")), /data-testid="route-line-prefer"/, "同时分的没有「首选哪条」");
+  assert.equal(lineStrategyOf(group("weighted", { spread: "auto" }).policy), "auto");
+  assert.equal(lineStrategyOf(group("hybrid").policy), "fallback");
 });
 
 test("按时段在「怎么切」下面直接配时段表，此刻命中的那一段带「此刻」", () => {
@@ -126,12 +129,11 @@ test("手动主备在「怎么切」下面直接选走哪条，没有「自动�
   assert.doesNotMatch(html, /应急人工指定/, "手动模式下没有第二个人工指定");
 });
 
-test("按权重：分法六选一（含「自动」），按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
+test("同时分：选中的那种下面一句它会怎么做；按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
   const html = render(group("weighted"));
-  // 2.3.534 起和出口组同一个下拉框（统一负载均衡）：框里显示选中的那种，下拉里只有线路组能分连接的六种
-  assert.match(html, /role="combobox"[^>]*aria-label="新连接怎么分"/);
-  assert.deepEqual([...ROUTE_SPREADS], ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto"]);
-  assert.match(render(group("weighted", { spread: "auto" })), /沿途主机的负载自动算权重/, "选中「自动」时下面那句说它会怎么做");
+  assert.match(html, /role="combobox"[^>]*aria-label="分配方式"/);
+  assert.deepEqual([...ROUTE_SPREADS], ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto", "latency"]);
+  assert.match(render(group("weighted", { spread: "auto" })), /看延迟、抖动、丢包和忙闲/, "选中「自动」时下面那句说它会怎么做");
   assert.match(html, /data-testid="route-line-weights"/);
   assert.match(html, /aria-label="主线路 的权重"/);
   assert.match(html, /aria-label="晚高峰 的权重"/);
@@ -140,16 +142,15 @@ test("按权重：分法六选一（含「自动」），按权重时一条线�
   assert.doesNotMatch(render(group("weighted", { spread: "round_robin" })), /data-testid="route-line-weights"/, "轮流不用填权重");
 });
 
-test("「怎么切」下面那一行只说要点：坏了几秒内切走、多久切回（四格已经写了是哪种）", () => {
-  const hint = (mode: RouteMode, patch: Partial<RouteGroup["policy"]> = {}, perSession = false) => lineModeHint(group(mode, patch).policy, perSession);
+test("分配方式下面那一行只说要点：坏了几秒内切走、多久切回", () => {
+  const hint = (mode: RouteMode, patch: Partial<RouteGroup["policy"]> = {}) => lineModeHint(group(mode, patch).policy);
   assert.equal(hint("failover"), "坏了 5 秒内切走 · 5 分钟后切回");
   assert.equal(hint("failover", { autoFailback: false }), "坏了 5 秒内切走 · 不自动切回");
   assert.match(hint("smart"), /^坏了 \d+ 秒内切走 · /);
   assert.match(hint("scheduled"), /^按时段表走 · 坏了/);
   assert.match(hint("hybrid"), /^时段外挑最快的 · 坏了/);
   assert.match(hint("manual"), /^走指定的那条 · 坏了/);
-  assert.equal(hint("weighted"), "新连接按权重分 · 坏了的先跳过");
-  assert.equal(hint("weighted", {}, true), "新会话按权重分 · 坏了的先跳过", "纯 UDP 按会话说");
+  assert.match(hint("weighted"), /^坏了的 \d+ 秒内跳过，恢复了再分$/);
   for (const mode of ["failover", "smart", "scheduled", "hybrid", "manual", "weighted"] as RouteMode[]) {
     assert.ok(hint(mode).length <= 24, `一行放得下：${hint(mode)}`);
   }
@@ -160,15 +161,12 @@ test("「怎么切」下面那一行只说要点：坏了几秒内切走、多�
 
 test("纯 UDP 的编辑框：分法和旧会话三选一都按会话说，TCP+UDP 照旧按连接", () => {
   const udp = render(group("weighted", { spread: "round_robin" }), true, "udp");
-  assert.match(udp, /aria-label="新会话怎么分"/);
-  assert.match(udp, /新会话轮流走每一条/);
+  assert.match(udp, /新会话一个一个轮着走/);
   assert.match(udp, /切换时旧会话怎么办[^]*?平滑切换[^]*?已有的会话留在原路径[^]*?快速切换[^]*?丢掉它上面的会话[^]*?强制切换/);
-  assert.match(udp, /新会话按权重分 · /);
-  assert.doesNotMatch(udp, /切换时旧连接怎么办|新连接轮流走每一条|新连接按权重分/);
+  assert.doesNotMatch(udp, /切换时旧连接怎么办|新连接一个一个轮着走/);
   const both = render(group("weighted", { spread: "round_robin" }), true, "both");
-  assert.match(both, /aria-label="新连接怎么分"/);
+  assert.match(both, /新连接一个一个轮着走/);
   assert.match(both, /切换时旧连接怎么办/);
-  assert.match(both, /新连接按权重分 · /);
 });
 
 test("高级策略的折叠条只有标题和箭头（2.3.499）；默认折起来，规则表单里改过模板值的打开时直接展开", () => {
@@ -426,8 +424,8 @@ test("多落地怎么用（2.3.501）：线路有两个以上落地、一次走�
   const html = render(withLines(draft, lines), false);
   assert.match(html, /data-testid="route-line-dest-spread"[^>]*>[^]*?2 个落地：[^]*?主备/, "默认主备");
   const spreading = render(withLines(draft, [{ ...lines[0], destSpread: "least_load" }, ...lines.slice(1)]), false);
-  assert.match(spreading, /data-testid="route-line-dest-spread"[^>]*>[^]*?按负载分/);
-  assert.match(spreading, /HK entry 01 → JP relay 02 → 落地 等 2 个 · 按负载分/, "收起那一行写上怎么分");
+  assert.match(spreading, /data-testid="route-line-dest-spread"[^>]*>[^]*?按负载/);
+  assert.match(spreading, /HK entry 01 → JP relay 02 → 落地 等 2 个 · 按负载/, "收起那一行写上怎么分");
   // 只有一个落地的线路没有这个选择
   assert.equal(count(render(group("failover"), false), /data-testid="route-line-dest-spread"/g), 0);
 });
@@ -438,6 +436,6 @@ test("按权重、聚合时整组本来就在分：不给选，落地下面说�
   lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }], destSpread: "least_load" };
   const html = render(withLines(draft, lines), false);
   assert.doesNotMatch(html, /data-testid="route-line-dest-spread"/);
-  assert.match(html, /data-testid="route-line-dest-spread-note"[^>]*>按权重：多落地已经按下面「新连接怎么分」一起分/);
-  assert.doesNotMatch(html, /· 按负载分/, "存着的一起分这时不生效，行上也不写");
+  assert.match(html, /data-testid="route-line-dest-spread-note"[^>]*>按权重：多落地已经按下面的分配方式一起分/);
+  assert.doesNotMatch(html, /· 按负载/, "存着的一起分这时不生效，行上也不写");
 });

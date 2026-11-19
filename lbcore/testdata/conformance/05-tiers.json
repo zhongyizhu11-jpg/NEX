@@ -1,0 +1,216 @@
+[
+  {
+    "name": "fallback-dead-primary-unstable-backup",
+    "about": "主备：主的连不上、备用只是不稳 —— 走备用。连不上的，只要还有一个连得上就不挑（路线图 X1）",
+    "strategy": "fallback",
+    "members": [
+      { "name": "primary", "health": "down" },
+      { "name": "backup", "health": "unstable" }
+    ],
+    "steps": [
+      { "picks": 20, "expect": { "counts": { "backup": [20, 20] }, "never": ["primary"] } },
+      {
+        "about": "主的回来了：走主的",
+        "set": { "primary": "healthy" },
+        "picks": 20,
+        "expect": { "counts": { "primary": [20, 20] } }
+      }
+    ]
+  },
+  {
+    "name": "fallback-in-configured-order",
+    "about": "主备：按配置的先后用第一个健康的",
+    "strategy": "fallback",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      { "picks": 5, "expect": { "counts": { "a": [5, 5] } } },
+      { "set": { "a": "down" }, "picks": 5, "expect": { "counts": { "b": [5, 5] } } },
+      { "set": { "b": "down" }, "picks": 5, "expect": { "counts": { "c": [5, 5] } } },
+      { "set": { "a": "healthy" }, "picks": 5, "expect": { "counts": { "a": [5, 5] } } }
+    ]
+  },
+  {
+    "name": "fallback-stable-before-unstable-before-target-down",
+    "about": "主备：稳的 → 不稳的 → 下游不通的 → 连不上的。主备不受摘除上限限制（线路组没有「不稳」「下游不通」，不跑）",
+    "strategy": "fallback",
+    "only": ["lbcore", "fxp"],
+    "members": [
+      { "name": "a", "health": "target_down" },
+      { "name": "b", "health": "unstable" },
+      { "name": "c", "health": "unstable" },
+      { "name": "d" }
+    ],
+    "steps": [
+      { "picks": 5, "expect": { "counts": { "d": [5, 5] } } },
+      { "set": { "d": "down" }, "picks": 5, "expect": { "counts": { "b": [5, 5] } } },
+      { "set": { "b": "down", "c": "down" }, "picks": 5, "expect": { "counts": { "a": [5, 5] } } }
+    ]
+  },
+  {
+    "name": "fallback-all-dead-tries-the-cooled-down-one-first",
+    "about": "主备全都连不上：先试冷却到期的那个（该再试一次了），还在冷却的是刚撞过墙的（线路组没有冷却，不跑）",
+    "strategy": "fallback",
+    "only": ["lbcore", "fxp"],
+    "members": [
+      { "name": "a", "health": "cooling" },
+      { "name": "b", "health": "down" },
+      { "name": "c", "health": "cooling" }
+    ],
+    "steps": [{ "picks": 5, "expect": { "counts": { "b": [5, 5] } } }]
+  },
+  {
+    "name": "panic-does-not-single-out-the-cooled-down-one",
+    "about": "分着用时全都连不上：在所有成员里摊开，不盯着冷却到期的那一个撞（线路组没有冷却，不跑）",
+    "strategy": "round_robin",
+    "only": ["lbcore", "fxp"],
+    "members": [
+      { "name": "a", "health": "cooling" },
+      { "name": "b", "health": "down" },
+      { "name": "c", "health": "cooling" }
+    ],
+    "steps": [{ "picks": 30, "expect": { "counts": { "a": [10, 10], "b": [10, 10], "c": [10, 10] } } }]
+  },
+  {
+    "name": "healthy-only-while-any-is-healthy",
+    "about": "还有健康的就只在健康的里挑，连不上的不拿用户的连接去试",
+    "strategy": "weighted",
+    "members": [
+      { "name": "a", "weight": 10 },
+      { "name": "b", "weight": 10, "health": "down" },
+      { "name": "c", "weight": 10, "health": "down" }
+    ],
+    "steps": [{ "picks": 50, "expect": { "counts": { "a": [50, 50] }, "never": ["b", "c"] } }]
+  },
+  {
+    "name": "soft-ejection-is-capped-at-half",
+    "about": "摘除有上限：四个成员里三个被判成不稳，最多摘掉一半（两个），留下的不稳成员照常分 —— 不把全部流量压到唯一那个稳的上（线路组没有「不稳」，不跑）",
+    "strategy": "round_robin",
+    "only": ["lbcore", "fxp"],
+    "members": [
+      { "name": "a", "health": "unstable" },
+      { "name": "b", "health": "unstable" },
+      { "name": "c", "health": "unstable" },
+      { "name": "d" }
+    ],
+    "steps": [
+      {
+        "about": "摘掉靠后的两个不稳的，留 a 和 d",
+        "picks": 40,
+        "expect": { "counts": { "a": [20, 20], "d": [20, 20] }, "never": ["b", "c"] }
+      },
+      {
+        "about": "只有一个不稳：四个里摘一个，剩三个",
+        "set": { "a": "healthy", "b": "healthy" },
+        "picks": 30,
+        "expect": { "counts": { "a": [10, 10], "b": [10, 10], "d": [10, 10] }, "never": ["c"] }
+      },
+      {
+        "about": "全都不稳：最多摘一半，至少留一个",
+        "set": { "a": "unstable", "b": "unstable", "d": "unstable" },
+        "picks": 40,
+        "expect": { "counts": { "a": [20, 20], "b": [20, 20] }, "never": ["c", "d"] }
+      }
+    ]
+  },
+  {
+    "name": "soft-ejection-never-removes-the-last-candidate",
+    "about": "只有一个成员连得上、它还不稳：照样用它，不会因为不稳把唯一能用的摘掉（线路组没有「不稳」，不跑）",
+    "strategy": "round_robin",
+    "only": ["lbcore", "fxp"],
+    "members": [
+      { "name": "a", "health": "unstable" },
+      { "name": "b", "health": "down" }
+    ],
+    "steps": [{ "picks": 10, "expect": { "counts": { "a": [10, 10] }, "never": ["b"] } }]
+  },
+  {
+    "name": "panic-spreads-over-every-reachable-member",
+    "about": "恐慌：连得上、下游也通的一个都不剩时，在所有连得上的成员里分（下游不通的也算），连不上的仍然不挑（线路组没有「下游不通」，不跑）",
+    "strategy": "round_robin",
+    "only": ["lbcore", "fxp"],
+    "members": [
+      { "name": "a", "health": "target_down" },
+      { "name": "b", "health": "down" },
+      { "name": "c", "health": "target_down" }
+    ],
+    "steps": [{ "picks": 40, "expect": { "counts": { "a": [20, 20], "c": [20, 20] }, "never": ["b"] } }]
+  },
+  {
+    "name": "all-down-last-resort",
+    "about": "恐慌到底：一个连得上的都没有也不拒绝，在所有没被排除的成员里摊开，不盯着某一个撞（判断可能是错的）",
+    "strategy": "round_robin",
+    "members": [
+      { "name": "a", "health": "down" },
+      { "name": "b", "health": "down" },
+      { "name": "c", "health": "down" }
+    ],
+    "steps": [
+      { "picks": 30, "expect": { "counts": { "a": [10, 10], "b": [10, 10], "c": [10, 10] } } },
+      {
+        "about": "有一个回来了：只走它",
+        "set": { "b": "healthy" },
+        "picks": 30,
+        "expect": { "counts": { "b": [30, 30] } }
+      }
+    ]
+  },
+  {
+    "name": "all-down-last-resort-fallback",
+    "about": "主备全挂：给排最前的那个",
+    "strategy": "fallback",
+    "members": [
+      { "name": "a", "health": "down" },
+      { "name": "b", "health": "down" }
+    ],
+    "steps": [{ "picks": 5, "expect": { "counts": { "a": [5, 5] } } }]
+  },
+  {
+    "name": "admin-excluded-is-never-picked",
+    "about": "管理上排除的（暂停 / 维护）任何时候都不挑：别的全挂了也不退回到它上面；全都被排除就拒绝",
+    "strategy": "round_robin",
+    "members": [
+      { "name": "a" },
+      { "name": "b", "health": "excluded" },
+      { "name": "c" }
+    ],
+    "steps": [
+      { "picks": 40, "expect": { "counts": { "a": [20, 20], "c": [20, 20] }, "never": ["b"] } },
+      {
+        "about": "a、c 都挂了：兜底只在 a、c 里，不含被排除的 b",
+        "set": { "a": "down", "c": "down" },
+        "picks": 40,
+        "expect": { "counts": { "a": [20, 20], "c": [20, 20] }, "never": ["b"] }
+      },
+      {
+        "about": "全都被排除：挑不出来",
+        "set": { "a": "excluded", "c": "excluded" },
+        "picks": 5,
+        "expect": { "rejected": true }
+      }
+    ]
+  },
+  {
+    "name": "admin-excluded-is-never-picked-fallback",
+    "about": "主备：被排除的主不挑，哪怕备用挂了",
+    "strategy": "fallback",
+    "members": [
+      { "name": "primary", "health": "excluded" },
+      { "name": "backup", "health": "down" }
+    ],
+    "steps": [{ "picks": 10, "expect": { "counts": { "backup": [10, 10] }, "never": ["primary"] } }]
+  },
+  {
+    "name": "admin-excluded-is-never-picked-ip-hash",
+    "about": "按访客固定：被排除的成员不接访客，它上面的访客换到别的成员",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      { "keys": { "pattern": "192.0.2.%d", "count": 200 }, "save": "before", "expect": { "reference": true } },
+      {
+        "set": { "b": "excluded" },
+        "keys": { "pattern": "192.0.2.%d", "count": 200 },
+        "expect": { "never": ["b"], "movedOnlyFrom": { "saved": "before", "members": ["b"] } }
+      }
+    ]
+  }
+]

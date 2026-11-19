@@ -2,23 +2,23 @@
   线路组在界面上的说法：模式、分法、切换方式、备用怎么候着、事件的名字，切换原因和
   路径问题怎么翻成人话。shared/routeGroup.ts 统一再导出。
 */
-import { LINK_SPREAD_LABELS } from "./linkTerms";
+import { BALANCE_STRATEGY_LABELS, normalizeBalanceStrategy } from "./loadBalance";
 import type {
   RouteDelivery,
   RouteDestSpread,
   RouteEventKind,
   RouteMode,
-  RouteSpread,
   RouteSwitchMode,
 } from "./routeGroupModel";
 
 export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; hint: string }> = {
-  one: { label: "主备", hint: "几个落地里只用一个，按上面「怎么切」挑，坏了换下一个" },
-  least_load: { label: "按负载分", hint: "这条线路在用时，新连接给现在连接最少的那个落地" },
-  round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
-  random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },
-  ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一个落地，适合要保持登录的服务" },
-  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "这条线路在用时，按最近延迟和落地主机的负载自动算权重，新连接随机挑两个落地取更好的那个" },
+  // 名字和一句话都用统一的那份（BALANCE_STRATEGY_LABELS），这里只说「在几个落地之间」
+  one: { label: BALANCE_STRATEGY_LABELS.fallback.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.fallback.hint}` },
+  least_load: { label: BALANCE_STRATEGY_LABELS.least_load.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.least_load.hint}` },
+  round_robin: { label: BALANCE_STRATEGY_LABELS.round_robin.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.round_robin.hint}` },
+  random: { label: BALANCE_STRATEGY_LABELS.random.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.random.hint}` },
+  ip_hash: { label: BALANCE_STRATEGY_LABELS.ip_hash.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.ip_hash.hint}` },
+  auto: { label: BALANCE_STRATEGY_LABELS.auto.label, hint: `几个落地之间：${BALANCE_STRATEGY_LABELS.auto.hint}` },
 };
 
 /** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
@@ -53,7 +53,7 @@ export const ROUTE_MODE_INFO: Record<RouteMode, RouteModeInfo> = {
   failover: { label: "自动故障切换", template: "稳定优先", hint: "平时只走主线路，出问题自动换到下一条；主线路恢复并稳定一阵子再切回" },
   scheduled: { label: "定时主备", template: "早晚高峰", hint: "按时段表决定首选（比如晚高峰走 B），时段外回主线路；出问题照样往下切" },
   manual: { label: "手动主备", template: "人工掌控", hint: "一直走你指定的那条，直到你换；它挂了才临时往下切，恢复后再回来" },
-  smart: { label: "智能择优", template: "延迟优先", hint: "按线路评分（延迟、丢包、抖动、可用率）走最好的一条；分差够大、持续够久才换，不来回漂" },
+  smart: { label: "智能择优", template: "延迟优先", hint: "走整条链最快的一条（丢包、抖动、沿途负载按变慢算）；快得够多、持续够久才换，不来回漂" },
   hybrid: { label: "混合策略", template: "晚高峰优化", hint: "时段表给出首选，到点前先预热预检；预检不过就不切，继续走当前这条" },
   weighted: { label: "权重负载", template: "负载均衡", hint: "新连接按权重分到各条路径，旧连接不动；哪条出问题就先跳过它" },
 };
@@ -67,6 +67,29 @@ export function routeModeHint(mode: RouteMode, perSession = false): string {
   return (perSession && ROUTE_MODE_SESSION_HINTS[mode]) || ROUTE_MODE_INFO[mode].hint;
 }
 
+/** 主备时「首选哪条」（编辑框里那几格同一套说法）。 */
+export const ROUTE_PREFER_LABELS: Record<RouteMode, string> = {
+  failover: "按顺序",
+  smart: "最快的",
+  scheduled: "按时段",
+  hybrid: "按时段 · 择优",
+  manual: "手动指定",
+  weighted: "",
+};
+
+/**
+ * 线路组是 8 种分配方式（shared/loadBalance.ts）里的哪一种：同时分的说分法（「自动」「轮流」），其余是主备，
+ * 后面跟首选哪条（「主备 · 最快的」）。short：只要方式名。
+ */
+export function routeStrategyLabel(policy: { mode: RouteMode; spread?: string | null; strategy?: string | null }, short = false): string {
+  if (policy.mode === "weighted") {
+    const spread = normalizeBalanceStrategy(policy.spread ?? policy.strategy) ?? "weighted";
+    return BALANCE_STRATEGY_LABELS[spread].label;
+  }
+  const main = BALANCE_STRATEGY_LABELS.fallback.label;
+  return short || policy.mode === "failover" ? main : `${main} · ${ROUTE_PREFER_LABELS[policy.mode]}`;
+}
+
 /** 徽标上的两个字：「主备 · 主线路」「定时 · 晚高峰线路」。 */
 export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
   failover: "主备",
@@ -77,16 +100,7 @@ export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
   weighted: "负载",
 };
 
-// 名字和出口组的策略同一套（shared/linkTerms.ts），只是这里说的是「路径」。
-export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: string }> = {
-  weighted: { label: LINK_SPREAD_LABELS.weighted.label, hint: "新连接按每条路径的权重分配" },
-  least_load: { label: LINK_SPREAD_LABELS.least_load.label, hint: "新连接给现在挂着连接最少的那条（按权重折算），长连接多时比按权重更均匀" },
-  round_robin: { label: LINK_SPREAD_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
-  random: { label: LINK_SPREAD_LABELS.random.label, hint: "新连接随机挑一条能用的" },
-  ip_hash: { label: LINK_SPREAD_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
-  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "按每条路径最近的延迟和沿途主机的负载自动算权重，新连接随机挑两条取更好的那条；慢了、忙了的少分" },
-};
-
+// 名字和出口组的分配方式同一套（shared/loadBalance.ts），算法也是同一份（lbcore），只是这里说的是「路径」。
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {
   smooth: { label: "平滑切换", hint: "旧连接留在原线路，新连接走新线路，基本无感（推荐）" },
   fast: { label: "快速切换", hint: "线路挂了就断开它上面的旧连接，让客户端马上重连到新线路；计划和择优切换仍然平滑" },
@@ -97,15 +111,6 @@ export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hi
   纯 UDP 没有连接：Agent 按会话（同一个来源地址发来的包）挑路径，切换时丢的是会话映射，
   下一个包重新挑一条。选项还是那几个，只是说法换成「会话」。
 */
-export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
-  weighted: "新会话按每条路径的权重分配",
-  least_load: "新会话给现在连接最少的那条（按权重折算）",
-  round_robin: "新会话轮流走每一条",
-  random: "新会话随机挑一条能用的",
-  ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",
-  auto: "按每条路径最近的延迟和沿途主机的负载自动算权重，新会话随机挑两条取更好的那条",
-};
-
 export const ROUTE_SWITCH_MODE_SESSION_HINTS: Record<RouteSwitchMode, string> = {
   smooth: "已有的会话留在原路径，新会话走新路径，基本无感（推荐）",
   fast: "路径挂了就丢掉它上面的会话，下一个包改走新路径；计划和择优切换仍然平滑",
@@ -160,7 +165,7 @@ function describeRouteReasonBase(text: string): string {
   if (lower === "startup" || lower === "spec updated") return "线路组重新下发";
   if (lower === "relay recovered") return "中转恢复";
   if (lower.startsWith("precheck:")) return `预检未通过：${describeRouteIssue(text.slice("precheck:".length))}`;
-  if (lower.startsWith("relay down") || lower === "paused" || lower === "drill" || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
+  if (lower.startsWith("relay down") || lower === "paused" || lower === "drill" || lower.startsWith("maintenance:") || lower.startsWith("quota:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
   if (lower.startsWith("panel:")) return text.slice("panel:".length).trim();
   // Agent 的抖动抑制：flap: 3 switches in 1h, hold 5m until 2026-…
   const flap = /^flap:\s*(\d+)\s+switches in 1h,\s*hold\s+(\d+)m/i.exec(text);
@@ -175,7 +180,7 @@ function describeRouteReasonBase(text: string): string {
 function isRelayIssuePhrase(text: string) {
   const lower = text.toLowerCase();
   return lower === "relay down" || lower.startsWith("relay down:") || lower === "paused" || lower === "path unresolved" || lower === "drill"
-    || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:");
+    || lower.startsWith("maintenance:") || lower.startsWith("quota:") || lower.startsWith("node offline:") || lower.startsWith("breaker:");
 }
 
 /**
@@ -212,6 +217,7 @@ export function describeRouteIssue(issue: unknown): string {
   if (lower === "paused") return "已手动暂停";
   if (lower === "drill") return "演练中：当成挂了";
   if (lower.startsWith("maintenance:")) return `${text.slice("maintenance:".length).trim()} 维护中`;
+  if (lower.startsWith("quota:")) return `${text.slice("quota:".length).trim()} 流量到阈值，已暂停`;
   if (lower.startsWith("node offline:")) return `${text.slice("node offline:".length).trim()} 离线`;
   if (lower.startsWith("breaker:")) return `${text.slice("breaker:".length).trim()} 熔断：几条线路都探不通它`;
   return text;

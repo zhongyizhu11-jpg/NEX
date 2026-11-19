@@ -1,3 +1,4 @@
+import { tunnelBalanceAgentIssues, tunnelRelayRuntimeIssues } from "../tunnelBalanceAgent";
 import { sameNetworkAddress } from "@shared/ipAddress";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { dbBool } from "../repositories/repositoryUtils";
@@ -39,9 +40,9 @@ import {
   TUNNEL_PARALLEL_STREAMS_MAX,
   tunnelParallelStreamsUnavailableReason,
 } from "../../shared/tunnelParallelStreams";
-import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
-import { serializeBalanceDetect } from "../../shared/loadBalance";
-import { exitTargetSummaryForTunnel } from "../exitTargetHealth";
+import { BALANCE_STRATEGIES, normalizeExitGroupStrategy, serializeBalanceDetect } from "../../shared/loadBalance";
+import { exitTargetSummaryForTunnel, tunnelBalancesExits } from "../exitTargetHealth";
+import { tunnelExitPinUnsupportedReason } from "../../shared/tunnelExitPin";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import { lossTolerantBlockerMessage, lossTolerantBlockers } from "../../shared/lossTolerantGate";
 import {
@@ -91,7 +92,8 @@ const forwardXV3InputFields = {
   v3Multiplex: z.boolean().nullable().optional(),
 };
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
-const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load", "auto", "latency"]);
+// 八种之外的（库里老的 none / least_conn）读的时候由 normalizeExitGroupStrategy 认，写进来的只能是这八种。
+const tunnelLoadBalanceStrategySchema = z.enum(BALANCE_STRATEGIES);
 /** 负载均衡的「检测与切换」（shared/loadBalance.ts），字段不全的按默认值补。 */
 const balanceDetectSchema = z.object({
   intervalSeconds: z.number().int().min(1).max(60).optional(),
@@ -371,25 +373,9 @@ async function requireExitGroupAccess(ctx: any, exitGroupId: number | null | und
   return group;
 }
 
-async function getTunnelEntryTestHostIds(tunnel: any) {
-  const ids: number[] = [];
-  const pushId = (value: unknown) => {
-    const id = Number(value || 0);
-    if (!Number.isFinite(id) || id <= 0 || ids.includes(id)) return;
-    ids.push(id);
-  };
-  const entryGroupId = Number(tunnel?.entryGroupId || 0);
-  if (entryGroupId > 0) {
-    const group = await db.getForwardGroupById(entryGroupId) as any;
-    if (group && dbBool(group.isEnabled) && String(group.groupMode || "") === "entry") {
-      const members = [...(group.members || [])]
-        .filter((member: any) => member && dbBool(member.isEnabled, true) && member.memberType === "host")
-        .sort((a: any, b: any) => Number(a?.priority || 0) - Number(b?.priority || 0));
-      for (const member of members) pushId(member.hostId);
-    }
-  }
-  if (ids.length === 0) pushId(tunnel?.entryHostId);
-  return ids;
+/** 测速用的入口机：启用的入口组里启用的主机成员（按优先级）；没有时用 entryHostId。 */
+function getTunnelEntryTestHostIds(tunnel: any) {
+  return hopRepo.getTunnelEntryHostIds(tunnel, { enabledOnly: true, entryHost: "fallback" });
 }
 function normalizeHopConnectForHost(rawConnectHost: string | null | undefined, host: any) {
   const raw = String(rawConnectHost || "").trim();
@@ -678,6 +664,22 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
         ...enabledGroupHostIds(endpointGroupById.get(Number(tunnel.exitGroupId || 0))),
       ],
     }), hostMap);
+    // GOST 链路开了负载均衡、入口机的 Agent 还不能执行统一调度：只走主出口，同一个位置写「需要升级 Agent」
+    fxpIssues.push(...tunnelBalanceAgentIssues(
+      tunnel,
+      Number(tunnel.entryGroupId || 0) > 0
+        ? enabledGroupHostIds(endpointGroupById.get(Number(tunnel.entryGroupId || 0)))
+        : [tunnel.entryHostId],
+      (extraExitNodesByTunnel.get(Number(tunnel.id)) || []).filter((node) => node.isEnabled).length,
+      hostMap,
+    ));
+    // GOST 并联中转、入口机运行时低于 nex6：只走第一台中转，同一个位置写「需要升级运行时」
+    fxpIssues.push(...tunnelRelayRuntimeIssues(
+      tunnel,
+      hopsByTunnelId.get(Number(tunnel.id)) || [],
+      [tunnel.entryHostId],
+      hostMap,
+    ));
     const latestLatency = latestLatencyByTunnel.get(Number(tunnel.id));
     const latestLatencySeries = latestLatencySeriesByTunnel.get(Number(tunnel.id)) || [];
     const fallbackLatency = typeof (tunnel as any).lastLatencyMs === "number" && Number.isFinite((tunnel as any).lastLatencyMs)
@@ -852,20 +854,33 @@ export const tunnelsRouter = router({
    */
   setExitPin: protectedProcedure
     .input(z.object({ tunnelId: z.number().int().positive(), hostId: z.number().int().positive().nullable() }))
-    .mutation(async ({ input, ctx }) => {
+    // 和别的改链路的操作拿同一把 tunnel:<id> 锁：正在保存的编辑、出口组同步会重写出口，别和它们交错。
+    .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.tunnelId}`, async () => {
       const tunnel = await db.getTunnelById(input.tunnelId) as Record<string, unknown> | null;
       if (!tunnel) throw new Error("链路不存在");
       if (ctx.user.role !== "admin" && Number(tunnel.userId) !== Number(ctx.user.id)) throw new Error("无权修改这条链路");
-      const extraExitNodes = await hopRepo.getTunnelExitNodes(input.tunnelId) as Array<{ hostId?: number | null }>;
-      const exitHostIds = [Number(tunnel.exitHostId || 0), ...(extraExitNodes || []).map((node) => Number(node.hostId || 0))]
+      const extraExitNodes = await hopRepo.getTunnelExitNodes(input.tunnelId) as Array<{ hostId?: number | null; isEnabled?: unknown }>;
+      const allExitHostIds = [Number(tunnel.exitHostId || 0), ...(extraExitNodes || []).map((node) => Number(node.hostId || 0))]
         .filter((hostId) => hostId > 0);
-      if (input.hostId != null && !exitHostIds.includes(input.hostId)) throw new Error("这台不是这条链路的出口");
+      if (input.hostId != null) {
+        // 这条链路上指定了也不生效的（Nginx、带中转的 NEX）：直接拒绝，别让界面挂着一个假的「已指定」。交回自动随时可以。
+        const hops = await hopRepo.getTunnelHops(input.tunnelId) as unknown[];
+        const unsupported = tunnelExitPinUnsupportedReason(tunnel, hops.length);
+        if (unsupported) throw new Error(unsupported);
+        if (!tunnelBalancesExits(tunnel as Parameters<typeof tunnelBalancesExits>[0])) throw new Error("这条链路没有开负载均衡，没有可以指定的出口");
+        // 停用的出口不在下发里，指定它等于没指定。
+        const usableExitHostIds = [Number(tunnel.exitHostId || 0), ...(extraExitNodes || [])
+          .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && node.isEnabled !== "0")
+          .map((node) => Number(node.hostId || 0))].filter((hostId) => hostId > 0);
+        if (!allExitHostIds.includes(input.hostId)) throw new Error("这台不是这条链路的出口");
+        if (!usableExitHostIds.includes(input.hostId)) throw new Error("这台出口已停用，不能指定");
+      }
       await db.updateTunnel(input.tunnelId, { balancePinHostId: input.hostId });
       const entryHostIds = await getTunnelEntryTestHostIds(tunnel);
-      await refreshTunnelRuntimeHosts(input.tunnelId, [...entryHostIds, ...exitHostIds], input.hostId ? "tunnel-exit-pinned" : "tunnel-exit-unpinned", { urgent: true });
+      await refreshTunnelRuntimeHosts(input.tunnelId, [...entryHostIds, ...allExitHostIds], input.hostId ? "tunnel-exit-pinned" : "tunnel-exit-unpinned", { urgent: true });
       appendPanelLog("info", `[Tunnel] exit pin tunnel=${input.tunnelId} host=${input.hostId ?? "auto"} by user=${ctx.user.id}`);
       return { success: true, hostId: input.hostId };
-    }),
+    })),
   list: protectedProcedure.query(async ({ ctx }) => {
       const accessScope = await getLinkAccessScope(ctx.user);
       const scope = visibleTunnelQueryScope(ctx.user, accessScope);
@@ -1945,6 +1960,8 @@ export const tunnelsRouter = router({
           await hopRepo.clearTunnelExitNodes(id);
           await hopRepo.clearForwardRuleTunnelExitsByTunnel(id);
         }
+        // 手动指定的那台被去掉 / 停用了、负载均衡关了、链路改成了指定不了的形态：指定作废（clearStaleTunnelExitPin）。
+        await hopRepo.clearStaleTunnelExitPin(id);
         // `forwardRules.tunnelExitPort` belongs to the tunnel's exit Agent,
         // so changing the exit host/listener (or switching into a non-
         // NEX transport) invalidates every active GOST rule's previous
@@ -2431,7 +2448,7 @@ export const tunnelsRouter = router({
           return { success: false, latencyMs: null, message, pending: true };
         }
         const extraExitEndpoints = (
-          dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+          dbBool(tunnel.loadBalanceEnabled)
             ? (tunnelExtraExitNodes || [])
             : []
         )

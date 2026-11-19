@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +29,7 @@ var (
 // writePersistentJSON keeps a last-known-good runtime snapshot available even
 // if the Agent is replaced while a write is in progress.
 func writePersistentJSON(path string, value any) error {
+	persistentJSONWrites.Add(1)
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -505,12 +508,37 @@ func persistFailoverSpec(ruleID int, sourcePort int, spec failoverSpec) error {
 		return fmt.Errorf("invalid failover persistence identity rule=%d port=%d", ruleID, sourcePort)
 	}
 	spec = stripFailoverRelayHints(normalizeFailoverSpec(spec))
+	path := persistentFailoverPath(ruleID, sourcePort)
+	value := persistedFailover{Version: persistentStateFileVersion, RuleID: ruleID, SourcePort: sourcePort, Spec: spec}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
 	persistentRuntimeMu.Lock()
 	defer persistentRuntimeMu.Unlock()
-	return writePersistentJSON(persistentFailoverPath(ruleID, sourcePort), persistedFailover{
-		Version: persistentStateFileVersion, RuleID: ruleID, SourcePort: sourcePort, Spec: spec,
-	})
+	/*
+		内容没变就不写（A13）。每次心跳都会把每条线路组规则的规格再同步一遍（startFailoverProxyLocked），以前每次
+		都整份重写：建临时文件、fsync、改名 —— 几百条规则就是每个心跳几百次 fsync，绝大多数时候写的是一模一样的字节。
+		记着上一次写下去的内容；一样、而且文件还在，就跳过。文件被人删了（或者换了目录）照样重写。
+	*/
+	if previous, ok := persistedFailoverWritten[path]; ok && bytes.Equal(previous, raw) {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return nil
+		}
+	}
+	if err := writePersistentJSON(path, value); err != nil {
+		delete(persistedFailoverWritten, path)
+		return err
+	}
+	persistedFailoverWritten[path] = raw
+	return nil
 }
+
+// 每个规格文件上一次写下去的内容（persistentRuntimeMu 保护）。删文件时一起清。
+var persistedFailoverWritten = map[string][]byte{}
+
+// 测试里数写了几次盘。
+var persistentJSONWrites atomic.Int64
 
 func removePersistedFailoverSpec(ruleID int, sourcePort int) {
 	if ruleID <= 0 || sourcePort <= 0 {
@@ -518,6 +546,7 @@ func removePersistedFailoverSpec(ruleID int, sourcePort int) {
 	}
 	persistentRuntimeMu.Lock()
 	defer persistentRuntimeMu.Unlock()
+	delete(persistedFailoverWritten, persistentFailoverPath(ruleID, sourcePort))
 	_ = os.Remove(persistentFailoverPath(ruleID, sourcePort))
 }
 

@@ -41,7 +41,7 @@ type failoverProxyEvent struct {
 	// 出站在清单里的序号：面板按它对回路径，不用再拿地址去猜。没有是 -1。
 	FromIndex int `json:"fromIndex"`
 	ToIndex   int `json:"toIndex"`
-	// 目标出站当时的评分（routeScore）；没法打分是 -1。
+	// 目标出站当时给人看的分（scoreLocked）；没法打分是 -1。
 	Score int `json:"score"`
 	// 切换时新旧两条整条链的延迟（入口探的这一段 + 后面几段，毫秒）；没探出来是 0。
 	// 面板据此写「比 备 1 快 3 ms」（2.2.243 起）。

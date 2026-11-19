@@ -1,0 +1,102 @@
+[
+  {
+    "name": "ip-hash-stable-when-a-member-leaves-and-returns",
+    "about": "按访客固定：一个成员走了，只有原来落在它上面的访客换；它回来，那些访客又回到它上面",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      {
+        "about": "300 个访客，三个成员大致各 100；每个访客落在哪和 lbcore.Rendezvous 算的一样",
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "save": "before",
+        "expect": { "counts": { "a": [70, 130], "b": [70, 130], "c": [70, 130] }, "reference": true }
+      },
+      {
+        "about": "同一个访客再来，还是同一个成员",
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "sameAs": "before" }
+      },
+      {
+        "about": "c 挂了：只有 c 上的访客换",
+        "set": { "c": "down" },
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "never": ["c"], "movedOnlyFrom": { "saved": "before", "members": ["c"] } }
+      },
+      {
+        "about": "c 回来：所有人回到原来的成员上",
+        "set": { "c": "healthy" },
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "sameAs": "before" }
+      },
+      {
+        "about": "刚恢复的成员在慢启动里：按访客固定不看慢启动，访客不会被挪走再挪回来",
+        "recovered": { "c": 3 },
+        "keys": { "pattern": "198.51.100.%d", "count": 300 },
+        "expect": { "sameAs": "before" }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-follows-weight",
+    "about": "按访客固定也按分量分：900:100 的两个成员，访客大约九比一（哈希没搅过时所有人都落在 900 那个上）",
+    "strategy": "ip_hash",
+    "members": [
+      { "name": "a", "weight": 900 },
+      { "name": "b", "weight": 100 }
+    ],
+    "steps": [
+      {
+        "keys": { "pattern": "203.0.113.%d", "count": 1000 },
+        "expect": { "counts": { "a": [860, 940], "b": [60, 140] }, "reference": true }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-a-heavy-visitor-never-spills",
+    "about": "按访客固定不设负载上限：一个访客自己开了 150 条一直挂着的连接，全部落在他的那个成员上（出口 IP 不变才是这个分法的意义；以前带 1.25 倍的上限，超过的连接落到别的成员上）",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      { "keys": { "list": ["203.0.113.250"] }, "mode": "hold", "save": "home", "expect": {} },
+      {
+        "about": "再来 149 条，同一个访客，前面的都挂着：一条都不换成员",
+        "keys": { "list": ["203.0.113.250"], "repeat": 149 },
+        "mode": "hold",
+        "expect": { "sameAs": "home" }
+      },
+      {
+        "about": "再来 150 个各不相同的访客：照样按纯哈希落，不因为那个成员压得重就被挤走",
+        "keys": { "pattern": "198.51.100.%d", "count": 150 },
+        "mode": "hold",
+        "expect": { "reference": true }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-heavy-visitor-ignores-weight-share",
+    "about": "分量 3:1，400 条全来自一个访客、一直挂着：全在同一个成员上（分量只决定访客落在哪，不限制一个访客能压多少）",
+    "strategy": "ip_hash",
+    "members": [
+      { "name": "a", "weight": 3 },
+      { "name": "b", "weight": 1 }
+    ],
+    "steps": [
+      { "keys": { "list": ["203.0.113.9"] }, "mode": "hold", "save": "home", "expect": {} },
+      {
+        "keys": { "list": ["203.0.113.9"], "repeat": 399 },
+        "mode": "hold",
+        "expect": { "sameAs": "home" }
+      }
+    ]
+  },
+  {
+    "name": "ip-hash-first-connections-stay-together",
+    "about": "同一个访客的头两条连接（第一条还挂着）落在同一个成员上",
+    "strategy": "ip_hash",
+    "members": [{ "name": "a" }, { "name": "b" }],
+    "steps": [
+      { "keys": { "list": ["192.0.2.77"] }, "mode": "hold", "save": "first", "expect": {} },
+      { "keys": { "list": ["192.0.2.77"] }, "mode": "hold", "expect": { "sameAs": "first" } }
+    ]
+  }
+]

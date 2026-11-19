@@ -310,6 +310,18 @@ export function defineBatchedWrite<T>(name: string, writer: BatchedWriter<T>, op
  * 面板自己 process.exit 的那几处（改设置后重启、安装向导换库）各自先调 flushPendingWrites。
  * 第二次 Ctrl+C 走 Node 默认处理，立刻退出。
  */
+/* 退出前还要做的几件事（放掉后台任务租约等），和刷写一起等，共用 flushTimeoutMs。 */
+const shutdownTasks = new Set<() => Promise<unknown> | unknown>();
+
+export function addShutdownTask(task: () => Promise<unknown> | unknown) {
+  shutdownTasks.add(task);
+  return () => { shutdownTasks.delete(task); };
+}
+
+function runShutdownTasks() {
+  return Promise.allSettled(Array.from(shutdownTasks, (task) => Promise.resolve().then(task)));
+}
+
 export function installWriteBatcherShutdownHooks(
   target: Pick<NodeJS.Process, "on" | "once" | "exit"> = process,
   options: { flushTimeoutMs?: number; log?: (message: string) => void } = {},
@@ -322,13 +334,15 @@ export function installWriteBatcherShutdownHooks(
     exiting = true;
     const pending = pendingWriteCount();
     const exit = () => target.exit(0);
-    if (pending === 0) {
+    if (pending === 0 && shutdownTasks.size === 0) {
       exit();
       return;
     }
-    log(`[WriteBatcher] ${signal}: flushing ${pending} queued rows before exit`);
+    if (pending > 0) log(`[WriteBatcher] ${signal}: flushing ${pending} queued rows before exit`);
     const timeout = setTimeout(exit, flushTimeoutMs);
-    flushPendingWrites().then(exit, exit).finally(() => clearTimeout(timeout));
+    Promise.all([pending > 0 ? flushPendingWrites() : Promise.resolve(), runShutdownTasks()])
+      .then(exit, exit)
+      .finally(() => clearTimeout(timeout));
   };
   target.once("SIGTERM", () => shutdown("SIGTERM"));
   target.once("SIGINT", () => shutdown("SIGINT"));

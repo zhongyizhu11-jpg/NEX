@@ -60,25 +60,46 @@ func TestAgentBalanceSnapshotReportsRealState(t *testing.T) {
 	}
 }
 
-func TestAgentBalanceSharesFromLiveConnections(t *testing.T) {
+// picks 是累计分到的条数，不是此刻挂着的连接数（2.2.263 及以前报的是后者）；share 由上报那边按最近一分钟算。
+func TestAgentBalancePicksAreAssignmentsNotOpenConnections(t *testing.T) {
+	resetAgentBalanceReporterForTest()
 	proxy := tunnelBalanceTestProxy("round_robin")
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	c, d := net.Pipe()
-	defer c.Close()
-	defer d.Close()
 	proxy.mu.Lock()
 	proxy.targetHealth[2] = false
+	// 第一台上挂着一条老连接，可这段时间一条新连接都没分给它
 	proxy.conns[0][a] = struct{}{}
-	proxy.conns[1][c] = struct{}{}
 	proxy.mu.Unlock()
+	for i := 0; i < 3; i++ {
+		proxy.notePick(1)
+	}
+	proxy.notePick(0)
 	_, _, exits, _ := proxy.balanceSnapshot()
-	if exits[0].Share != 0.5 || exits[1].Share != 0.5 || exits[0].State != "active" {
-		t.Fatalf("connections split across the two good exits: %#v", exits)
+	if exits[0].Picks != 1 || exits[1].Picks != 3 || exits[2].Picks != 0 {
+		t.Fatalf("picks are cumulative assignments: %#v", exits)
+	}
+	if exits[0].State != "active" || exits[1].State != "active" {
+		t.Fatalf("both good exits are in rotation: %#v", exits)
 	}
 	if exits[2].State != "down" || exits[2].Reason != "exit" {
 		t.Fatalf("entry cannot reach the third exit: %#v", exits[2])
+	}
+	failoverMu.Lock()
+	failoverProxies["balance-picks-test"] = proxy
+	failoverMu.Unlock()
+	defer func() {
+		failoverMu.Lock()
+		delete(failoverProxies, "balance-picks-test")
+		failoverMu.Unlock()
+	}()
+	rules, due := collectAgentBalanceReports(time.Unix(1_800_000_000, 0), true)
+	if !due || len(rules) != 1 {
+		t.Fatalf("report: %v %#v", due, rules)
+	}
+	if got := rules[0].Exits; got[0].Share != 0.25 || got[1].Share != 0.75 || got[2].Share != 0 {
+		t.Fatalf("share = share of recent assignments: %#v", got)
 	}
 }
 

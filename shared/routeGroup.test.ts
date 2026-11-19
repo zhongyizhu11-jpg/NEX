@@ -100,9 +100,9 @@ test("老数据的模式要推：分配方式不是主备的算权重负载，�
   // 存了模式就以它为准，不再猜。
   assert.equal(routePolicyOf({ routeMode: "manual", failoverPreferFastest: true }).mode, "manual");
   // 参数越界的收回范围里，没填的用默认值。
-  const policy = routePolicyOf({ routeFailureThreshold: 99, routeScoreMargin: 0, routePrewarmSeconds: "abc" });
+  const policy = routePolicyOf({ routeFailureThreshold: 99, routeScoreHoldSeconds: 1, routePrewarmSeconds: "abc" });
   assert.equal(policy.failureThreshold, 20);
-  assert.equal(policy.scoreMargin, 1);
+  assert.equal(policy.scoreHoldSeconds, 5);
   assert.equal(policy.prewarmSeconds, 300);
 });
 
@@ -171,7 +171,6 @@ test("换模式：参数按模板预填，定时和混合补默认时段，手�
   const weighted = applyRouteMode({ ...base, pin: { index: 1, untilMs: null } }, "weighted", { timezone: "UTC", pathCount: 2 });
   assert.equal(weighted.pin, null);
   const smart = applyRouteMode(base, "smart", { timezone: "UTC", pathCount: 2 });
-  assert.equal(smart.scoreMargin, 10);
   // 整链最优要快：明显更快持续 30 秒就切，切过去驻留 1 分钟（以前 3 分钟 + 10 分钟，看着像「选了没生效」）
   assert.equal(smart.scoreHoldSeconds, 30);
   assert.equal(smart.minHoldSeconds, 60);
@@ -219,6 +218,7 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地"), "中转异常：东京中转 → 落地");
   assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地; same exit ip"), "中转异常：东京中转 → 落地，换到同出口 IP 的备用");
   assert.equal(describeRouteReason("relay down: maintenance: HK2"), "HK2 维护中");
+  assert.equal(describeRouteReason("relay down: quota: HK2"), "HK2 流量到阈值，已暂停");
   assert.equal(describeRouteReason("relay down: node offline: JP01"), "JP01 离线");
   assert.equal(describeRouteReason("relay down: paused"), "已手动暂停");
   assert.equal(describeRouteReason("relay down"), "中转异常");

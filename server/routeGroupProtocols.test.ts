@@ -82,6 +82,12 @@ function run(): Outcome {
     await insertRule(2, "realm", "tcp", 21002, 443, "failover", "fallback", [direct("main", null), direct("backup", { ip: "198.51.100.9", port: 443 })]);
     // 3：gost TCP，按访客固定。
     await insertRule(3, "gost", "tcp", 21003, 443, "weighted", "ip_hash", [direct("a", null), direct("b", { ip: "198.51.100.9", port: 443 })]);
+    // 20：gost TCP，整组是主备（fallback），主线路的两个落地「按访客固定」一起分 —— 线路级的按访客固定。
+    await insertRule(20, "gost", "tcp", 21020, 443, "failover", "fallback", [
+      { ...direct("m1", null), tier: 0, destSpread: "ip_hash" },
+      { ...direct("m2", { ip: "198.51.100.8", port: 443 }), tier: 0, destSpread: "ip_hash" },
+      { ...direct("backup", { ip: "198.51.100.9", port: 443 }), tier: 1 },
+    ]);
     // 4：socat TCP+UDP。
     await insertRule(4, "socat", "both", 21004, 8443, "failover", "fallback", [direct("main", null), direct("backup", { ip: "198.51.100.9", port: 8443 })]);
     // 5：nginx TCP。
@@ -319,6 +325,20 @@ test("gost 按访客固定：由 gost 给调度器加一个 PROXY 头、调度�
   assert.deepEqual(outcome.agent.gostServices["fwx-3-tcp"].handler.metadata, { proxyProtocol: "1" });
   // 不按访客分的 gost 规则从来不加头。
   assert.equal(outcome.agent.gostServices["fwx-1-udp"].handler.metadata, undefined);
+});
+
+/*
+  A3：整组是主备、只有某条线路的落地之间「按访客固定」时，以前不加头（只看整组策略），调度器看到的访客
+  全是 127.0.0.1，所有人落到同一个落地。任何一层用了按访客固定都要加。
+*/
+test("线路级按访客固定（整组主备）：同样让 gost 加头、调度器读完就扔", () => {
+  const spec = outcome.agent.specs["20"];
+  assert.ok(spec, "线路级按访客固定的规则没有下发调度");
+  assert.equal(spec.strategy, "fallback");
+  assert.deepEqual(spec.targets.map((target: any) => target.spread || ""), ["ip_hash", "ip_hash", ""]);
+  assert.equal(spec.proxyProtocolReceive, true);
+  assert.equal(spec.proxyProtocolStrip, true);
+  assert.deepEqual(outcome.agent.gostServices["fwx-20-tcp"].handler.metadata, { proxyProtocol: "1" });
 });
 
 test("保存时只拦内核转发，不再拦 UDP 和 realm / socat / nginx", () => {

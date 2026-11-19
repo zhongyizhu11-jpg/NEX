@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
+import { BALANCE_STATE_WORDS } from "@/lib/balanceState";
 
 import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
 import { formatBytes } from "@shared/formatBytes";
 import type { NetworkHealth } from "@shared/networkHealth";
 import { routeWeightShares } from "@shared/routeGroup";
-import { ROUTE_SCORE_LOAD_FROM_PCT, ROUTE_SCORE_LOAD_FULL_PCT, ROUTE_SCORE_LOAD_MAX_PENALTY, routeLoadPenalty } from "@shared/routeScore";
+import { ROUTE_LOAD_MAX_PCT, ROUTE_LOAD_NOTICE_PCT, routeLoadSlowdown } from "@shared/routeScore";
 import type { RoutePolicy } from "@shared/routePolicy";
 import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 
@@ -83,18 +84,18 @@ export function describeRouteUdpSplit(path: Pick<RouteBoardPath, "healthy" | "ud
 }
 
 /**
- * 「负载 85%」那枚药丸：沿途有一台机器忙到 70% 以上才显示（70% 以下评分不扣，没什么可说的）。
- * 95% 起染红，之间琥珀；title 里写扣了几分。没到门槛或老 Agent 没报返回 null。
+ * 「负载 85%」那枚药丸：沿途有一台机器忙到 70% 以上才显示（再低影响不大，没什么可说的）。
+ * 95% 起染红，之间琥珀；title 里写这条线路按慢几倍算（调度的成本 ÷ (1 − 负载)）。没到门槛或没报返回 null。
  */
-export function describeRouteLoad(loadPct: number | null | undefined): { text: string; title: string; tone: "warn" | "down"; penalty: number } | null {
-  if (loadPct === null || loadPct === undefined || !Number.isFinite(loadPct) || loadPct < ROUTE_SCORE_LOAD_FROM_PCT) return null;
-  const penalty = Math.round(routeLoadPenalty(loadPct) * 10) / 10;
+export function describeRouteLoad(loadPct: number | null | undefined): { text: string; title: string; tone: "warn" | "down"; slowdown: number } | null {
+  if (loadPct === null || loadPct === undefined || !Number.isFinite(loadPct) || loadPct < ROUTE_LOAD_NOTICE_PCT) return null;
+  const slowdown = Math.round(routeLoadSlowdown(loadPct) * 10) / 10;
   const pct = Math.round(loadPct);
   return {
     text: `负载 ${pct}%`,
-    title: `沿途最忙的主机负载 ${pct}%（CPU 和带宽占用取大），评分扣 ${penalty} 分：${ROUTE_SCORE_LOAD_FROM_PCT}% 起扣，${ROUTE_SCORE_LOAD_FULL_PCT}% 扣满 ${ROUTE_SCORE_LOAD_MAX_PENALTY} 分`,
-    tone: loadPct >= ROUTE_SCORE_LOAD_FULL_PCT ? "down" : "warn",
-    penalty,
+    title: `沿途最忙的主机负载 ${pct}%（CPU 和带宽占用取大）：调度按慢 ${slowdown} 倍算这条线路，「自动」少分给它，择优时让一让（负载最多按 ${ROUTE_LOAD_MAX_PCT}% 算）`,
+    tone: loadPct >= ROUTE_LOAD_MAX_PCT ? "down" : "warn",
+    slowdown,
   };
 }
 
@@ -218,7 +219,7 @@ export function RouteMiniChain({ status, policy, onOpen, className }: { status: 
         const udpSplit = describeRouteUdpSplit(path);
         const state = (weighted
           ? `${shares[path.index]}%`
-          : path.active ? "在走" : path.down ? "断了" : path.prewarming ? "预热中" : "备用") + (udpSplit ? ` · ${udpSplit.text}` : "");
+          : path.active ? BALANCE_STATE_WORDS.active : path.down ? BALANCE_STATE_WORDS.down : path.prewarming ? "预热中" : BALANCE_STATE_WORDS.standby) + (udpSplit ? ` · ${udpSplit.text}` : "");
         const total = chain.totalMs === null ? "" : `${chain.partial ? "≥" : ""}${round(chain.totalMs)} ms`;
         const row = (
           <>

@@ -9,7 +9,7 @@ import type { RoutePath } from "./routeGroup";
   （0 = 不知道）、只有一次样本、计数器归零（机器重启）时都算不出带宽占用，这时只看 CPU。
 
   面板算出每台的负载后，给线路组的每条路径一个 loadPct：沿途中转机、落地机（落地是 NEX 主机时）里最忙的
-  那台；直接写地址的落地不算。Agent 拿它扣评分（shared/routeScore.ts）、算「自动」分法的权重。
+  那台；直接写地址的落地不算。Agent 把它当利用率算进成本（lbcore 的 Headroom：成本 ÷ (1 − 负载)），「自动」少分、择优让一让。
 */
 
 export type HostLoadSample = {

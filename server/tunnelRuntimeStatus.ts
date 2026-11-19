@@ -60,7 +60,7 @@ export function getTunnelRuntimeTopologyStatus(tunnelId: number, topology: Tunne
     .filter((id) => Number.isFinite(id) && id > 0)));
   const hops = unique(topology.hopHostIds || []);
   const entryCandidates = unique(topology.entryHostIds?.length ? topology.entryHostIds : [hops[0]]);
-  const useExtraExits = topology.loadBalanceEnabled === true && String(topology.loadBalanceStrategy || "").toLowerCase() !== "none";
+  const useExtraExits = topology.loadBalanceEnabled === true;
   const exitCandidates = unique([
     Number(topology.primaryExitHostId || hops[hops.length - 1] || 0),
     ...(useExtraExits ? topology.extraExitHostIds || [] : []),
@@ -130,6 +130,21 @@ export function clearTunnelRuntimeStatusForHost(hostId: number) {
     if (hosts.size === 0) tunnelRuntimeStatus.delete(tunnelId);
   }
   return affectedTunnelIds;
+}
+
+/**
+ * 只把这条链路上某几台的「已就绪」清掉（别的机器不动）。链路配置变了但不用重装时用：FXP 入口、多跳的
+ * 中转是看到自己「没就绪」才重新下发规格的，清掉它们就会带着新配置再下发一次；出口机的状态留着，
+ * 不会被连带重装。
+ */
+export function clearTunnelRuntimeStatusForHosts(tunnelId: number, hostIds: readonly number[]) {
+  const tid = normalizeTunnelId(tunnelId);
+  const hosts = tid ? tunnelRuntimeStatus.get(tid) : null;
+  if (!hosts) return;
+  let deleted = false;
+  for (const hostId of hostIds) deleted = hosts.delete(Number(hostId)) || deleted;
+  if (hosts.size === 0) tunnelRuntimeStatus.delete(tid);
+  if (deleted) bumpTunnelRuntimeGeneration(tid);
 }
 
 export function clearTunnelRuntimeStatus(tunnelId: number) {

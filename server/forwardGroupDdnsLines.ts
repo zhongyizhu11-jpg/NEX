@@ -27,7 +27,7 @@ import { getDb, nowDate } from "./dbRuntime";
   的规划把每条非默认线路的记录写到服务商，并把结果记在组的 ddnsLineState 里。
 
   对没分线路的组（也没有残留的线路记录）prepareForwardGroupDdnsLines 直接返回 null：
-  forwardGroupRepository 里所有分支都按 null 走原来的路，不多发一个请求、不多读一次库。
+  转发组评估（server/forwardGroups/）里所有分支都按 null 走原来的路，不多发一个请求、不多读一次库。
 
   失败的处理：一条线路写失败不影响别的线路，也不回滚默认线路；失败的那条保持上一次的状态（下一轮
   照旧会重试），全部处理完后抛错，让组的评估队列按退避重试。
@@ -110,6 +110,11 @@ export type ForwardGroupLineSyncInput = {
   members: LinePlannerMember[];
   forceSync?: boolean;
   rank?: LinePlanInput["rank"];
+  /**
+   * 评估只算结论时用（见 forwardGroups/evaluateScope.ts 的 deferProviderWrite）：走到要写服务商的地方先问一句，
+   * 返回 true 就不写、状态也不动，等发布队列那一轮再来。
+   */
+  deferNetwork?: () => boolean;
   recordEvent: (type: string, message: string, memberId?: number | null) => Promise<void>;
 };
 
@@ -159,6 +164,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
     previousLines = {};
   } else if (previousState && (previousState.domain !== domain || previousState.recordType !== recordType)) {
     // 组改了域名或记录类型：旧名字 / 旧类型上的线路记录按记下的 ID 先清掉，再按新的发布。
+    if (Object.keys(previousLines).length > 0 && input.deferNetwork?.()) return previousState;
     for (const entry of Object.values(previousLines)) {
       try {
         const result = await deleteDdnsLineRecords(settings, {
@@ -202,6 +208,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
     const reconcileKey = `${groupId}:${ctx.provider}:${key}`;
     if (entry.action === "delete") {
       if (!previous) continue;
+      if (input.deferNetwork?.()) return previousState;
       try {
         const result = await deleteDdnsLineRecords(settings, { domain, recordType, line: entry.line, recordIds: previous.recordIds });
         reconciledLines.delete(reconcileKey);
@@ -223,6 +230,7 @@ export async function syncForwardGroupDdnsLines(input: ForwardGroupLineSyncInput
       nextLines[key] = { ...previous, name: entry.line.name, memberIds: entry.memberIds, source: entry.source || "members" };
       continue;
     }
+    if (input.deferNetwork?.()) return previousState;
     try {
       const result = await publishDdnsLineRecords(settings, { domain, recordType, line: entry.line, values: entry.values, ttl });
       reconciledLines.set(reconcileKey, signature);

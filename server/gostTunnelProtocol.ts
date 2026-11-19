@@ -36,6 +36,11 @@ export function planGostTunnelHopRelay(input: {
 
 export type GostTunnelRuleProtocolPlan = {
   protocol: "tcp" | "udp" | "both";
+  /**
+   * 入口这一侧的 gost 服务要不要带 forwarder 目标。relay 隧道里「出口拨哪儿」是入口在请求里说的，所以恒为 true ——
+   * 它只说明这件事，不能拿来当「这条规则用不用某个功能」的开关（2.3.539 的出口组就是被一句
+   * `if (entryNeedsTarget) continue` 整个关掉的）。
+   */
   entryNeedsTarget: boolean;
   chainConnector: GostComponent;
   exitHandler: GostComponent;

@@ -117,7 +117,7 @@ test("两段：调度计划、最近切换；路径不在这里画（线路详�
 
 test("调度计划：策略模板、此刻起作用的那一行、切换保护、预热、旧连接", () => {
   const html = render();
-  assert.match(html, /晚高峰优化 · 混合策略/);
+  assert.match(html, /主备 · 按时段 · 择优：/, "策略写成 8 种分配方式里的哪一种 + 首选哪条");
   assert.equal((html.match(/data-state="deciding"/g) || []).length, 1);
   assert.match(html, /到点前 5 分钟先预热预检，预检不过不切/);
   assert.match(html, /计划切换预热/);
@@ -174,21 +174,21 @@ test("纯 UDP：调度计划里策略那句和旧会话都按会话说", () => {
   );
   const ready = { protocol: "udp" } as const;
   const udp = renderFor({ ...weighted, protocol: "udp" }, ready, { isOnline: true });
-  assert.match(udp, /负载均衡 · 权重负载：新会话按权重分到各条路径，旧会话不动/);
+  assert.match(udp, /按权重：按设定的比例分/);
   assert.match(udp, />旧会话</);
-  assert.doesNotMatch(udp, /新连接按权重分到各条路径/);
+
   const both = renderFor({ ...weighted, protocol: "both" }, { ...ready, protocol: "both" }, { isOnline: true });
-  assert.match(both, /负载均衡 · 权重负载：新连接按权重分到各条路径，旧连接不动/);
+  assert.match(both, /按权重：按设定的比例分/);
 });
 
 test("线路详情里直接改：编辑器每条线路后面是此刻的状态和立刻生效的暂停；还没保存的新线路没有（照旧是勾）", () => {
   const paused: string[] = [];
   const onPause = (lineKey: string, value: boolean) => { paused.push(`${lineKey}:${value}`); };
   const backup = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, onPause)}</>);
-  assert.match(backup, /data-testid="route-line-state"[^>]*>[^]*使用中/, "在走的那条写「使用中」");
+  assert.match(backup, /data-testid="route-line-state"[^>]*>[^]*在用/, "在走的那条写「在用」");
   assert.match(backup, /aria-label="暂停线路 晚高峰"/, "暂停按钮还在，不用保存");
   const main = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
-  assert.match(main, /待命/);
+  assert.match(main, /备用/);
   assert.doesNotMatch(main, /route-line-pause/, "只能看的时候没有暂停");
   assert.equal(routeLineStatusControls(status(), "new-line-not-saved"), null, "还没保存的新线路：没有状态，编辑器照旧给「参与切换」的勾");
   assert.equal(routeLineStatusControls(null, group.paths[0].key), null, "状态还没读到");
@@ -212,13 +212,13 @@ test("分层图：落地是最后一列、一直画到右边，后面没有「�
 test("手动换线路：点状态胶囊就能切到这条；指定了的那条胶囊带「指定」；没给切换（按权重 / 只能看）就是普通胶囊", () => {
   const lineSwitch = { pinIndex: null, pinUntilMs: null, pending: false, onPin: noop, onUnpin: noop };
   const idle = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, lineSwitch)}</>);
-  assert.match(idle, /aria-label="手动切换：主线路"[^>]*data-testid="route-line-switch"[^]*待命/, "胶囊本身就是切换按钮");
+  assert.match(idle, /aria-label="手动切换：主线路"[^>]*data-testid="route-line-switch"[^]*备用/, "胶囊本身就是切换按钮");
   const pinned = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, undefined, false, { ...lineSwitch, pinIndex: 1 })}</>);
-  assert.match(pinned, /使用中 · 指定/);
-  // 指定了主线路、机器还走在备用上：不写「待命 · 指定」（看着像指定了也不走），写「切换中」
+  assert.match(pinned, /已指定/);
+  // 指定了主线路、机器还走在备用上：写「已指定 · 切换中」，不写「备用」（看着像指定了也不走）
   const switching = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, { ...lineSwitch, pinIndex: 0 })}</>);
-  assert.match(switching, /切换中 · 指定/);
-  assert.doesNotMatch(switching, /待命/);
+  assert.match(switching, /已指定 · 切换中/);
+  assert.doesNotMatch(switching, />备用</);
   const plain = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
   assert.doesNotMatch(plain, /route-line-switch/);
 });
@@ -300,7 +300,7 @@ test("线路详情照效果图 ①（2.3.499）：「线路」标题右边那行
 test("调度计划里的「多落地」（2.3.501）：一起分的线路列成「主线路 按负载分」，不带长说明；主备的线路不列", () => {
   const line = (key: string, name: string, destSpread?: "one" | "least_load" | "ip_hash") => ({ key, name, paused: false, layers: [], dests: [], weight: 50, ...(destSpread ? { destSpread } : {}) });
   const html = render({ status: status({ lines: [line("main", "主线路", "least_load"), line("bk", "备用 1", "one"), line("bk2", "晚高峰", "ip_hash")] }) });
-  assert.match(html, />多落地<[^]*?主线路 按负载分；晚高峰 按访客固定</);
+  assert.match(html, />多落地<[^]*?主线路 按负载；晚高峰 按访客固定</);
   assert.doesNotMatch(html, /这条线路在用时/);
   assert.doesNotMatch(render({ status: status({ lines: [line("main", "主线路")] }) }), />多落地</, "没有线路一起分：不列");
 });

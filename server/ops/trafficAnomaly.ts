@@ -25,6 +25,7 @@ import { listRuleLiveRates, type RuleLiveRate } from "../ruleLiveRates";
 import { refreshRuleLimitAgents } from "../ruleLimits";
 import { sendAdminAlert, type AdminAlertMessage } from "../resourceAlertNotifier";
 import { createNonOverlappingScheduledTask } from "../scheduledTask";
+import { isPanelBackgroundLeaseHolder, leaseHolderOnly, onPanelBackgroundLeaseChange } from "../panelLease";
 import { recordPanelEvent, type PanelEventInput } from "./panelEvents";
 import { onlineSnapshots } from "./onlineIps";
 import type { OnlineIpRow } from "./onlineIpsCore";
@@ -755,11 +756,17 @@ let started = false;
 export function startTrafficAnomalyJob() {
   if (started) return;
   started = true;
-  // 收回立刻做：上一次运行留下的临时限速，功能关了就别再多限一分钟。
-  void recoverAnomalyThrottlesOnStartup().catch((error) => {
-    appendPanelLog("warn", `[TrafficAnomaly] startup throttle recovery failed: ${error instanceof Error ? error.message : String(error)}`);
-  });
-  const task = createNonOverlappingScheduledTask("traffic anomaly detection", () => runTrafficAnomalyTick(), { slowTaskMs: 20_000 });
+  // 收回立刻做：上一次运行留下的临时限速，功能关了就别再多限一分钟。多实例部署时由跑后台任务的实例做
+  // （server/panelLease.ts），接手租约的那一刻再做一次（上一任留下的限速）。
+  const recover = () => {
+    if (!isPanelBackgroundLeaseHolder()) return;
+    void recoverAnomalyThrottlesOnStartup().catch((error) => {
+      appendPanelLog("warn", `[TrafficAnomaly] startup throttle recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+  recover();
+  onPanelBackgroundLeaseChange((holder) => { if (holder) recover(); });
+  const task = createNonOverlappingScheduledTask("traffic anomaly detection", () => runTrafficAnomalyTick(), { slowTaskMs: 20_000, shouldRun: leaseHolderOnly });
   // 启动后先等两分钟：Agent 还没重连、实时速率还是空的，这时判不出什么。
   const startTimer = setTimeout(() => {
     void task();

@@ -61,7 +61,7 @@ function runScenario(): Outcome {
       "routeMode", "routePaths", "routeDelivery", "failoverSeconds", "recoverSeconds", "autoFailback",
     ], [300, 1, "带中转", "gost", "tcp", 10, 1, 17000, "203.0.113.10", 45855, 1, 1, 0, 1, "fallback", "smart", hopPaths, "hot", 3, 300, 1]);
 
-    const forwardGroups = await import(url("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(url("server/db.ts"));
     const rules = await import(url("server/repositories/forwardRuleRepository.ts"));
     const { routeGroupOf } = await import(url("shared/routeGroup.ts"));
     await forwardGroups.syncForwardGroupRules(10);
@@ -79,7 +79,6 @@ function runScenario(): Outcome {
       ["recoverSeconds", 33],
       ["autoFailback", false],
       ["routeFailureThreshold", 5],
-      ["routeScoreMargin", 22],
       ["routeScoreHoldSeconds", 44],
       ["routePrewarmSeconds", 55],
       ["routeSwitchMode", "fast"],

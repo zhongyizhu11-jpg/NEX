@@ -2,9 +2,11 @@
  * 按带宽排序解析 (bandwidth-ranked entry records) —— 入口组的选项，2.3.454 前叫「多入口带宽加权分流」。
  *
  * 实际做的事（server/bandwidthAggregation.ts applyAggregationToDdnsValues）：入口域名照旧解析出
- * 全部健康入口，只是按带宽 / 权重 / 剩余带宽把它们排个先后。很多客户端和运营商 DNS 优先用排在前面的
- * 地址，所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例 —— 以前的说法（按带宽分配
- * 解析份额、总吞吐接近各入口之和）说过头了。下面的英文说明是最初的设计，保留作背景。
+ * 全部健康入口，只是按带宽 / 权重 / 剩余带宽把它们排个先后。这个先后到不了客户端：一个名字下的多条
+ * 记录在 DNS 里是没有顺序的集合，服务商和解析器返回时自己轮换；成员没变时面板也不会为了换顺序重写
+ * 记录。所以它现在不改变客户端被分到哪一台，只用于面板里的占用率显示 —— 文档和界面都照这个说
+ * （以前写的「大带宽的入口通常会接到更多客户端」「按带宽分配解析份额」都不成立）。按服务商的记录权重
+ * 真正分流量是后续阶段的事。下面的英文说明是最初的设计，保留作背景。
  *
  * Not to be confused with the tunnel's relay bandwidth aggregation, which
  * splits a single connection across several relays. This module distributes

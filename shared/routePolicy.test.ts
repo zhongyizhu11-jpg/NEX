@@ -92,13 +92,15 @@ test("自动择优在决定时，首选交给 Agent —— 面板不知道谁更
   assert.deepEqual(states(inside), ["schedule:deciding", "fastest:overridden", "order:idle"], "时段表压过自动择优");
 });
 
-test("择优的门槛写的是 Agent 里那三个数", () => {
+test("择优的门槛写的是 Agent 里那几个数（lbcore 的 SwitchPolicy）", () => {
   // 文案里照抄了 Agent 的常数。Agent 那边改了、这里没跟上，界面就在说一套机器上不存在的规矩。
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, "../agent/main.go"), "utf8");
-  const constant = (name: string) => Number(source.match(new RegExp(`const ${name} = ([\\d.]+)`))?.[1]);
+  const source = ["../lbcore/latency.go", "../lbcore/switch.go", "../agent/main.go"]
+    .map((file) => fs.readFileSync(path.resolve(import.meta.dirname, file), "utf8")).join("\n");
+  const constant = (name: string) => Number(source.match(new RegExp(`${name}\\s*= ([\\d.]+)`))?.[1]);
   const then = policyAt(OUT_OF_WINDOW, { failoverPreferFastest: true }).conditions[0].then;
-  assert.match(then, new RegExp(`快 ${constant("failoverFastestMarginMs")}ms`));
-  assert.match(then, new RegExp(`快 ${Math.round(constant("failoverFastestMarginRatio") * 100)}%`));
+  assert.match(then, new RegExp(`快 ${constant("DefaultLatencyMargin")}ms`));
+  assert.match(then, new RegExp(`快 ${Math.round(constant("DefaultSwitchRatio") * 100)}%`));
+  assert.match(then, new RegExp(`的 ${constant("DefaultSwitchFastHold")} 秒就换`));
   assert.match(then, new RegExp(`连续 ${constant("failoverFastestHoldSeconds") / 60} 分钟`));
 });
 

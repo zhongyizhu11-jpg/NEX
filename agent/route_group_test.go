@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -50,48 +48,6 @@ func routeEventsOfKind(events []failoverProxyEvent, kind string) []failoverProxy
 	return out
 }
 
-// 评分公式和面板共用一张用例表：谁改出了偏差，谁那边红。
-func TestRouteScoreSharedCases(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "shared", "routeScore.cases.json"))
-	if err != nil {
-		t.Fatalf("读共用用例表: %v", err)
-	}
-	var fixture struct {
-		Cases []struct {
-			Name            string   `json:"name"`
-			LatencyMs       *float64 `json:"latencyMs"`
-			LossPct         float64  `json:"lossPct"`
-			JitterMs        float64  `json:"jitterMs"`
-			AvailabilityPct float64  `json:"availabilityPct"`
-			Healthy         bool     `json:"healthy"`
-			LoadPct         float64  `json:"loadPct"`
-			Expected        *int     `json:"expected"`
-		} `json:"cases"`
-	}
-	if err := json.Unmarshal(raw, &fixture); err != nil {
-		t.Fatalf("解析共用用例表: %v", err)
-	}
-	if len(fixture.Cases) < 8 {
-		t.Fatalf("用例表只读到 %d 条，路径大概不对", len(fixture.Cases))
-	}
-	for _, testCase := range fixture.Cases {
-		latency := 0.0
-		if testCase.LatencyMs != nil {
-			latency = *testCase.LatencyMs
-		}
-		actual, scored := routeScore(latency, testCase.LatencyMs != nil, testCase.LossPct, testCase.JitterMs, testCase.AvailabilityPct, testCase.Healthy, testCase.LoadPct)
-		if testCase.Expected == nil {
-			if scored {
-				t.Errorf("%s：应当不打分，拿到 %d", testCase.Name, actual)
-			}
-			continue
-		}
-		if !scored || actual != *testCase.Expected {
-			t.Errorf("%s：期望 %d，拿到 %d（scored=%v）", testCase.Name, *testCase.Expected, actual, scored)
-		}
-	}
-}
-
 func TestRouteStatsSummaryUsesMedianAndCountsLoss(t *testing.T) {
 	stats := &routeTargetStats{}
 	at := time.Now()
@@ -109,11 +65,11 @@ func TestRouteStatsSummaryUsesMedianAndCountsLoss(t *testing.T) {
 	if summary.jitterMs <= 0 {
 		t.Fatal("有尖峰就该有抖动")
 	}
-	if stats.consecutiveFailures != 1 {
-		t.Fatalf("连续失败应当是 1，拿到 %d", stats.consecutiveFailures)
+	if stats.consecutiveFailures() != 1 {
+		t.Fatalf("连续失败应当是 1，拿到 %d", stats.consecutiveFailures())
 	}
 	stats.recordProbe(true, 50, at.Add(35*time.Second))
-	if stats.consecutiveFailures != 0 {
+	if stats.consecutiveFailures() != 0 {
 		t.Fatal("探通一次就该清零")
 	}
 }
@@ -590,35 +546,35 @@ func TestForceSwitchClosesOldConnections(t *testing.T) {
 	}
 }
 
-// 智能择优：评分只差几分不切；分差够大还要等够持续时间。
-func TestScoreMarginGatesSmartSwitch(t *testing.T) {
-	build := func(candidateLossOf100 int) *failoverProxy {
-		proxy := routeTestProxy(failoverSpec{Strategy: "fallback", AutoFailback: true, Targets: routeTargets(2), PreferFastest: true, ScoreMargin: 10, ScoreHoldSeconds: 180})
+// 智能择优：成本差不到「一样快」的门槛（50ms）不切；差够了还要等够持续时间。
+func TestPreferFastestMarginGatesSmartSwitch(t *testing.T) {
+	build := func(candidateMs int) *failoverProxy {
+		proxy := routeTestProxy(failoverSpec{Strategy: "fallback", AutoFailback: true, Targets: routeTargets(2), PreferFastest: true, ScoreHoldSeconds: 180})
 		at := time.Now().Add(-10 * time.Minute)
 		for i := 0; i < 100; i++ {
-			proxy.statsLocked(0).recordProbe(i >= 2, 60, at.Add(time.Duration(i)*5*time.Second))
-			proxy.statsLocked(1).recordProbe(i >= candidateLossOf100, 60, at.Add(time.Duration(i)*5*time.Second))
+			proxy.statsLocked(0).recordProbe(true, 120, at.Add(time.Duration(i)*5*time.Second))
+			proxy.statsLocked(1).recordProbe(true, candidateMs, at.Add(time.Duration(i)*5*time.Second))
 		}
 		return proxy
 	}
 	start := time.Now()
 
-	close := build(1) // 当前 82 分（丢包 2%），候选 90 分（丢包 1%）：差 8 分，不切
+	close := build(90) // 120ms 对 90ms：差 30ms，在延迟优先里算一样快，不切
 	close.mu.Lock()
 	if got := fastestAfterHold(close, start); got != -1 {
 		close.mu.Unlock()
-		t.Fatalf("分差不到门槛就切了：%d", got)
+		t.Fatalf("差不到门槛就切了：%d", got)
 	}
 	close.mu.Unlock()
 
-	clear := build(0) // 候选 98 分：差 16 分，等够 180 秒才切
+	clear := build(60) // 120ms 对 60ms：差 60ms、快一半，等够 180 秒才切（差不到 100ms，不算「好得多」）
 	clear.mu.Lock()
 	defer clear.mu.Unlock()
-	if score, _ := clear.scoreLocked(0); score != 82 {
-		t.Fatalf("当前线路应当 82 分，拿到 %d", score)
+	if score, _ := clear.scoreLocked(0); score != 78 {
+		t.Fatalf("当前线路应当显示 78 分，拿到 %d", score)
 	}
-	if score, _ := clear.scoreLocked(1); score != 98 {
-		t.Fatalf("候选应当 98 分，拿到 %d", score)
+	if score, _ := clear.scoreLocked(1); score != 94 {
+		t.Fatalf("候选应当显示 94 分，拿到 %d", score)
 	}
 	if got := clear.fastestIndexLocked(start); got != -1 {
 		t.Fatalf("第一次看到就切：%d", got)
@@ -634,8 +590,8 @@ func TestScoreMarginGatesSmartSwitch(t *testing.T) {
 	if clear.activeIndex != 1 {
 		t.Fatalf("择优之后应当切过去：active=%d", clear.activeIndex)
 	}
-	if switched := routeEventsOfKind(drainFailoverEvents(), "switch"); len(switched) != 1 || switched[0].Reason != "score" || switched[0].Score != 98 {
-		t.Fatalf("择优切换应当带原因 score 和评分：%+v", switched)
+	if switched := routeEventsOfKind(drainFailoverEvents(), "switch"); len(switched) != 1 || switched[0].Reason != "score" || switched[0].Score != 94 {
+		t.Fatalf("择优切换应当带原因 score 和显示分：%+v", switched)
 	}
 }
 
@@ -709,5 +665,37 @@ func TestPersistedSpecDropsRelayHints(t *testing.T) {
 	}
 	if !spec.Targets[0].Down {
 		t.Fatal("去提示不该改到原来的规格")
+	}
+}
+
+/*
+F6：择优比的成本不能「拿苹果比梨」。拨通率只有在走的那条有（真实连接只拨它），候选一条真实拨号都没有、拨通率是
+「不知道」（不罚）。以前在走的那条 2/20 次拨号失败就按 1 + 10 × 10% = 2 倍罚，120ms 被算成 240ms，
+慢的候选（150ms）反而「好得多」，被切过去。现在只有两边都有拨号样本时才比拨通率。
+*/
+func TestPreferFastestComparesDialSuccessOnlyLikeForLike(t *testing.T) {
+	proxy := routeTestProxy(failoverSpec{Strategy: "fallback", AutoFailback: true, Targets: routeTargets(2), PreferFastest: true, ScoreHoldSeconds: 30})
+	at := time.Now().Add(-5 * time.Minute)
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	for i := 0; i < 40; i++ {
+		proxy.statsLocked(0).recordProbe(true, 120, at.Add(time.Duration(i)*5*time.Second))
+		proxy.statsLocked(1).recordProbe(true, 150, at.Add(time.Duration(i)*5*time.Second))
+	}
+	now := time.Now()
+	for i := 0; i < 20; i++ {
+		proxy.statsLocked(0).recordDial(i >= 2, 5, now.Add(-time.Duration(i)*time.Second), 120)
+	}
+	start := time.Now()
+	if got := fastestAfterHold(proxy, start); got != -1 {
+		t.Fatalf("在走的 120ms（偶尔拨不通）不该输给一条没拨过的 150ms：%d", got)
+	}
+	// 两边都有拨号样本时照比：候选拨号全通、在走的那条一半拨不通，差得远，该换。
+	for i := 0; i < 20; i++ {
+		proxy.statsLocked(0).recordDial(i%2 == 0, 5, now, 120)
+		proxy.statsLocked(1).recordDial(true, 5, now, 150)
+	}
+	if got := fastestAfterHold(proxy, start.Add(time.Second)); got != 1 {
+		t.Fatalf("两边都有拨号样本、在走的一半拨不通：应该换到候选，拿到 %d", got)
 	}
 }

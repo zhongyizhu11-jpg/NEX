@@ -120,7 +120,7 @@ function runScenario(): Outcome {
       // 旧机上的落地入站：不自动搬，只提示
       await insert("proxy_inbounds", ["id", "userId", "hostId", "name", "port"], [60, 1, 1, "落地", 25000]);
 
-      const forwardGroups = await import(url("server/repositories/forwardGroupRepository.ts"));
+      const forwardGroups = await import(url("server/db.ts"));
       await forwardGroups.syncForwardGroupRules(10);
       const routeGroups = await import(url("server/routeGroups.ts"));
       await routeGroups.syncRouteRelayRulesForRule(400, { reason: "test" });

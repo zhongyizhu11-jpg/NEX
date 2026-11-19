@@ -6,7 +6,7 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { pushAgentRefresh } from "./agentEvents";
 import { getDb } from "./dbRuntime";
 import { getProxyNodeById } from "./repositories/proxySubscriptionRepository";
-import { syncForwardGroupRules } from "./repositories/forwardGroupRepository";
+import { syncForwardGroupRules } from "./forwardGroups/ruleSync";
 import { getForwardRuleById, updateForwardRule } from "./repositories/forwardRuleRepository";
 import { dbBool } from "./repositories/repositoryUtils";
 import { getTunnelById } from "./repositories/tunnelRepository";

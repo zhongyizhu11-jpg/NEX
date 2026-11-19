@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -27,6 +28,9 @@ import (
 // 规格里路径特别多时一下子开太多探测连接 / ping。
 const failoverProbeParallelism = 8
 
+// failoverProbeDefaultTimeout 探测默认等多久（规格没带 ProbeTimeoutMs；经出口探时拨本机 gost 端口也用它）。
+const failoverProbeDefaultTimeout = 2 * time.Second
+
 // failoverRaceDelayMin 竞速前至少等这么久（RFC 8305 建议 250 ms 左右）。路径本身往返就慢
 // （跨洲线路握手几百毫秒很正常）时按它最近一次探测耗时的两倍等，免得把健康但远的路径上
 // 的连接系统性地抢到近的路径上，打乱权重分配。
@@ -48,8 +52,13 @@ func failoverTCPDialContext(ctx context.Context, network, address string) (net.C
 
 // probeFailoverTargets 有界并行地探测所有路径，结果按路径下标返回。
 func probeFailoverTargets(protocol string, targets []failoverTarget) ([]int, []bool) {
+	return probeFailoverTargetsWithin(protocol, targets, failoverProbeDefaultTimeout)
+}
+
+// probeFailoverTargetsWithin 同上，拨 TCP 探测时最多等 timeout（规格的 ProbeTimeoutMs）。
+func probeFailoverTargetsWithin(protocol string, targets []failoverTarget, timeout time.Duration) ([]int, []bool) {
 	return probeFailoverTargetsWith(targets, func(target failoverTarget) (int, bool) {
-		return failoverProbeTarget(protocol, target)
+		return failoverProbeTargetWithin(protocol, target, timeout)
 	})
 }
 
@@ -113,7 +122,7 @@ func failoverDialTCP(ctx context.Context, target failoverTarget, timeout time.Du
 // 挑出来的，也就是按优先级、分层规格下按层的下一条）。
 func (p *failoverProxy) raceAllowedLocked() bool {
 	switch p.spec.Strategy {
-	case "weighted", "round_robin", "random", "least_load", "auto":
+	case "weighted", "round_robin", "random", "least_load", "auto", "latency":
 		return len(p.spec.Targets) > 1
 	case "fallback":
 		return p.spec.Delivery == "hot" && len(p.spec.Targets) > 1
@@ -137,11 +146,50 @@ type failoverDialResult struct {
 	index   int
 	err     error
 	elapsed time.Duration
+	// 这次拨号发起的时刻（并发失败去重用）和它的在途。
+	started     time.Time
+	reservation failoverReservation
 }
 
-// dialFailoverPath 拨已经挑好的路径；允许竞速时按上面的规则再拨一条备选。拨失败的路径记一次
-// 失败并加进 attempted（和原来一样）；被取消的输家不算失败。返回实际连上的那条。
-func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, index int, attempted map[int]bool, timeout time.Duration) (net.Conn, failoverTarget, int, error) {
+// errFailoverNoPath：没有可挑的路径了（都试过、或者剩下的都被管理上排除）。
+var errFailoverNoPath = errors.New("no path available")
+
+/*
+dialNextPathReserved 挑一条 attempted 里没有的路径去拨（挑中就记在途，A8），拨不通的记进 attempted 再挑下一条，
+直到拨通或者没得挑。建连接（handleConn）和保护期里换路（earlyReroute）都走它。accept 不为空时拨通以后再过一道
+（换路要先把留着的数据重发过去）：过不了的那条关掉、算试过，接着挑。返回拨通那条的连接、下标和在途（调用方
+转成连接或者退掉）；一条都没拨通返回最后一次的错误，一条都没挑出来是 errFailoverNoPath。
+*/
+func (p *failoverProxy) dialNextPathReserved(visitor string, attempted map[int]bool, accept func(net.Conn) error) (net.Conn, int, failoverReservation, error) {
+	err := errFailoverNoPath
+	for {
+		target, index, reservation := p.pickReserved(visitor, attempted, false)
+		if index < 0 {
+			return nil, -1, failoverReservation{}, err
+		}
+		var conn net.Conn
+		// 拨失败的在里面记失败、加进 attempted；允许竞速的策略实际连上的可能是另一条。
+		conn, _, index, reservation, err = p.dialFailoverPathReserved(visitor, target, index, reservation, attempted, failoverProxyDialTimeout)
+		if err == nil && accept != nil {
+			if err = accept(conn); err != nil {
+				_ = conn.Close()
+				attempted[index] = true
+				p.releaseReservation(reservation)
+			}
+		}
+		if err == nil {
+			return conn, index, reservation, nil
+		}
+	}
+}
+
+/*
+dialFailoverPathReserved 拨已经挑好的路径；允许竞速时按上面的规则再拨一条备选。拨失败的路径记一次失败并加进
+attempted；被取消的输家不算失败。返回实际连上的那条。带着在途（A8）：reservation 是调用方挑 index 时记的那一笔
+（pickReserved；零值 = 没记）。拨失败的、竞速输掉的在这里退掉；返回的是连上那条的在途，调用方把它转成连接
+（trackConnReserved）或者退掉。竞速时另拨的那条自己记一笔。
+*/
+func (p *failoverProxy) dialFailoverPathReserved(visitor string, target failoverTarget, index int, reservation failoverReservation, attempted map[int]bool, timeout time.Duration) (net.Conn, failoverTarget, int, failoverReservation, error) {
 	p.mu.RLock()
 	race := p.raceAllowedLocked()
 	delay := p.raceDelayLocked(index)
@@ -151,21 +199,22 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 		conn, err := failoverDialTCP(context.Background(), target, timeout)
 		if err != nil {
 			attempted[index] = true
-			p.markTargetFailure(index, "dial failed")
-		} else {
-			p.markDialSuccess(index, time.Since(started))
+			p.releaseReservation(reservation)
+			p.markDialFailure(index, "dial failed", started, err)
+			return conn, target, index, failoverReservation{}, err
 		}
-		return conn, target, index, err
+		p.markDialSuccess(index, time.Since(started))
+		return conn, target, index, reservation, nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	results := make(chan failoverDialResult, 2)
-	dial := func(target failoverTarget, index int) {
+	dial := func(target failoverTarget, index int, reservation failoverReservation) {
 		started := time.Now()
 		conn, err := failoverDialTCP(ctx, target, timeout)
-		results <- failoverDialResult{conn: conn, target: target, index: index, err: err, elapsed: time.Since(started)}
+		results <- failoverDialResult{conn: conn, target: target, index: index, err: err, elapsed: time.Since(started), started: started, reservation: reservation}
 	}
-	go dial(target, index)
+	go dial(target, index, reservation)
 	pending := 1
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -181,34 +230,40 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 				exclude[i] = true
 			}
 			exclude[index] = true
-			second, secondIndex := p.pickTargetForKey(visitor, exclude)
+			second, secondIndex, secondReservation := p.pickReserved(visitor, exclude, false)
 			p.mu.RLock()
 			healthy := secondIndex >= 0 && p.healthyLocked(secondIndex)
 			p.mu.RUnlock()
 			if healthy {
-				go dial(second, secondIndex)
+				go dial(second, secondIndex, secondReservation)
 				pending++
+			} else {
+				p.releaseReservation(secondReservation)
 			}
 		case result := <-results:
 			pending--
 			if result.err == nil {
 				p.markDialSuccess(result.index, result.elapsed)
 				cancel()
-				// 输家可能在取消前刚好连上：收下来关掉，别漏连接。
+				// 输家可能在取消前刚好连上：收下来关掉，别漏连接；它那笔在途也退掉。
 				for ; pending > 0; pending-- {
 					go func() {
-						if loser := <-results; loser.conn != nil {
+						loser := <-results
+						if loser.conn != nil {
 							_ = loser.conn.Close()
 						}
+						p.releaseReservation(loser.reservation)
 					}()
 				}
-				return result.conn, result.target, result.index, nil
+				return result.conn, result.target, result.index, result.reservation, nil
 			}
 			attempted[result.index] = true
-			p.markTargetFailure(result.index, "dial failed")
+			p.releaseReservation(result.reservation)
+			// 被我们自己取消的输家不走到这里（赢家出来就返回了）；万一是，markDialFailure 也按本机错误不计。
+			p.markDialFailure(result.index, "dial failed", result.started, result.err)
 			last = result
 		}
 	}
 	cancel()
-	return nil, last.target, last.index, last.err
+	return nil, last.target, last.index, failoverReservation{}, last.err
 }

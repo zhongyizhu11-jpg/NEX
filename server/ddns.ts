@@ -47,6 +47,12 @@ export type DdnsRecordInput = {
 
 export type DdnsRecordValuesInput = Omit<DdnsRecordInput, "value"> & {
   values: string[];
+  /**
+   * 只在 values 为空（清记录）时有用：只删值在这份清单里的记录，别的值一律不动。
+   * 删转发组时用（P6）：面板只删它自己发过的那几个值（组的 lastDdnsValue），这个名字上别人手动加的
+   * 记录不是面板写的，不能跟着删。不传 = 这个名字 / 类型整个归面板管，全删（关双栈清副记录的老用法）。
+   */
+  removeOnlyValues?: string[];
 };
 
 /** 单次 DNS 服务商 API 请求最长等多久。 */
@@ -765,6 +771,19 @@ function uniqueDdnsValues(values: string[]) {
   return out;
 }
 
+/** 比较记录值用的规整：CNAME 不分大小写、不看末尾的点；地址去掉方括号、转小写。 */
+function ddnsValueKey(recordType: string, value: unknown) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (String(recordType || "").toUpperCase() === "CNAME") return text.replace(/\.+$/, "");
+  return text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1).trim() : text;
+}
+
+/** removeOnlyValues 规整成的集合；没给（或这次不是清记录）是 null = 不限制。 */
+function ddnsRemoveOnlyKeys(input: Pick<DdnsRecordValuesInput, "recordType" | "removeOnlyValues">, values: string[]) {
+  if (values.length > 0 || !Array.isArray(input.removeOnlyValues)) return null;
+  return new Set(input.removeOnlyValues.map((value) => ddnsValueKey(input.recordType, value)).filter(Boolean));
+}
+
 function planDdnsValueChanges<T>(records: T[], desiredValues: string[], valueOf: (record: T) => unknown) {
   const desired = uniqueDdnsValues(desiredValues);
   const desiredSet = new Set(desired);
@@ -808,6 +827,7 @@ async function updateCloudflareValues(input: {
   recordType: string;
   values: string[];
   ttl?: number;
+  removeOnly?: Set<string> | null;
 }) {
   const headers = {
     Authorization: "Bearer " + input.apiToken,
@@ -827,7 +847,8 @@ async function updateCloudflareValues(input: {
     String(item?.type || "").toUpperCase() === recordType
   ));
   const desired = uniqueDdnsValues(input.values);
-  const managedRecords = records.filter((record: any) => String(record?.id || ""));
+  const managedRecords = records.filter((record: any) => String(record?.id || "")
+    && (!input.removeOnly || input.removeOnly.has(ddnsValueKey(recordType, record?.content))));
   const template = managedRecords[0] || records[0] || null;
   const plan = planDdnsValueChanges(managedRecords, desired, (record: any) => record?.content);
   const payloadFor = (value: string, record: any = template) => {
@@ -895,6 +916,8 @@ async function updateWebhookValues(settings: DdnsSettings, input: DdnsRecordValu
     ttl,
     lineId: input.lineId || undefined,
     lineName: input.lineName || undefined,
+    // 清记录时面板发过的值（删转发组）：接收方可以只删这几个；老接收方不认这个字段，照 action=delete 处理。
+    ...(values.length === 0 && Array.isArray(input.removeOnlyValues) ? { removeValues: uniqueDdnsValues(input.removeOnlyValues) } : {}),
   });
   const resp = await ddnsFetch(url, {
     method: settings.webhookMethod,
@@ -907,7 +930,7 @@ async function updateWebhookValues(settings: DdnsSettings, input: DdnsRecordValu
   }
 }
 
-async function updateHuaweiCloudValues(settings: DdnsSettings, input: DdnsRecordValuesInput, values: string[]) {
+async function updateHuaweiCloudValues(settings: DdnsSettings, input: DdnsRecordValuesInput, values: string[], removeOnly: Set<string> | null = null) {
   ensureHuaweiCloudCredentials(settings);
   const name = fqdn(input.domain);
   const recordType = (input.recordType || "A").toUpperCase();
@@ -918,9 +941,19 @@ async function updateHuaweiCloudValues(settings: DdnsSettings, input: DdnsRecord
   const zoneId = encodeURIComponent(resolvedZoneId);
   const basePath = `/v2.1/zones/${zoneId}/recordsets`;
   if (values.length === 0) {
-    if (record?.id) {
-      await huaweicloudRequest(settings, "DELETE", `${basePath}/${encodeURIComponent(String(record.id))}`, {});
+    if (!record?.id) return;
+    const recordPath = `${basePath}/${encodeURIComponent(String(record.id))}`;
+    if (removeOnly) {
+      // 华为云一个名字一个记录集：只拿掉面板发过的值，剩下的（别人加的）留在记录集里；一个都不是面板的就不动。
+      const current: string[] = (Array.isArray(record.records) ? record.records : []).map((value: unknown) => String(value));
+      const remaining = current.filter((value) => !removeOnly.has(ddnsValueKey(recordType, value)));
+      if (remaining.length === current.length) return;
+      if (remaining.length > 0) {
+        await huaweicloudRequest(settings, "PUT", recordPath, {}, { name, type: recordType, ttl: Number(record.ttl) || ttl, records: remaining });
+        return;
+      }
     }
+    await huaweicloudRequest(settings, "DELETE", recordPath, {});
     return;
   }
   const payload = { name, type: recordType, ttl, records: values };
@@ -931,7 +964,7 @@ async function updateHuaweiCloudValues(settings: DdnsSettings, input: DdnsRecord
   await huaweicloudRequest(settings, "POST", basePath, {}, huaweiCloudCreatePayload({ name, recordType, ttl, records: values, line }));
 }
 
-async function updateAliyunValues(settings: DdnsSettings, input: DdnsRecordValuesInput, values: string[]) {
+async function updateAliyunValues(settings: DdnsSettings, input: DdnsRecordValuesInput, values: string[], removeOnly: Set<string> | null = null) {
   if (!settings.aliyunAccessKeyId || !settings.aliyunAccessKeySecret || !settings.aliyunDomainName) {
     throw new Error("阿里云 DDNS 配置不完整");
   }
@@ -954,7 +987,8 @@ async function updateAliyunValues(settings: DdnsSettings, input: DdnsRecordValue
     String(item?.Type || "").toUpperCase() === recordType &&
     (!line || String(item?.Line || "") === line)
   ));
-  const managedRecords = candidates.filter((record: any) => String(record?.RecordId || ""));
+  const managedRecords = candidates.filter((record: any) => String(record?.RecordId || "")
+    && (!removeOnly || removeOnly.has(ddnsValueKey(recordType, record?.Value))));
   const plan = planDdnsValueChanges(managedRecords, values, (record: any) => record?.Value);
   await withProviderMinTtl("aliyun", root, ttl, async (effectiveTtl) => {
     const payloadFor = (value: string) => ({ RR: rr, Type: recordType, Value: value, Line: line, TTL: effectiveTtl });
@@ -973,7 +1007,7 @@ async function updateAliyunValues(settings: DdnsSettings, input: DdnsRecordValue
   }
 }
 
-async function updateTencentCloudValues(settings: DdnsSettings, input: DdnsRecordValuesInput, values: string[]) {
+async function updateTencentCloudValues(settings: DdnsSettings, input: DdnsRecordValuesInput, values: string[], removeOnly: Set<string> | null = null) {
   if (!settings.tencentcloudSecretId || !settings.tencentcloudSecretKey || !settings.tencentcloudDomainName) {
     throw new Error("腾讯云 DNSPod DDNS 配置不完整");
   }
@@ -997,7 +1031,8 @@ async function updateTencentCloudValues(settings: DdnsSettings, input: DdnsRecor
     String(item?.Type || "").toUpperCase() === recordType &&
     (recordLineId ? String(item?.LineId || "") === recordLineId : String(item?.Line || "") === recordLine)
   ));
-  const managedRecords = candidates.filter((record: any) => String(record?.RecordId || ""));
+  const managedRecords = candidates.filter((record: any) => String(record?.RecordId || "")
+    && (!removeOnly || removeOnly.has(ddnsValueKey(recordType, record?.Value))));
   const plan = planDdnsValueChanges(managedRecords, values, (record: any) => record?.Value);
   await withProviderMinTtl("tencentcloud", root, ttl, async (effectiveTtl) => {
     const payloadFor = (value: string) => {
@@ -1045,6 +1080,9 @@ export async function updateDdnsRecordValues(input: DdnsRecordValuesInput) {
   if (!normalizedInput.domain) throw new Error("入口组未配置 DDNS 域名");
   const values = uniqueDdnsValues(input.values);
   if (normalizedInput.recordType === "CNAME" && values.length > 1) throw new Error("CNAME 记录只能指向一个值");
+  const removeOnly = ddnsRemoveOnlyKeys(normalizedInput, values);
+  // 清记录但清单是空的：面板没发过任何值，什么都不删。
+  if (removeOnly && removeOnly.size === 0) return;
 
   return withKeyedTaskLock(ddnsRecordLockKey(settings, normalizedInput), async () => {
     if (settings.provider === "cloudflare") {
@@ -1056,6 +1094,7 @@ export async function updateDdnsRecordValues(input: DdnsRecordValuesInput) {
         recordType: normalizedInput.recordType,
         values,
         ttl: normalizedInput.ttl ?? settings.ttl,
+        removeOnly,
       });
       return;
     }
@@ -1066,17 +1105,17 @@ export async function updateDdnsRecordValues(input: DdnsRecordValuesInput) {
     }
 
     if (settings.provider === "huaweicloud") {
-      await updateHuaweiCloudValues(settings, normalizedInput, values);
+      await updateHuaweiCloudValues(settings, normalizedInput, values, removeOnly);
       return;
     }
 
     if (settings.provider === "aliyun") {
-      await updateAliyunValues(settings, normalizedInput, values);
+      await updateAliyunValues(settings, normalizedInput, values, removeOnly);
       return;
     }
 
     if (settings.provider === "tencentcloud") {
-      await updateTencentCloudValues(settings, normalizedInput, values);
+      await updateTencentCloudValues(settings, normalizedInput, values, removeOnly);
     }
   });
 }

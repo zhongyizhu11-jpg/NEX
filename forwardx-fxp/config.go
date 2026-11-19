@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 func readConfig(path string) (config, error) {
@@ -98,12 +100,11 @@ func normalizeConfig(cfg config) config {
 }
 
 func normalizeExitStrategy(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "fallback", "random", "ip_hash", "weighted", "least_load", "auto", "latency":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return "round_robin"
+	// 八种分配方式的名字只有 lbcore 那一份；认不出的（包括没写）按轮流。面板下发前已经规整过，这里不认别名。
+	if name := strings.ToLower(strings.TrimSpace(value)); lbcore.ValidStrategy(name) {
+		return name
 	}
+	return lbcore.StrategyRoundRobin
 }
 
 func validateConfig(cfg config) error {

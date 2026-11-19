@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -97,12 +98,21 @@ func checkResolvedExitTarget(hello helloFrame, ip net.IP) error {
 
 // exitTargetDialHook 只给测试用：返回错误就当这台出口（按监听端口认）连不上目标，
 // 用来在一台机器上模拟「三台出口里一台到落地不通」。生产里永远是 nil。
-var exitTargetDialHook func(listenPort int, hello helloFrame) error
+// 出口的会话协程在读它，测试换钩子时可能正读着，所以放在原子指针里。
+var exitTargetDialHook atomic.Pointer[func(listenPort int, hello helloFrame) error]
+
+func setExitTargetDialHook(hook func(listenPort int, hello helloFrame) error) {
+	if hook == nil {
+		exitTargetDialHook.Store(nil)
+		return
+	}
+	exitTargetDialHook.Store(&hook)
+}
 
 // dialExitTargetFor 是出口这边拨目标的入口：先过测试钩子，再 dialExitTarget。
 func dialExitTargetFor(cfg config, hello helloFrame, timeout time.Duration) (net.Conn, error) {
-	if hook := exitTargetDialHook; hook != nil {
-		if err := hook(cfg.ListenPort, hello); err != nil {
+	if hook := exitTargetDialHook.Load(); hook != nil {
+		if err := (*hook)(cfg.ListenPort, hello); err != nil {
 			return nil, err
 		}
 	}
@@ -111,8 +121,12 @@ func dialExitTargetFor(cfg config, hello helloFrame, timeout time.Duration) (net
 
 // dialExitTarget 拨一个核对过的 TCP 目标。拨的就是解析出来、查过的那个 IP，
 // 查和拨之间不会再解析一次。
+//
+// 解析目标域名也算在 timeout 里（F2）：入口等结果帧的时间是按「拨目标的时限」算的，解析放在时限外面，
+// 冷 DNS 一慢，每台出口的结果都晚过入口的等待，被当成出口没回话。
 func dialExitTarget(hello helloFrame, timeout time.Duration) (net.Conn, error) {
-	address, err := resolveHopAddress(hello.TargetIP, hello.TargetPort)
+	deadline := time.Now().Add(timeout)
+	address, err := resolveHopAddressWithin(hello.TargetIP, hello.TargetPort, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +137,7 @@ func dialExitTarget(hello helloFrame, timeout time.Duration) (net.Conn, error) {
 	if err := checkResolvedExitTarget(hello, net.ParseIP(host)); err != nil {
 		return nil, err
 	}
-	d := net.Dialer{Timeout: timeout, KeepAlive: fxpTCPKeepAlive}
+	d := net.Dialer{Deadline: deadline, KeepAlive: fxpTCPKeepAlive}
 	conn, err := d.Dial("tcp", address)
 	if err != nil {
 		return nil, err

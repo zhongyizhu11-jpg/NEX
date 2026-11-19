@@ -316,3 +316,130 @@ test("直连域名只有管理员能设、能改；「自动」只给管理员�
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+/*
+  P10 直连域名：
+    · 流量到阈值被暂停的成员不发布（以前只看在线和维护）；
+    · 掉出解析是立刻的，加回去要连续能用满一分钟；
+    · 写失败按 1、2、5 分钟退避重试（以前固定十分钟不再试）；
+    · TTL 用 DDNS 设置里的（以前写死 60）。
+  用 Webhook 服务商、把 fetch 换成假的来数每次写了什么；时间用 Date.now 加偏移往前拨。
+*/
+test("落地池直连域名：流量暂停的不发布、加回去等一分钟、写失败退避重试、TTL 跟着 DDNS 设置", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-landing-dns-"));
+  try {
+    const script = String.raw`
+      import assert from "node:assert/strict";
+      import path from "node:path";
+      import { pathToFileURL } from "node:url";
+      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+      const runtime = await import(url("server/dbRuntime.ts"));
+      const schema = await import(url("server/dbSchema.ts"));
+      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+      await schema.ensureDatabaseSchema();
+      console.info = () => {};
+      console.warn = () => {};
+      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+      const realNow = Date.now.bind(Date);
+      let skew = 0;
+      Date.now = () => realNow() + skew;
+      const online = new Set([1, 2, 3]);
+      const touch = async () => {
+        for (const id of online) await exec('UPDATE hosts SET "isOnline" = 1, "lastHeartbeat" = ? WHERE id = ?', [Math.floor(Date.now() / 1000), id]);
+      };
+      const advance = async (ms) => { skew += ms; await touch(); };
+
+      await exec("INSERT INTO users (id, username, password, role, \"allowProxySubscription\") VALUES (1, 'admin', 'hash', 'admin', 1)");
+      for (const id of [1, 2, 3]) {
+        await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?)', [id, "H" + id, "203.0.113." + id, "203.0.113." + id, "slave", "tok" + id, Math.floor(Date.now() / 1000), "2.2.244"]);
+      }
+      const db = await import(url("server/db.ts"));
+      const pools = await import(url("server/nodePools.ts"));
+      const landing = await import(url("server/landingPools.ts"));
+      const save = await import(url("server/landingPoolSave.ts"));
+
+      const writes = [];
+      let failWrites = false;
+      globalThis.fetch = async (_rawUrl, init = {}) => {
+        const body = JSON.parse(String(init.body || "{}"));
+        writes.push({ values: [...(body.values || [])].sort(), ttl: body.ttl });
+        if (failWrites) return new Response("provider is down", { status: 503 });
+        return new Response(null, { status: 204 });
+      };
+      await db.setSettings({ ddnsEnabled: "true", ddnsProvider: "webhook", ddnsWebhookUrl: "https://hook.example.test/ddns", ddnsWebhookMethod: "POST", ddnsTtl: "300" });
+
+      const { config } = save.mergeLandingInput(null, { protocol: "vless", port: 443, users: [{ id: 0, name: "默认" }] });
+      const poolId = Number(await pools.createNodePool({ userId: 1, name: "HK 落地池", role: "landing", hostIds: [1, 2, 3], landingJson: JSON.stringify(config) }));
+      await pools.updateNodePool(poolId, { directDomain: "hk.example.test" });
+      const first = await landing.syncLandingPool(poolId, { reason: "test", domainChanged: true });
+      assert.equal(first.dnsError, null);
+      assert.deepEqual(writes, [{ values: ["203.0.113.1", "203.0.113.2", "203.0.113.3"], ttl: 300 }], "三台都发布，TTL 是 DDNS 设置里的 300 而不是写死的 60");
+      const refresh = async () => { await touch(); await landing.refreshLandingPoolHealth(poolId, "test"); };
+      const last = () => writes[writes.length - 1].values;
+
+      // 流量到阈值被暂停：马上拿掉
+      await exec('UPDATE hosts SET "trafficFailoverEnabled" = 1, "trafficLimit" = 1000, "trafficFailoverExcluded" = 1 WHERE id = 2');
+      await refresh();
+      assert.deepEqual(last(), ["203.0.113.1", "203.0.113.3"], "流量暂停的成员不发布");
+
+      // 掉线：马上拿掉
+      online.delete(3);
+      await exec('UPDATE hosts SET "isOnline" = 0, "lastHeartbeat" = ? WHERE id = 3', [Math.floor(Date.now() / 1000) - 3600]);
+      await refresh();
+      assert.deepEqual(last(), ["203.0.113.1"], "掉线的成员立刻拿掉");
+
+      // 回来：先不加，满一分钟才加
+      online.add(3);
+      let count = writes.length;
+      await refresh();
+      assert.equal(writes.length, count, "刚回来不马上加回解析");
+      await advance(30_000);
+      await refresh();
+      assert.equal(writes.length, count, "才 30 秒，还不加");
+      await advance(31_000);
+      await refresh();
+      assert.deepEqual(last(), ["203.0.113.1", "203.0.113.3"], "连续能用满一分钟后加回");
+
+      // 写失败：1、2、5 分钟退避
+      await exec('UPDATE hosts SET "trafficFailoverExcluded" = 0 WHERE id = 2');
+      await refresh();
+      await advance(61_000);
+      failWrites = true;
+      count = writes.length;
+      await refresh();
+      assert.equal(writes.length, count + 1, "H2 稳定后要写，这次写失败");
+      await refresh();
+      assert.equal(writes.length, count + 1, "一分钟内不重试");
+      await advance(61_000);
+      await refresh();
+      assert.equal(writes.length, count + 2, "1 分钟后重试（以前要等 10 分钟）");
+      await advance(61_000);
+      await refresh();
+      assert.equal(writes.length, count + 2, "第二次失败后等 2 分钟");
+      await advance(61_000);
+      await refresh();
+      assert.equal(writes.length, count + 3);
+      await advance(4 * 60_000);
+      await refresh();
+      assert.equal(writes.length, count + 3, "第三次失败后等 5 分钟");
+      failWrites = false;
+      await advance(61_000);
+      await refresh();
+      assert.equal(writes.length, count + 4);
+      assert.deepEqual(last(), ["203.0.113.1", "203.0.113.2", "203.0.113.3"]);
+      assert.deepEqual(landing.LANDING_DNS_RETRY_DELAYS_MS.map((ms) => ms / 60_000), [1, 2, 5]);
+      console.log("OK");
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "dns.db"), FORWARDX_LOG_DIR: directory },
+      timeout: 180000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /OK/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

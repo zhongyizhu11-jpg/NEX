@@ -1,5 +1,4 @@
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { FXP_TARGET_AWARE_VERSION } from "@shared/loadBalance";
+import { FXP_TARGET_AWARE_VERSION, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { isAgentVersionAtLeast } from "@shared/version";
 
 export type ExitGroupTunnelMember = {
@@ -74,7 +73,6 @@ export function planExitGroupTunnelEndpoints(
  */
 export function forwardXExitStrategy(value: unknown, supportsTargetAware = true) {
   const strategy = normalizeExitGroupStrategy(value);
-  if (strategy === "none") return "round_robin";
   if (!supportsTargetAware && (strategy === "auto" || strategy === "latency")) return "least_load";
   return strategy;
 }
@@ -82,30 +80,4 @@ export function forwardXExitStrategy(value: unknown, supportsTargetAware = true)
 /** 这台机器上的 FXP 认不认「出口回报连目标的结果」、auto / latency 策略（2.2.142 起）。 */
 export function fxpSupportsTargetAware(fxpVersion: unknown) {
   return isAgentVersionAtLeast(String(fxpVersion || ""), FXP_TARGET_AWARE_VERSION);
-}
-
-/**
- * A failed multi-exit dial must not wait on the runtime's longer default
- * timeout before the handler retries another exit. Relay failover uses the
- * same fast path even when it has no exit group.
- */
-export function shouldUseFastTunnelFailover(exitCandidateCount: number, relayFailover = false) {
-  return relayFailover || Number(exitCandidateCount) > 1;
-}
-
-/**
- * 按权重：gost 用 random，份数写在节点的 metadata.weight（gost 3 的 random 按它加权随机）；nginx 写 weight=N。
- * 份数见 shared/exitStrategy.ts 的 exitGroupWeights。
- * 「按负载」gost 看不到实时负载，退成按带宽加权随机；nginx 用 least_conn + 权重。
- */
-export function gostExitSelector(value: unknown) {
-  const strategy = normalizeExitGroupStrategy(value);
-  return {
-    // 延迟优先：面板按到目标的延迟把节点排好（快的在前），GOST 按顺序用（2.3.535，以前当随机）
-    strategy: strategy === "fallback" || strategy === "latency" ? "fifo"
-      : strategy === "random" || strategy === "weighted" || strategy === "least_load" || strategy === "auto" ? "random"
-        : strategy === "ip_hash" ? "hash" : "round",
-    maxFails: 1,
-    failTimeout: strategy === "fallback" || strategy === "latency" ? "5s" : "15s",
-  };
 }

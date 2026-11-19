@@ -18,9 +18,6 @@ import {
 } from "@shared/failoverSchedule";
 import {
   ROUTE_GUARD_LIMITS,
-  ROUTE_SPREADS,
-  ROUTE_SPREAD_LABELS,
-  ROUTE_SPREAD_SESSION_HINTS,
   ROUTE_SWITCH_MODES,
   ROUTE_SWITCH_MODE_INFO,
   ROUTE_SWITCH_MODE_SESSION_HINTS,
@@ -39,6 +36,7 @@ import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type Rou
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
 import { linkChoiceClass } from "@/features/links/LinkSpreadPicker";
 import { BalanceStrategySelect } from "@/features/links/LoadBalanceFields";
+import { balanceStrategyHint, type BalanceStrategy } from "@shared/loadBalance";
 import { RouteLinesEditor, expandForPreview, type RouteLineHost, type RouteLinePool, type RouteLineTunnel } from "./RouteLinesEditor";
 import { LineCard, LineHint, LineSec, LineSegmented } from "@/features/lines/LineUi";
 import { ROUTE_DELIVERY_INFO, normalizeRouteDelivery, type RouteDelivery } from "@shared/routeGroup";
@@ -51,8 +49,8 @@ import { newRouteLine, routeLinesFromPaths, serializeRouteLines, type RouteLine 
   从上往下：
     1. 线路（RouteLinesEditor）：主线路一张卡（入口 / 一层层中转候选 / 落地），下面有序的备用。
        中转机上的中继规则由面板按需生成，用户不用管。
-    2. 怎么切：四格（稳定优先 / 整链最优 / 按权重 / 按时段）+ 一句它会怎么做。稳定优先下可以人工
-       指定走哪条（手动主备），按时段下可以时段外择优（混合）；时段表、分法、每条线路的权重就地配。
+    2. 分配方式：和出口组同一个下拉框（8 种）+ 一句它会怎么做。主备下面再选首选哪条（按顺序 / 最快的 /
+       按时段 / 手动指定；按时段可以时段外择优 = 混合）；时段表、每条线路的权重就地配。
        「切换不断连」= 热备。
     3. 高级策略：几条一起用、切换保护（连续失败次数、持续多久、恢复稳定多久、最短驻留、切不切回）、
        择优门槛、计划切换预热、旧连接怎么办、应急人工指定（线路详情里没有：那里点状态胶囊就能切）、
@@ -247,7 +245,6 @@ export function routeGroupPayload(group: RouteGroupDraft) {
     recoverSeconds: policy.recoverSeconds,
     minHoldSeconds: policy.minHoldSeconds,
     autoFailback: policy.autoFailback,
-    scoreMargin: policy.scoreMargin,
     scoreHoldSeconds: policy.scoreHoldSeconds,
     prewarmSeconds: policy.prewarmSeconds,
     switchMode: policy.switchMode,
@@ -301,8 +298,8 @@ export function summarizeRouteAdvanced({ policy, probes }: RouteAdvancedSummaryI
     if (policy.minHoldSeconds !== template.minHoldSeconds) items.push(policy.minHoldSeconds > 0 ? `最短驻留 ${formatPolicyDuration(policy.minHoldSeconds)}` : "不限驻留");
     if (policy.autoFailback !== template.autoFailback) items.push(policy.autoFailback ? "恢复后切回" : "恢复后不切回");
   }
-  if ((policy.mode === "smart" || policy.mode === "hybrid") && (policy.scoreMargin !== template.scoreMargin || policy.scoreHoldSeconds !== template.scoreHoldSeconds)) {
-    items.push(`择优门槛 ${policy.scoreMargin} 分 / ${formatPolicyDuration(policy.scoreHoldSeconds)}`);
+  if ((policy.mode === "smart" || policy.mode === "hybrid") && policy.scoreHoldSeconds !== template.scoreHoldSeconds) {
+    items.push(`更快的持续 ${formatPolicyDuration(policy.scoreHoldSeconds)}才换`);
   }
   if ((policy.mode === "scheduled" || policy.mode === "hybrid") && policy.prewarmSeconds !== template.prewarmSeconds) {
     items.push(policy.prewarmSeconds > 0 ? `预热 ${formatPolicyDuration(policy.prewarmSeconds)}` : "不预热");
@@ -313,18 +310,25 @@ export function summarizeRouteAdvanced({ policy, probes }: RouteAdvancedSummaryI
   return items;
 }
 
-/** 「怎么切」四格：稳定优先 / 整链最优 / 按权重 / 按时段（混合也落在按时段，人工指定落在稳定优先）。 */
-const LINE_MODE_SEGMENTS: ReadonlyArray<{ value: RouteMode; label: string }> = [
-  { value: "failover", label: "稳定优先" },
-  { value: "smart", label: "整链最优" },
-  { value: "weighted", label: "按权重" },
+/*
+  分配方式和出口组同一个下拉框（8 种，shared/loadBalance.ts）。线路组的「主备」多一个问题：首选哪条 ——
+  按顺序（failover）/ 最快的（smart，整链择优）/ 按时段（scheduled，可加「时段外挑最快的」= hybrid）/ 手动指定（manual）。
+  其余 7 种都是同时分（mode weighted + spread）。存的还是原来的 mode / spread，只是界面上换成同一套说法。
+*/
+const LINE_PREFER_SEGMENTS: ReadonlyArray<{ value: RouteMode; label: string }> = [
+  { value: "failover", label: "按顺序" },
+  { value: "smart", label: "最快的" },
   { value: "scheduled", label: "按时段" },
+  { value: "manual", label: "手动指定" },
 ];
 
 function lineModeSegment(mode: RouteMode): RouteMode {
-  if (mode === "hybrid") return "scheduled";
-  if (mode === "manual") return "failover";
-  return mode;
+  return mode === "hybrid" ? "scheduled" : mode;
+}
+
+/** 线路组此刻是 8 种里的哪一种：同时分的就是它的分法，其余都是主备。 */
+export function lineStrategyOf(policy: Pick<RouteGroupPolicy, "mode" | "spread">): BalanceStrategy {
+  return policy.mode === "weighted" ? policy.spread : "fallback";
 }
 
 function lineDuration(seconds: number) {
@@ -334,15 +338,15 @@ function lineDuration(seconds: number) {
 }
 
 /**
- * 「怎么切」下面那一行：只说要点（坏了几秒内切走、多久切回）。上面四格已经写了是哪种，不再复述
+ * 分配方式下面那一行：只说要点（坏了几秒内切走、多久切回）。上面已经写了是哪种，不再复述
  * （2.3.498：原来一句话两行，用户嫌字多）。
  */
-export function lineModeHint(policy: RouteGroupPolicy, perSession = false) {
+export function lineModeHint(policy: RouteGroupPolicy) {
   const switchSeconds = routeSwitchWithinSeconds(policy);
   const away = `坏了 ${switchSeconds} 秒内切走`;
   const back = policy.autoFailback ? `${lineDuration(policy.recoverSeconds)}后切回` : "不自动切回";
   switch (policy.mode) {
-    case "weighted": return `${perSession ? "新会话" : "新连接"}按权重分 · 坏了的先跳过`;
+    case "weighted": return `坏了的 ${switchSeconds} 秒内跳过，恢复了再分`;
     case "scheduled": return `按时段表走 · ${away}`;
     case "hybrid": return `时段外挑最快的 · ${away}`;
     case "manual": return `走指定的那条 · ${away}，好了回来`;
@@ -432,6 +436,15 @@ export function RouteGroupFields({
     ...value,
     policy: applyRouteMode(routePolicy, next, { timezone: scheduleTimeZone, pathCount: paths.length }),
   });
+  // 8 种里选一种：主备回到按顺序（已经是主备的某一种就不动），其余是同时分 + 这种分法
+  const changeStrategy = (next: BalanceStrategy) => {
+    if (next === "fallback") {
+      if (weighted) changeMode("failover");
+      return;
+    }
+    const base = weighted ? routePolicy : applyRouteMode(routePolicy, "weighted", { timezone: scheduleTimeZone, pathCount: paths.length });
+    onChange({ ...value, policy: { ...base, spread: next } });
+  };
   const setWindows = (next: FailoverScheduleWindow[]) => setPolicy({
     schedule: next.length > 0 ? { timezone: scheduleTimeZone, windows: next } : null,
   });
@@ -628,7 +641,7 @@ export function RouteGroupFields({
         ruleTargetNodeId={ruleTargetNodeId}
         destSpreadAllowed={mode !== "weighted" && delivery !== "aggregate" && delivery !== "replicate"}
         destSpreadNote={mode === "weighted"
-          ? "按权重：多落地已经按下面「新连接怎么分」一起分"
+          ? "按权重：多落地已经按下面的分配方式一起分"
           : delivery === "aggregate" ? "聚合：在用的那条线路，多落地按负载一起分" : null}
         entryHostId={entryHostId}
         entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
@@ -645,42 +658,34 @@ export function RouteGroupFields({
         arrange={groupSettingsOpen}
       />
       {groupSettingsOpen ? <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
-        <LineSec left="怎么切" />
+        <LineSec left="分配方式" />
         <LineCard>
-          <LineSegmented
-            ariaLabel="怎么切"
-            value={lineModeSegment(mode)}
-            options={LINE_MODE_SEGMENTS}
-            onChange={(next) => changeMode(next === "scheduled" && mode === "hybrid" ? "hybrid" : next)}
+          <BalanceStrategySelect
+            value={lineStrategyOf(routePolicy)}
+            onChange={changeStrategy}
+            ariaLabel="分配方式"
           />
-          <LineHint>{lineModeHint(routePolicy, udpOnly)}</LineHint>
-          {/* 四格之外的两种：稳定优先下「人工指定」= 手动主备，按时段下「时段外择优」= 混合（保存才生效，用 Checkbox） */}
-          {lineModeSegment(mode) === "failover" ? (
-            <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
-              <Checkbox checked={mode === "manual"} onCheckedChange={(checked) => changeMode(checked ? "manual" : "failover")} aria-label="手动指定走哪条" data-testid="route-line-manual" />
-              手动指定走哪条
-            </label>
+          <LineHint>{balanceStrategyHint(lineStrategyOf(routePolicy), udpOnly)}</LineHint>
+          {!weighted ? (
+            <div className="mt-3 space-y-1.5" data-testid="route-line-prefer">
+              <div className="text-[12.5px] text-muted-foreground">首选哪条</div>
+              <LineSegmented
+                ariaLabel="首选哪条"
+                value={lineModeSegment(mode)}
+                options={LINE_PREFER_SEGMENTS}
+                onChange={(next) => changeMode(next === "scheduled" && mode === "hybrid" ? "hybrid" : next)}
+              />
+            </div>
           ) : null}
+          <LineHint>{lineModeHint(routePolicy)}</LineHint>
           {lineModeSegment(mode) === "scheduled" ? (
-            <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+            <label className="mt-[10px] flex min-h-9 w-fit items-center gap-2 text-[12px] text-muted-foreground">
               <Checkbox checked={mode === "hybrid"} onCheckedChange={(checked) => changeMode(checked ? "hybrid" : "scheduled")} aria-label="时段外挑最快的" data-testid="route-line-hybrid" />
               时段外挑最快的
             </label>
           ) : null}
           {mode === "manual" ? <div className="mt-2" data-state={deciding === "pin" ? "deciding" : "idle"} data-testid="policy-pin">{pinPicker(false)}</div> : null}
           {usesSchedule ? <div className="mt-3" data-state={deciding === "schedule" ? "deciding" : "idle"} data-testid="policy-schedule">{scheduleEditor}</div> : null}
-          {weighted ? (
-            <div className="mt-3 space-y-1.5">
-              {/* 和出口组同一个下拉框（统一负载均衡）：线路组这里只有能分连接的几种，主备在上面「怎么切」里 */}
-              <BalanceStrategySelect
-                value={routePolicy.spread}
-                allowed={ROUTE_SPREADS}
-                onChange={(spread) => setPolicy({ spread: spread as typeof routePolicy.spread })}
-                ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
-              />
-              <p className="text-meta leading-5 text-muted-foreground">{udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}</p>
-            </div>
-          ) : null}
           {weighted && routePolicy.spread === "weighted" ? (
             /* 按权重：一条线路一个数（展开出来的几条路径一起分它那一份） */
             <div className="mt-3 flex flex-col gap-1.5" data-testid="route-line-weights">
@@ -857,18 +862,9 @@ export function RouteGroupFields({
             {usesScore ? (
               <PolicyGroup
                 title="择优门槛"
-                note="评分 0–100，由延迟、丢包、抖动、建连成功率、可用率算出（90 起是优、80 起是良、其余较差）。候选要比当前明显更好、而且持续一阵，才换 —— 不然线路会来回漂。"
+                note="比的是整条链的延迟，丢包、抖动、建连失败和沿途主机负载都按「变慢」算进去。另一条要比现在这条快 50ms 以上、而且快两成，并且持续一阵，才换 —— 不然线路会来回漂。"
               >
                 <div className="grid grid-cols-2 gap-2">
-                  <NumberField
-                    label="高出多少分"
-                    hint="候选比当前至少高这么多"
-                    unit="分"
-                    value={routePolicy.scoreMargin}
-                    min={ROUTE_GUARD_LIMITS.scoreMargin.min}
-                    max={ROUTE_GUARD_LIMITS.scoreMargin.max}
-                    onChange={(scoreMargin) => setPolicy({ scoreMargin })}
-                  />
                   <NumberField
                     label="持续多久"
                     hint={`明显更好要持续多久才换，最少 ${ROUTE_GUARD_LIMITS.scoreHoldSeconds.min} 秒；快一半以上的 10 秒就换`}

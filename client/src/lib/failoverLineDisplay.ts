@@ -8,7 +8,7 @@ import {
   type RoutePolicyHost,
   type RoutePolicyReportText,
 } from "@shared/routePolicy";
-import { ROUTE_MODE_SHORT } from "@shared/routeGroup";
+import { routeStrategyLabel } from "@shared/routeGroup";
 
 /**
  * 规则行上那一小块主备状态该说什么。
@@ -41,17 +41,6 @@ export type FailoverLineDisplay = {
   policy: RoutePolicy;
 };
 
-// 权重负载下说分法（和编辑框里的选项同一套叫法），其余模式说模式。
-const spreadText: Record<RoutePolicy["strategy"], string> = {
-  fallback: "主备",
-  weighted: "按权重",
-  least_load: "按负载",
-  round_robin: "轮流",
-  random: "随机",
-  ip_hash: "按访客",
-  auto: "自动",
-};
-
 export function describeFailoverLineDisplay(
   rule: Parameters<typeof describeRoutePolicy>[0],
   host?: RoutePolicyHost,
@@ -60,7 +49,8 @@ export function describeFailoverLineDisplay(
   const policy = describeRoutePolicy(rule, { host, nowMs });
   if (!policy) return null;
   const report = describeRoutePolicyReport(policy, { nowMs });
-  const label = policy.mode === "weighted" ? spreadText[policy.strategy] : ROUTE_MODE_SHORT[policy.mode];
+  // 8 种分配方式的名字（同时分的说分法，其余是「主备」），和编辑框同一套
+  const label = routeStrategyLabel(policy, true);
   const activeIndex = policy.report.kind === "current" ? policy.report.index : null;
   return {
     // 还不知道走哪条时报路径条数：「混合 · 3 条」比「混合 2」（备用条数）看得懂。

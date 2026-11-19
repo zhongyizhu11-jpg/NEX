@@ -293,6 +293,10 @@ func buildEntryPlans(entries []config, grouped bool) ([]tcpListenPlan, []udpServ
 				sig:   fxpComponentSignature(entry, stripTCPOnlyFields),
 				cfg:   entry,
 				serve: func(conn *net.UDPConn) error {
+					// UDP 运行时也让维护循环盯着各台出口（路线图 X3）：以前只有 TCP 运行时会探测，
+					// 纯 UDP 的规则出口机没了也不知道。
+					release := res.selector.activateUDP(entry)
+					defer release()
 					return serveEntryUDPDirect(conn, entry, res.selector, res.inLimiter, res.outLimiter)
 				},
 			})
@@ -470,7 +474,14 @@ func buildRelayPlans(cfg config) ([]tcpListenPlan, []udpServePlan, error) {
 			port:  udpListenPort(cfg),
 			sig:   fxpComponentSignature(cfg, stripTCPOnlyFields),
 			cfg:   cfg,
-			serve: func(conn *net.UDPConn) error { return serveRelayUDPDirect(conn, cfg, selector) },
+			serve: func(conn *net.UDPConn) error {
+				// 中转的 UDP 选择器同样要有探测盯着（路线图 X3），握手 / 探活用的是下一跳的密钥。
+				downCfg := cfg
+				downCfg.Key = cfg.RelayKey
+				release := selector.activateUDP(downCfg)
+				defer release()
+				return serveRelayUDPDirect(conn, cfg, selector)
+			},
 		})
 	}
 	udpPlans = appendLossCarrierUDPPlan(udpPlans, cfg, "relay")
@@ -699,6 +710,11 @@ func (s *tcpListenerSlot) serveListener(m *fxpRuntimeManager, ln net.Listener, r
 			return
 		}
 		enableTCPKeepAlive(conn)
+		if role != "entry" {
+			// 出口 / 中转接进来的是隧道连接（入口接的是用户的连接，不动）：还在等 hello、握手的时候上一跳黑洞了 30 秒就判死；
+			// 会话跑起来（目标 / 下一跳接上了）就清掉（secureConn.commitSession）。
+			setTCPUserTimeout(conn, tunnelUserTimeout())
+		}
 		handler := s.handler.Load()
 		if handler == nil {
 			_ = conn.Close()

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.262"
+var Version = "2.2.264"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -548,6 +548,12 @@ type failoverTarget struct {
 	// 而不是零长度包 + ping。面板按对端 Agent 的版本给；填了探测地址时不带（照填的拨 TCP）。
 	// 行为参数，进签名；不带时签名逐字不变。
 	ProbeUdpEcho bool `json:"probeUdpEcho,omitempty"`
+	// 出口组里这台出口在中转后面（多跳链路，2.2.264）：入口机连不到它，没法直接探。不探（每轮算通），通不通看
+	// 真实连接「没回就被关」后的经出口复核和面板提示（failover_exit_group.go）。行为参数，进签名。
+	ViaRelay bool `json:"viaRelay,omitempty"`
+	// 出口组里这台出口的隧道监听是不加密的 tcp / mtcp（2.2.264 起）：直接探出口机时连上以后再发一个坏请求，
+	// 等 gost 当场断开 —— 进程卡死、只有内核还在接连接的出口这样才判得出来（failoverProbeRelay）。行为参数，进签名。
+	ProbeRelay bool `json:"probeRelay,omitempty"`
 	// 面板随规格附带的运行时提示（failover_hints.go）。嵌入进来：JSON 里还是和上面这些字段平级，
 	// 代码里照样写 target.Down、target.LoadPct。
 	failoverTargetHints
@@ -606,15 +612,16 @@ type failoverSpec struct {
 	// 有期限这件事很要紧：应急处理完没人记得去关，那条线就一直被钉着，后面所有
 	// 自动切换（包括时段表）全部静默失效，而面板上看不出任何异常。
 	PinnedUntil int64 `json:"pinnedUntil,omitempty"`
-	// 按实测延迟自动择优。
+	// 主备里按实测质量自动择优（「整链最优」）。
 	//
-	// 不是「谁快切谁」：那样线路会一直漂。候选必须**明显**更快（同时满足绝对值和
-	// 百分比两个门槛），而且要连着好一阵子都更快，才会被提到最前。
+	// 不是「谁快切谁」：那样线路会一直漂。候选的成本必须**明显**更低（差出 LatencyMarginMs 而且低两成，
+	// lbcore.SwitchPolicy），而且要连着 ScoreHoldSeconds 都更低，才会被提到最前。
 	PreferFastest bool `json:"preferFastest,omitempty"`
 	// 连续失败几次才标记异常（探测不通和真实连接拨不通都算）。不带就是 1，即上一版的行为。
 	FailureThreshold int `json:"failureThreshold,omitempty"`
-	// 自动择优：候选要高出多少分、持续多少秒才切。不带就是 10 分 / 180 秒。
-	ScoreMargin      int `json:"scoreMargin,omitempty"`
+	// 「一样快」的门槛（毫秒）：延迟优先圈「一样快」的一组、自动择优比成本都按它。不带就是 50。
+	LatencyMarginMs int `json:"latencyMarginMs,omitempty"`
+	// 自动择优：明显更好的那条要连着领先多少秒才切。不带就是 180 秒。
 	ScoreHoldSeconds int `json:"scoreHoldSeconds,omitempty"`
 	// 计划切换提前多少秒预热并预检目标线路；0 = 不预检，到点就切（上一版的行为）。
 	PrewarmSeconds int `json:"prewarmSeconds,omitempty"`
@@ -633,6 +640,13 @@ type failoverSpec struct {
 	// GOST 链路的负载均衡（2.2.262 起，面板 2.3.539）：这个代理替隧道入口在几台出口之间挑，每个目标是本机一个只走
 	// 某台出口的 gost 端口。带着它就把每台出口的真实状态报给面板（balance_report.go），HostIDs 和 Targets 一一对应。
 	BalanceReport *failoverBalanceReport `json:"balanceReport,omitempty"`
+	// 探测节奏（2.2.264 起，出口组的规格带）：多久探一轮、一次探测等多久。不带（0）就是老规矩 ——
+	// 间隔 = 「异常多久切」的一半（1–5 秒）、超时 2 秒。带了以后每轮从上一轮**开始**算间隔（固定节拍），
+	// 探得慢也不会把下一轮往后推：出口组要在「几次不通 × 间隔」内把坏出口摘掉（failover_exit_group.go）。
+	ProbeIntervalSeconds int `json:"probeIntervalSeconds,omitempty"`
+	ProbeTimeoutMs       int `json:"probeTimeoutMs,omitempty"`
+	// 刚恢复的目标不做慢启动（面板「检测与切换」里关了「刚恢复的慢慢加量」）。不带 = 照常慢启动。
+	NoSlowStart bool `json:"noSlowStart,omitempty"`
 }
 
 type failoverBalanceReport struct {
@@ -1369,28 +1383,8 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	return heartbeatResult{NextInterval: resp.NextInterval, MetricsOnly: resp.MetricsOnly}, nil
 }
 
-/*
-自动择优（智能择优）：按线路评分挑一条明显更好的。
-
-**不是「谁好切谁」** —— 那样线路会一直漂：两条线在几分之间来回，每次探测都能得出不同的
-结论，而每次切换都会让新连接换一条路。所以要过两道门槛：
-
-	· 明显更好：候选评分高出 ScoreMargin 分（默认 10）；或者延迟快 20 毫秒且快 20%（延迟优先
-	  的用法：两条都很好的线路评分只差一两分，可 60ms 和 35ms 对游戏是两回事）而评分不比当前低
-	· 持续时间：连着 ScoreHoldSeconds（默认 180 秒）都是它，才算数
-
-评分本身由 routeScore 算（延迟、丢包、抖动、可用率），和面板同一份公式。
-*/
-const failoverFastestMarginMs = 20
-const failoverFastestMarginRatio = 0.2
+// failoverFastestHoldSeconds：自动择优默认要连着领先多久（规格没带 ScoreHoldSeconds）。门槛和「好得多」见 lbcore.SwitchPolicy。
 const failoverFastestHoldSeconds = 180
-
-/*
-好得多就不用等满 ScoreHoldSeconds（2.2.244 起）：整条链快 100 毫秒以上、而且只要一半的时间，连着 10 秒都是它
-就切。557ms 的线路旁边摆着 3ms 的，等三分钟只会让人以为「整链最优」没生效；只好一点点的照旧等满，防来回漂。
-*/
-const failoverDramaticMarginMs = 100
-const failoverDramaticHold = 10 * time.Second
 
 // 面板给的下游延迟提示最多算到这么大（再大评分早就是 0 了），防一个离谱值溢出。
 const failoverMaxExtraLatencyMs = 60000

@@ -68,6 +68,8 @@ test("规则那三列不许有人读，生效的只能是主机那一层", () =>
     "server/agentHeartbeatLocalMatch.ts",
     "server/agentStatusRoutes.ts",
     "server/repositories/forwardGroupRepository.ts",
+    // 转发组拆出去的几块（子规则同步、端口、评估）照样不许读规则自己的协议封禁列
+    ...fs.readdirSync(path.join(repoRoot, "server/forwardGroups")).filter((file) => /\.ts$/.test(file) && !file.endsWith(".test.ts")).map((file) => `server/forwardGroups/${file}`),
   ];
   const offenders: string[] = [];
   for (const file of files) {

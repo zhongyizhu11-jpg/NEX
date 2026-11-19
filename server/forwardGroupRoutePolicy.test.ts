@@ -107,7 +107,7 @@ function runScenario(): Outcome {
       "routeMode", "routePaths", "failoverSeconds", "recoverSeconds", "autoFailback",
     ], [310, 1, "直连", "gost", "tcp", 10, 1, 17010, "203.0.113.20", 80, 1, 1, 0, 1, "fallback", JSON.stringify([{ targetIp: "198.51.100.9", targetPort: 80 }]), "failover", directPaths, 60, 120, 1]);
 
-    const forwardGroups = await import(url("server/repositories/forwardGroupRepository.ts"));
+    const forwardGroups = await import(url("server/db.ts"));
     await forwardGroups.syncForwardGroupRules(10);
     // 当成 Agent 已经把子规则跑起来了（热更新只对跑着的生效）。
     await exec('UPDATE forward_rules SET "isRunning" = 1 WHERE "forwardGroupRuleId" IN (300, 310)');
@@ -267,7 +267,7 @@ function runScenario(): Outcome {
       if (response.status !== 200) throw new Error("心跳没通: " + response.status);
     };
     // 模板 300 没填的几项按缺省：连续失败 3 次、评分持续 180 秒（ROUTE_GUARD_DEFAULTS）
-    const baseSpec = { minHoldSeconds: 60, preferFastest: true, strategy: "fallback", delivery: "hot", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 3, scoreMargin: 10, scoreHoldSeconds: 180, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 };
+    const baseSpec = { minHoldSeconds: 60, preferFastest: true, strategy: "fallback", delivery: "hot", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 3, scoreHoldSeconds: 180, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 };
     await heartbeatStats({ ...baseSpec, pinnedIndex: null }, false);
     const driftStatus = await caller.routeStatus({ ruleId: 300 });
     const drift = { fields: (driftStatus?.drift?.fields || []).map((field) => [field.key, field.expected, field.actual]) };

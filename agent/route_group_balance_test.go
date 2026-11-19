@@ -1,11 +1,41 @@
 package main
 
 import (
+	mathrand "math/rand"
 	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
+
+// 真的同时到的一批连接（各在各的协程里挑）：挑中和记在途必须在同一把锁里，不然后来的看不见前面的，又压到同一条上。
+func TestRouteLeastLoadConcurrentBurstIsSpread(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		p := balanceTestProxy("least_load", 50, 30, 20)
+		p.ensureHealthStateLocked()
+		counts := make([]int32, 3)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < 100; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, index, _ := p.pickReserved("", nil, false)
+				atomic.AddInt32(&counts[index], 1)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if counts[0] < 48 || counts[0] > 52 || counts[1] < 28 || counts[1] > 32 || counts[2] < 18 || counts[2] > 22 {
+			t.Fatalf("第 %d 轮：100 条同时到的连接应该按 50:30:20 分，实际 %v", round+1, counts)
+		}
+	}
+}
 
 func balanceTestProxy(strategy string, weights ...int) *failoverProxy {
 	targets := make([]failoverTarget, len(weights))
@@ -126,8 +156,101 @@ func TestRouteSlowStartAfterRecovery(t *testing.T) {
 	if counts[1] > 3 {
 		t.Fatalf("刚恢复的路径分到了 %d 条：%v", counts[1], counts)
 	}
-	if p.slowStartLocked(1, time.Now().Add(routeSlowStartWindow)) != 1 {
+	if p.slowStartLocked(1, time.Now().Add(lbcore.DefaultSlowStart.Window), false) != 1 {
 		t.Fatal("窗口过了应该满份")
+	}
+}
+
+// 别的测试文件里直接按某一种分法挑一条用的（产品代码都从 spreadPickLocked 进）。调用方持有 p.mu。
+func (p *failoverProxy) weightedPickLocked(candidates []int) int {
+	return p.spreadPickLocked(lbcore.StrategyWeighted, candidates, "", false)
+}
+
+func (p *failoverProxy) rendezvousPickLocked(candidates []int, key string) int {
+	return p.spreadPickLocked(lbcore.StrategyIPHash, candidates, key, false)
+}
+
+// 按访客固定不设负载上限（和出口组同一个实现，lbcore/rendezvous.go）：这个访客的路径能用，他的每一条连接都落在
+// 那上面，压了多少都不挪（出口 IP 不变才是这个分法的意义；以前超过「该分的 × 1.25」就落到别的路径上）。
+func TestRouteIPHashKeepsAVisitorOnItsPath(t *testing.T) {
+	p := balanceTestProxy("ip_hash", 1, 1)
+	p.ensureHealthStateLocked()
+	_, home := p.pickTargetForKey("203.0.113.7", nil)
+	for i := 0; i < 40; i++ {
+		autoHoldConn(t, p, home)
+		if _, index := p.pickTargetForKey("203.0.113.7", nil); index != home {
+			t.Fatalf("同一个访客挂着 %d 条以后换了路径（另一条空着也不该挪）", i+1)
+		}
+	}
+	// 他的路径挂了才换；回来以后又回去。
+	p.mu.Lock()
+	p.targetHealth[home] = false
+	p.mu.Unlock()
+	if _, index := p.pickTargetForKey("203.0.113.7", nil); index == home {
+		t.Fatal("路径挂了还往上放")
+	}
+	p.mu.Lock()
+	p.targetHealth[home] = true
+	p.mu.Unlock()
+	if _, index := p.pickTargetForKey("203.0.113.7", nil); index != home {
+		t.Fatal("路径回来以后访客没回去")
+	}
+	// 不知道访客是谁：轮流，不把所有人钉在同一条上。
+	q := balanceTestProxy("ip_hash", 1, 1)
+	q.ensureHealthStateLocked()
+	_, first := q.pickTargetForKey("", nil)
+	if _, second := q.pickTargetForKey("", nil); second == first {
+		t.Fatal("没有访客地址时应该轮流")
+	}
+}
+
+// 延迟优先（和出口组同一个实现）：只在和最快的差不到 50ms 的几条里分。
+func TestRouteLatencyStrategyUsesTheNearSet(t *testing.T) {
+	spec := normalizeFailoverSpec(failoverSpec{Strategy: "latency", Targets: []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: 1, Weight: 1}, {TargetIP: "127.0.0.2", TargetPort: 2, Weight: 1}, {TargetIP: "127.0.0.3", TargetPort: 3, Weight: 1},
+	}})
+	if spec.Strategy != "latency" {
+		t.Fatalf("latency 被规整成了 %q", spec.Strategy)
+	}
+	p := &failoverProxy{spec: spec}
+	p.ensureHealthStateLocked()
+	at := time.Now()
+	for i, ms := range []int{20, 50, 300} {
+		p.stats[i].recordProbe(true, ms, at)
+	}
+	counts := map[int]int{}
+	for i := 0; i < 60; i++ {
+		_, index, _ := p.pickReserved("", nil, false)
+		counts[index]++
+	}
+	if counts[2] != 0 || counts[0] == 0 || counts[1] == 0 {
+		t.Fatalf("慢出门槛的那条不分，另外两条都分：%v", counts)
+	}
+}
+
+// 起步位置随机（路线图 X4）：不同的线路组，按权重的第一条连接不都落在同一条路径上；份额不变。
+func TestRouteWeightedStartsAtARandomPhase(t *testing.T) {
+	firsts := map[int]bool{}
+	for seed := int64(1); seed <= 40; seed++ {
+		p := balanceTestProxy("weighted", 5, 3)
+		p.rng = mathrand.New(mathrand.NewSource(seed))
+		counts := map[int]int{}
+		for i := 0; i < 80; i++ {
+			_, index := p.pickTargetForKey("", nil)
+			if i == 0 {
+				firsts[index] = true
+			}
+			counts[index]++
+		}
+		if counts[0] != 50 || counts[1] != 30 {
+			t.Fatalf("起步位置不该改变份额：%v", counts)
+		}
+	}
+	if len(firsts) < 2 {
+		t.Fatal("40 个线路组的第一条连接全落在同一条路径上")
+	}
+	if a, b := randomSpreadStart(1, 2), randomSpreadStart(1, 2); a < 0 || b < 0 {
+		t.Fatal("轮转的随机初值不能是负数")
 	}
 }
 
@@ -135,5 +258,50 @@ func TestRouteLeastLoadSpecIsKept(t *testing.T) {
 	spec := normalizeFailoverSpec(failoverSpec{Strategy: "least_load", Targets: []failoverTarget{{TargetIP: "127.0.0.1", TargetPort: 1}}})
 	if spec.Strategy != "least_load" {
 		t.Fatalf("least_load 被规整成了 %q", spec.Strategy)
+	}
+}
+
+/*
+F3：换规格时「延迟优先」的那一组（lbNear，按路径下标记的）要跟着路径搬。以前不搬：出站换了个顺序，慢的那条
+挪到了原来快的那条的下标上，就继承了「在组里」，驻留期（1 分钟）里照样分到连接。
+*/
+func TestRouteRebuildCarriesNearSetWithThePath(t *testing.T) {
+	p := balanceTestProxy("latency", 1, 1)
+	p.ensureHealthStateLocked()
+	at := time.Now()
+	p.stats[0].recordProbe(true, 20, at)
+	p.stats[1].recordProbe(true, 300, at)
+	for i := 0; i < 5; i++ {
+		if _, index := p.pickTargetForKey("", nil); index != 0 {
+			t.Fatalf("300ms 的那条不在「一样快」的组里，不该分到：%d", index)
+		}
+	}
+	next := p.spec
+	next.Targets = []failoverTarget{p.spec.Targets[1], p.spec.Targets[0]}
+	p.mu.Lock()
+	p.rebuildForSpecLocked(normalizeFailoverSpec(next), time.Now())
+	p.mu.Unlock()
+	if p.lbNear.Contains(0) || !p.lbNear.Contains(1) {
+		t.Fatalf("换了顺序以后，慢的那条（现在是 0）不在组里、快的（现在是 1）在")
+	}
+	for i := 0; i < 20; i++ {
+		if _, index := p.pickTargetForKey("", nil); index != 1 {
+			t.Fatalf("换了顺序以后慢的那条继承了「在组里」，分到了连接（第 %d 次）", i)
+		}
+	}
+}
+
+// F4：轮流的起步位置是起代理时随机定的（路线图 X4）；换规格不能把它清回 0，不然每次改设置后所有规则又从第一条起步。
+func TestRouteRebuildKeepsRoundRobinStart(t *testing.T) {
+	p := balanceTestProxy("round_robin", 1, 1, 1)
+	p.ensureHealthStateLocked()
+	p.roundRobinNext = 12345
+	next := p.spec
+	next.Targets = append(append([]failoverTarget(nil), p.spec.Targets...), failoverTarget{TargetIP: "127.0.0.9", TargetPort: 1009, Weight: 1})
+	p.mu.Lock()
+	p.rebuildForSpecLocked(normalizeFailoverSpec(next), time.Now())
+	p.mu.Unlock()
+	if p.roundRobinNext != 12345 {
+		t.Fatalf("换规格把轮流的位置清掉了：%d", p.roundRobinNext)
 	}
 }

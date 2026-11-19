@@ -48,6 +48,25 @@ export function tunnelRelayHotStandbySupported(mode: unknown) {
   return tunnelRelayAggregateSupported(mode);
 }
 
+/**
+ * GOST 并联中转（中转主备）要的运行时构建号：nex6 之前 gost 的选择器把中转全摘掉时，入口机直接连目标、
+ * 绕过隧道（gost-runtime/nex-selector-noempty.patch 堵上的就是这个）。比它旧的入口机只下发第一台中转。
+ */
+export const GOST_RELAY_SELECTOR_MIN_NEX_BUILD = 6;
+
+/** 运行时版本串里的 NEX 构建号：3.2.6-nex6 → 6；官方版、没装、认不出是 null。 */
+export function gostRuntimeNexBuild(runtimeVersion: unknown): number | null {
+  const match = String(runtimeVersion ?? "").trim().match(/-nex(\d+)\b/i);
+  if (!match) return null;
+  const build = Number(match[1]);
+  return Number.isInteger(build) && build > 0 ? build : null;
+}
+
+/** 这台机器的运行时能不能放心带中转选择器（报不上来的按不能算：宁可只走一台，也不能绕过隧道）。 */
+export function gostRuntimeSupportsRelaySelector(runtimeVersion: unknown) {
+  return (gostRuntimeNexBuild(runtimeVersion) ?? 0) >= GOST_RELAY_SELECTOR_MIN_NEX_BUILD;
+}
+
 export function tunnelRelayCandidates<T>(hops: T[]) {
   return Array.isArray(hops) && hops.length >= 3 ? hops.slice(1, -1) : [];
 }

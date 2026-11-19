@@ -6,13 +6,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 /*
 「自动」分法（动态权重，2.2.251）和评分里的主机负载（failoverTarget.LoadPct）。
 
-挑的是 power of two choices：按有效权重随机挑两条，取「连接数 + 1 ÷ 有效权重」更小的那条。连接不断开的话
-分到的连接数会按有效权重的比例涨 —— 下面的用例每挑一次就在那条上挂一条连接，看长期的比例。
+算法在 lbcore（P2C + peak EWMA）：成本 = 延迟 × 丢包系数 × (连接 + 在途 + 1) ÷ (权重 × 慢启动 × 余量)，挑最低的
+（候选多于 3 条时随机抽两条比）。连接不断开的话分到的连接数会按「权重 × 余量 ÷ 延迟」的比例涨 ——
+下面的用例每挑一次就在那条上挂一条连接，看长期的比例。
 */
 
 func autoHoldConn(t *testing.T, p *failoverProxy, index int) {
@@ -113,23 +116,131 @@ func TestRouteAutoPenalizesLoadedAndSlowPaths(t *testing.T) {
 	}
 }
 
-// 自动：再慢、再忙也留一成（系数压在 0.1–1），不会彻底饿死；还不知道延迟的那条不罚。
-func TestRouteAutoWeightsAreClamped(t *testing.T) {
+// 自动：再忙也留 5% 的余量（利用率最多按 95% 算），不会彻底饿死；还不知道延迟的那条按最快的算，不罚。
+func TestRouteAutoCostIsBoundedAndNeutralForUnknowns(t *testing.T) {
 	p := balanceTestProxy("auto", 1, 1, 1)
 	p.ensureHealthStateLocked()
 	at := time.Now()
 	p.stats[0].recordProbe(true, 10, at)
 	p.stats[1].recordProbe(true, 5000, at)
 	p.spec.Targets[1].LoadPct = 100
-	weights := p.autoWeightsLocked([]int{0, 1, 2}, at)
-	if weights[0] != 1 {
-		t.Fatalf("最快、不忙的那条满份：%v", weights)
+	all := []int{0, 1, 2}
+	members := p.membersLocked(all, lbcore.StrategyAuto, at, false, p.pathLoadLocked)
+	fast, _ := lbcore.Cost(members, all, 0, false)
+	slow, _ := lbcore.Cost(members, all, 1, false)
+	unknown, _ := lbcore.Cost(members, all, 2, false)
+	if math.Abs(slow/fast-500*20) > 1 {
+		t.Fatalf("慢 500 倍、满负载（余量 5%%）：成本应该是 500 × 20 倍，拿到 %v 倍", slow/fast)
 	}
-	if math.Abs(weights[1]-0.01) > 1e-9 {
-		t.Fatalf("慢 500 倍、满负载：0.1 × 0.1 = 0.01，拿到 %v", weights[1])
+	if math.Abs(unknown-fast) > 1e-9 {
+		t.Fatalf("还没探出延迟的不罚：%v 对 %v", unknown, fast)
 	}
-	if weights[2] != 1 {
-		t.Fatalf("还没探出延迟的不罚：%v", weights)
+}
+
+// 自动的延迟是 peak EWMA：一次慢探测立刻把读数抬上去，之后按时间落回来；真实拨号只在比读数慢时才算。
+func TestRoutePeakLatencyFollowsSlowSamples(t *testing.T) {
+	p := balanceTestProxy("auto", 1, 1)
+	p.ensureHealthStateLocked()
+	at := time.Now().Add(-30 * time.Second)
+	for i := 0; i < 3; i++ {
+		p.stats[0].recordProbe(true, 20, at.Add(time.Duration(i)*5*time.Second))
+	}
+	steady := at.Add(10 * time.Second)
+	if got := p.peakLatencyLocked(0, steady); math.Abs(got-20) > 0.01 {
+		t.Fatalf("平稳时就是那个延迟：%v", got)
+	}
+	// 一次 900ms 的探测：立刻跳上去；之后的探测回到 20ms，尖峰按 e^(-t/10s) 往 20 落（不会钉在 900 上饿死这条路）。
+	p.stats[0].recordProbe(true, 900, at.Add(15*time.Second))
+	if got := p.peakLatencyLocked(0, at.Add(15*time.Second)); got != 900 {
+		t.Fatalf("慢样本应该立刻跳上去：%v", got)
+	}
+	p.stats[0].recordProbe(true, 20, at.Add(20*time.Second))
+	if got, want := p.peakLatencyLocked(0, at.Add(30*time.Second)), 20+880/math.E; math.Abs(got-want) > 1 {
+		t.Fatalf("正常样本来了 10 秒后尖峰应该剩 1/e：%v，应该是 %v", got, want)
+	}
+	// 真实拨号：比读数慢的算（这条路此刻真的慢），比读数快的不算（拨号只到第一跳，说明不了整条路快）。
+	q := balanceTestProxy("auto", 1, 1)
+	q.ensureHealthStateLocked()
+	q.stats[0].recordProbe(true, 40, at)
+	q.stats[0].dials = append(q.stats[0].dials, routeDialSample{at: at.Add(time.Second), ok: true, ms: 5})
+	if got := q.peakLatencyLocked(0, at.Add(time.Second)); got < 36 {
+		t.Fatalf("快的拨号不该把读数拉下来：%v", got)
+	}
+	q.stats[0].dials = append(q.stats[0].dials, routeDialSample{at: at.Add(2 * time.Second), ok: true, ms: 700})
+	if got := q.peakLatencyLocked(0, at.Add(2*time.Second)); got != 700 {
+		t.Fatalf("慢的拨号应该立刻算进去：%v", got)
+	}
+	if q.peakLatencyLocked(1, at) != 0 {
+		t.Fatal("没探通过的是 0")
+	}
+}
+
+/*
+F1：自动的排名在一个探测间隔里不翻。延迟 = 探测的 peak EWMA + 面板给的下游延迟；以前 peak EWMA 两次探测之间
+往 0 落、下游延迟不落：A 本机 100ms、下游 0 对 B 本机 10ms、下游 60ms，刚探完 B（70）快，4.9 秒后
+A 落到 61、B 落到 66，A 反而排前面 —— 每个间隔里翻一次。
+*/
+func TestRouteAutoRankingIsStableBetweenProbes(t *testing.T) {
+	p := balanceTestProxy("auto", 1, 1)
+	p.ensureHealthStateLocked()
+	p.spec.Targets[1].ExtraLatencyMs = 60
+	at := time.Now().Add(-time.Minute)
+	for i := 0; i < 4; i++ {
+		p.stats[0].recordProbe(true, 100, at.Add(time.Duration(i)*5*time.Second))
+		p.stats[1].recordProbe(true, 10, at.Add(time.Duration(i)*5*time.Second))
+	}
+	last := at.Add(15 * time.Second)
+	for elapsed := time.Duration(0); elapsed < 5*time.Second; elapsed += 100 * time.Millisecond {
+		now := last.Add(elapsed)
+		a, b := p.qualityLocked(0, now, true).Latency, p.qualityLocked(1, now, true).Latency
+		if math.Abs(a-100) > 1e-9 || math.Abs(b-70) > 1e-9 {
+			t.Fatalf("+%v：整链延迟应该稳在 A=100、B=70，实际 A=%v B=%v", elapsed, a, b)
+		}
+	}
+}
+
+// 质量和线路评分用的是同一批探测结果：丢包、抖动来自探测窗口，利用率是面板给的沿途主机负载，拨通率来自真实拨号。
+func TestRouteQualityInputs(t *testing.T) {
+	p := balanceTestProxy("auto", 1, 1)
+	p.ensureHealthStateLocked()
+	at := time.Now()
+	for i := 0; i < 18; i++ {
+		p.stats[0].recordProbe(true, 30+10*(i%2), at.Add(time.Duration(i)*time.Second))
+	}
+	p.stats[0].recordProbe(false, 0, at.Add(18*time.Second))
+	p.stats[0].recordProbe(false, 0, at.Add(19*time.Second))
+	p.spec.Targets[0].LoadPct = 40
+	p.spec.Targets[0].ExtraLatencyMs = 15
+	for i := 0; i < 8; i++ {
+		p.stats[0].dials = append(p.stats[0].dials, routeDialSample{at: at, ok: i < 6, ms: 1})
+	}
+	quality := p.qualityLocked(0, at.Add(19*time.Second), false)
+	summary := p.scoreInputLocked(0)
+	if math.Abs(quality.Loss-summary.lossPct/100) > 1e-9 || math.Abs(quality.Loss-0.1) > 1e-9 {
+		t.Fatalf("丢包应该是探测窗口的 10%%（和评分用的同一个数）：%v", quality.Loss)
+	}
+	// 抖动：比最低延迟高出多少的 90 分位。30 / 40 交替 → 10ms。一次 2 秒的尖峰不改变它（评分里那个平均差会被带飞）。
+	if quality.Jitter != 10 {
+		t.Fatalf("抖动应该是 10ms：%v", quality.Jitter)
+	}
+	p.stats[0].recordProbe(true, 2000, at.Add(20*time.Second))
+	if got := p.qualityLocked(0, at.Add(20*time.Second), false).Jitter; got != 10 {
+		t.Fatalf("一次尖峰不该改变抖动：%v", got)
+	}
+	if routeProbeJitter(p.stats[0].samples[:5]) != 0 {
+		t.Fatal("样本不够不算抖动")
+	}
+	if quality.Utilisation != 0.4 || math.Abs(quality.Success-0.75) > 1e-9 {
+		t.Fatalf("利用率 40%%、拨通率 6/8：%+v", quality)
+	}
+	quality = p.qualityLocked(0, at.Add(20*time.Second), false)
+	if want := p.stats[0].latencyEwmaMs + 15; math.Abs(quality.Latency-want) > 1e-9 {
+		t.Fatalf("延迟 = 指数平均 + 下游延迟：%v 对 %v", quality.Latency, want)
+	}
+	// 什么都没量到的那条：全是 0（不知道），拨号不到 5 次不算拨通率。
+	p.stats[1].dials = append(p.stats[1].dials, routeDialSample{at: at, ok: false})
+	if got := p.qualityLocked(1, at, true); got != (lbcore.Quality{}) {
+		t.Fatalf("没量到的应该全是不知道：%+v", got)
 	}
 }
 
@@ -218,20 +329,7 @@ func TestLineSpreadAutoPrefersIdleLanding(t *testing.T) {
 	}
 }
 
-// 负载扣分：70% 以下不扣，95% 起扣满 15 分，中间线性；扣不到负数。
-func TestRouteLoadPenalty(t *testing.T) {
-	cases := map[float64]float64{0: 0, 69.9: 0, 70: 0, 82.5: 7.5, 95: 15, 100: 15, -5: 0, math.NaN(): 0}
-	for load, want := range cases {
-		if got := routeLoadPenalty(load); math.Abs(got-want) > 1e-9 {
-			t.Errorf("负载 %v 应扣 %v 分，拿到 %v", load, want, got)
-		}
-	}
-	if score, ok := routeScore(650, true, 9.5, 240, 0, true, 99); !ok || score != 0 {
-		t.Fatalf("本来就 0 分的扣完还是 0：%d %v", score, ok)
-	}
-}
-
-// 面板给的负载是运行时提示：不进签名、不落盘，applyRelayHintsLocked 换上就生效，评分跟着扣，快照回显。
+// 面板给的负载是运行时提示：不进签名、不落盘，applyRelayHintsLocked 换上就生效，成本（和显示的分）跟着变，快照回显。
 func TestRouteLoadHintIsRuntimeOnly(t *testing.T) {
 	spec := failoverSpec{Strategy: "fallback", Targets: routeTargets(2), PreferFastest: true}
 	proxy := routeTestProxy(spec)
@@ -242,20 +340,21 @@ func TestRouteLoadHintIsRuntimeOnly(t *testing.T) {
 	}
 	before, _ := proxy.scoreLocked(1)
 	hinted := append([]failoverTarget(nil), proxy.spec.Targets...)
-	hinted[1].LoadPct = 95
+	hinted[1].LoadPct = 50
 	if failoverSignature(failoverSpec{Strategy: "fallback", Targets: hinted}) != failoverSignature(failoverSpec{Strategy: "fallback", Targets: proxy.spec.Targets}) {
 		t.Fatal("负载提示不该进签名")
 	}
 	proxy.applyRelayHintsLocked(hinted)
 	after, _ := proxy.scoreLocked(1)
-	if after != before-15 {
-		t.Fatalf("95%% 负载应扣 15 分：%d → %d", before, after)
+	// 30ms ÷ (1 − 50%) = 60ms 的成本 → 显示 94 分
+	if before != 100 || after != 94 {
+		t.Fatalf("50%% 负载：成本按 60ms 算，应当 100 → 94：%d → %d", before, after)
 	}
 	if other, _ := proxy.scoreLocked(0); other != before {
 		t.Fatalf("没给负载的那条不该变：%d → %d", before, other)
 	}
 	report := proxy.statsReportLocked()
-	if report.Targets[1].LoadPct != 95 || report.Targets[0].LoadPct != 0 {
+	if report.Targets[1].LoadPct != 50 || report.Targets[0].LoadPct != 0 {
 		t.Fatalf("快照该回显负载：%+v", report.Targets)
 	}
 	if stripped := stripFailoverRelayHints(proxy.spec); stripped.Targets[1].LoadPct != 0 {

@@ -1,12 +1,25 @@
 package main
 
+import "github.com/zhongyizhu11-jpg/NEX/lbcore"
+
 // 选路第 1 段：候选（见 failover_pick.go）。
 
-// pickCandidatesLocked：先只要能用的；一条都没有时退回全部（不分层），让连接去碰碰运气。
+/*
+pickCandidatesLocked：先只要能用的；一条都没有时退回「不健康但没被管理上排除」的（不分层），让连接去碰碰运气。
+
+「在哪些路径里挑」的规矩是 lbcore.Candidates（和 NEX 隧道的出口组同一个）：这边每条路径只有两个信号 ——
+连不上（探测 / 中转提示判成不能用）和管理上排除（暂停 / 维护 / 流量停机，adminExcludedLocked，A5）。
+还有能用的就只在能用的里挑，分层规格再只留最优一层（bestTierLocked）；一条能用的都没有时在没被排除的里摊开；
+全都被排除时返回空：TCP 连接直接关，UDP 包丢掉。
+*/
 func (p *failoverProxy) pickCandidatesLocked(exclude map[int]bool, udp bool) []int {
-	candidates := p.candidateIndicesForLocked(exclude, true, udp)
-	if len(candidates) == 0 {
-		candidates = p.candidateIndicesForLocked(exclude, false, udp)
+	health := make([]lbcore.Health, len(p.spec.Targets))
+	for i := range p.spec.Targets {
+		health[i] = lbcore.Health{Excluded: p.adminExcludedLocked(i), Dead: !p.usableLocked(i, udp)}
+	}
+	candidates, level := lbcore.Candidates(nil, health, exclude, lbcore.EjectPolicy{})
+	if level == lbcore.LevelNormal {
+		return p.bestTierLocked(candidates)
 	}
 	return candidates
 }
@@ -32,7 +45,15 @@ func (p *failoverProxy) candidateIndicesForLocked(exclude map[int]bool, healthyO
 		}
 		indices = append(indices, i)
 	}
-	if !healthyOnly || len(indices) < 2 || !failoverSpecTiered(p.spec) {
+	if !healthyOnly {
+		return indices
+	}
+	return p.bestTierLocked(indices)
+}
+
+// bestTierLocked：分层规格下只留 indices 里最优（数字最小）的那一层（就地过滤）；不分层、不到两条时原样返回。
+func (p *failoverProxy) bestTierLocked(indices []int) []int {
+	if len(indices) < 2 || !failoverSpecTiered(p.spec) {
 		return indices
 	}
 	best := p.lowestTierLocked(indices)

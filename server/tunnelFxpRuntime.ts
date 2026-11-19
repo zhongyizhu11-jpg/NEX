@@ -71,7 +71,10 @@ export function redactTunnelFxpRuntimeIssue(issue: TunnelFxpRuntimeIssue, visibl
     hostId: null,
     hostName: null,
     fxpVersion: null,
-    message: "隧道中有一台节点的 FXP 版本过旧，需要管理员升级 Agent",
+    // 同一个位置还放「入口机的 Agent 不能执行统一调度」（server/tunnelBalanceAgent.ts）：那不是 FXP 的事
+    message: /负载均衡/.test(String(issue.message || ""))
+      ? "隧道入口的 Agent 版本过旧，负载均衡没有生效，需要管理员升级 Agent"
+      : "隧道中有一台节点的 FXP 版本过旧，需要管理员升级 Agent",
   };
 }
 

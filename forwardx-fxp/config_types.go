@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 type exitEndpoint struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
@@ -14,6 +16,10 @@ type exitEndpoint struct {
 	TargetStatus bool `json:"targetStatus,omitempty"`
 	// HostID：面板里这台出口的主机号（2.2.145 起），只用来上报负载均衡状态时说「是哪台」，选路不看它。
 	HostID int `json:"hostId,omitempty"`
+	// LoadKey（可选）：这个端点的负载（会话数、流量、延迟）记在哪一份上。写了一样的几个端点算一台机器。
+	// 没写时按主机名；主机是本机环回（V2 用户态 WireGuard 把出口改写成 127.0.0.1:端口）时按「主机:端口」。
+	// 见 exit_load.go 的 endpointLoadKey。
+	LoadKey string `json:"loadKey,omitempty"`
 	// lossTolerant 不上线：拨这个端点用不用抗丢包传输（跟着规则 / 中转的 LossTolerant）。
 	lossTolerant bool
 	// transport 不上线：V3 的外层选项（v3TransportIdentity），V1 / V2 为空。选项不同的
@@ -157,4 +163,7 @@ type config struct {
 	LossTolerant bool `json:"lossTolerant,omitempty"`
 	// ReloadNonce 由 Agent 在热更新时写入，进程应用后原样写回 <config>.applied。
 	ReloadNonce string `json:"reloadNonce,omitempty"`
+	// v3HandshakeTimeout 不上线：V3 现拨物理连接时外层 + 内层握手最多等多久（0 = fxpHandshakeTimeout，10 秒）。
+	// 入口有别的出口可换时用 fxpPipelinedAckFast（和 V1 流水线握手的确认一样，见 selectedTransport.connectLocked）。
+	v3HandshakeTimeout time.Duration
 }

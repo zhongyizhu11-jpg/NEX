@@ -1,3 +1,4 @@
+import { dbBool } from "../repositories/repositoryUtils";
 import * as db from "../db";
 import { groupModeSupportsMemberSchedule, memberEnabledIntent, serializeMemberSchedule } from "../../shared/memberSchedule";
 import { getDdnsSettings } from "../ddns";
@@ -7,9 +8,9 @@ import { newForwardChainBatchId } from "../forwardChainManualProbe";
 import { ENV } from "../env";
 import { normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../shared/forwardTypes";
-import { normalizeExitGroupStrategy, type ExitGroupStrategy } from "../../shared/exitStrategy";
-import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { type BalanceStrategy, normalizeExitGroupStrategy, serializeBalanceDetect } from "../../shared/loadBalance";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
+import { serializePeerObserverHostIds } from "../forwardGroups/topology";
 import { forwardGroupMirrorRecordType, forwardGroupSupportsDualStack } from "../forwardGroupDualStackDdns";
 import { normalizeDdnsLineFallback, serializeDdnsLines, type DdnsLineFallbackMode } from "../../shared/ddnsLines";
 import {
@@ -49,7 +50,7 @@ export type ForwardGroupInput = {
   name: string;
   remark?: string | null;
   groupMode?: ForwardGroupMode;
-  exitStrategy?: ExitGroupStrategy;
+  exitStrategy?: BalanceStrategy;
   /** 出口组的「检测与切换」（shared/loadBalance.ts）。不传 = 不动原来的。 */
   balanceDetect?: unknown;
   entryGroupId?: number | null;
@@ -89,6 +90,12 @@ export type ForwardGroupInput = {
   bandwidthAggregationMinMembers?: number;
   /** 分线路解析：线路成员全挂时的处理（shared/ddnsLines.ts）。 */
   ddnsLineFallback?: DdnsLineFallbackMode;
+  /** 外部观察：让别的机器探成员对外的入口端口（主备转发组、入口组）。不传 = 新建时开，编辑时不动。 */
+  peerProbeEnabled?: boolean;
+  /** 额外指定的观察主机。不传 = 编辑时不动。 */
+  peerObserverHostIds?: number[];
+  /** 入口组按服务商的记录权重发布（要先开带宽聚合）。不传 = 编辑时不动。 */
+  ddnsWeightEnabled?: boolean;
   autoFailback: boolean;
   isEnabled: boolean;
   members: ForwardGroupMemberRequest[];
@@ -315,6 +322,9 @@ async function normalizeForwardGroupInput(input: ForwardGroupInput, userId?: num
     bandwidthAggregationSlots: normalizeAggregationRecordSlots(input.bandwidthAggregationSlots),
     bandwidthAggregationMinMembers: normalizeAggregationMinMembers(input.bandwidthAggregationMinMembers),
     ddnsLineFallback: normalizeDdnsLineFallback(input.ddnsLineFallback),
+    peerProbeEnabled: input.peerProbeEnabled !== false,
+    peerObserverHostIds: groupMode === "failover" || groupMode === "entry" ? serializePeerObserverHostIds(input.peerObserverHostIds) : null,
+    ddnsWeightEnabled: bandwidthAggregationEnabled && !!input.ddnsWeightEnabled,
     autoFailback: input.autoFailback,
     isEnabled: input.isEnabled,
   };
@@ -350,6 +360,10 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
     const keep = existing.ddnsDualStack === true || existing.ddnsDualStack === 1;
     normalized.data.ddnsDualStack = keep && forwardGroupSupportsDualStack(normalized.data.groupMode, normalized.data.recordType);
   }
+  // 外部观察、按权重解析：没传的（老客户端、脚本）保持原样。
+  if (input.peerProbeEnabled === undefined) normalized.data.peerProbeEnabled = dbBool(existing.peerProbeEnabled, true);
+  if (input.peerObserverHostIds === undefined) normalized.data.peerObserverHostIds = serializePeerObserverHostIds(existing.peerObserverHostIds);
+  if (input.ddnsWeightEnabled === undefined) normalized.data.ddnsWeightEnabled = dbBool(existing.ddnsWeightEnabled) && !!normalized.data.bandwidthAggregationEnabled;
   const desiredEnabled = !!normalized.data.isEnabled;
   const enabledChanged = !!existing.isEnabled !== desiredEnabled;
   const memberPriorityChanged = memberPrioritySignature((existing?.members || []) as ForwardGroupMemberRequest[])
@@ -369,6 +383,8 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
     normalizeBandwidthAggregationStrategy(group?.bandwidthAggregationStrategy),
     normalizeAggregationRecordSlots(group?.bandwidthAggregationSlots),
     normalizeAggregationMinMembers(group?.bandwidthAggregationMinMembers),
+    // 按权重解析开关变了也要重新发布一次（带上 / 收掉记录权重）
+    group?.ddnsWeightEnabled === true || group?.ddnsWeightEnabled === 1,
   ].join("|");
   const aggregationChanged = normalized.data.groupMode === "entry"
     && aggregationSignature(existing) !== aggregationSignature(normalized.data);
@@ -382,11 +398,18 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
       || ((normalized.data as { balanceDetect?: string | null }).balanceDetect !== undefined
         && String((normalized.data as { balanceDetect?: string | null }).balanceDetect ?? "") !== String(existing?.balanceDetect ?? ""))
     );
-  const shouldResetChinaHealth = !normalized.data.chinaHealthCheckEnabled
-    || !!existing?.chinaHealthCheckEnabled !== !!normalized.data.chinaHealthCheckEnabled
-    || String(existing?.chinaHealthCheckTarget || "") !== String(normalized.data.chinaHealthCheckTarget || "")
-    || normalizeForwardGroupHealthCheckMethod(existing?.chinaHealthCheckMethod)
-      !== normalizeForwardGroupHealthCheckMethod(normalized.data.chinaHealthCheckMethod);
+  /*
+    成员健康什么时候重置（P11）：健康检查的开关变了，或者开着的时候目标 / 方式变了 —— 旧结论不是按现在
+    这套设置测出来的。以前第一个条件是「健康检查没开」，没开健康检查的组每保存一次（哪怕只改名字）就把
+    所有成员的健康和故障 / 恢复计时清掉：正在数的切换观察时间从头再来，界面上成员全变回「未知」。
+  */
+  const chinaHealthToggled = !!existing?.chinaHealthCheckEnabled !== !!normalized.data.chinaHealthCheckEnabled;
+  const shouldResetChinaHealth = chinaHealthToggled
+    || (!!normalized.data.chinaHealthCheckEnabled && (
+      String(existing?.chinaHealthCheckTarget || "") !== String(normalized.data.chinaHealthCheckTarget || "")
+      || normalizeForwardGroupHealthCheckMethod(existing?.chinaHealthCheckMethod)
+        !== normalizeForwardGroupHealthCheckMethod(normalized.data.chinaHealthCheckMethod)
+    ));
   const persistConfiguration = async (options: { deferRefresh?: boolean; skipMemberSync?: boolean } = {}) => {
     await db.updateForwardGroup(id, {
       ...normalized.data,

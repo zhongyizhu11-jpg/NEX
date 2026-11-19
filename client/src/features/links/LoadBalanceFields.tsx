@@ -18,8 +18,8 @@ import {
   DEFAULT_BALANCE_DETECT,
   balanceDetectEquals,
   balanceSensitivityOf,
+  balanceStrategyHint,
   balanceSwitchWithinSeconds,
-  describeBalanceDetectShort,
   describeBalanceEffect,
   normalizeBalanceStrategy,
   type BalanceDetect,
@@ -28,14 +28,10 @@ import {
 } from "@shared/loadBalance";
 
 /*
-  统一的负载均衡表单（2026-11 用户定的样子，效果图 ①～④）：
+  统一的负载均衡表单（出口组；线路组只用下拉框）。新建时已经是「自动 · 推荐」+「均衡」，什么都不用改就能用：
 
-    分配方式   一个下拉框。常用 3 个（自动 · 推荐 / 主备 / 按访客固定）+ 分隔线 + 自定义 5 个；每项下面一行灰字说明，
-               合上的框里只放名字。下面一行绿点说明现在怎么分、坏了多久切走。
-    检测与切换  默认收起，只写一行当前设置；点开原地展开：多久探一次、几次不通算坏、恢复要通几次、延迟门槛、
-               抖动门槛、持续多久、抖动时怎么办、刚恢复慢慢加量，最下面一句「实际效果」，右上角「恢复默认」。
-
-  链路负载均衡、出口组、线路组线路里的几个落地都用这一套。新建时不预选，让人自己挑（用户要求）。
+    分配方式  一个下拉框：自动（推荐）在最上面，其余 7 种在「其他方式」里；每项一句话，选中的那句写在下面。
+    检测      灵敏 / 均衡 / 稳定三档，下面一句「坏了约 N 秒内切走」。逐项参数收在「高级」里，默认合着。
 */
 
 export function BalanceStrategySelect({
@@ -43,15 +39,13 @@ export function BalanceStrategySelect({
   onChange,
   allowed,
   ariaLabel = "分配方式",
-  placeholder = "请选择分配方式",
   className,
 }: {
   value: string | null | undefined;
   onChange: (value: BalanceStrategy) => void;
-  /** 只给这几种（转发组只有主备之类）；不给 = 全部 8 种 */
+  /** 只给这几种；不给 = 全部 8 种 */
   allowed?: readonly BalanceStrategy[];
   ariaLabel?: string;
-  placeholder?: string;
   className?: string;
 }) {
   const selected = normalizeBalanceStrategy(value);
@@ -71,47 +65,20 @@ export function BalanceStrategySelect({
   );
   return (
     <Select value={selected ?? undefined} onValueChange={(next) => { const strategy = normalizeBalanceStrategy(next); if (strategy) onChange(strategy); }}>
-      <SelectTrigger aria-label={ariaLabel} className={cn("h-11 text-[15px] font-medium", className)}>
-        <SelectValue placeholder={placeholder} />
+      <SelectTrigger aria-label={ariaLabel} className={cn("h-10 text-[15px] font-medium", className)}>
+        <SelectValue placeholder="选一种分配方式" />
       </SelectTrigger>
       <SelectContent className="max-w-[min(26rem,calc(100vw-2rem))]">
-        {common.length > 0 ? (
-          <SelectGroup>
-            {custom.length > 0 ? <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">综合</SelectPrimitive.Label> : null}
-            {common.map(renderItem)}
-          </SelectGroup>
-        ) : null}
+        {common.length > 0 ? <SelectGroup>{common.map(renderItem)}</SelectGroup> : null}
         {common.length > 0 && custom.length > 0 ? <SelectPrimitive.Separator className="mx-2 my-1 h-px bg-border/70" /> : null}
         {custom.length > 0 ? (
           <SelectGroup>
-            <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">其他方式</SelectPrimitive.Label>
+            {common.length > 0 ? <SelectPrimitive.Label className="px-2 pb-1 pt-1.5 text-meta font-medium text-muted-foreground">其他方式</SelectPrimitive.Label> : null}
             {custom.map(renderItem)}
           </SelectGroup>
         ) : null}
       </SelectContent>
     </Select>
-  );
-}
-
-/** 下拉框下面那一行：绿点 + 现在怎么分 + 坏了多久切走。 */
-export function BalanceSummaryLine({ strategy, detect, extra, dns = false }: {
-  strategy: string | null | undefined;
-  detect: BalanceDetect;
-  extra?: ReactNode;
-  dns?: boolean;
-}) {
-  const selected = normalizeBalanceStrategy(strategy);
-  if (!selected) {
-    return <p className="text-meta leading-5 text-muted-foreground">选一种分配方式：不知道选哪个就用「自动」。</p>;
-  }
-  return (
-    <p className="flex gap-2 text-meta leading-5 text-muted-foreground">
-      <span aria-hidden className="mt-[7px] h-2 w-2 shrink-0 rounded-full bg-[var(--fx-ok,#22a55a)]" />
-      <span className="min-w-0">
-        {BALANCE_STRATEGY_LABELS[selected].hint}；坏了约 {balanceSwitchWithinSeconds(detect)} 秒内{dns ? "改解析" : "切走"}
-        {extra ? <>；{extra}</> : null}
-      </span>
-    </p>
   );
 }
 
@@ -127,13 +94,13 @@ function Stepper({ value, onChange, min, max, step = 1, unit, label }: {
   const set = (next: number) => onChange(Math.min(max, Math.max(min, Math.round(next / step) * step)));
   return (
     <div className="fx-lb-step inline-flex shrink-0 items-stretch overflow-hidden rounded-[10px] border border-border/80 bg-background" role="group" aria-label={label}>
-      <button type="button" className="fx-lb-step-btn flex w-8 items-center justify-center text-muted-foreground hover:bg-muted/60 disabled:opacity-40" aria-label={`${label}减少`} disabled={value <= min} onClick={() => set(value - step)}>
+      <button type="button" className="fx-lb-step-btn flex w-9 items-center justify-center text-muted-foreground hover:bg-muted/60 disabled:opacity-40" aria-label={`${label}减少`} disabled={value <= min} onClick={() => set(value - step)}>
         <Minus className="h-3.5 w-3.5" />
       </button>
-      <span className="flex min-w-[3.25rem] items-center justify-center border-x border-border/70 px-1 text-[13.5px] font-semibold tabular-nums">
-        {value}{unit}
+      <span className="flex min-w-[3.5rem] items-center justify-center border-x border-border/70 px-1 text-[13.5px] font-semibold tabular-nums whitespace-nowrap">
+        {value} {unit}
       </span>
-      <button type="button" className="fx-lb-step-btn flex w-8 items-center justify-center text-muted-foreground hover:bg-muted/60 disabled:opacity-40" aria-label={`${label}增加`} disabled={value >= max} onClick={() => set(value + step)}>
+      <button type="button" className="fx-lb-step-btn flex w-9 items-center justify-center text-muted-foreground hover:bg-muted/60 disabled:opacity-40" aria-label={`${label}增加`} disabled={value >= max} onClick={() => set(value + step)}>
         <Plus className="h-3.5 w-3.5" />
       </button>
     </div>
@@ -152,128 +119,144 @@ function SettingRow({ title, hint, children, stacked = false }: { title: string;
   );
 }
 
-/**
- * 「检测与切换」：默认收起，只写一行当前设置；点开原地展开。
- * gost：GOST 隧道（不能当场换出口）；dns：转发组 / 入口组（改解析）—— 只影响「实际效果」那句话。
- */
-export function BalanceDetectPanel({
-  value,
-  onChange,
-  strategy,
-  defaults = DEFAULT_BALANCE_DETECT,
-  weights,
-  memberNames,
-  gost = false,
-  dns = false,
-  defaultOpen = false,
-}: {
+/** 「高级」：逐项的检测参数。改过任何一项，上面的三档就显示成「自定义」。 */
+function BalanceAdvanced({ value, onChange, strategy, weights, memberNames }: {
   value: BalanceDetect;
   onChange: (value: BalanceDetect) => void;
-  strategy?: string | null;
-  defaults?: BalanceDetect;
+  strategy: BalanceStrategy | null;
   weights?: readonly number[];
   memberNames?: readonly string[];
-  gost?: boolean;
-  dns?: boolean;
-  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const bodyId = useId();
   const patch = (next: Partial<BalanceDetect>) => onChange({ ...value, ...next });
-  const isDefault = balanceDetectEquals(value, defaults);
-  const intervalChoices = Array.from(new Set<number>([...BALANCE_INTERVAL_CHOICES, defaults.intervalSeconds])).sort((a, b) => a - b);
-  // 灵敏度三档（2.3.539）：大多数人选一档就够；转发组 / 入口组靠改解析，默认值不一样，不给三档
-  const sensitivity = dns ? null : balanceSensitivityOf(value);
+  const limits = BALANCE_DETECT_LIMITS;
   return (
-    <div className="rounded-xl border border-border/60 bg-background/60">
-      {!dns ? (
-        <div className="space-y-1.5 px-3 pt-2.5">
-          <div className="text-[14.5px] font-semibold leading-5">检测灵敏度</div>
-          <SegmentedControl<string>
-            ariaLabel="检测灵敏度"
-            value={sensitivity ?? "custom"}
-            options={[
-              ...BALANCE_SENSITIVITIES.map((key) => ({ value: key, label: BALANCE_SENSITIVITY_PRESETS[key].label })),
-              ...(sensitivity ? [] : [{ value: "custom", label: "自定义" }]),
-            ]}
-            onChange={(key) => {
-              const preset = BALANCE_SENSITIVITY_PRESETS[key as keyof typeof BALANCE_SENSITIVITY_PRESETS];
-              if (preset) onChange({ ...preset.detect });
-            }}
-            listClassName="grid grid-flow-col auto-cols-fr gap-1"
-          />
-          <p className="text-meta leading-5 text-muted-foreground">
-            {sensitivity ? `${BALANCE_SENSITIVITY_PRESETS[sensitivity].hint}；` : "已按下面的高级设置；"}坏了约 {balanceSwitchWithinSeconds(value)} 秒内切走
-          </p>
-        </div>
+    <div className="pb-1">
+      <div className="-mt-1 mb-1 flex justify-end">
+        <button
+          type="button"
+          className="fx-lb-reset inline-flex items-center gap-1 text-meta font-medium text-primary disabled:text-muted-foreground disabled:opacity-60"
+          disabled={balanceDetectEquals(value, DEFAULT_BALANCE_DETECT)}
+          onClick={() => onChange({ ...DEFAULT_BALANCE_DETECT })}
+        >
+          <RotateCcw className="h-3 w-3" />恢复默认
+        </button>
+      </div>
+      <SettingRow title="多久探一次" hint="越短切得越快；每次只是连一下，流量很小" stacked>
+        <SegmentedControl
+          ariaLabel="多久探一次"
+          value={value.intervalSeconds}
+          options={BALANCE_INTERVAL_CHOICES.map((seconds) => ({ value: seconds, label: `${seconds} 秒` }))}
+          onChange={(intervalSeconds) => patch({ intervalSeconds })}
+          listClassName="grid grid-flow-col auto-cols-fr gap-1"
+          optionClassName="whitespace-nowrap px-1"
+        />
+      </SettingRow>
+      <SettingRow title="几次不通算坏" hint={`默认 ${DEFAULT_BALANCE_DETECT.failThreshold} 次`}>
+        <Stepper label="几次不通算坏" value={value.failThreshold} onChange={(failThreshold) => patch({ failThreshold })} {...limits.failThreshold} unit="次" />
+      </SettingRow>
+      <SettingRow title="恢复要连续通几次" hint="防刚好又坏">
+        <Stepper label="恢复要连续通几次" value={value.recoverThreshold} onChange={(recoverThreshold) => patch({ recoverThreshold })} {...limits.recoverThreshold} unit="次" />
+      </SettingRow>
+      {strategy === "latency" ? (
+        <SettingRow title="差多少算一样快" hint="比最快的慢不到这么多的一起分">
+          <Stepper label="一样快的门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} {...limits.latencyMarginMs} unit="ms" />
+        </SettingRow>
       ) : null}
-      <button
-        type="button"
-        className="fx-lb-detect-toggle flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="min-w-0">
-          <span className={cn("block leading-5", dns ? "text-[14.5px] font-semibold" : "text-[13.5px] font-medium text-muted-foreground")}>{dns ? "检测与切换" : "高级设置"}</span>
-          {!open && dns ? <span className="block truncate text-meta leading-5 text-muted-foreground">{describeBalanceDetectShort(value)}</span> : null}
-        </span>
-        <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open ? "rotate-180" : "-rotate-90")} />
-      </button>
-      {open ? (
-        <div id={bodyId} className="px-3 pb-3">
-          <div className="-mt-1 mb-1 flex justify-end">
-            <button
-              type="button"
-              className="fx-lb-reset inline-flex items-center gap-1 text-meta font-medium text-primary disabled:text-muted-foreground disabled:opacity-60"
-              disabled={isDefault}
-              onClick={() => onChange({ ...defaults })}
-            >
-              <RotateCcw className="h-3 w-3" />恢复默认
-            </button>
+      <SettingRow title="抖动超过多少算抖" hint="抖动这三项只对 NEX 隧道起作用">
+        <Stepper label="抖动门槛" value={value.jitterMs} onChange={(jitterMs) => patch({ jitterMs })} {...limits.jitterMs} unit="ms" />
+      </SettingRow>
+      <SettingRow title="持续多久才处理" hint="偶尔抖一下不动">
+        <Stepper label="持续多久才处理" value={value.jitterHoldSeconds} onChange={(jitterHoldSeconds) => patch({ jitterHoldSeconds })} {...limits.jitterHoldSeconds} unit="秒" />
+      </SettingRow>
+      <SettingRow title="抖动大的时候" stacked>
+        <SegmentedControl<BalanceJitterAction>
+          ariaLabel="抖动大的时候"
+          value={value.jitterAction}
+          options={BALANCE_JITTER_ACTIONS.map((action) => ({ value: action, label: BALANCE_JITTER_ACTION_LABELS[action] }))}
+          onChange={(jitterAction) => patch({ jitterAction })}
+          listClassName="grid grid-cols-3 gap-1"
+        />
+      </SettingRow>
+      <SettingRow title="刚恢复的慢慢加量" hint="1 分钟内从一小份加到满份">
+        <Switch aria-label="刚恢复的慢慢加量" checked={value.slowStart} onCheckedChange={(slowStart) => patch({ slowStart })} />
+      </SettingRow>
+      <p className="mt-2 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-meta leading-5 text-foreground/80">
+        实际效果：{describeBalanceEffect({ strategy, detect: value, weights, memberNames })}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * 出口组的「分配方式 + 检测」一块。note：分配方式那句后面补的一句（按权重的比例、没填带宽的点名）。
+ */
+export function LoadBalanceFields({
+  strategy,
+  onStrategyChange,
+  detect,
+  onDetectChange,
+  note,
+  weights,
+  memberNames,
+}: {
+  strategy: BalanceStrategy | null;
+  onStrategyChange: (value: BalanceStrategy) => void;
+  detect: BalanceDetect;
+  onDetectChange: (value: BalanceDetect) => void;
+  note?: string | null;
+  weights?: readonly number[];
+  memberNames?: readonly string[];
+}) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedId = useId();
+  const sensitivity = balanceSensitivityOf(detect);
+  return (
+    <div className="space-y-3 rounded-xl border border-border/60 bg-muted/15 p-3" data-testid="load-balance-fields">
+      <div className="space-y-1.5">
+        <div className="text-[14px] font-semibold leading-5">分配方式</div>
+        <BalanceStrategySelect value={strategy} onChange={onStrategyChange} />
+        {strategy ? (
+          <p className="text-meta leading-5 text-muted-foreground" data-testid="balance-strategy-hint">
+            {balanceStrategyHint(strategy)}{note ? `；${note}` : ""}
+          </p>
+        ) : null}
+      </div>
+      <div className="space-y-1.5">
+        <div className="text-[14px] font-semibold leading-5">检测灵敏度</div>
+        <SegmentedControl<string>
+          ariaLabel="检测灵敏度"
+          value={sensitivity ?? "custom"}
+          options={[
+            ...BALANCE_SENSITIVITIES.map((key) => ({ value: key, label: BALANCE_SENSITIVITY_PRESETS[key].label })),
+            ...(sensitivity ? [] : [{ value: "custom", label: "自定义" }]),
+          ]}
+          onChange={(key) => {
+            const preset = BALANCE_SENSITIVITY_PRESETS[key as keyof typeof BALANCE_SENSITIVITY_PRESETS];
+            if (preset) onDetectChange({ ...preset.detect });
+          }}
+          listClassName="grid grid-flow-col auto-cols-fr gap-1"
+        />
+        <p className="text-meta leading-5 text-muted-foreground">
+          {sensitivity ? BALANCE_SENSITIVITY_PRESETS[sensitivity].hint : "按高级里的设置"}；坏了约 {balanceSwitchWithinSeconds(detect)} 秒内切走
+        </p>
+      </div>
+      <div className="border-t border-border/50">
+        <button
+          type="button"
+          className="flex min-h-9 w-full items-center justify-between gap-3 pt-2 text-left text-[13.5px] font-medium text-muted-foreground"
+          aria-expanded={advancedOpen}
+          aria-controls={advancedId}
+          onClick={() => setAdvancedOpen((open) => !open)}
+        >
+          高级
+          <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", advancedOpen ? "rotate-180" : "-rotate-90")} />
+        </button>
+        {advancedOpen ? (
+          <div id={advancedId}>
+            <BalanceAdvanced value={detect} onChange={onDetectChange} strategy={strategy} weights={weights} memberNames={memberNames} />
           </div>
-          <SettingRow title="多久探一次" hint="越短切得越快；每次只是连一下，流量很小" stacked>
-            <SegmentedControl
-              ariaLabel="多久探一次"
-              value={value.intervalSeconds}
-              options={intervalChoices.map((seconds) => ({ value: seconds, label: `${seconds} 秒` }))}
-              onChange={(intervalSeconds) => patch({ intervalSeconds })}
-              listClassName="grid grid-flow-col auto-cols-fr gap-1"
-              optionClassName="whitespace-nowrap px-1"
-            />
-          </SettingRow>
-          <SettingRow title="几次不通算坏" hint={`默认 ${defaults.failThreshold} 次`}>
-            <Stepper label="几次不通算坏" value={value.failThreshold} onChange={(failThreshold) => patch({ failThreshold })} min={BALANCE_DETECT_LIMITS.failThreshold.min} max={BALANCE_DETECT_LIMITS.failThreshold.max} unit=" 次" />
-          </SettingRow>
-          <SettingRow title="恢复要连续通几次" hint="防刚好又坏">
-            <Stepper label="恢复要连续通几次" value={value.recoverThreshold} onChange={(recoverThreshold) => patch({ recoverThreshold })} min={BALANCE_DETECT_LIMITS.recoverThreshold.min} max={BALANCE_DETECT_LIMITS.recoverThreshold.max} unit=" 次" />
-          </SettingRow>
-          <SettingRow title="比最快的慢多少就少分" hint="延迟门槛">
-            <Stepper label="延迟门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} min={BALANCE_DETECT_LIMITS.latencyMarginMs.min} max={BALANCE_DETECT_LIMITS.latencyMarginMs.max} step={BALANCE_DETECT_LIMITS.latencyMarginMs.step} unit="ms" />
-          </SettingRow>
-          <SettingRow title="抖动超过多少算抖" hint="延迟上下浮动的幅度">
-            <Stepper label="抖动门槛" value={value.jitterMs} onChange={(jitterMs) => patch({ jitterMs })} min={BALANCE_DETECT_LIMITS.jitterMs.min} max={BALANCE_DETECT_LIMITS.jitterMs.max} step={BALANCE_DETECT_LIMITS.jitterMs.step} unit="ms" />
-          </SettingRow>
-          <SettingRow title="持续多久才处理" hint="偶尔抖一下不动">
-            <Stepper label="持续多久才处理" value={value.jitterHoldSeconds} onChange={(jitterHoldSeconds) => patch({ jitterHoldSeconds })} min={BALANCE_DETECT_LIMITS.jitterHoldSeconds.min} max={BALANCE_DETECT_LIMITS.jitterHoldSeconds.max} step={BALANCE_DETECT_LIMITS.jitterHoldSeconds.step} unit=" 秒" />
-          </SettingRow>
-          <SettingRow title="抖动大的时候" stacked>
-            <SegmentedControl<BalanceJitterAction>
-              ariaLabel="抖动大的时候"
-              value={value.jitterAction}
-              options={BALANCE_JITTER_ACTIONS.map((action) => ({ value: action, label: BALANCE_JITTER_ACTION_LABELS[action] }))}
-              onChange={(jitterAction) => patch({ jitterAction })}
-              listClassName="grid grid-cols-3 gap-1"
-            />
-          </SettingRow>
-          <SettingRow title="刚恢复的慢慢加量" hint="1 分钟内从一小份加到满份">
-            <Switch aria-label="刚恢复的慢慢加量" checked={value.slowStart} onCheckedChange={(slowStart) => patch({ slowStart })} />
-          </SettingRow>
-          <p className="mt-2 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-meta leading-5 text-foreground/80">
-            实际效果：{describeBalanceEffect({ strategy, detect: value, weights, memberNames, gost, dns })}
-          </p>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }

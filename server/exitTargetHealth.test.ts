@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_BALANCE_DETECT } from "../shared/loadBalance";
 import {
+  EXIT_TARGET_LEGACY_MAX_INTERVAL_MS,
+  EXIT_TARGET_PROBE_SLACK_MS,
   EXIT_TARGET_STALE_MS,
+  exitTargetDownStale,
   exitTargetExcludedHostIds,
+  noteExitTargetAllDown,
   exitTargetProbeSpec,
   exitTargetSummaryForTunnel,
   exitTargetUnstable,
-  latencyOrderedExitHostIds,
   ruleActiveExit,
   setExitTargetTunnelMetaForTest,
   exitTargetBaseline,
@@ -45,9 +48,9 @@ function state(partial: Partial<ExitTargetState> & { hostId: number }): ExitTarg
   };
 }
 
-test("负载均衡链路才算：开了、而且不是「只用第一个」", () => {
+test("负载均衡链路才算：开了就算（库里老的「只用第一个」是主备，也在几台出口之间换）", () => {
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: true, loadBalanceStrategy: "auto" }), true);
-  assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: true, loadBalanceStrategy: "none" }), false);
+  assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: true, loadBalanceStrategy: "none" }), true);
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: false, loadBalanceStrategy: "auto" }), false);
 });
 
@@ -74,6 +77,56 @@ test("GOST 摘出口：只摘连不上的；全都连不上、或剩下的没一
   resetExitTargetStates();
   setExitTargetStateForTest(state({ hostId: 1, down: true }));
   assert.equal(exitTargetExcludedHostIds(7, [1, 2]).size, 0, "另一台没报过（不知道能不能通）时不摘");
+});
+
+test("旧的「连不上」不摘出口（a）：每台都连不上结束以后、还没再探过的当不知道（实验室：恢复后好好的出口被摘掉）", () => {
+  resetExitTargetStates();
+  const t0 = Date.now() - 60_000;
+  // 三台一起断（都在 Agent 的退避里，60 秒一次）
+  for (const hostId of [1, 2, 3]) {
+    setExitTargetStateForTest(state({ hostId, down: true, at: t0, probedAt: t0, probeIntervalMs: 60_000 }));
+    noteExitTargetAllDown(7, [1, 2, 3], t0);
+  }
+  assert.equal(exitTargetExcludedHostIds(7, [1, 2, 3], t0).size, 0, "都连不上：一台不摘");
+  // 30 秒后出口 1 先探到恢复；2、3 的全量照旧报「连不上」，结论还是故障期间探的
+  const t1 = t0 + 30_000;
+  setExitTargetStateForTest(state({ hostId: 1, at: t1, probedAt: t1, probeIntervalMs: 2000 }));
+  assert.equal(noteExitTargetAllDown(7, [1, 2, 3], t1), true, "「每台都连不上」到这里结束");
+  setExitTargetStateForTest(state({ hostId: 3, down: true, at: t1 + 1000, probedAt: t0 + 5000, probeIntervalMs: 60_000 }));
+  assert.equal(noteExitTargetAllDown(7, [1, 2, 3], t1 + 1000), false);
+  assert.equal(exitTargetExcludedHostIds(7, [1, 2, 3], t1 + 2000).size, 0, "2、3 的「连不上」是故障期间的：当不知道，不摘（以前当场摘掉 2、3）");
+  // 出口 2 恢复之后真的又断了（新探出来的）：摘它；出口 3 还是旧的：不摘
+  const t2 = t1 + 20_000;
+  setExitTargetStateForTest(state({ hostId: 2, down: true, at: t2, probedAt: t2, probeIntervalMs: 4000 }));
+  assert.deepEqual([...exitTargetExcludedHostIds(7, [1, 2, 3], t2)], [2]);
+  // 出口 3 再探一次还是连不上（探的时刻在结束之后）：摘
+  setExitTargetStateForTest(state({ hostId: 3, down: true, at: t2 + 1000, probedAt: t2 + 500, probeIntervalMs: 60_000 }));
+  assert.deepEqual([...exitTargetExcludedHostIds(7, [1, 2, 3], t2 + 1000)].sort(), [2, 3]);
+});
+
+test("旧的「连不上」不摘出口（b）：离探出来超过两倍探测间隔（含退避）+ 余量的当不知道", () => {
+  const now = Date.now();
+  const down = { down: true, at: now };
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 30_000, probeIntervalMs: 4000 }, now), false, "30 秒一次的全量之间：还算新");
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 2 * 4000 - EXIT_TARGET_PROBE_SLACK_MS - 1, probeIntervalMs: 4000 }, now), true);
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 150_000, probeIntervalMs: 60_000 }, now), false, "退避到 60 秒的：两倍 + 余量以内还算新");
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 2 * EXIT_TARGET_LEGACY_MAX_INTERVAL_MS - EXIT_TARGET_PROBE_SLACK_MS - 1 }, now), true, "老 Agent 按最长退避算");
+  assert.equal(exitTargetDownStale({ down: false, at: now, probedAt: now - 600_000, probeIntervalMs: 2000 }, now), false, "只管「连不上」");
+  assert.equal(exitTargetDownStale({ ...down, probedAt: now - 1000, probeIntervalMs: 2000 }, now, now - 500), true, "探的时刻早于「都连不上」结束");
+  resetExitTargetStates();
+  setExitTargetStateForTest(state({ hostId: 1, down: true, probedAt: now - 200_000, probeIntervalMs: 4000 }));
+  setExitTargetStateForTest(state({ hostId: 2 }));
+  assert.equal(exitTargetExcludedHostIds(7, [1, 2], now).size, 0);
+});
+
+test("只有一台报过「连不上」算不上「每台都连不上」", () => {
+  resetExitTargetStates();
+  const now = Date.now();
+  setExitTargetStateForTest(state({ hostId: 1, down: true, probedAt: now - 1000 }));
+  noteExitTargetAllDown(7, [1, 2, 3], now);
+  setExitTargetStateForTest(state({ hostId: 2 }));
+  assert.equal(noteExitTargetAllDown(7, [1, 2, 3], now + 1000), false);
+  assert.deepEqual([...exitTargetExcludedHostIds(7, [1, 2, 3], now + 1000)], [1]);
 });
 
 test("过期（90 秒没报）的状态当不知道", () => {
@@ -145,21 +198,6 @@ test("链路弹窗「怎么走」：NEX 延迟优先，差不到门槛的一起�
   const summary = exitTargetSummaryForTunnel(tunnel, [1, 2, 3], { hostNames: new Map([[1, "A"], [2, "B"], [3, "C"]]) });
   assert.deepEqual(summary.exits.map((item) => item.activeRules), [1, 1, 0]);
   assert.equal(summary.how, "延迟优先：A、B（差不到 50ms，按负载分），1 台备用");
-});
-
-test("GOST 延迟优先：按延迟排顺序，差不多快时不来回换", () => {
-  resetExitTargetStates();
-  const detect = { ...DEFAULT_BALANCE_DETECT };
-  setExitTargetStateForTest(state({ hostId: 1, ruleId: 20, medianMs: 40, jitterMs: 0, gost: true }));
-  setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 10, jitterMs: 0, gost: true }));
-  setExitTargetStateForTest(state({ hostId: 3, ruleId: 20, down: true, gost: true }));
-  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [2, 1, 3]);
-  // 1 号变快了一点，但没快过 50ms：还是 2 号在前
-  setExitTargetStateForTest(state({ hostId: 1, ruleId: 20, medianMs: 5, jitterMs: 0, gost: true }));
-  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [2, 1, 3]);
-  // 2 号慢到比 1 号多 50ms 以上：换
-  setExitTargetStateForTest(state({ hostId: 2, ruleId: 20, medianMs: 90, jitterMs: 0, gost: true }));
-  assert.deepEqual(latencyOrderedExitHostIds(20, [1, 2, 3], detect), [1, 2, 3]);
 });
 
 test("平时延迟 = 最低延迟：更低的马上跟下来，更高的只慢慢往上跟", () => {
@@ -273,3 +311,18 @@ test("主出口正常、或者每台都连不上：照旧按主出口", () => {
   assert.equal(row.latestLatencyIsTimeout, true);
   assert.equal(row.exitTargetVia, null);
 });
+
+/*
+  C3：「持续多久才处理」（jitterHoldSeconds，默认 30 秒）以前没人看 —— 一次抖动大的样本就算不稳，延迟优先
+  马上把这台排到后面。现在抖动要连续超过门槛满这段时间才算；丢包照旧立刻算（它本来就是一段样本的比例）。
+*/
+test("不稳：抖动要持续「持续多久才处理」才算，单次抖动大的样本不算；丢包不等", () => {
+  const detect = { ...DEFAULT_BALANCE_DETECT };
+  const at = Date.now();
+  const jittery = { jitterMs: 63, lossPct: 0, samples: 30, at };
+  assert.equal(exitTargetUnstable({ ...jittery, jitterSince: at }, detect), false, "刚开始抖：不算");
+  assert.equal(exitTargetUnstable({ ...jittery, jitterSince: at - (detect.jitterHoldSeconds - 1) * 1000 }, detect), false);
+  assert.equal(exitTargetUnstable({ ...jittery, jitterSince: at - detect.jitterHoldSeconds * 1000 }, detect), true, "抖满了「持续多久才处理」才算");
+  assert.equal(exitTargetUnstable({ jitterMs: 4, lossPct: 12, samples: 30, at, jitterSince: null }, detect), true, "丢包不等");
+});
+

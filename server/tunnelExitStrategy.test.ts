@@ -1,38 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exitGroupUsesMultipleExits, normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "../shared/loadBalance";
 import {
   forwardXExitStrategy,
-  gostExitSelector,
   planExitGroupTunnelEndpoints,
-  shouldUseFastTunnelFailover,
 } from "./tunnelExitStrategy";
 
 test("normalizes exit-group strategies without enabling unknown values", () => {
   assert.equal(normalizeExitGroupStrategy("fallback"), "fallback");
   assert.equal(normalizeExitGroupStrategy("IP_HASH"), "ip_hash");
   assert.equal(normalizeExitGroupStrategy("unsupported"), "round_robin");
-  assert.equal(exitGroupUsesMultipleExits("none"), false);
-  assert.equal(exitGroupUsesMultipleExits("random"), true);
+  // 老值只在一处认：none 当主备，least_conn 当按负载
+  assert.equal(normalizeExitGroupStrategy("none"), "fallback");
+  assert.equal(normalizeExitGroupStrategy("least_conn"), "least_load");
 });
 
-test("maps shared exit strategies to GOST and NEX selectors", () => {
-  assert.deepEqual(gostExitSelector("fallback"), {
-    strategy: "fifo",
-    maxFails: 1,
-    failTimeout: "5s",
-  });
-  assert.equal(gostExitSelector("random").strategy, "random");
-  assert.equal(gostExitSelector("ip_hash").strategy, "hash");
-  assert.equal(forwardXExitStrategy("none"), "round_robin");
+test("maps shared exit strategies to the NEX selector (GOST exits are picked by the entry Agent, see gostBalancePlan.test.ts)", () => {
+  assert.equal(forwardXExitStrategy("none"), "fallback");
   assert.equal(forwardXExitStrategy("ip_hash"), "ip_hash");
-});
-
-test("enables fast dialing for every multi-exit strategy", () => {
-  assert.equal(shouldUseFastTunnelFailover(0), false);
-  assert.equal(shouldUseFastTunnelFailover(1), false);
-  assert.equal(shouldUseFastTunnelFailover(2), true);
-  assert.equal(shouldUseFastTunnelFailover(1, true), true);
 });
 
 test("reorders exit-group endpoints without changing ports already assigned to a host", () => {

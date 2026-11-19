@@ -10,21 +10,9 @@
  *   负载均衡     新连接分到几条线路上；连接多的时候带宽相加，单条连接仍只走一条
  *   单连接叠加   把一条连接拆开同时走几条线路、在出口拼回来；单条连接也能用上几条的带宽
  *
- * 分连接的方式也只有一套名字（线路组、出口组共用）：按负载 / 主备 / 轮流 / 随机 / 按访客固定 / 按权重 / 自动。
- * 「自动」只有线路组有（Agent 2.2.251 起）：出口组还是那六种。
+ * 分连接的方式也只有一套名字和说法（线路组、出口组共用）：shared/loadBalance.ts 的 BALANCE_STRATEGY_LABELS。
  */
 
 export const LINK_TERM_FAILOVER = "主备";
 export const LINK_TERM_LOAD_BALANCE = "负载均衡";
 export const LINK_TERM_SPLIT_CONNECTION = "单连接叠加";
-
-/** 分连接的方式。值和数据库、Agent 里的一致，只是名字统一。 */
-export const LINK_SPREAD_LABELS = {
-  least_load: { label: "按负载", hint: "新连接给现在最闲的那条（按实时流量、连接数和线路带宽算），最能把几条一起跑满" },
-  fallback: { label: "主备", hint: "从上往下，前一个坏了才用下一个" },
-  round_robin: { label: "轮流", hint: "新连接轮流走每一个" },
-  random: { label: "随机", hint: "新连接随机挑一个能用的" },
-  ip_hash: { label: "按访客固定", hint: "同一个来源 IP 总走同一个，适合要保持登录的服务" },
-  weighted: { label: "按权重", hint: "新连接按权重分，带宽大的多分一些" },
-  auto: { label: "自动", hint: "按最近延迟和主机负载自动算权重，随机挑两条取更好的那条" },
-} as const;

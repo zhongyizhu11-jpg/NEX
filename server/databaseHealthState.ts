@@ -58,6 +58,7 @@ export class DatabaseHealthTracker {
   private health: DatabaseHealth = { state: "checking", databaseType: null, checkedAt: null, unavailableSince: null, reason: null, restartRequired: false };
   private lastLogAt = 0;
   private setupPending: () => boolean = () => false;
+  private readonly recoveryListeners = new Set<() => void>();
   constructor(private log: (message: string) => void = (message) => console.warn(message)) {}
 
   /**
@@ -107,8 +108,22 @@ export class DatabaseHealthTracker {
     return true;
   }
 
+  /**
+   * 从「不可用」恢复时通知一声（转发组评估要重新给一段就绪宽限：故障期间 Agent 的请求全被 503 了，
+   * 内存里的主机存活状态不作数）。监听器出错不影响恢复本身。
+   */
+  onRecovered(listener: () => void) {
+    this.recoveryListeners.add(listener);
+    return () => { this.recoveryListeners.delete(listener); };
+  }
+
   healthy() {
-    if (this.health.state === "unavailable") this.log(`[DatabaseHealth] recovered type=${this.health.databaseType || "unknown"}`);
+    if (this.health.state === "unavailable") {
+      this.log(`[DatabaseHealth] recovered type=${this.health.databaseType || "unknown"}`);
+      for (const listener of this.recoveryListeners) {
+        try { listener(); } catch { /* 恢复不能被监听器拦住 */ }
+      }
+    }
     this.health = { ...this.health, state: "healthy", checkedAt: new Date().toISOString(), unavailableSince: null, reason: null, restartRequired: false };
   }
 

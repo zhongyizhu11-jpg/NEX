@@ -5,10 +5,11 @@ import {
   BALANCE_CUSTOM_STRATEGIES,
   BALANCE_STRATEGIES,
   DEFAULT_BALANCE_DETECT,
-  balanceStrategyForLegacyRuntime,
   balanceSwitchWithinSeconds,
-  describeBalanceDetectShort,
+  balanceStrategyHint,
+  BALANCE_STRATEGY_LABELS,
   describeBalanceEffect,
+  nginxBalanceBasicSupportNote,
   normalizeBalanceDetect,
   normalizeBalanceStrategy,
   serializeBalanceDetect,
@@ -26,13 +27,6 @@ test("老值：只用第一个当主备，least_conn 当按负载，空和认不
   assert.equal(normalizeBalanceStrategy("AUTO"), "auto");
   assert.equal(normalizeBalanceStrategy(""), null);
   assert.equal(normalizeBalanceStrategy("whatever"), null);
-});
-
-test("老 FXP 不认自动 / 延迟优先，换成按负载；别的照旧", () => {
-  assert.equal(balanceStrategyForLegacyRuntime("auto"), "least_load");
-  assert.equal(balanceStrategyForLegacyRuntime("latency"), "least_load");
-  assert.equal(balanceStrategyForLegacyRuntime("weighted"), "weighted");
-  assert.equal(balanceStrategyForLegacyRuntime(null), "round_robin");
 });
 
 test("检测参数：缺的按默认补，越界的夹回范围，坏 JSON 当默认", () => {
@@ -55,7 +49,6 @@ test("和默认一样存 null（以后改默认跟着走），不一样存 JSON"
 
 test("默认参数：每 2 秒探一次、2 次不通算坏，约 5 秒内切走", () => {
   assert.equal(balanceSwitchWithinSeconds(DEFAULT_BALANCE_DETECT), 5);
-  assert.equal(describeBalanceDetectShort(DEFAULT_BALANCE_DETECT), "每 2 秒探一次 · 2 次不通算坏 · 抖动超过 30ms 少分");
 });
 
 test("实际效果那句话跟着设置变", () => {
@@ -65,5 +58,18 @@ test("实际效果那句话跟着设置变", () => {
   assert.match(text, /抖动超过 30ms 持续 30 秒，就把它降到 4 分之 1/);
   const ignore = describeBalanceEffect({ strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, jitterAction: "ignore" } });
   assert.doesNotMatch(ignore, /抖动超过/);
-  assert.match(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT, gost: true }), /GOST 隧道/);
+  // GOST 隧道和 NEX 隧道一样由入口自己探、自己切：不再有「GOST 不能当场换出口」那句
+  assert.doesNotMatch(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT }), /GOST/);
+  // Nginx 隧道不经统一调度：界面上另写一句「基础支持」
+  assert.match(String(nginxBalanceBasicSupportNote("nginx_stream")), /^基础支持：/);
+  assert.equal(nginxBalanceBasicSupportNote("tls"), null);
+  assert.equal(nginxBalanceBasicSupportNote("forwardx"), null);
+});
+
+test("每种方式一句话：主备说清先用谁、什么时候换、什么时候切回；只转 UDP 时说新会话", () => {
+  assert.equal(BALANCE_STRATEGY_LABELS.fallback.hint, "先用第一个，连不上才换下一个，恢复稳定后切回");
+  assert.equal(balanceStrategyHint("round_robin"), "新连接一个一个轮着走");
+  assert.equal(balanceStrategyHint("round_robin", true), "新会话一个一个轮着走");
+  assert.match(balanceStrategyHint("least_load", true), /会话数/);
+  for (const strategy of BALANCE_STRATEGIES) assert.ok(BALANCE_STRATEGY_LABELS[strategy].hint.length <= 48, strategy);
 });

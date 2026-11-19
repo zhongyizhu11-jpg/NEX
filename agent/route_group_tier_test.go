@@ -312,7 +312,7 @@ func TestHotDeliveryFallbackRacesNextHealthyPath(t *testing.T) {
 		t.Fatal("输掉的拨号没被取消")
 	}
 	proxy.mu.Lock()
-	failures := proxy.statsLocked(0).consecutiveFailures
+	failures := proxy.statsLocked(0).consecutiveFailures()
 	proxy.mu.Unlock()
 	if failures != 0 {
 		t.Fatalf("被取消的拨号记成了 %d 次失败", failures)

@@ -24,6 +24,7 @@ jobs:
         module:
           - agent
           - forwardx-fxp
+          - lbcore
     defaults:
       run:
         working-directory: ${{ matrix.module }}

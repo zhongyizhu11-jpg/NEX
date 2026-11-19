@@ -273,12 +273,12 @@ func structureSpecCases() []structureSpecCase {
 	}
 	with("prefer-fastest", func(spec *failoverSpec) {
 		spec.PreferFastest = true
-		spec.ScoreMargin = 7
+		spec.LatencyMarginMs = 7
 		spec.ScoreHoldSeconds = 45
 	})
 	with("thresholds/high", func(spec *failoverSpec) {
 		spec.FailureThreshold = 25
-		spec.ScoreMargin = -1
+		spec.LatencyMarginMs = -1
 		spec.ScoreHoldSeconds = 0
 		spec.PrewarmSeconds = -5
 		spec.MinHoldSeconds = -3
@@ -340,7 +340,7 @@ var structureWireSpecs = []struct {
 	name string
 	raw  string
 }{
-	{"full", `{"enabled":true,"listenPort":65040,"bindAddress":"127.0.0.1","protocol":"both","strategy":"auto","targets":[{"targetIp":"10.0.0.1","targetPort":443,"probeIp":"10.9.9.9","probePort":80,"probeUdpEcho":true,"weight":3,"tier":0,"line":0,"landing":"A","spread":"least_load","extraLatencyMs":12,"loadPct":85,"exitIp":"203.0.113.9","down":true,"downReason":"relay down: hk → jp"},{"targetIp":"10.0.0.2","targetPort":443,"weight":1,"tier":1,"exitIp":" 203.0.113.9 "},{"targetIp":"10.0.0.3","targetPort":8443,"loadPct":40}],"failoverSeconds":30,"recoverSeconds":90,"autoFailback":true,"pinnedIndex":1,"pinnedUntil":1893456000000,"preferFastest":true,"failureThreshold":3,"scoreMargin":8,"scoreHoldSeconds":120,"prewarmSeconds":60,"switchMode":"fast","proxyProtocolReceive":true,"delivery":"hot","schedule":{"timezone":"Asia/Shanghai","windows":[{"days":[1,2,3],"from":"18:00","to":"23:00","targetIndex":2}]}}`},
+	{"full", `{"enabled":true,"listenPort":65040,"bindAddress":"127.0.0.1","protocol":"both","strategy":"auto","targets":[{"targetIp":"10.0.0.1","targetPort":443,"probeIp":"10.9.9.9","probePort":80,"probeUdpEcho":true,"weight":3,"tier":0,"line":0,"landing":"A","spread":"least_load","extraLatencyMs":12,"loadPct":85,"exitIp":"203.0.113.9","down":true,"downReason":"relay down: hk → jp"},{"targetIp":"10.0.0.2","targetPort":443,"weight":1,"tier":1,"exitIp":" 203.0.113.9 "},{"targetIp":"10.0.0.3","targetPort":8443,"loadPct":40}],"failoverSeconds":30,"recoverSeconds":90,"autoFailback":true,"pinnedIndex":1,"pinnedUntil":1893456000000,"preferFastest":true,"failureThreshold":3,"latencyMarginMs":40,"scoreHoldSeconds":120,"prewarmSeconds":60,"switchMode":"fast","proxyProtocolReceive":true,"delivery":"hot","schedule":{"timezone":"Asia/Shanghai","windows":[{"days":[1,2,3],"from":"18:00","to":"23:00","targetIndex":2}]}}`},
 	{"minimal", `{"enabled":true,"listenPort":1,"targets":[{"targetIp":"1.1.1.1","targetPort":1}]}`},
 	{"hints-only", `{"enabled":true,"listenPort":2,"strategy":"fallback","targets":[{"targetIp":"1.1.1.1","targetPort":1,"down":true},{"targetIp":"1.1.1.2","targetPort":2,"downReason":"x","extraLatencyMs":-4},{"targetIp":"1.1.1.3","targetPort":3,"loadPct":101,"exitIp":"198.51.100.1"}]}`},
 	{"nulls", `{"enabled":true,"listenPort":3,"targets":null,"schedule":null,"pinnedIndex":null}`},

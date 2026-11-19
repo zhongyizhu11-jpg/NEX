@@ -343,6 +343,11 @@ export const lineDiagnosticsRouter = router({
       const hostIds = Array.from(new Set(input.hostIds));
       const role = pools.normalizeNodePoolRole(input.role);
       const emptyGroups = [] as Array<{ groupId: number; added: number; removed: number; kept: number; skipped?: string; error?: string }>;
+      // 跟着这个池的组放不下这批机器（组最多 20 个成员）时不让存：以前池存成了，组却没跟上，错误只在保存结果里一闪而过。
+      if (existing) {
+        const { assertPoolFitsFollowingGroups } = await import("../nodePoolGroups");
+        await assertPoolFitsFollowingGroups(existing.id, hostIds);
+      }
 
       if (role === "landing") {
         if (hostIds.length > MAX_LANDING_POOL_MEMBERS) throw new Error(`落地池最多 ${MAX_LANDING_POOL_MEMBERS} 台：每台都要开入站，线路里一台一条路径`);

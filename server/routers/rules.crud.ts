@@ -13,7 +13,6 @@ import {
   validateFailoverSchedule,
 } from "@shared/failoverSchedule";
 import { readFailoverPin } from "@shared/failoverPin";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import {
   MAX_ROUTE_HOPS,
   MAX_ROUTE_PATHS,
@@ -120,6 +119,7 @@ import {
 } from "../ruleEntryBridges";
 import { isPortRangeRule, portRangeShapeError, portRangeUnsupportedReason } from "@shared/portRange";
 import { reserveForwardGroupPortRangeTail, reserveRulePortRange, resolveNextSourcePortEnd } from "../rulePortRange";
+import { withForwardGroupEditLock } from "../panelKeyedLock";
 
 /**
  * 规则行上的协议封禁三列永远写 false。
@@ -243,7 +243,6 @@ const routeGroupInputSchema = z.object({
   recoverSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.recoverSeconds.min).max(ROUTE_GUARD_LIMITS.recoverSeconds.max).optional(),
   minHoldSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.minHoldSeconds.min).max(ROUTE_GUARD_LIMITS.minHoldSeconds.max).optional(),
   autoFailback: z.boolean().optional(),
-  scoreMargin: z.number().int().min(ROUTE_GUARD_LIMITS.scoreMargin.min).max(ROUTE_GUARD_LIMITS.scoreMargin.max).optional(),
   scoreHoldSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.scoreHoldSeconds.min).max(ROUTE_GUARD_LIMITS.scoreHoldSeconds.max).optional(),
   prewarmSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.prewarmSeconds.min).max(ROUTE_GUARD_LIMITS.prewarmSeconds.max).optional(),
   switchMode: z.enum(ROUTE_SWITCH_MODES).optional(),
@@ -335,7 +334,7 @@ export type NormalizeFailoverContext = {
  * 转发组模板的线路组能不能带中转。
  *
  * 模板本身不跑，跑的是每台成员机上的子规则：子规则照抄模板的路径，各自按自己的入口机在中转机上
- * 建中继（forwardGroupRepository.ensureMemberRuleForTemplate → routeGroups）。所以只要成员都是
+ * 建中继（forwardGroups/ruleSync.ts 的 ensureMemberRuleForTemplate → routeGroups）。所以只要成员都是
  * 直连主机（端口转发、主备组）就行；转发链的中转就是成员本身，隧道成员的调度在隧道出口上，都不带。
  */
 export function routeHopsAllowedForGroup(group: any): boolean {
@@ -607,7 +606,6 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
       recoverSeconds: clampGuard(routeGroup.recoverSeconds ?? base?.recoverSeconds, "recoverSeconds", template.recoverSeconds),
       minHoldSeconds: clampGuard(routeGroup.minHoldSeconds ?? base?.minHoldSeconds, "minHoldSeconds", template.minHoldSeconds),
       autoFailback: routeGroup.autoFailback ?? base?.autoFailback ?? template.autoFailback,
-      scoreMargin: clampGuard(routeGroup.scoreMargin ?? base?.scoreMargin, "scoreMargin", template.scoreMargin),
       scoreHoldSeconds: clampGuard(routeGroup.scoreHoldSeconds ?? base?.scoreHoldSeconds, "scoreHoldSeconds", template.scoreHoldSeconds),
       prewarmSeconds: clampGuard(routeGroup.prewarmSeconds ?? base?.prewarmSeconds, "prewarmSeconds", template.prewarmSeconds),
       switchMode: normalizeRouteSwitchMode(routeGroup.switchMode ?? base?.switchMode),
@@ -660,7 +658,6 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
     routePaths: serializeRoutePaths(paths),
     routeSwitchMode: policy.switchMode,
     routeFailureThreshold: policy.failureThreshold,
-    routeScoreMargin: policy.scoreMargin,
     routeScoreHoldSeconds: policy.scoreHoldSeconds,
     routePrewarmSeconds: policy.prewarmSeconds,
     routeDelivery: normalizeRouteDelivery(policy.delivery),
@@ -698,7 +695,7 @@ export function routeSchedulerHostIds(hostId: number, tunnel: any | null | undef
   const primary = routeEntryHostId(hostId, tunnel);
   if (!tunnel) return [primary];
   const ids = [primary];
-  if (dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none") {
+  if (dbBool(tunnel.loadBalanceEnabled)) {
     for (const node of exitNodes) {
       if (!node || !dbBool(node.isEnabled, true) || Number(node.hostId) <= 0 || Number(node.listenPort) <= 0) continue;
       ids.push(Number(node.hostId));
@@ -943,7 +940,6 @@ const ROUTE_RULE_COLUMNS = [
   "routeDelivery",
   "routeSwitchMode",
   "routeFailureThreshold",
-  "routeScoreMargin",
   "routeScoreHoldSeconds",
   "routePrewarmSeconds",
 ] as const;
@@ -2315,7 +2311,7 @@ async function createSniForwardGroupRuleForActor(
   options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> } = {},
 ) {
   const forwardGroupId = Number(input.forwardGroupId);
-  return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+  return withForwardGroupEditLock(forwardGroupId, async () => {
     let quotaReservation: RuleQuotaReservation | null = null;
     let backendReservation: HostPortReservation | null = null;
     try {
@@ -2532,7 +2528,7 @@ async function updateSniForwardGroupRuleForActor(
 ) {
   await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
   const forwardGroupId = Number(rule.forwardGroupId);
-  return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+  return withForwardGroupEditLock(forwardGroupId, async () => {
     const group = await db.getForwardGroupById(forwardGroupId);
     const unsupported = sniGroupUnsupportedReason(group);
     if (unsupported) throw new Error(unsupported);
@@ -2799,7 +2795,7 @@ export const crudRulesRouter = router({
       let currentUser = await db.getUserById(ctx.user.id);
       if (input.forwardGroupId) {
         const forwardGroupId = Number(input.forwardGroupId);
-        return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+        return withForwardGroupEditLock(forwardGroupId, async () => {
         const groupReservations: HostPortReservation[] = [];
         let quotaReservation: RuleQuotaReservation | null = null;
         try {
@@ -3662,7 +3658,7 @@ export const crudRulesRouter = router({
           if (groupChanged) await markTemplateChildrenPendingDelete(input.id, "forward-group-rule-route-changed");
           await db.updateForwardRule(input.id, data);
           // 模板上的「切到这条 / 交回自动」和普通规则一样记进切换记录（同一个事务：后面同步失败就不留这条）；
-          // 子规则跟着组同步拿到钉子（forwardGroupRepository.childRoutePolicyColumns），Agent 跑的是子规则。
+          // 子规则跟着组同步拿到钉子（forwardGroups/ruleSync.ts 的 childRoutePolicyColumns），Agent 跑的是子规则。
           if (failoverFieldsProvided(input) && !groupChanged) await recordRoutePinChange(rule, data);
         }));
         if (groupChanged) await db.runForwardGroupFailover(groupId);

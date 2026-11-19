@@ -33,13 +33,13 @@ func TestEntryMovesAConnectionToAnotherExitWhenTheTargetIsUnreachable(t *testing
 	brokenPort := freeTCPUDPPort(t)
 	goodPort := freeTCPUDPPort(t)
 	entryPort := freeTCPUDPPort(t)
-	exitTargetDialHook = func(listenPort int, _ helloFrame) error {
+	setExitTargetDialHook(func(listenPort int, _ helloFrame) error {
 		if listenPort == brokenPort {
 			return errors.New("simulated: no route to target")
 		}
 		return nil
-	}
-	defer func() { exitTargetDialHook = nil }()
+	})
+	defer setExitTargetDialHook(nil)
 
 	done := make(chan struct{})
 	defer close(done)
@@ -305,8 +305,8 @@ func TestTargetProbeReportsReachability(t *testing.T) {
 	if err != nil || !status.OK {
 		t.Fatalf("目标开着，探测应该说通：status=%+v err=%v", status, err)
 	}
-	exitTargetDialHook = func(int, helloFrame) error { return errors.New("simulated: refused") }
-	defer func() { exitTargetDialHook = nil }()
+	setExitTargetDialHook(func(int, helloFrame) error { return errors.New("simulated: refused") })
+	defer setExitTargetDialHook(nil)
 	status, err = probeEndpointTarget(fxpEndpointStateFor(endpoint), endpoint, cfg)
 	if err != nil || status.OK {
 		t.Fatalf("出口连不上目标，探测应该说不通：status=%+v err=%v", status, err)
@@ -342,9 +342,10 @@ func TestTargetProbeBacksOffForADownExit(t *testing.T) {
 			t.Fatalf("一直连不上，探测越来越慢，最长 60 秒：got %v want %v", got, want)
 		}
 	}
-	// 通了一次：加快确认（要连续 3 次通才算恢复），不再等 60 秒
+	// 通了一次：回到平常的间隔确认（要连续 3 次通才算恢复），不再等 60 秒。
+	// 以前是 4 秒（间隔的两倍）：一次 20 秒的中断，目标回来后要十几秒才恢复（路线图 X9）。
 	h.observe(true, 10, start.Add(10*time.Second), d)
-	if !h.down || targetProbeInterval(h, d) != 4*time.Second {
+	if !h.down || targetProbeInterval(h, d) != 2*time.Second {
 		t.Fatalf("通了一次就快一点确认恢复：down=%v interval=%v", h.down, targetProbeInterval(h, d))
 	}
 }

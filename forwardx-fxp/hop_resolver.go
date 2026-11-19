@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,19 +45,25 @@ var fxpHopResolver = struct {
 
 // resolveHopAddress 返回可直接拨号的 ip:port。已经是 IP 的原样返回。
 func resolveHopAddress(host string, port int) (string, error) {
+	return resolveHopAddressWithin(host, port, 0)
+}
+
+// resolveHopAddressWithin 和 resolveHopAddress 一样，只是现查 DNS 最多等 budget（≤ 0 表示按 fxpHopResolveTimeout）。
+// 等不及时查询在后台接着跑，查到了照样进缓存，下一次就用得上。出口拨目标用它：解析算在拨目标的时限里。
+func resolveHopAddressWithin(host string, port int, budget time.Duration) (string, error) {
 	host = strings.TrimSpace(host)
 	portText := strconv.Itoa(port)
 	if host == "" || net.ParseIP(strings.Trim(host, "[]")) != nil {
 		return net.JoinHostPort(strings.Trim(host, "[]"), portText), nil
 	}
-	ip, err := lookupHopIP(host)
+	ip, err := lookupHopIP(host, budget)
 	if err != nil {
 		return "", err
 	}
 	return net.JoinHostPort(ip.String(), portText), nil
 }
 
-func lookupHopIP(host string) (net.IP, error) {
+func lookupHopIP(host string, budget time.Duration) (net.IP, error) {
 	now := time.Now()
 	fxpHopResolver.mu.Lock()
 	entry := fxpHopResolver.entries[host]
@@ -82,7 +89,7 @@ func lookupHopIP(host string) (net.IP, error) {
 		}
 	}
 	fxpHopResolver.mu.Unlock()
-	ips, err := queryHopIPs(host)
+	ips, err := queryHopIPsWithin(host, budget)
 	if err != nil {
 		// 重载作废的结果：现查失败时旧地址照样用到 fxpHopResolveStaleMax，和到期
 		// 刷新失败时一个口径。
@@ -176,11 +183,54 @@ func storeHopIPs(host string, ips []net.IP) {
 	fxpHopResolver.entries[host] = &hopResolveEntry{ips: ips, resolvedAt: time.Now()}
 }
 
+// queryHopIPsWithin：现查，最多等 budget（≤ 0 或不短于 fxpHopResolveTimeout 时就是 queryHopIPs）。等不及就先报超时，
+// 查询在后台跑完，查到了存进缓存。
+func queryHopIPsWithin(host string, budget time.Duration) ([]net.IP, error) {
+	if budget <= 0 || budget >= fxpHopResolveTimeout {
+		return queryHopIPs(host)
+	}
+	type result struct {
+		ips []net.IP
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ips, err := queryHopIPs(host)
+		if err == nil {
+			storeHopIPs(host, ips)
+		}
+		done <- result{ips, err}
+	}()
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case r := <-done:
+		return r.ips, r.err
+	case <-timer.C:
+		return nil, &net.DNSError{Err: fmt.Sprintf("no answer within %s", budget), Name: host, IsTimeout: true}
+	}
+}
+
+// fxpHopLookupHook 只给测试用：非 nil 时代替系统解析器（后台刷新的协程可能正在读，所以是原子指针）。
+var fxpHopLookupHook atomic.Pointer[func(ctx context.Context, host string) ([]net.IPAddr, error)]
+
+func setHopLookupHook(hook func(ctx context.Context, host string) ([]net.IPAddr, error)) {
+	if hook == nil {
+		fxpHopLookupHook.Store(nil)
+		return
+	}
+	fxpHopLookupHook.Store(&hook)
+}
+
 // queryHopIPs 优先 IPv4（和标准库拨号时的默认顺序一致），其次 IPv6。
 func queryHopIPs(host string) ([]net.IP, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), fxpHopResolveTimeout)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	lookup := net.DefaultResolver.LookupIPAddr
+	if hook := fxpHopLookupHook.Load(); hook != nil {
+		lookup = *hook
+	}
+	addrs, err := lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}

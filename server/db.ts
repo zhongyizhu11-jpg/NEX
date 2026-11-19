@@ -52,6 +52,17 @@ export * from "./repositories/productStockRepository";
 export * from "./repositories/announcementRepository";
 export * from "./repositories/ticketRepository";
 export * from "./repositories/forwardGroupRepository";
+// 转发组：仓库只留组 / 成员的增删改查，评估、DDNS、健康上报、探测拓扑、子规则同步、端口在 server/forwardGroups/ 下。
+export { recordForwardGroupEvent } from "./forwardGroups/common";
+export { clearForwardGroupPublishedDdns, clearForwardGroupMirrorDdns } from "./forwardGroups/ddnsPublish";
+export { scheduleForwardGroupFailover, waitForForwardGroupPublishIdle, primeForwardGroupHostLivenessDeadlines, noteForwardGroupDatabaseRecovered, runForwardGroupsForHostAddressChange, scheduleForwardGroupsForHostHealthChange, runForwardGroupFailover, runForwardGroupFailoverSweep } from "./forwardGroups/evaluateDriver";
+export { normalizeChinaHealthTarget, ingestForwardGroupPeerReports, attachForwardGroupPeerHealth, getForwardGroupHealthConfigs, updateForwardGroupMemberChinaHealth, resetForwardGroupChinaHealth, updateForwardGroupMemberAgentHealth } from "./forwardGroups/health";
+export type { ForwardGroupMemberPeerObserver, ForwardGroupMemberPeerHealth } from "./forwardGroups/health";
+export { forwardGroupEntryPortPolicy, getForwardGroupEntryPortPolicy, getForwardGroupEntryPortRange, findAvailableForwardGroupPort, validateForwardGroupRuleConfig, filterForwardGroupFieldsForUse } from "./forwardGroups/portPolicy";
+export { getForwardGroupChainProbes, invalidateForwardGroupProbeTopology, getForwardGroupProbeTopologyForHost } from "./forwardGroups/probeTopology";
+export type { ForwardGroupChainProbe, ForwardGroupChinaHealthProbe, ForwardGroupEntryHealthProbe, ForwardGroupPeerHealthProbe, ForwardGroupProbeTopologyForHost } from "./forwardGroups/probeTopology";
+export { withForwardGroupSyncTransaction, withForwardGroupsSyncTransaction, syncForwardGroupRules } from "./forwardGroups/ruleSync";
+export { refreshForwardGroupReferences, refreshForwardGroupRuntime, restoreForwardRulesByGroupId, healAutoStoppedForwardRules, setForwardGroupEnabled } from "./forwardGroups/runtime";
 export * from "./repositories/hostProbeServiceRepository";
 export * from "./repositories/hostGroupRepository";
 export * from "./repositories/pluginRepository";
@@ -398,7 +409,7 @@ export async function syncForwardGroupRulesAfterUpgrade(version: string) {
   );
   const groupIds = Array.from(new Set(rows.map((row) => Number(row.forwardGroupId)).filter((id) => Number.isInteger(id) && id > 0)));
   // 动态引入：转发组仓库依赖一大圈 repository，而 db.ts 是它们的汇总出口，静态引入会绕成环。
-  const { syncForwardGroupRules } = await import("./repositories/forwardGroupRepository");
+  const { syncForwardGroupRules } = await import("./forwardGroups/ruleSync");
   let failed = 0;
   for (const groupId of groupIds) {
     try {

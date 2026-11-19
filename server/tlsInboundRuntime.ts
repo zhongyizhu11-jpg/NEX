@@ -117,7 +117,10 @@ export function sniInboundRevision(spec: Omit<AgentSniInbound, "revision">) {
   return createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 16);
 }
 
-function ruleProxyVersion(rule: any) {
+function ruleProxyVersion(rule: any, visitorHeaderRuleIds?: ReadonlySet<number>) {
+  // 入口本机代理要知道访客是谁（GOST 链路负载均衡：按访客固定、「连上就被关」算谁的账）：分流器先发一个 v2 头，
+  // 规则在回环上的 gost 监听收下、把访客地址写进它发给代理的头里，代理读完扔掉 —— 目标那边看不到这个头。
+  if (visitorHeaderRuleIds?.has(Number(rule?.id))) return 2;
   if (!truthy(rule?.proxyProtocolSend)) return 0;
   return Number(rule?.proxyProtocolVersion) === 2 ? 2 : 1;
 }
@@ -131,6 +134,11 @@ export function buildAgentSniInbounds(options: {
   agentVersion: string;
   inbounds: readonly TlsInboundRow[];
   rules: readonly any[];
+  /**
+   * 这台机器上由入口本机代理在几台出口之间挑的 GOST 规则（agentHeartbeatRoute 的 gostBalancePlans）：分流器给它们的
+   * 回环监听先发 PROXY v2 头带上访客地址（不然访客永远是分流器自己的 127.0.0.1，按访客固定会全落到一台出口上）。
+   */
+  visitorHeaderRuleIds?: ReadonlySet<number>;
 }): AgentSniInbound[] {
   if (!isTlsInboundAgentSupported(options.agentVersion)) return [];
   const rulesByInbound = new Map<number, any[]>();
@@ -157,7 +165,7 @@ export function buildAgentSniInbounds(options: {
           ruleId: Number(rule.id),
           backendPort,
           active,
-          proxyProtocolVersion: ruleProxyVersion(rule),
+          proxyProtocolVersion: ruleProxyVersion(rule, options.visitorHeaderRuleIds),
         });
       }
     }
@@ -165,7 +173,7 @@ export function buildAgentSniInbounds(options: {
     if (inbound.unknownSniAction === "default_rule" && inbound.defaultRuleId) {
       const rule = rules.find((item) => Number(item.id) === Number(inbound.defaultRuleId));
       if (rule && truthy(rule.isEnabled) && Number(rule.sourcePort || 0) > 0) {
-        defaultBackend = { ruleId: Number(rule.id), backendPort: Number(rule.sourcePort), proxyProtocolVersion: ruleProxyVersion(rule) };
+        defaultBackend = { ruleId: Number(rule.id), backendPort: Number(rule.sourcePort), proxyProtocolVersion: ruleProxyVersion(rule, options.visitorHeaderRuleIds) };
       }
     }
     const spec: AgentSniInbound = {

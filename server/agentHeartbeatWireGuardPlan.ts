@@ -8,7 +8,6 @@ import {
   isForwardXWireGuardV2,
 } from "./forwardXWireGuard";
 import { tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { AGENT_DYNAMIC_CACHE_MAX, tunnelRouteLogCache } from "./agentHeartbeatState";
 import { runtimeBool } from "./agentHeartbeatRuntime";
 import type { HeartbeatRequestContext, HeartbeatRow } from "./agentHeartbeatContext";
@@ -72,10 +71,8 @@ export function createForwardXWireGuardPlanner(ctx: HeartbeatRequestContext, dep
       const entryHostIds = tunnelEntryHostIds(tunnel);
       entryHostIds.forEach((hostId) => addNode(hostId));
       const hops = tunnelHopsByTunnelId.get(tunnelId) || [];
-      const extraExitNodes = normalizeExitGroupStrategy((tunnel as any).loadBalanceStrategy) === "none"
-        ? []
-        : (tunnelExitNodesByTunnelId.get(tunnelId) || [])
-          .filter((node: any) => runtimeBool(node?.isEnabled, true) && Number(node?.hostId || 0) > 0);
+      const extraExitNodes = (tunnelExitNodesByTunnelId.get(tunnelId) || [])
+        .filter((node: any) => runtimeBool(node?.isEnabled, true) && Number(node?.hostId || 0) > 0);
       if (Array.isArray(hops) && hops.length >= 2) {
         hops.forEach((hop: any, index: number) => addNode(hop?.hostId, index > 0 ? hop?.mimicPort : 0));
         const relayFailover = tunnelRelayUsesParallelRelays(tunnel, hops);

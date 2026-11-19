@@ -1,0 +1,56 @@
+[
+  {
+    "name": "round-robin-in-order",
+    "about": "轮流：一个接一个；坏了的跳过",
+    "strategy": "round_robin",
+    "members": [{ "name": "a" }, { "name": "b" }, { "name": "c" }],
+    "steps": [
+      { "picks": 6, "expect": { "exact": ["a", "b", "c", "a", "b", "c"] } },
+      { "set": { "b": "down" }, "picks": 300, "expect": { "counts": { "a": [150, 150], "c": [150, 150] }, "never": ["b"] } }
+    ]
+  },
+  {
+    "name": "round-robin-ignores-weight",
+    "about": "轮流不看权重",
+    "strategy": "round_robin",
+    "members": [
+      { "name": "a", "weight": 90 },
+      { "name": "b", "weight": 10 }
+    ],
+    "steps": [{ "picks": 200, "expect": { "counts": { "a": [100, 100], "b": [100, 100] } } }]
+  },
+  {
+    "name": "round-robin-slow-start",
+    "about": "轮流里刚恢复的成员也慢慢加量：轮到它时按几成收，没收就给下一个",
+    "strategy": "round_robin",
+    "members": [{ "name": "a" }, { "name": "b" }],
+    "steps": [
+      {
+        "about": "b 刚恢复 6 秒（一成）：大约 10 : 1",
+        "recovered": { "b": 6 },
+        "picks": 1100,
+        "expect": { "counts": { "a": [950, 1050], "b": [50, 150] } }
+      },
+      {
+        "about": "恢复满了：一人一半",
+        "recovered": { "b": 120 },
+        "picks": 200,
+        "expect": { "counts": { "a": [100, 100], "b": [100, 100] } }
+      }
+    ]
+  },
+  {
+    "name": "random-is-uniform",
+    "about": "随机：三个成员大致各三分之一，不看权重；坏了的不给",
+    "strategy": "random",
+    "members": [
+      { "name": "a", "weight": 80 },
+      { "name": "b", "weight": 10 },
+      { "name": "c", "weight": 10 }
+    ],
+    "steps": [
+      { "picks": 3000, "expect": { "counts": { "a": [880, 1120], "b": [880, 1120], "c": [880, 1120] } } },
+      { "set": { "c": "down" }, "picks": 2000, "expect": { "counts": { "a": [900, 1100], "b": [900, 1100] }, "never": ["c"] } }
+    ]
+  }
+]

@@ -348,8 +348,8 @@ test("下发给入口 Agent：三条路径按下标对齐，解析不出来的�
   assert.equal(spec.targets[2].down, true, "解析不出来的路径要标成不可用，而不是从清单里消失");
   assert.match(String(spec.targets[2].downReason), /没有入口地址/);
   assert.deepEqual(
-    { strategy: spec.strategy, threshold: spec.failureThreshold, margin: spec.scoreMargin, hold: spec.scoreHoldSeconds, prewarm: spec.prewarmSeconds, mode: spec.switchMode, preferFastest: spec.preferFastest, minHold: spec.minHoldSeconds },
-    { strategy: "fallback", threshold: 3, margin: 10, hold: 180, prewarm: 300, mode: "smooth", preferFastest: true, minHold: 600 },
+    { strategy: spec.strategy, threshold: spec.failureThreshold, hold: spec.scoreHoldSeconds, prewarm: spec.prewarmSeconds, mode: spec.switchMode, preferFastest: spec.preferFastest, minHold: spec.minHoldSeconds },
+    { strategy: "fallback", threshold: 3, hold: 180, prewarm: 300, mode: "smooth", preferFastest: true, minHold: 600 },
   );
   assert.equal(spec.schedule?.windows?.length, 1, "混合策略的时段表要下发");
 });

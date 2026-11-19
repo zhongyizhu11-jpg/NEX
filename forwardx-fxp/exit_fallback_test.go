@@ -118,29 +118,85 @@ func TestEntryFallsBackQuicklyWhenThePrimaryExitBlackHoles(t *testing.T) {
 
 	// 过了重试窗口再来一条。以前这里会重新拿用户的连接去探那个死节点，
 	// 于是又是满满一次 20 秒 —— 稳定流量下等于每隔几秒就有人卡二十秒。
-	time.Sleep(fxpFallbackRetry + 500*time.Millisecond)
+	time.Sleep(fxpRecoverProbeGap + 500*time.Millisecond)
 	third := roundTrip("窗口过后")
-	t.Logf("健康重试窗口(%v)过后再来一条：%v", fxpFallbackRetry, third.Round(time.Millisecond))
+	t.Logf("健康重试窗口(%v)过后再来一条：%v", fxpRecoverProbeGap, third.Round(time.Millisecond))
 	if third > time.Second {
 		t.Fatalf("重试窗口过后那条连接花了 %v —— 探测又跑回用户路径上了", third.Round(time.Millisecond))
 	}
 }
 
-func TestFallbackRetryBacksOffWhileAnEndpointStaysDown(t *testing.T) {
-	// 探一次连得上但不回话的出口要等满一个握手超时。固定几秒去探一次，
-	// 等于把时间都花在探一个死节点上。
-	if got := fallbackRetryDelay(1); got != fxpFallbackRetry {
-		t.Fatalf("第一次失败应该按基准等 %v，得到 %v", fxpFallbackRetry, got)
+// 连不上的出口每隔 recoverGap 探一次，不再越探越慢（阶段 2）：以前退避最长 2 分钟，出口恢复之后要等退避到期
+// 才探第一下。探测在后台协程里，等多久都不占用户连接的时间。
+func TestDownEndpointIsReprobedAtAFixedShortInterval(t *testing.T) {
+	resetFXPEndpointRegistry()
+	state := fxpEndpointStateFor(exitEndpoint{Host: "127.0.0.1", Port: 39001})
+	for round := 0; round < 8; round++ {
+		before := time.Now()
+		state.markFailure(errTestEndpointDown)
+		state.mu.Lock()
+		wait := state.tcp.retryAfter.Sub(before)
+		state.mu.Unlock()
+		if wait < fxpRecoverProbeGap-50*time.Millisecond || wait > fxpRecoverProbeGap+time.Second {
+			t.Fatalf("第 %d 次失败后应该 %v 后再探，实际 %v", round+1, fxpRecoverProbeGap, wait)
+		}
 	}
-	if fallbackRetryDelay(2) <= fallbackRetryDelay(1) {
-		t.Fatal("连着失败，间隔应该越拉越长")
+	// 规则带了「检测与切换」时按规则的来：几次不通算坏、恢复要连续通几次、多久探一次。
+	release := state.watch(config{BalanceDetect: &balanceDetectConfig{IntervalSeconds: 1, FailThreshold: 4, RecoverThreshold: 5}})
+	defer release()
+	state.mu.Lock()
+	tuning := state.tuning
+	state.mu.Unlock()
+	if tuning.fail != 4 || tuning.recover != 5 || tuning.recoverGap != time.Second {
+		t.Fatalf("探测参数应该跟着规则的检测设置：%+v", tuning)
 	}
-	if got := fallbackRetryDelay(100); got != fxpFallbackRetryMax {
-		t.Fatalf("退避要封顶在 %v，得到 %v", fxpFallbackRetryMax, got)
+	if got := fxpProbeTuningFor(config{}); got != defaultFXPProbeTuning() {
+		t.Fatalf("没带检测设置用默认：%+v", got)
 	}
-	if fxpFallbackRetryMax <= fxpHandshakeTimeout {
-		t.Fatalf("退避上限(%v)不该小于一次探测的代价(%v)，否则大半时间都在探死节点",
-			fxpFallbackRetryMax, fxpHandshakeTimeout)
+}
+
+// 出口恢复：连着 3 次探通（间隔 2 秒）就放回来 —— 黑洞结束后几秒内重新接新连接；一小时里来回断了 4 次起，
+// 要从断开算起坏满 30 秒才放回来（抖动抑制），每多断一次翻倍。
+func TestEndpointReadmissionIsQuickUnlessItFlaps(t *testing.T) {
+	resetFXPEndpointRegistry()
+	state := fxpEndpointStateFor(exitEndpoint{Host: "127.0.0.1", Port: 39002})
+	state.markFailure(errTestEndpointDown)
+	for i := 0; i < fxpRecoverProbes-1; i++ {
+		state.probeSucceeded()
+		if state.isHealthy() {
+			t.Fatal("恢复要连着三次都通")
+		}
+	}
+	state.probeSucceeded()
+	if !state.isHealthy() {
+		t.Fatal("连着三次探通应该恢复")
+	}
+	// 再断三次（一共四次）：进入抖动抑制，刚断的不会三次探通就放回来。
+	for i := 0; i < 3; i++ {
+		state.markFailure(errTestEndpointDown)
+		if i < 2 {
+			state.markHealthy()
+		}
+	}
+	for i := 0; i < fxpRecoverProbes+2; i++ {
+		state.probeSucceeded()
+	}
+	if state.isHealthy() {
+		t.Fatal("一小时里断了四次的出口，刚断就连着探通也不该马上放回来")
+	}
+	// 坏满了抖动抑制要求的时长：放回来。
+	state.mu.Lock()
+	state.tcp.downAt = time.Now().Add(-fxpEndpointFlapPolicy.Base - time.Second)
+	state.mu.Unlock()
+	state.probeSucceeded()
+	if !state.isHealthy() {
+		t.Fatal("坏满 30 秒之后探通应该恢复")
+	}
+	// 用户流量走通了（markHealthy）不受抖动抑制限制：那是真凭实据。
+	state.markFailure(errTestEndpointDown)
+	state.markHealthy()
+	if !state.isHealthy() {
+		t.Fatal("真实连接走通了应该立刻算健康")
 	}
 }
 
@@ -175,7 +231,7 @@ func TestExitSelectorKeepsAFailedEndpointOffTheUserPath(t *testing.T) {
 		t.Fatalf("探通之后没有回到首选：index=%d ok=%v", back, ok)
 	}
 	selector.states[0].mu.Lock()
-	failures := selector.states[0].failures
+	failures := selector.states[0].tcp.failures
 	selector.states[0].mu.Unlock()
 	if failures != 0 {
 		t.Fatalf("恢复健康之后失败计数没清零：%d", failures)

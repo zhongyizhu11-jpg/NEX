@@ -12,6 +12,7 @@
 import { billingCalendarParts, billingStartOfCalendarDay } from "../shared/billingTime";
 import { boolLiteral, inList, quoteIdentifier } from "./dbCompat";
 import { executeRaw, queryRaw, withDatabaseTransaction } from "./dbRuntime";
+import { isPanelBackgroundLeaseHolder } from "./panelLease";
 
 const TABLE = "user_traffic_daily";
 const BUCKET_MINUTES = 30;
@@ -125,7 +126,8 @@ export function startUserTrafficDailyJob() {
   if (jobStarted) return;
   jobStarted = true;
   const tick = () => {
-    if (rollupRunning) return;
+    // 多实例部署：汇总只由跑后台任务的实例做（server/panelLease.ts）。
+    if (rollupRunning || !isPanelBackgroundLeaseHolder()) return;
     rollupRunning = rollupUserTrafficDaily().finally(() => { rollupRunning = null; });
     rollupRunning.catch((error) => console.warn(`[UserTraffic] rollup failed: ${error instanceof Error ? error.message : String(error)}`));
   };

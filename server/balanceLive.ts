@@ -1,7 +1,6 @@
 import { getHostNamesByIds, getHostsByIds } from "./repositories/hostRepository";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
-import { getTunnelsByIds, getTunnelExitNodesByTunnelIds } from "./repositories/tunnelRepository";
-import { getForwardGroupById } from "./repositories/forwardGroupRepository";
+import { getTunnelEntryHostIds, getTunnelsByIds, getTunnelExitNodesByTunnelIds } from "./repositories/tunnelRepository";
 
 /*
   负载均衡的真实状态（2.3.539，用户：「全部排查下优化改进……不要再这么多问题了」）。
@@ -31,7 +30,16 @@ export type LiveExit = {
   jitterMs: number | null;
   lossPct: number | null;
   samples: number;
+  /**
+   * 这台出口的 UDP 那一侧（只有规则转 UDP、入口在用它时才报；NEX 隧道 FXP 2.2.145 起）：ok 探活在回；down 探活连着没回，
+   * UDP 新会话不给它；unverified 从没回过探活包（对端版本过旧，或者 UDP 一直不通），UDP 的健康只能跟着 TCP 走。没报是 null。
+   */
+  udpState: LiveUdpState | null;
+  /** 对端（出口机的 FXP）版本过旧：现在只有一种情况 —— 不回 UDP 探活包 */
+  peerOutdated: boolean;
 };
+
+export type LiveUdpState = "ok" | "down" | "unverified";
 
 export type LiveEvent = {
   at: number;
@@ -56,7 +64,7 @@ export type LiveRuleReport = {
   at: number;
 };
 
-export const BALANCE_LIVE_STALE_MS = 35_000;
+const BALANCE_LIVE_STALE_MS = 35_000;
 const MAX_REPORTS = 20_000;
 
 const reports = new Map<string, LiveRuleReport>();
@@ -77,7 +85,17 @@ function finiteOrNull(value: unknown) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-type RawExit = { hostId?: unknown; host?: unknown; port?: unknown; state?: unknown; reason?: unknown; share?: unknown; picks?: unknown; medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown };
+type RawExit = {
+  hostId?: unknown; host?: unknown; port?: unknown; state?: unknown; reason?: unknown; share?: unknown; picks?: unknown;
+  medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; udpState?: unknown; peerOutdated?: unknown;
+};
+
+const UDP_STATES: readonly LiveUdpState[] = ["ok", "down", "unverified"];
+
+function asUdpState(value: unknown): LiveUdpState | null {
+  const text = String(value || "").toLowerCase();
+  return (UDP_STATES as readonly string[]).includes(text) ? text as LiveUdpState : null;
+}
 type RawEvent = { at?: unknown; hostId?: unknown; host?: unknown; from?: unknown; to?: unknown; reason?: unknown };
 type RawRule = { tunnelId?: unknown; ruleId?: unknown; strategy?: unknown; targetAware?: unknown; exits?: unknown; events?: unknown };
 
@@ -131,8 +149,7 @@ export async function ingestBalanceLiveReport(input: {
   for (const tunnel of tunnels) {
     const groupId = Number(tunnel.entryGroupId || 0);
     if (groupId > 0 && !entryGroupMembers.has(groupId)) {
-      const group = await getForwardGroupById(groupId).catch(() => null) as { members?: Array<{ hostId?: number | null }> } | null;
-      entryGroupMembers.set(groupId, new Set((group?.members || []).map((member) => Number(member?.hostId || 0)).filter((id) => id > 0)));
+      entryGroupMembers.set(groupId, new Set(await getTunnelEntryHostIds({ entryGroupId: groupId }).catch(() => [])));
     }
   }
   const exitHostIdsByTunnel = new Map<number, number[]>();
@@ -180,6 +197,8 @@ export async function ingestBalanceLiveReport(input: {
         jitterMs: finiteOrNull(exit?.jitterMs) ?? (Number(exit?.medianMs) > 0 ? 0 : null),
         lossPct: finiteOrNull(exit?.lossPct) ?? (Number(exit?.samples) > 0 ? 0 : null),
         samples: Math.max(0, Math.floor(Number(exit?.samples || 0))),
+        udpState: asUdpState(exit?.udpState),
+        peerOutdated: exit?.peerOutdated === true,
       };
     });
     if (exits.length < 2) continue;
@@ -229,6 +248,8 @@ const pruneTimer = setInterval(() => pruneStale(Date.now()), 5 * 60_000);
 pruneTimer.unref?.();
 
 const STATE_RANK: Record<LiveExitState, number> = { active: 3, standby: 2, unstable: 1, down: 0 };
+// 几台入口合成一份时，UDP 那一侧取最差的那个（有一台入口看它不通就写不通）。
+const UDP_RANK: Record<LiveUdpState, number> = { ok: 0, unverified: 1, down: 2 };
 
 /**
  * 一条规则合起来的真实状态（入口组时几台入口各报一份，合成一份：一台出口只要有入口在往它分就算在用，
@@ -259,6 +280,8 @@ export function liveBalanceForRule(ruleId: number, nowMs = Date.now()): LiveRule
         current.reason = exit.reason;
       }
       current.picks += exit.picks;
+      if (exit.udpState && (!current.udpState || UDP_RANK[exit.udpState] > UDP_RANK[current.udpState])) current.udpState = exit.udpState;
+      current.peerOutdated ||= exit.peerOutdated;
     }
   }
   const exits = order.map((key) => merged.get(key)!);
@@ -282,8 +305,4 @@ export function liveBalanceForTunnel(tunnelId: number, nowMs = Date.now()): Live
 /** 只给测试用 */
 export function resetBalanceLiveForTest() {
   reports.clear();
-}
-
-export function setBalanceLiveReportForTest(report: LiveRuleReport) {
-  reports.set(`${report.ruleId}:${report.entryHostId}`, report);
 }

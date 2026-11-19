@@ -1,10 +1,11 @@
 import * as db from "./db";
 import { queryRaw, executeRaw, quoteDbIdentifier } from "./dbRuntime";
 import { appendPanelLog } from "./_core/panelLogger";
-import { withKeyedTaskLock } from "./keyedTaskLock";
 import { getNodePool } from "./nodePools";
 import { memberEnabledIntent } from "../shared/memberSchedule";
 import type { ForwardGroupMemberInput } from "./repositories/forwardGroupRepository";
+import { MAX_FORWARD_GROUP_MEMBERS } from "../shared/forwardGroup";
+import { withForwardGroupEditLock } from "./panelKeyedLock";
 
 const q = quoteDbIdentifier;
 
@@ -60,6 +61,43 @@ export function poolMemberPlan(existing: readonly any[], poolHostIds: readonly n
   return { members, added, removed, kept };
 }
 
+/*
+  组的成员上限（MAX_FORWARD_GROUP_MEMBERS = 20）比节点池的上限（32）小：池里的机器比组装得下的多时，
+  以前要到同步那一步才在 replaceForwardGroupMembers 里抛错，错误只出现在保存结果的 groups[].error 里，
+  池已经存成了，组的成员却没跟上（P16）。现在保存池之前先算一遍，放不下就不让存，并说清楚是哪个组、差多少；
+  已经存成这样的老数据，在节点池卡片上提示。
+*/
+
+/** 这个组按这批机器同步后放不放得下。放不下返回给人看的一句话，放得下返回 null。纯函数。 */
+export function poolGroupCapacityIssue(existing: Parameters<typeof poolMemberPlan>[0], poolHostIds: readonly number[], groupLabel: string): string | null {
+  const plan = poolMemberPlan(existing, poolHostIds);
+  if (plan.members.length <= MAX_FORWARD_GROUP_MEMBERS) return null;
+  const others = plan.members.filter((member) => member.memberType !== "host").length;
+  const room = Math.max(0, MAX_FORWARD_GROUP_MEMBERS - others);
+  return `「${groupLabel}」跟着这个节点池，组最多 ${MAX_FORWARD_GROUP_MEMBERS} 个成员${others > 0 ? `（其中 ${others} 个是不归池管的隧道成员）` : ""}，池里有 ${poolHostIds.length} 台机器放不下：把池减到 ${room} 台以内，或者先让这个组不再跟着节点池`;
+}
+
+type GroupLabelRow = { id?: unknown; name?: unknown; domain?: unknown };
+type MemberRow = Parameters<typeof poolMemberPlan>[0][number] & { groupId?: unknown };
+
+function groupLabelOf(group: GroupLabelRow) {
+  return String(group?.domain || group?.name || `组 #${group?.id}`).trim();
+}
+
+/** 保存节点池之前调：跟着它的组里有放不下这批机器的就抛错（池不保存）。新建的池没有组跟着，不用查。 */
+export async function assertPoolFitsFollowingGroups(poolId: number, hostIds: readonly number[]) {
+  const groups = await queryRaw<GroupLabelRow>(`SELECT ${q("id")}, ${q("name")}, ${q("domain")} FROM ${q("forward_groups")} WHERE ${q("poolId")} = ?`, [Number(poolId)]);
+  if (groups.length === 0) return;
+  const members = await queryRaw<MemberRow>(
+    `SELECT * FROM ${q("forward_group_members")} WHERE ${q("groupId")} IN (${groups.map(() => "?").join(", ")})`,
+    groups.map((group) => Number(group.id)),
+  );
+  for (const group of groups) {
+    const issue = poolGroupCapacityIssue(members.filter((member) => Number(member.groupId) === Number(group.id)), hostIds, groupLabelOf(group));
+    if (issue) throw new Error(issue);
+  }
+}
+
 /** 一个组按它跟着的池同步一遍成员；没跟、池没了、成员没变化都直接返回。 */
 export async function syncGroupMembersFromPool(groupId: number, reason: string): Promise<PoolGroupSyncResult> {
   const group = await db.getForwardGroupById(Number(groupId)) as any;
@@ -86,6 +124,9 @@ export async function setGroupPool(groupId: number, poolId: number | null): Prom
     const pool = await getNodePool(poolId);
     if (!pool) throw new Error("节点池不存在");
     if (pool.hostIds.length === 0) throw new Error("节点池是空的：先往池里加机器");
+    const existing = await queryRaw<MemberRow>(`SELECT * FROM ${q("forward_group_members")} WHERE ${q("groupId")} = ?`, [Number(groupId)]);
+    const issue = poolGroupCapacityIssue(existing, pool.hostIds, groupLabelOf(group));
+    if (issue) throw new Error(issue);
     // 池的主人改池就会改组的成员（同步时不再查主机权限），所以只能跟着组主人自己的池或管理员的池
     if (Number(pool.userId) !== Number(group.userId)) {
       const owner = await db.getUserById(Number(pool.userId)) as any;
@@ -104,7 +145,7 @@ export async function syncGroupsFollowingPool(poolId: number, reason: string): P
   for (const row of rows) {
     try {
       // 和在组编辑框里改成员用同一把锁：别和手动编辑同时写这个组的成员
-      results.push(await withKeyedTaskLock(`forward-group:${Number(row.id)}`, () => syncGroupMembersFromPool(Number(row.id), reason)));
+      results.push(await withForwardGroupEditLock(Number(row.id), () => syncGroupMembersFromPool(Number(row.id), reason)));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendPanelLog("warn", `[NodePool] group=${row.id} sync from pool=${poolId} failed: ${message}`);

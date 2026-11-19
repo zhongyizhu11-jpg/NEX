@@ -18,7 +18,7 @@ func TestStatsReportCarriesEffectiveSpec(t *testing.T) {
 		Strategy: "fallback", AutoFailback: true, Targets: routeTargets(3),
 		PinnedIndex: &pinned, PinnedUntil: time.Now().Add(time.Hour).UnixMilli(),
 		Schedule: schedule, MinHoldSeconds: 60, PreferFastest: true, FailureThreshold: 2,
-		FailoverSeconds: 3, RecoverSeconds: 300, ScoreMargin: 10, ScoreHoldSeconds: 30, PrewarmSeconds: 300,
+		FailoverSeconds: 3, RecoverSeconds: 300, LatencyMarginMs: 30, ScoreHoldSeconds: 30, PrewarmSeconds: 300,
 		SwitchMode: "smooth", Delivery: "hot",
 	})
 	proxy.mu.Lock()
@@ -40,7 +40,7 @@ func TestStatsReportCarriesEffectiveSpec(t *testing.T) {
 	if spec.FailureThreshold != 2 || spec.FailoverSeconds != 3 || spec.RecoverSeconds != 300 || !spec.AutoFailback {
 		t.Fatalf("切换保护没报对：%+v", spec)
 	}
-	if spec.ScoreMargin != 10 || spec.ScoreHoldSeconds != 30 || spec.PrewarmSeconds != 300 || spec.SwitchMode != "smooth" || spec.TargetCount != 3 {
+	if spec.LatencyMarginMs != 30 || spec.ScoreHoldSeconds != 30 || spec.PrewarmSeconds != 300 || spec.SwitchMode != "smooth" || spec.TargetCount != 3 {
 		t.Fatalf("其余字段没报对：%+v", spec)
 	}
 	// JSON 里没钉住要写成 null，不是省略：面板那边 undefined 和 null 的意思不一样（老 Agent 没有这份 / 机器说没钉）。

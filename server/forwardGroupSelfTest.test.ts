@@ -38,6 +38,9 @@ test("group rule tests follow active host/tunnel members and persist their selec
     };
     try {
       for (let id = 1; id <= 4; id++) await insert("hosts", { id, name: "host-" + id, ip: "198.51.100." + id, ipv4: "198.51.100." + id, userId: 1, isOnline: 1, agentToken: "token-" + id, lastHeartbeat: id === 1 ? now - 600 : now });
+      // 在线 = 连着面板、有快速存活状态；主机 1 掉线了（没有这份状态，见 server/forwardGroups/liveness.ts）。
+      const fast = await mod("server/agentFastLiveness.ts");
+      for (const id of [2, 3, 4]) fast.registerPresenceCapableHost(id);
       await insert("forward_groups", { id: 10, name: "failover", groupMode: "failover", groupType: "host", userId: 1, domain: "entry.example.test", activeMemberId: 102, isEnabled: 1, targetIp: "203.0.113.10" });
       for (const [id, hostId, priority] of [[101, 1, 0], [102, 2, 1]]) await insert("forward_group_members", { id, groupId: 10, memberType: "host", hostId, priority, isEnabled: 1 });
       const rule = { userId: 1, name: "my-rule", sourcePort: 18000, targetIp: "203.0.113.10", targetPort: 443, forwardType: "gost", protocol: "tcp", isEnabled: 1, pendingDelete: 0, forwardGroupId: 10 };
@@ -54,6 +57,7 @@ test("group rule tests follow active host/tunnel members and persist their selec
 
       // Recovery must not override the still-active member when auto-failback is off.
       await runtime.executeRaw('UPDATE "hosts" SET "lastHeartbeat" = ? WHERE "id" = 1', [now]);
+      fast.registerPresenceCapableHost(1);
       assert.equal((await start()).hostId, 2);
       await runtime.executeRaw('UPDATE "forward_groups" SET "activeMemberId" = 101 WHERE "id" = 10');
       const returned = await start();
@@ -77,6 +81,7 @@ test("group rule tests follow active host/tunnel members and persist their selec
       const unauthorized = selfTestRulesRouter.createCaller({ user: { id: 9, role: "user" }, req: { headers: {} }, res: {} });
       await assert.rejects(() => unauthorized.startSelfTest({ ruleId: 100 }), /无权操作/);
       await runtime.executeRaw('UPDATE "hosts" SET "lastHeartbeat" = ? WHERE "id" = 1', [now - 600]);
+      fast.removePresenceCapableHost(1);
       await assert.rejects(() => start(), /活动入口/, "do not probe a standby while the actual active route is still offline");
       await runtime.executeRaw('UPDATE "forward_groups" SET "activeMemberId" = 102 WHERE "id" = 10');
       await runtime.executeRaw('UPDATE "forward_rules" SET "pendingDelete" = 1 WHERE "id" = 120');
