@@ -1140,6 +1140,15 @@ export const forwardGroups = table("forward_groups", {
   ddnsLineFallback: varchar("ddnsLineFallback", { length: 16 }).notNull().default("default"),
   /** 面板在每条非默认线路上发布的值和服务商记录 ID（运行状态，JSON）。 */
   ddnsLineState: text("ddnsLineState"),
+  /**
+   * 外部观察（server/forwardGroups/evaluate.ts decideExternalHealth）：让别的机器去探成员对外的入口端口。
+   * 默认开；peerObserverHostIds 是额外指定的观察主机（JSON 数组，可空）。主备转发组、入口组才用。
+   */
+  peerProbeEnabled: boolean("peerProbeEnabled").notNull().default(true),
+  peerObserverHostIds: text("peerObserverHostIds"),
+  /** 入口组按服务商的记录权重发布（带宽聚合的份额换成权重）；ddnsWeightState 是上一次发出去的权重（运行状态，JSON）。 */
+  ddnsWeightEnabled: boolean("ddnsWeightEnabled").notNull().default(false),
+  ddnsWeightState: text("ddnsWeightState"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   activeMemberId: int("activeMemberId"),
   /** 成员跟着哪个节点池（server/nodePoolGroups.ts）；null = 手动维护。 */
@@ -1183,6 +1192,8 @@ export const forwardGroupMembers = table("forward_group_members", {
   failureSince: epoch("failureSince"),
   healthySince: epoch("healthySince"),
   lastCheckedAt: epoch("lastCheckedAt"),
+  /** 外部观察留下的状态（JSON：是否判了不可用、哪些观察点连通过它），面板重启后接着用。 */
+  externalHealth: text("externalHealth"),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

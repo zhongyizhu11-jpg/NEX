@@ -8,6 +8,7 @@ import { parseRouteLines } from "../shared/routeLines";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
 import { routeFaultCounts } from "./ops/routeFaultCounts";
 import { ignoreErrorWith } from "./ignoredError";
+import { poolGroupCapacityIssue } from "./nodePoolGroups";
 
 const q = quoteDbIdentifier;
 
@@ -294,6 +295,11 @@ export async function poolBoard(actor: { id: number; role: string }) {
       landing,
       // 跟着这个池的入口组 / 出口组（2.3.497）
       followers: groups.filter((group) => Number(group.poolId || 0) === pool.id).map((group) => String(group.domain || group.name || "")),
+      // 跟着这个池、但放不下池里这些机器的组（组最多 20 个成员）：成员没同步过去，卡片上提示。
+      followerWarnings: groups
+        .filter((group) => Number(group.poolId || 0) === pool.id)
+        .map((group) => poolGroupCapacityIssue(memberRows.filter((member) => Number(member.groupId) === Number(group.id)), pool.hostIds, String(group.domain || group.name || `组 #${group.id}`)))
+        .filter((issue): issue is string => !!issue),
       members,
       usable: members.filter((member) => member.tone === "ok").length,
       total: members.length,

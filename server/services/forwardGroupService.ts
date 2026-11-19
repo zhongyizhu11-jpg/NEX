@@ -10,6 +10,7 @@ import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../sh
 import { normalizeExitGroupStrategy, type ExitGroupStrategy } from "../../shared/exitStrategy";
 import { serializeBalanceDetect } from "../../shared/loadBalance";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
+import { serializePeerObserverHostIds } from "../forwardGroups/topology";
 import { forwardGroupMirrorRecordType, forwardGroupSupportsDualStack } from "../forwardGroupDualStackDdns";
 import { normalizeDdnsLineFallback, serializeDdnsLines, type DdnsLineFallbackMode } from "../../shared/ddnsLines";
 import {
@@ -89,6 +90,12 @@ export type ForwardGroupInput = {
   bandwidthAggregationMinMembers?: number;
   /** 分线路解析：线路成员全挂时的处理（shared/ddnsLines.ts）。 */
   ddnsLineFallback?: DdnsLineFallbackMode;
+  /** 外部观察：让别的机器探成员对外的入口端口（主备转发组、入口组）。不传 = 新建时开，编辑时不动。 */
+  peerProbeEnabled?: boolean;
+  /** 额外指定的观察主机。不传 = 编辑时不动。 */
+  peerObserverHostIds?: number[];
+  /** 入口组按服务商的记录权重发布（要先开带宽聚合）。不传 = 编辑时不动。 */
+  ddnsWeightEnabled?: boolean;
   autoFailback: boolean;
   isEnabled: boolean;
   members: ForwardGroupMemberRequest[];
@@ -315,6 +322,9 @@ async function normalizeForwardGroupInput(input: ForwardGroupInput, userId?: num
     bandwidthAggregationSlots: normalizeAggregationRecordSlots(input.bandwidthAggregationSlots),
     bandwidthAggregationMinMembers: normalizeAggregationMinMembers(input.bandwidthAggregationMinMembers),
     ddnsLineFallback: normalizeDdnsLineFallback(input.ddnsLineFallback),
+    peerProbeEnabled: input.peerProbeEnabled !== false,
+    peerObserverHostIds: groupMode === "failover" || groupMode === "entry" ? serializePeerObserverHostIds(input.peerObserverHostIds) : null,
+    ddnsWeightEnabled: bandwidthAggregationEnabled && !!input.ddnsWeightEnabled,
     autoFailback: input.autoFailback,
     isEnabled: input.isEnabled,
   };
@@ -350,6 +360,11 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
     const keep = existing.ddnsDualStack === true || existing.ddnsDualStack === 1;
     normalized.data.ddnsDualStack = keep && forwardGroupSupportsDualStack(normalized.data.groupMode, normalized.data.recordType);
   }
+  // 外部观察、按权重解析：没传的（老客户端、脚本）保持原样。
+  const truthy = (value: unknown) => value === true || value === 1 || value === "1";
+  if (input.peerProbeEnabled === undefined) normalized.data.peerProbeEnabled = existing.peerProbeEnabled === undefined || existing.peerProbeEnabled === null || truthy(existing.peerProbeEnabled);
+  if (input.peerObserverHostIds === undefined) normalized.data.peerObserverHostIds = serializePeerObserverHostIds(existing.peerObserverHostIds);
+  if (input.ddnsWeightEnabled === undefined) normalized.data.ddnsWeightEnabled = truthy(existing.ddnsWeightEnabled) && !!normalized.data.bandwidthAggregationEnabled;
   const desiredEnabled = !!normalized.data.isEnabled;
   const enabledChanged = !!existing.isEnabled !== desiredEnabled;
   const memberPriorityChanged = memberPrioritySignature((existing?.members || []) as ForwardGroupMemberRequest[])
@@ -369,6 +384,8 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
     normalizeBandwidthAggregationStrategy(group?.bandwidthAggregationStrategy),
     normalizeAggregationRecordSlots(group?.bandwidthAggregationSlots),
     normalizeAggregationMinMembers(group?.bandwidthAggregationMinMembers),
+    // 按权重解析开关变了也要重新发布一次（带上 / 收掉记录权重）
+    group?.ddnsWeightEnabled === true || group?.ddnsWeightEnabled === 1,
   ].join("|");
   const aggregationChanged = normalized.data.groupMode === "entry"
     && aggregationSignature(existing) !== aggregationSignature(normalized.data);

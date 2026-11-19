@@ -11,7 +11,6 @@
  *
  * 老值 none（只用第一个出口）在界面上显示成主备：坏了自动换下一台，比原来只用第一台更好。
  */
-
 import { isAgentVersionAtLeast } from "./version";
 
 export const BALANCE_STRATEGIES = [

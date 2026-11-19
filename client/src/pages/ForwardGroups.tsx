@@ -118,7 +118,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { BalanceDetectPanel, BalanceStrategySelect, BalanceSummaryLine } from "@/features/links/LoadBalanceFields";
-import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeBalanceStrategy, type BalanceDetect } from "@shared/loadBalance";
+import { DEFAULT_BALANCE_DETECT, UNIFIED_BALANCE_AGENT_VERSION, normalizeBalanceDetect, normalizeBalanceStrategy, type BalanceDetect } from "@shared/loadBalance";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -166,6 +166,7 @@ import {
   normalizeMemberWeight,
   type BandwidthAggregationStrategy,
 } from "@shared/bandwidthAggregation";
+import { ddnsWeightRecordTypeSupported } from "@shared/ddnsWeights";
 
 // 延迟曲线按需加载：recharts 不跟着组列表一起下，点开延迟弹窗才取。
 const GroupLatencyAreaChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.GroupLatencyAreaChart })));
@@ -229,6 +230,11 @@ type GroupForm = {
   bandwidthAggregationMinMembers: string;
   /** 分线路解析：线路成员全挂时改用默认线路的健康成员，还是删掉这条线路的记录。 */
   ddnsLineFallback: DdnsLineFallbackMode;
+  /** 入口组按服务商的记录权重发布（带宽聚合的份额换成权重）。 */
+  ddnsWeightEnabled: boolean;
+  /** 外部观察：让别的机器探成员对外的入口端口；peerObserverHostIds 是额外指定的观察主机。 */
+  peerProbeEnabled: boolean;
+  peerObserverHostIds: number[];
   autoFailback: boolean;
   isEnabled: boolean;
   members: MemberForm[];
@@ -268,6 +274,9 @@ const makeDefaultForm = (): GroupForm => ({
   bandwidthAggregationSlots: "8",
   bandwidthAggregationMinMembers: "1",
   ddnsLineFallback: "default",
+  ddnsWeightEnabled: false,
+  peerProbeEnabled: true,
+  peerObserverHostIds: [],
   autoFailback: true,
   isEnabled: true,
   members: [],
@@ -289,6 +298,18 @@ function groupModeDisplayLabel(mode: unknown) {
   if (normalized === "entry") return "入口组";
   if (normalized === "exit") return "出口组";
   return "转发组";
+}
+
+/** 组里存的观察主机清单（JSON 数组）读成数字数组。 */
+function parseObserverHostIds(raw: unknown): number[] {
+  if (Array.isArray(raw)) return raw.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0) : [];
+  } catch {
+    return [];
+  }
 }
 
 function isCollectionMode(mode: GroupMode) {
@@ -1140,6 +1161,9 @@ export function ForwardGroupsContent({
       bandwidthAggregationSlots: String(normalizeAggregationRecordSlots(group.bandwidthAggregationSlots)),
       bandwidthAggregationMinMembers: String(normalizeAggregationMinMembers(group.bandwidthAggregationMinMembers)),
       ddnsLineFallback: normalizeDdnsLineFallback(group.ddnsLineFallback),
+      ddnsWeightEnabled: !!group.ddnsWeightEnabled,
+      peerProbeEnabled: group.peerProbeEnabled === undefined || group.peerProbeEnabled === null ? true : !!group.peerProbeEnabled,
+      peerObserverHostIds: parseObserverHostIds(group.peerObserverHostIds),
       autoFailback: !!group.autoFailback,
       isEnabled: !!group.isEnabled,
       members: normalizedMembers,
@@ -1343,6 +1367,13 @@ export function ForwardGroupsContent({
   const ddnsLinesQuery = trpc.forwardGroups.ddnsLines.useQuery({ domain: null }, {
     enabled: showDialog && showLineColumn,
     staleTime: 10 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  // 入口组「按权重解析」：现在的服务商不支持时置灰并写明原因
+  const ddnsWeightSupportQuery = trpc.forwardGroups.ddnsWeightSupport.useQuery(undefined, {
+    enabled: showDialog && form.groupMode === "entry" && form.bandwidthAggregationEnabled,
+    staleTime: 60_000,
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -1631,6 +1662,9 @@ export function ForwardGroupsContent({
       bandwidthAggregationSlots: normalizeAggregationRecordSlots(form.bandwidthAggregationSlots),
       bandwidthAggregationMinMembers: normalizeAggregationMinMembers(form.bandwidthAggregationMinMembers),
       ddnsLineFallback: normalizeDdnsLineFallback(form.ddnsLineFallback),
+      ddnsWeightEnabled: isEntryGroup && form.bandwidthAggregationEnabled && form.ddnsWeightEnabled,
+      peerProbeEnabled: supportsChinaHealth ? form.peerProbeEnabled : true,
+      peerObserverHostIds: supportsChinaHealth ? form.peerObserverHostIds : [],
       // 端口转发挂了入口组：入口全由入口组定，不带自己的成员
       members: (isPortMode && form.entryGroupId ? [] : form.members).map((member, index) => ({
         memberType: member.memberType,
@@ -2176,6 +2210,11 @@ export function ForwardGroupsContent({
                       {renderGroupPolicyBadge(group)}
                     </div>
                     {renderGroupMembers(group)}
+                    {group.peerProbe?.outdatedHosts?.length ? (
+                      <p className="text-meta text-[var(--fx-warn-text)]" title="外部观察要让别的机器替面板去探成员的入口端口，Agent 太旧的机器当不了观察点" data-testid="group-peer-probe-outdated">
+                        需要升级 Agent：{group.peerProbe.outdatedHosts.map((host: { name: string }) => host.name).join("、")} 还当不了外部观察的观察点
+                      </p>
+                    ) : null}
                     {Number(group.poolId || 0) > 0 ? (
                       <p className="text-meta text-[var(--fx-accent)]" title="池里加减机器，这个组的成员跟着加减；在节点池页或编辑框里改" data-testid="group-follows-pool">
                         成员跟着节点池「{poolNameOf(Number(group.poolId))}」
@@ -2644,6 +2683,56 @@ export function ForwardGroupsContent({
                   </label>
                 )}
 
+                <div className="space-y-2 rounded-md border border-border/60 p-3" data-testid="group-peer-probe">
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="space-y-1">
+                      <span className="block text-sm font-medium">外部观察</span>
+                      <span data-fx-help="" className="block text-xs text-muted-foreground">
+                        让组里别的成员替面板去连每个成员对外的入口端口。成员自己报告正常、但两台别的机器持续连不上它，照样从解析里拿掉；
+                        面板连不上它的 Agent、别的机器却连得上，就继续留着。观察点要 Agent {UNIFIED_BALANCE_AGENT_VERSION} 以上；没有可用的观察点时只看成员自己的报告。
+                      </span>
+                    </span>
+                    <Checkbox aria-label="外部观察" checked={form.peerProbeEnabled} onCheckedChange={(peerProbeEnabled) => setForm({ ...form, peerProbeEnabled })} />
+                  </label>
+                  {form.peerProbeEnabled ? (
+                    <div className="space-y-2 border-t border-border/60 pt-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-muted-foreground">额外的观察主机</span>
+                        {form.peerObserverHostIds.length === 0 ? <span className="text-xs text-muted-foreground">没有指定（成员之间互相看）</span> : null}
+                        {form.peerObserverHostIds.map((hostId) => (
+                          <Badge key={hostId} variant="secondary" className="h-6 gap-1 rounded px-1.5 font-normal">
+                            {hostById.get(hostId)?.name || `主机 ${hostId}`}
+                            <button
+                              type="button"
+                              className="text-muted-foreground hover:text-foreground"
+                              aria-label={`移除观察主机 ${hostById.get(hostId)?.name || hostId}`}
+                              onClick={() => setForm({ ...form, peerObserverHostIds: form.peerObserverHostIds.filter((id) => id !== hostId) })}
+                            >
+                              ×
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                      {form.peerObserverHostIds.length < 8 ? (
+                        <Select
+                          value=""
+                          onValueChange={(value) => {
+                            const hostId = Number(value);
+                            if (hostId > 0 && !form.peerObserverHostIds.includes(hostId)) setForm({ ...form, peerObserverHostIds: [...form.peerObserverHostIds, hostId] });
+                          }}
+                        >
+                          <SelectTrigger aria-label="添加观察主机" className="h-8 w-full sm:w-64"><SelectValue placeholder="添加观察主机（成员少、或者想从别的网络看）" /></SelectTrigger>
+                          <SelectContent>
+                            {(hosts || [])
+                              .filter((host: { id: number }) => !form.peerObserverHostIds.includes(Number(host.id)) && !form.members.some((member) => Number(member.hostId) === Number(host.id)))
+                              .map((host: { id: number; name: string }) => <SelectItem key={host.id} value={String(host.id)}>{host.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
                 {formHasDdnsLines && (
                   <div className="space-y-2 rounded-md border border-border/60 p-3">
                     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,16rem)] sm:items-center">
@@ -2731,6 +2820,29 @@ export function ForwardGroupsContent({
                         {editingId ? (
                           <BandwidthAggregationSummary groupId={editingId} open={showDialog} />
                         ) : null}
+                        {(() => {
+                          // 按权重解析：把上面算出来的份额写成 DNS 服务商的记录权重，解析时真的按比例返回。
+                          const weightSupport = ddnsWeightSupportQuery.data;
+                          const typeReason = ddnsWeightRecordTypeSupported(form.recordType) ? null : "CNAME 一个名字只能有一条记录，没有按比例一说，用不了按权重解析";
+                          const disabledReason = typeReason || (weightSupport && !weightSupport.supported ? weightSupport.reason : null);
+                          return (
+                            <label className="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                              <span className="space-y-1">
+                                <span className="block text-sm font-medium">按权重解析</span>
+                                <span data-fx-help="" className="block text-xs text-muted-foreground">
+                                  把上面的份额写成 DNS 服务商的记录权重，解析时按比例返回各个入口（腾讯云 DNSPod、阿里云 DNS、华为云 DNS 支持；只管默认线路）。
+                                </span>
+                                {disabledReason ? <span className="block text-xs text-[var(--fx-warn-text)]" data-testid="ddns-weight-unsupported">{disabledReason}</span> : null}
+                              </span>
+                              <Checkbox
+                                aria-label="按权重解析"
+                                checked={form.ddnsWeightEnabled && !disabledReason}
+                                disabled={!!disabledReason}
+                                onCheckedChange={(ddnsWeightEnabled) => setForm({ ...form, ddnsWeightEnabled })}
+                              />
+                            </label>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>

@@ -10,6 +10,12 @@
     开了国内探测还有 chinaHealthStatus —— 用这些。
   · 没被用着的转发组、入口组、出口组、端口组没有成员级探测，库里那份健康是旧的：只看主机
     在不在线（隧道成员没有主机，就不画点）。
+  · 外部观察（主备转发组、入口组，member.peerHealth）：别的机器替面板去探这个成员对外的入口端口。
+    上面那些都是「成员自己报告的」，这一项是「别人看到的」，两样分开说：
+      自己报告正常、外部连不上  → 访客连不上，红点「外部不通」；
+      面板连不上它、外部连得上  → 访客还能用，黄点「面板连不上」，解析里继续留着；
+      都正常                    → 悬停里多一句「外部观察 N/M 可达」。
+    没有可用的观察点（单成员组、别的成员 Agent 太旧）时只看成员自己的报告，悬停里说明。
 */
 
 export type MemberLiveTone = "healthy" | "degraded" | "down" | "off" | "unknown";
@@ -27,6 +33,18 @@ type LiveGroup = {
   isEnabled?: unknown;
   templateRuleCount?: unknown;
   chinaHealthCheckEnabled?: unknown;
+  /** 外部观察在这个组上的情况（只有管理员的列表里带）：active = 有成员被观察着。 */
+  peerProbe?: { active?: unknown; outdatedHosts?: Array<{ id?: unknown; name?: unknown }> | null } | null;
+};
+
+export type MemberPeerHealth = {
+  state?: unknown;
+  down?: unknown;
+  reachableWhileAgentOffline?: unknown;
+  reachableCount?: unknown;
+  usableCount?: unknown;
+  assignedCount?: unknown;
+  label?: unknown;
 };
 
 type LiveMember = {
@@ -38,6 +56,7 @@ type LiveMember = {
   chinaHealthStatus?: unknown;
   chinaHealthLatencyMs?: unknown;
   host?: { isOnline?: unknown } | null;
+  peerHealth?: MemberPeerHealth | null;
 };
 
 const flag = (value: unknown, fallback = false) => value === undefined || value === null ? fallback : value === true || value === 1 || value === "1" || value === "true";
@@ -58,6 +77,32 @@ export function describeMemberLive(group: LiveGroup, member: LiveMember): Member
   if (!flag(group.isEnabled, true)) return null;
   if (!flag(member.isEnabled, true)) return { tone: "off", note: null, title: "已停用" };
   if (flag(member.scheduleSuspended)) return { tone: "off", note: "时段外", title: "时段外暂停，到点自己回来" };
+  const self = describeMemberSelfReport(group, member);
+  const peer = member.peerHealth || null;
+  const peerLabel = peer ? String(peer.label || "").trim() : "";
+  if (!peer || Number(peer.assignedCount || 0) <= 0) {
+    // 这个组开着外部观察，但这个成员没有可用的观察点：只看它自己的报告，说一声。
+    if (self && group.peerProbe && String(group.groupMode || "failover") !== "exit" && self.tone !== "off") {
+      return { ...self, title: `自己报告：${self.title}；没有可用的观察点，只看成员自己的报告` };
+    }
+    return self;
+  }
+  if (flag(peer.reachableWhileAgentOffline)) {
+    return { tone: "degraded", note: "面板连不上", title: `自己报告：面板连不上这台的 Agent；${peerLabel}，访客还能用，继续留在解析里` };
+  }
+  if (!self || self.tone === "down" || self.tone === "off") return self ? { ...self, title: `自己报告：${self.title}；${peerLabel}` } : self;
+  const state = String(peer.state || "");
+  if (flag(peer.down) || state === "down") {
+    return { tone: "down", note: "外部不通", title: `自己报告：${self.title}；${peerLabel}：别的机器连不上它的入口端口，按不可用处理` };
+  }
+  if (state === "failing") {
+    return { tone: "degraded", note: "外部不通", title: `自己报告：${self.title}；${peerLabel}：别的机器连不上它的入口端口，观察中` };
+  }
+  return { ...self, title: `自己报告：${self.title}；${peerLabel}` };
+}
+
+/** 只看成员自己这一侧（主机在线、面板按它的子规则探测算的健康）。 */
+function describeMemberSelfReport(group: LiveGroup, member: LiveMember): MemberLiveState | null {
   const host = member.host || null;
   if (host && host.isOnline !== undefined && !flag(host.isOnline)) return { tone: "down", note: "离线", title: "主机离线" };
   if (groupHasMemberProbes(group)) {
@@ -92,7 +137,7 @@ export function summarizeGroupLive(group: LiveGroup, members: LiveMember[]): Gro
   const down = known.filter((state) => state.tone === "down").length;
   const degraded = known.length - healthy - down;
   if (states.length === 1 && healthy === 1) return null;
-  const parts = [`${down > 0 ? `${down} 个不可用` : ""}`, `${degraded > 0 ? `${degraded} 个国内不通` : ""}`, `${states.length - known.length > 0 ? `${states.length - known.length} 个等检测` : ""}`].filter(Boolean);
+  const parts = [`${down > 0 ? `${down} 个不可用` : ""}`, `${degraded > 0 ? `${degraded} 个部分不通` : ""}`, `${states.length - known.length > 0 ? `${states.length - known.length} 个等检测` : ""}`].filter(Boolean);
   return {
     text: `${healthy}/${states.length} 正常`,
     tone: healthy === 0 ? "down" : healthy < states.length ? "warn" : "ok",

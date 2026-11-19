@@ -728,6 +728,10 @@ const tables: TableDef[] = [
       // 分线路解析（shared/ddnsLines.ts）：线路成员全挂时回落到默认线路还是删掉线路记录；
       // ddnsLineState 是面板在每条非默认线路上写了什么、服务商记录 ID（运行状态）。
       c("ddnsLineFallback", "varchar", { length: 16, notNull: true, default: "default" }), c("ddnsLineState", "text"),
+      // 外部观察（别的机器探成员的入口端口，server/forwardGroups/）：默认开；peerObserverHostIds 是额外指定的观察主机（JSON）。
+      c("peerProbeEnabled", "bool", { notNull: true, default: true }), c("peerObserverHostIds", "text"),
+      // 入口组按服务商记录权重发布；ddnsWeightState 是上一次发出去的权重（运行状态）。
+      c("ddnsWeightEnabled", "bool", { notNull: true, default: false }), c("ddnsWeightState", "text"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("activeMemberId", "int"), c("lastDdnsValue", "text"),
       // 成员跟着哪个节点池（2.3.497）：设了就由 server/nodePoolGroups.ts 按池里的机器同步主机成员
       c("poolId", "int"),
@@ -751,6 +755,8 @@ const tables: TableDef[] = [
       // 线路按时间段启用（shared/memberSchedule.ts）：可用时段，和「是时段让它停的」标记。
       c("activeSchedule", "text"), c("scheduleSuspended", "bool", { notNull: true, default: false }),
       c("lastLatencyMs", "int"), c("chinaHealthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }), c("chinaHealthLatencyMs", "int"), c("chinaHealthCheckedAt", "epoch"), c("failureSince", "epoch"), c("healthySince", "epoch"), c("lastCheckedAt", "epoch"),
+      // 外部观察留下的状态（JSON：是否判了不可用、哪些观察点连通过它）。
+      c("externalHealth", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["groupId", "priority"], ["ruleId"], ["hostId"], ["tunnelId"]],

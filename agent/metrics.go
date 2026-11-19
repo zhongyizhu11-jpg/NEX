@@ -2262,6 +2262,7 @@ func executeTCPingTaskWithProbes(
 		}
 	}
 	applyForwardGroupHealthDecision(task, measurement.Reachable, payload, time.Now())
+	applyForwardGroupPeerProbeReport(task, measurement.Reachable, payload)
 	return tcpingTaskResult{Kind: task.Kind, Payload: payload}
 }
 
