@@ -41,7 +41,7 @@ import {
 } from "./topology";
 import { LooseRow, chainEntryMembers, ddnsValueForHostByRecordType, entryAddressForHost, forwardChainTargetLabel, hostDisplayLabel, normalizeForwardGroupRecordType, sortedMembers, supportsChinaHealthMode } from "./common";
 import { getForwardGroupById, getForwardGroupPrimaryTemplateRule, resolveChainConnectHost } from "../repositories/forwardGroupRepository";
-import { normalizeChinaHealthTarget } from "./health";
+import { normalizeChinaHealthTarget } from "./healthTarget";
 
 export type ForwardGroupChainProbe = {
   groupId: number;
