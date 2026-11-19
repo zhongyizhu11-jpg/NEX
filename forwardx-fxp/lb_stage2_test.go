@@ -1,9 +1,6 @@
 package main
 
 import (
-	"errors"
-	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"strconv"
@@ -481,19 +478,4 @@ func TestBlackholedExitNeverFailsANewTCPConnection(t *testing.T) {
 			}
 		})
 	}
-}
-
-var errStage2 = errors.New("stage2")
-
-func stage2Echo(t *testing.T, conn net.Conn, payload string, wait time.Duration) (string, error) {
-	t.Helper()
-	_ = conn.SetDeadline(time.Now().Add(wait))
-	if _, err := conn.Write([]byte(payload)); err != nil {
-		return "", err
-	}
-	buf := make([]byte, len(payload))
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return "", fmt.Errorf("%w: %v", errStage2, err)
-	}
-	return string(buf), nil
 }

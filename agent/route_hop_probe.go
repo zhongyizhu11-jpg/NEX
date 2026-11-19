@@ -523,11 +523,6 @@ func windowMinLocked(state *routeHopProbeState) float64 {
 	return min
 }
 
-// record 兼容老的调用（测试里用）：一次普通的主动结果。
-func (r *routeHopProbeRunner) record(state *routeHopProbeState, ok bool, latencyMs float64) {
-	r.recordSample(state, routeHopSample{ms: latencyMs, ok: ok})
-}
-
 // recordSample 记一次结果；翻转了记进 changed，下一次 flush 立刻报。
 func (r *routeHopProbeRunner) recordSample(state *routeHopProbeState, sample routeHopSample) {
 	r.mu.Lock()

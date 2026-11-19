@@ -6,8 +6,7 @@ import { getSetting, setSetting } from "./repositories/settingsRepository";
 import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
-import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
-import { DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, type BalanceDetect } from "../shared/loadBalance";
+import { type BalanceDetect, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeExitGroupStrategy } from "../shared/loadBalance";
 import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
 
 /*
@@ -299,7 +298,7 @@ function truthy(value: unknown) {
 
 /** 这条链路是不是「几台出口一起分」的负载均衡。 */
 export function tunnelBalancesExits(tunnel: TunnelRow | null | undefined) {
-  return !!tunnel && truthy(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none";
+  return !!tunnel && truthy(tunnel.loadBalanceEnabled);
 }
 
 /** 链路的检测参数（没设 = 默认值）。 */
@@ -533,6 +532,15 @@ export type ExitTargetExitSummary = {
   slowerMs: number | null;
   /** 数据从哪来：traffic = 真实连接的内核 RTT，probe = 主动探测（多数规则是哪种就写哪种） */
   source: "traffic" | "probe" | null;
+  /**
+   * UDP 那一侧（只有入口真实上报、规则转 UDP 时有）：几条规则里 UDP 探活在回 / 不通 / 从没回过。三个都是 0 = 没有 UDP 规则
+   * 或者没报（GOST 的 UDP 跟着出口机走，不单独报）。
+   */
+  udpOk: number;
+  udpDown: number;
+  udpUnverified: number;
+  /** 出口机的 FXP 版本过旧（不回 UDP 探活包）：弹窗写「对端版本过旧」 */
+  peerOutdated: boolean;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -573,7 +581,7 @@ function exitTargetScore(state: ExitTargetState | undefined) {
 */
 const excludedMemoByRule = new Map<number, { key: string; at: number }>();
 const lastFlipAt = new Map<string, number>();
-export const EXIT_TARGET_FLIP_REPEAT_MS = 30_000;
+const EXIT_TARGET_FLIP_REPEAT_MS = 30_000;
 // 用到时才建：exitTargetPush → agentEvents 那一串模块会绕回来引用这个文件，模块加载时还拿不到这个类。
 let flipPushesInstance: ExitTargetPushDebouncer | null = null;
 function flipPushes() {
@@ -593,7 +601,7 @@ export function setExitTargetPushDebouncerForTest(debouncer: ExitTargetPushDebou
   面板跑得越久扫得越慢。半小时没再报过的（规则 / 链路 / 出口已经不在，或者不再走负载均衡）清掉；
   每分钟最多清一次。平时值（baselines）另有三天的期限，不在这里清。
 */
-export const EXIT_TARGET_FORGET_MS = 30 * 60_000;
+const EXIT_TARGET_FORGET_MS = 30 * 60_000;
 const EXIT_TARGET_PRUNE_EVERY_MS = 60_000;
 let lastPrunedAt = 0;
 
@@ -792,6 +800,10 @@ export function exitTargetSummaryForTunnel(
         baselineRules: entry.baselines.length,
         slowerMs: entry.slower > 0 ? entry.slower : null,
         source: entry.traffic + entry.probe === 0 ? null : entry.traffic >= entry.probe ? "traffic" : "probe",
+        udpOk: 0,
+        udpDown: 0,
+        udpUnverified: 0,
+        peerOutdated: false,
       };
     }),
     targetIssues,
@@ -825,7 +837,7 @@ function exitTargetSummaryFromLive(
   const names = (hostIds: number[]) => hostIds.map(nameOf).join("、");
   const perExit = new Map(ids.map((hostId) => [hostId, {
     rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
-    baselines: [] as number[], slower: 0, picks: 0,
+    baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
   }]));
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
   const hows = new Map<string, number>();
@@ -844,6 +856,10 @@ function exitTargetSummaryFromLive(
       else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
       if (exit.state === "active") entry.activeRules += 1;
       entry.picks += exit.picks;
+      if (exit.udpState === "ok") entry.udpOk += 1;
+      else if (exit.udpState === "down") entry.udpDown += 1;
+      else if (exit.udpState === "unverified") entry.udpUnverified += 1;
+      entry.peerOutdated ||= exit.peerOutdated;
       if (exit.state !== "down" && exit.medianMs != null) entry.medians.push(exit.medianMs);
       if (exit.state !== "down" && exit.jitterMs != null) entry.jitters.push(exit.jitterMs);
       if (exit.lossPct != null) entry.losses.push(exit.lossPct);
@@ -906,6 +922,10 @@ function exitTargetSummaryFromLive(
         baselineRules: entry.baselines.length,
         slowerMs: entry.slower > 0 ? entry.slower : null,
         source: entry.rules === 0 ? null : entry.picks > 0 ? "traffic" : "probe",
+        udpOk: entry.udpOk,
+        udpDown: entry.udpDown,
+        udpUnverified: entry.udpUnverified,
+        peerOutdated: entry.peerOutdated,
       };
     }),
     targetIssues,
@@ -986,7 +1006,7 @@ export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.no
 }
 
 /** 入口上报的真实状态 → 「流量没走主出口时，在用的是哪几台」。主出口在用（或都不能用）时 null。 */
-export function activeExitFromLive(live: LiveRuleReport) {
+function activeExitFromLive(live: LiveRuleReport) {
   const primary = live.exits[0];
   if (!primary) return null;
   const active = live.exits.filter((exit) => exit.state === "active" && exit.hostId > 0);
@@ -1019,25 +1039,6 @@ export type RuleExitTargetSummary = {
   bad: Array<{ hostId: number; hostName: string; reason: "down" | "unstable"; medianMs: number | null; jitterMs: number | null; lossPct: number | null }>;
   allBad: boolean;
 };
-
-/** 规则卡上那一句用：几台出口、哪几台有问题、是不是全都有问题。 */
-export function summarizeRuleExitTargets(ruleId: number, tunnel: TunnelRow | null | undefined, exitHostIds: readonly number[], nowMs = Date.now()): RuleExitTargetSummary | null {
-  if (!tunnelBalancesExits(tunnel) || exitHostIds.length < 2) return null;
-  const detect = tunnelBalanceDetect(tunnel);
-  const fresh = exitTargetStatesForRule(ruleId, nowMs).filter((state) => exitHostIds.includes(state.hostId));
-  if (fresh.length === 0) return null;
-  const bad = fresh
-    .filter((state) => state.down || exitTargetUnstable(state, detect))
-    .map((state) => ({
-      hostId: state.hostId,
-      hostName: state.hostName,
-      reason: (state.down ? "down" : "unstable") as "down" | "unstable",
-      medianMs: state.medianMs ?? state.latencyMs,
-      jitterMs: state.jitterMs,
-      lossPct: state.lossPct,
-    }));
-  return { total: exitHostIds.length, reporting: fresh.length, bad, allBad: bad.length > 0 && bad.length >= fresh.length && fresh.length >= exitHostIds.length };
-}
 
 /**
  * 给规则的流量 / 延迟汇总行补上「各台出口到目标」：exitTargetTotal（报上来的出口数，≥2 才有）、
@@ -1133,7 +1134,7 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
  * 规则卡上那一句话。没有问题返回 null。
  * gost：GOST 隧道只能把连不上的出口摘掉，抖动、丢包没法少分，只写出来。
  */
-export function describeRuleExitTargetSummary(summary: RuleExitTargetSummary | null, gost = false): string | null {
+function describeRuleExitTargetSummary(summary: RuleExitTargetSummary | null, gost = false): string | null {
   if (!summary || summary.bad.length === 0) return null;
   if (summary.allBad) return `${summary.total} 台出口都连不好目标：多半是目标本身的问题，换出口没用`;
   const parts = summary.bad.map((item) => {

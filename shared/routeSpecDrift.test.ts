@@ -87,7 +87,7 @@ test("时段表、最短驻留、备用怎么候着、阈值的差异各报各�
 test("Agent 报的原始 JSON：null 是没钉、省略的时段表是没有、老 Agent 没报就是 null", () => {
   assert.equal(parseRouteAgentSpec(undefined), null);
   assert.equal(parseRouteAgentSpec("x"), null);
-  const spec = parseRouteAgentSpec({ pinnedIndex: null, minHoldSeconds: 60, preferFastest: true, strategy: "fallback", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 2, scoreMargin: 10, scoreHoldSeconds: 30, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 });
+  const spec = parseRouteAgentSpec({ pinnedIndex: null, minHoldSeconds: 60, preferFastest: true, strategy: "fallback", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 2, scoreHoldSeconds: 30, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 });
   assert.ok(spec);
   assert.equal(spec.pinnedIndex, null);
   assert.equal(spec.schedule, null);

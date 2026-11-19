@@ -304,20 +304,7 @@ func TestLineSpreadAutoPrefersIdleLanding(t *testing.T) {
 	}
 }
 
-// 负载扣分：70% 以下不扣，95% 起扣满 15 分，中间线性；扣不到负数。
-func TestRouteLoadPenalty(t *testing.T) {
-	cases := map[float64]float64{0: 0, 69.9: 0, 70: 0, 82.5: 7.5, 95: 15, 100: 15, -5: 0, math.NaN(): 0}
-	for load, want := range cases {
-		if got := routeLoadPenalty(load); math.Abs(got-want) > 1e-9 {
-			t.Errorf("负载 %v 应扣 %v 分，拿到 %v", load, want, got)
-		}
-	}
-	if score, ok := routeScore(650, true, 9.5, 240, 0, true, 99); !ok || score != 0 {
-		t.Fatalf("本来就 0 分的扣完还是 0：%d %v", score, ok)
-	}
-}
-
-// 面板给的负载是运行时提示：不进签名、不落盘，applyRelayHintsLocked 换上就生效，评分跟着扣，快照回显。
+// 面板给的负载是运行时提示：不进签名、不落盘，applyRelayHintsLocked 换上就生效，成本（和显示的分）跟着变，快照回显。
 func TestRouteLoadHintIsRuntimeOnly(t *testing.T) {
 	spec := failoverSpec{Strategy: "fallback", Targets: routeTargets(2), PreferFastest: true}
 	proxy := routeTestProxy(spec)
@@ -328,20 +315,21 @@ func TestRouteLoadHintIsRuntimeOnly(t *testing.T) {
 	}
 	before, _ := proxy.scoreLocked(1)
 	hinted := append([]failoverTarget(nil), proxy.spec.Targets...)
-	hinted[1].LoadPct = 95
+	hinted[1].LoadPct = 50
 	if failoverSignature(failoverSpec{Strategy: "fallback", Targets: hinted}) != failoverSignature(failoverSpec{Strategy: "fallback", Targets: proxy.spec.Targets}) {
 		t.Fatal("负载提示不该进签名")
 	}
 	proxy.applyRelayHintsLocked(hinted)
 	after, _ := proxy.scoreLocked(1)
-	if after != before-15 {
-		t.Fatalf("95%% 负载应扣 15 分：%d → %d", before, after)
+	// 30ms ÷ (1 − 50%) = 60ms 的成本 → 显示 94 分
+	if before != 100 || after != 94 {
+		t.Fatalf("50%% 负载：成本按 60ms 算，应当 100 → 94：%d → %d", before, after)
 	}
 	if other, _ := proxy.scoreLocked(0); other != before {
 		t.Fatalf("没给负载的那条不该变：%d → %d", before, other)
 	}
 	report := proxy.statsReportLocked()
-	if report.Targets[1].LoadPct != 95 || report.Targets[0].LoadPct != 0 {
+	if report.Targets[1].LoadPct != 50 || report.Targets[0].LoadPct != 0 {
 		t.Fatalf("快照该回显负载：%+v", report.Targets)
 	}
 	if stripped := stripFailoverRelayHints(proxy.spec); stripped.Targets[1].LoadPct != 0 {

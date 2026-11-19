@@ -5,7 +5,6 @@ import {
   BALANCE_CUSTOM_STRATEGIES,
   BALANCE_STRATEGIES,
   DEFAULT_BALANCE_DETECT,
-  balanceStrategyForLegacyRuntime,
   balanceSwitchWithinSeconds,
   describeBalanceDetectShort,
   describeBalanceEffect,
@@ -27,13 +26,6 @@ test("老值：只用第一个当主备，least_conn 当按负载，空和认不
   assert.equal(normalizeBalanceStrategy("AUTO"), "auto");
   assert.equal(normalizeBalanceStrategy(""), null);
   assert.equal(normalizeBalanceStrategy("whatever"), null);
-});
-
-test("老 FXP 不认自动 / 延迟优先，换成按负载；别的照旧", () => {
-  assert.equal(balanceStrategyForLegacyRuntime("auto"), "least_load");
-  assert.equal(balanceStrategyForLegacyRuntime("latency"), "least_load");
-  assert.equal(balanceStrategyForLegacyRuntime("weighted"), "weighted");
-  assert.equal(balanceStrategyForLegacyRuntime(null), "round_robin");
 });
 
 test("检测参数：缺的按默认补，越界的夹回范围，坏 JSON 当默认", () => {

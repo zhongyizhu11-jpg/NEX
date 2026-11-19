@@ -26,7 +26,6 @@ export const ROUTE_POLICY_RULE_FIELDS = [
   "autoFailback",
   "routeMode",
   "routeFailureThreshold",
-  "routeScoreMargin",
   "routeScoreHoldSeconds",
   "routePrewarmSeconds",
   "routeSwitchMode",

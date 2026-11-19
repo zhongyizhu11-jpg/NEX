@@ -34,14 +34,11 @@ test("tunnel probe topology follows the active exit strategy", () => {
     loadBalanceEnabled: true,
   };
   const exitNodes = [{ id: 1, hostId: 21, listenPort: 3001, isEnabled: true }];
-  const disabled = tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], exitNodes);
-  assert.equal(
-    disabled,
-    tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], [{ ...exitNodes[0], listenPort: 3999 }]),
-  );
+  // 每种分配方式都会用到备用出口（库里老的 none 是主备），备用出口变了拓扑就变
+  const fallback = tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], exitNodes);
   assert.notEqual(
-    disabled,
-    tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "round_robin" }, [], exitNodes),
+    fallback,
+    tunnelProbeTopologyKey({ ...base, loadBalanceStrategy: "none" }, [], [{ ...exitNodes[0], listenPort: 3999 }]),
   );
 });
 

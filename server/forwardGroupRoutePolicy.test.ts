@@ -267,7 +267,7 @@ function runScenario(): Outcome {
       if (response.status !== 200) throw new Error("心跳没通: " + response.status);
     };
     // 模板 300 没填的几项按缺省：连续失败 3 次、评分持续 180 秒（ROUTE_GUARD_DEFAULTS）
-    const baseSpec = { minHoldSeconds: 60, preferFastest: true, strategy: "fallback", delivery: "hot", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 3, scoreMargin: 10, scoreHoldSeconds: 180, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 };
+    const baseSpec = { minHoldSeconds: 60, preferFastest: true, strategy: "fallback", delivery: "hot", failoverSeconds: 3, recoverSeconds: 300, autoFailback: true, failureThreshold: 3, scoreHoldSeconds: 180, prewarmSeconds: 300, switchMode: "smooth", targetCount: 2 };
     await heartbeatStats({ ...baseSpec, pinnedIndex: null }, false);
     const driftStatus = await caller.routeStatus({ ruleId: 300 });
     const drift = { fields: (driftStatus?.drift?.fields || []).map((field) => [field.key, field.expected, field.actual]) };

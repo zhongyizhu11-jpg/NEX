@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { exitGroupUsesMultipleExits, normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "../shared/loadBalance";
 import {
   forwardXExitStrategy,
   planExitGroupTunnelEndpoints,
@@ -10,12 +10,13 @@ test("normalizes exit-group strategies without enabling unknown values", () => {
   assert.equal(normalizeExitGroupStrategy("fallback"), "fallback");
   assert.equal(normalizeExitGroupStrategy("IP_HASH"), "ip_hash");
   assert.equal(normalizeExitGroupStrategy("unsupported"), "round_robin");
-  assert.equal(exitGroupUsesMultipleExits("none"), false);
-  assert.equal(exitGroupUsesMultipleExits("random"), true);
+  // 老值只在一处认：none 当主备，least_conn 当按负载
+  assert.equal(normalizeExitGroupStrategy("none"), "fallback");
+  assert.equal(normalizeExitGroupStrategy("least_conn"), "least_load");
 });
 
 test("maps shared exit strategies to the NEX selector (GOST exits are picked by the entry Agent, see gostBalancePlan.test.ts)", () => {
-  assert.equal(forwardXExitStrategy("none"), "round_robin");
+  assert.equal(forwardXExitStrategy("none"), "fallback");
   assert.equal(forwardXExitStrategy("ip_hash"), "ip_hash");
 });
 

@@ -52,7 +52,6 @@ import { mapWithConcurrency } from "./asyncPool";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
 import { isTunnelRelayFailover, tunnelRelayCandidates } from "../shared/tunnelRelay";
-import { exitGroupUsesMultipleExits } from "../shared/exitStrategy";
 import { isRuleLatencyReportMethodCompatible } from "../shared/latencyProbe";
 import { completeSupportBundleHost } from "./supportBundle";
 import {
@@ -102,8 +101,7 @@ function isForwardXTunnel(tunnel: any) {
 }
 
 function tunnelUsesExtraExitHosts(tunnel: any) {
-  return !!tunnel?.loadBalanceEnabled
-    && String(tunnel?.loadBalanceStrategy || "").trim().toLowerCase() !== "none";
+  return !!tunnel?.loadBalanceEnabled;
 }
 
 async function withTrafficAccountingUserLocks<T>(userIds: number[], task: () => Promise<T>): Promise<T> {
@@ -411,7 +409,7 @@ export function tunnelProbeTargetHostId(
   }
   if (seriesKey === "primary") return Number(tunnel?.exitHostId || 0) || null;
   const exitMatch = seriesKey.match(/^exit-(\d+)$/);
-  if (exitMatch && tunnel?.loadBalanceEnabled && exitGroupUsesMultipleExits(tunnel?.loadBalanceStrategy)) {
+  if (exitMatch && tunnel?.loadBalanceEnabled) {
     const exitIndex = Number(exitMatch[1]) - 2;
     const activeExits = [...(exitNodes || [])]
       .filter((node) => node?.isEnabled !== false && Number(node?.hostId || 0) > 0 && Number(node?.listenPort || 0) > 0)

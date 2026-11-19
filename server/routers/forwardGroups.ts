@@ -11,7 +11,7 @@ import {
   updateForwardGroupFromInput,
 } from "../services/forwardGroupService";
 import { withKeyedTaskLock } from "../keyedTaskLock";
-import { EXIT_GROUP_STRATEGIES } from "../../shared/exitStrategy";
+import { BALANCE_STRATEGIES } from "../../shared/loadBalance";
 import { FORWARD_GROUP_HEALTH_CHECK_METHODS } from "../../shared/forwardGroupHealthCheck";
 import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
@@ -32,7 +32,7 @@ import {
 } from "../linkAvailabilitySummary";
 
 const failoverStrategySchema = z.enum(["fallback", "round_robin", "random", "ip_hash"]);
-const exitGroupStrategySchema = z.enum(EXIT_GROUP_STRATEGIES);
+const exitGroupStrategySchema = z.enum(BALANCE_STRATEGIES);
 const failoverTargetSchema = z.object({
   targetIp: z.string().min(1).max(253),
   targetPort: z.number().int().min(1).max(65535),

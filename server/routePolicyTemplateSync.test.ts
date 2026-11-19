@@ -79,7 +79,6 @@ function runScenario(): Outcome {
       ["recoverSeconds", 33],
       ["autoFailback", false],
       ["routeFailureThreshold", 5],
-      ["routeScoreMargin", 22],
       ["routeScoreHoldSeconds", 44],
       ["routePrewarmSeconds", 55],
       ["routeSwitchMode", "fast"],

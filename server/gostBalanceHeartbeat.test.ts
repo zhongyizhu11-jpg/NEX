@@ -98,10 +98,10 @@ test("换分配方式、手动指定：只换代理的规格，入口机的 gost
     assert.deepEqual(bundles[name].entryGost, bundles.round_robin.entryGost);
   }
   assert.deepEqual(
-    Object.fromEntries(["round_robin", "random", "weighted", "least_load", "ip_hash", "fallback", "latency", "auto"].map((name) => [name, [bundles[name].failover!.spec.strategy, bundles[name].failover!.spec.preferFastest]])),
+    Object.fromEntries(["round_robin", "random", "weighted", "least_load", "ip_hash", "fallback", "latency", "auto"].map((name) => [name, bundles[name].failover!.spec.strategy])),
     {
-      round_robin: ["round_robin", false], random: ["random", false], weighted: ["weighted", false], least_load: ["least_load", false],
-      ip_hash: ["ip_hash", false], fallback: ["fallback", false], latency: ["fallback", true], auto: ["auto", false],
+      round_robin: "round_robin", random: "random", weighted: "weighted", least_load: "least_load",
+      ip_hash: "ip_hash", fallback: "fallback", latency: "latency", auto: "auto",
     },
   );
   // 份数：线路带宽 500 / 300 / 200 → 8 : 5 : 3（和 FXP 用的同一个来源）；轮流、随机、主备不带

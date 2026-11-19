@@ -77,7 +77,6 @@ export function routeGroupRuleFields(group: RouteGroup, rule: Pick<RouteGroupRul
     routePaths: serializeRoutePaths(group.paths),
     routeSwitchMode: policy.switchMode,
     routeFailureThreshold: policy.failureThreshold,
-    routeScoreMargin: policy.scoreMargin,
     routeScoreHoldSeconds: policy.scoreHoldSeconds,
     routePrewarmSeconds: policy.prewarmSeconds,
     routeDelivery: normalizeRouteDelivery(policy.delivery),

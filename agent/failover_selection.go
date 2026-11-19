@@ -12,17 +12,25 @@ import (
 )
 
 func (p *failoverProxy) resetFastestLocked() {
-	p.fastestCandidate = -1
-	p.fastestSince = time.Time{}
+	p.challenger.Reset()
 }
 
+/*
+自动择优（主备里开了「整链最优」）：有没有一条明显更好、而且已经领先够久的。返回它的下标，没有是 -1。
+
+「明显更好」和「等多久」是 lbcore.SwitchPolicy（lbcore/switch.go）：比的是只看质量的成本
+（整链延迟 + 抖动，乘丢包 / 拨号失败系数，除以沿途主机负载留下的余量），差出延迟优先的那个门槛
+（switchPolicyLocked：规格的 LatencyMarginMs，默认 50ms）而且快出两成才算；同一条要连着领先 ScoreHoldSeconds，
+好得多的（不到一半、差出两个门槛）10 秒就换。切过去以后的来回由抖动抑制压（holdingLocked）。
+
+分层：只在还有健康出站的最优一层里择优。当前这条不在那一层（走着备用组而主组已经恢复）时不择优 ——
+交给按数组顺序切回，回到那一层的第一条健康出站。
+*/
 func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 	if !p.spec.PreferFastest || len(p.spec.Targets) < 2 {
 		return -1
 	}
 	p.ensureHealthStateLocked()
-	// 分层：只在还有健康出站的最优一层里择优。当前这条不在那一层（走着备用组而主组
-	// 已经恢复）时不择优 —— 交给按数组顺序切回，回到那一层的第一条健康出站。
 	tiered := failoverSpecTiered(p.spec)
 	bestTier := 0
 	if tiered {
@@ -37,60 +45,48 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 			return -1
 		}
 	}
-	activeScore, activeScored := p.scoreLocked(p.activeIndex)
-	activeLatency := p.chainScoreInputLocked(p.activeIndex).latencyMs
-	best := -1
-	bestScore := 0
-	bestLatency := 0
+	if !p.healthyLocked(p.activeIndex) {
+		p.resetFastestLocked()
+		return -1
+	}
+	activeCost := p.qualityCostLocked(p.activeIndex, now)
+	best, bestCost := -1, 0.0
 	for index := range p.spec.Targets {
-		if index == p.activeIndex || !p.healthyLocked(index) {
+		if index == p.activeIndex || !p.healthyLocked(index) || (tiered && *p.spec.Targets[index].Tier != bestTier) {
 			continue
 		}
-		if tiered && *p.spec.Targets[index].Tier != bestTier {
-			continue
-		}
-		// 还没法打分（没探出耗时）的不能当成「好得不得了」。
-		score, scored := p.scoreLocked(index)
-		if !scored {
-			continue
-		}
-		latency := p.chainScoreInputLocked(index).latencyMs
-		if best < 0 || score > bestScore || (score == bestScore && latency > 0 && latency < bestLatency) {
-			best, bestScore, bestLatency = index, score, latency
+		// 还没量出延迟的（成本 0）不能当成「好得不得了」。
+		if cost := p.qualityCostLocked(index, now); cost > 0 && (best < 0 || cost < bestCost) {
+			best, bestCost = index, cost
 		}
 	}
-	if best < 0 || !activeScored || !p.healthyLocked(p.activeIndex) {
+	policy := p.switchPolicyLocked()
+	better, much := policy.Better(activeCost, bestCost)
+	if best < 0 || !better {
 		p.resetFastestLocked()
 		return -1
 	}
-	better := bestScore-activeScore >= p.spec.ScoreMargin
-	if !better && activeLatency > 0 && bestLatency > 0 && bestScore >= activeScore {
-		margin := activeLatency - bestLatency
-		better = margin >= failoverFastestMarginMs && float64(margin) >= float64(activeLatency)*failoverFastestMarginRatio
-	}
-	if !better {
-		p.resetFastestLocked()
-		return -1
-	}
-	// fastestSince 是零值时必须当成「还没开始计时」。
-	//
-	// fastestCandidate 的 Go 零值是 0，所以第一次评估如果恰好选中第 0 条，
-	// `p.fastestCandidate != best` 会是 false，而 now.Sub(零时刻) 是个巨大的数 ——
-	// 持续时间那道门槛会被整个跳过，第一次探测就切。这三道门槛里最重要的一道
-	// 就这么没了，而且只在「最快的恰好是第 0 条」时发生，最难查。
-	if p.fastestCandidate != best || p.fastestSince.IsZero() {
-		p.fastestCandidate = best
-		p.fastestSince = now
-		return -1
-	}
-	hold := time.Duration(p.spec.ScoreHoldSeconds) * time.Second
-	if activeLatency > 0 && bestLatency > 0 && activeLatency-bestLatency >= failoverDramaticMarginMs && bestLatency*2 <= activeLatency && hold > failoverDramaticHold {
-		hold = failoverDramaticHold
-	}
-	if now.Sub(p.fastestSince) < hold {
+	if !p.challenger.Ready(best, now, policy.HoldFor(much)) {
 		return -1
 	}
 	return best
+}
+
+// qualityCostLocked 这条出站只看质量的成本（lbcore.QualityCost，整链延迟，见 qualityLocked）；不知道延迟是 0。
+func (p *failoverProxy) qualityCostLocked(index int, now time.Time) float64 {
+	return lbcore.QualityCost(p.qualityLocked(index, now, false))
+}
+
+// latencyMarginLocked「一样快」的门槛（毫秒）：延迟优先圈组、择优比成本、同出口 IP 算平手都用它。
+func (p *failoverProxy) latencyMarginLocked() float64 {
+	if p.spec.LatencyMarginMs > 0 {
+		return float64(p.spec.LatencyMarginMs)
+	}
+	return lbcore.DefaultLatencyMargin
+}
+
+func (p *failoverProxy) switchPolicyLocked() lbcore.SwitchPolicy {
+	return lbcore.SwitchPolicy{Margin: p.latencyMarginLocked(), Hold: time.Duration(p.spec.ScoreHoldSeconds) * time.Second}
 }
 
 /*

@@ -82,18 +82,18 @@ test("自定探测目标时第一段不算实测，整链用入口探到的那�
   assert.equal(chain.partial, false);
 });
 
-test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起染红，title 写扣了几分；老 Agent 没报就没有", () => {
+test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起染红，title 写按慢几倍算；没报就没有", () => {
   assert.equal(describeRouteLoad(null), null);
   assert.equal(describeRouteLoad(undefined), null);
-  assert.equal(describeRouteLoad(69), null, "70% 以下评分不扣，不显示");
+  assert.equal(describeRouteLoad(69), null, "70% 以下不显示");
   const warm = describeRouteLoad(85)!;
   assert.equal(warm.text, "负载 85%");
   assert.equal(warm.tone, "warn");
-  assert.equal(warm.penalty, 9);
-  assert.match(warm.title, /评分扣 9 分/);
+  assert.equal(warm.slowdown, 6.7);
+  assert.match(warm.title, /按慢 6\.7 倍算/);
   const hot = describeRouteLoad(97)!;
   assert.equal(hot.tone, "down");
-  assert.equal(hot.penalty, 15);
+  assert.equal(hot.slowdown, 20);
 });
 
 test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕，在走的那条标出来", () => {

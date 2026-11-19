@@ -1,4 +1,3 @@
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { agentSupportsUnifiedBalance, UNIFIED_BALANCE_AGENT_VERSION } from "@shared/loadBalance";
 
 /*
@@ -27,7 +26,7 @@ export function tunnelBalanceAgentIssues(
 ): TunnelBalanceAgentIssue[] {
   const mode = String(tunnel?.mode || "").trim().toLowerCase();
   if (!tunnel || mode === "forwardx" || mode === "nginx_stream") return [];
-  if (!truthy(tunnel.loadBalanceEnabled) || normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) === "none" || !(extraExitCount > 0)) return [];
+  if (!truthy(tunnel.loadBalanceEnabled) || !(extraExitCount > 0)) return [];
   const issues: TunnelBalanceAgentIssue[] = [];
   const seen = new Set<number>();
   for (const value of entryHostIds) {

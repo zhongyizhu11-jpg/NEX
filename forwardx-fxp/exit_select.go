@@ -22,9 +22,6 @@ import (
 各分配方式的算法、参数和默认值见 lbcore 各文件开头。
 */
 
-// fxpLatencyNearHold：「延迟优先」里一台出口进了「一样快」的那一组，至少留这么久（文档：切过去至少用 1 分钟）。
-const fxpLatencyNearHold = time.Minute
-
 // Float64 让选择器自己当 lbcore 的随机数来源（[0,1)）。取不到随机数时返回 0：按几成收的会收下，抽签抽到第一个。
 func (s *exitEndpointSelector) Float64() float64 {
 	value, err := s.randomValue()
@@ -212,7 +209,7 @@ func (s *exitEndpointSelector) chooseLocked(excluded map[int]bool, selectionKey 
 	s.fillMembersLocked(candidates, now)
 	options := lbcore.Options{Scratch: s.scoreBuf}
 	if s.strategy == lbcore.StrategyLatency {
-		options.Near = lbcore.NearPolicy{Margin: lbcore.DefaultLatencyMargin, Hold: fxpLatencyNearHold}
+		options.Near = lbcore.NearPolicy{Margin: lbcore.DefaultLatencyMargin, Hold: lbcore.DefaultNearHold}
 		if s.targetAware() {
 			options.Near.Margin = s.target.detect.margin
 		}

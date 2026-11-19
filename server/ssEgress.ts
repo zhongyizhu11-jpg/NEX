@@ -75,7 +75,6 @@ import { listLandingOptions } from "./landingOptions";
 import { createCredentialCipher, type CredentialCipher } from "./ipChange/secrets";
 import { restrictedForwardTargetClass, restrictedForwardTargetLabel } from "./ruleTargetPolicy";
 import { dbBool } from "./repositories/repositoryUtils";
-import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
 import type { ProxyInboundUser } from "../shared/proxyInbound";
 
 /* ── 外部链接的加密 ─────────────────────────────────────────────────── */
@@ -134,7 +133,7 @@ export function tunnelEgressDialHostIdsOf(tunnel: any, hops: readonly any[] = []
   if (!tunnel) return [];
   const lastHop = hops.length >= 2 ? hops[hops.length - 1] : null;
   const ids = [Number(tunnel.exitHostId || 0), Number(lastHop?.hostId || 0)];
-  if (dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none") {
+  if (dbBool(tunnel.loadBalanceEnabled)) {
     for (const node of exitNodes) {
       if (!dbBool(node?.isEnabled, true) || Number(node?.listenPort || 0) <= 0) continue;
       ids.push(Number(node?.hostId || 0));

@@ -19,22 +19,18 @@ lbcore/testdata/conformance 的用例卡住两边一致，这边由 lbcore_confo
 	Active       这条路径上挂着的连接；InFlight 已经挑中、还在拨的（A8）
 	Latency      自动：探测耗时（和比它慢的真实拨号）的 peak EWMA 读数 + 面板给的下游延迟；
 	             延迟优先：探测延迟的指数平均 + 下游延迟
-	Jitter、Loss 探测窗口（最近 10 分钟）的抖动、丢包 —— 和线路评分（routeScore）是同一批探测样本
-	             （抖动的算法不同：这里取「比最低延迟高出多少」的 90 分位，见 routeProbeJitter）
+	Jitter、Loss 探测窗口（最近 10 分钟）的抖动（「比最低延迟高出多少」的 90 分位，见 routeProbeJitter）、丢包
 	Success      最近 10 分钟真实连接的拨通率（不到 5 次不算）
 	Utilisation  面板给的沿途主机负载（LoadPct）
 
 八种分配方式的算法、参数和默认值见 lbcore 各文件开头。以前这里自己写了一份（按权重的平滑加权轮询、
 (连接 + 1) ÷ 权重的按负载、FNV 的 rendezvous、权重 × 延迟比 × 负载系数再随机挑两条的自动），和出口组的不一样。
 
-0–100 的线路评分（route_group.go 的 routeScore）不参与「新连接怎么分」：它是给人看的，以及主备里
-「整链最优」比分差用的；这里的成本和它用的是同一批探测结果。
+主备里的「整链最优」比的也是这里的 Quality（lbcore.QualityCost，failover_selection.go 的 fastestIndexLocked）；
+给人看的 0–100 分是同一个成本换算的（route_group.go 的 scoreLocked），不参与任何决定。
 */
 
-var (
-	routeSlowStartWindow = lbcore.DefaultSlowStart.Window
-	routeSlowStartMin    = lbcore.DefaultSlowStart.Floor
-)
+var routeSlowStartWindow = lbcore.DefaultSlowStart.Window
 
 func (p *failoverProxy) markSlowStartLocked(index int, now time.Time) {
 	if len(p.slowStartAt) != len(p.spec.Targets) {
@@ -299,7 +295,12 @@ func (p *failoverProxy) spreadPickLocked(strategy string, candidates []int, hash
 		}
 	}
 	state := p.spreadStateLocked(members, candidates, strategy == lbcore.StrategyWeighted)
-	return lbcore.Pick(strategy, state, members, keys, candidates, hashKey, now, p.randLocked(), lbcore.Options{})
+	options := lbcore.Options{}
+	if strategy == lbcore.StrategyLatency {
+		// 门槛是规格的 LatencyMarginMs（GOST 出口组带面板「检测与切换」里的那个数），和 NEX 出口组一样留组 1 分钟。
+		options.Near = lbcore.NearPolicy{Margin: p.latencyMarginLocked(), Hold: lbcore.DefaultNearHold}
+	}
+	return lbcore.Pick(strategy, state, members, keys, candidates, hashKey, now, p.randLocked(), options)
 }
 
 // ---- 在途计数（A8，见 failover_pick.go 的 pickReserved） ----

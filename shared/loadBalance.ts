@@ -1,16 +1,13 @@
 /**
  * 统一的负载均衡：分配方式 + 检测与切换（2026-11 用户要求「所有负载均衡统一成一套」）。
  *
- * 链路负载均衡（隧道多出口）、出口组、线路组线路里的几个落地都用这一套：同一个下拉框、同一组检测参数、
- * 同一句「实际效果」。转发组 / 入口组靠改 DNS 切换，只用得上其中几项（见 BALANCE_DNS_STRATEGIES）。
+ * 链路负载均衡（隧道多出口）、出口组、线路组都用这一套：同一个下拉框、同一组检测参数、同一句「实际效果」。
+ * 转发组 / 入口组靠改 DNS 切换，只用得上检测参数和主备。
  *
- * 分配方式的值和数据库、Agent、FXP 里的一致（老的五种照旧，新加 auto / latency）：
- *
- *   常用    auto（自动）、fallback（主备）、ip_hash（按访客固定）
- *   自定义  latency（延迟优先）、least_load（按负载）、weighted（按权重）、round_robin（轮流）、random（随机）
- *
- * 老值 none（只用第一个出口）在界面上显示成主备：坏了自动换下一台，比原来只用第一台更好。
+ * 分配方式的值和数据库、Agent、FXP 里的一致，算法只有一份（lbcore，docs/dev/scheduler-spec.md）。
+ * 库里老的值只在 normalizeBalanceStrategy 一处认：none（只用第一个出口）当主备，least_conn 当按负载。
  */
+import { proxyLoadBalanceWeights } from "./linkWeights";
 import { isAgentVersionAtLeast } from "./version";
 
 export const BALANCE_STRATEGIES = [
@@ -33,15 +30,16 @@ export type BalanceStrategy = (typeof BALANCE_STRATEGIES)[number];
 */
 export const BALANCE_COMMON_STRATEGIES: readonly BalanceStrategy[] = ["auto"];
 export const BALANCE_CUSTOM_STRATEGIES: readonly BalanceStrategy[] = ["latency", "fallback", "ip_hash", "least_load", "weighted", "round_robin", "random"];
-/** 转发组靠 DNS 切换：DNS 只能指向「当前这一台」，分不了连接。 */
-export const BALANCE_DNS_STRATEGIES: readonly BalanceStrategy[] = ["fallback"];
 
+/*
+  每种方式一句话，说的是代码真实的做法（Agent 和 FXP 共用的 lbcore）。坏了的所有方式都会避开，这里不重复。
+*/
 export const BALANCE_STRATEGY_LABELS: Record<BalanceStrategy, { label: string; hint: string }> = {
-  auto: { label: "自动", hint: "综合延迟、抖动、负载和带宽，新连接给最好的那台" },
-  fallback: { label: "主备", hint: "按顺序用第一台，坏了或一直抖才换下一台" },
-  ip_hash: { label: "按访客固定", hint: "同一个 IP 一直走同一台，适合要保持登录的服务" },
-  latency: { label: "延迟优先", hint: "只看延迟和抖动，最快最稳的那台多分" },
-  least_load: { label: "按负载", hint: "新连接给现在最闲的那台" },
+  auto: { label: "自动", hint: "延迟、抖动、丢包、正在走的连接和带宽占用合成一个数，新连接给最划算的那台；刚变慢、变忙的立刻少分" },
+  fallback: { label: "主备", hint: "按顺序只用第一台，坏了换下一台，好了再切回来" },
+  ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一台（那台坏了才换），适合要保持登录的服务" },
+  latency: { label: "延迟优先", hint: "只在最快的那几台里分：比最快的慢不到设定的毫秒数算一样快，慢出这么多的不分" },
+  least_load: { label: "按负载", hint: "新连接给现在最闲的那台：看连接数，填了线路带宽的还看流量占了带宽几成" },
   weighted: { label: "按权重", hint: "按每台的权重分，例如 5 : 3 : 2" },
   round_robin: { label: "轮流", hint: "新连接一台一台轮着走" },
   random: { label: "随机", hint: "新连接随机挑一台能用的" },
@@ -56,9 +54,30 @@ export function normalizeBalanceStrategy(value: unknown): BalanceStrategy | null
   return (BALANCE_STRATEGIES as readonly string[]).includes(raw) ? raw as BalanceStrategy : null;
 }
 
-export function balanceStrategyLabel(value: unknown) {
-  const strategy = normalizeBalanceStrategy(value);
-  return strategy ? BALANCE_STRATEGY_LABELS[strategy].label : "未选择";
+/** 链路 / 出口组上存的分配方式 → 统一的分配方式；空的、认不出的按轮流（数据库的默认值）。 */
+export function normalizeExitGroupStrategy(value: unknown): BalanceStrategy {
+  return normalizeBalanceStrategy(value) ?? "round_robin";
+}
+
+/**
+ * 每台出口分几份（按出口主机的线路带宽 hostBandwidthHintMbps 算，500M / 300M → [5, 3]）：按权重、按负载、自动、
+ * 延迟优先在 GOST（入口机 Agent）和 Nginx 上用。不是这几种、只有一个出口、有一台不知道带宽或都一样时返回 null（一样大）。
+ */
+export function exitGroupWeights(strategy: unknown, bandwidthsMbps: readonly number[]): number[] | null {
+  const normalized = normalizeExitGroupStrategy(strategy);
+  if (normalized !== "weighted" && normalized !== "least_load" && normalized !== "auto" && normalized !== "latency") return null;
+  return proxyLoadBalanceWeights(bandwidthsMbps);
+}
+
+/**
+ * 交给 FXP 的每台出口的线路带宽（Mbps）：按负载、自动、延迟优先拿它算利用率（流量 ÷ 线路带宽），按访客固定按它加权。
+ * 只要有一台不知道就都不给 —— 这时按负载只看连接数（FXP 那边也是要么全按带宽、要么一样大）。
+ */
+export function exitGroupCapacities(strategy: unknown, bandwidthsMbps: readonly number[]): number[] | null {
+  const normalized = normalizeExitGroupStrategy(strategy);
+  if (normalized !== "least_load" && normalized !== "ip_hash" && normalized !== "auto" && normalized !== "latency") return null;
+  if (bandwidthsMbps.length < 2 || bandwidthsMbps.some((value) => !(value > 0))) return null;
+  return bandwidthsMbps.map((value) => Math.floor(value));
 }
 
 /* ─────────────────────────── 检测与切换 ─────────────────────────── */
@@ -78,7 +97,7 @@ export type BalanceDetect = {
   failThreshold: number;
   /** 坏了以后要连续通几次才算恢复 */
   recoverThreshold: number;
-  /** 比最快的那台慢多少毫秒就少分 */
+  /** 延迟优先：比最快的那台慢不到这么多毫秒算一样快（只对延迟优先起作用） */
   latencyMarginMs: number;
   /** 抖动（最近一段延迟上下浮动的幅度）超过多少毫秒算抖 */
   jitterMs: number;
@@ -113,12 +132,6 @@ export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
   slowStart: true,
 };
 
-/** 转发组 / 入口组（靠 DNS）默认 30 秒探一次：DNS 本身要等缓存过期，探得再快也快不了多少。 */
-export const DEFAULT_DNS_BALANCE_DETECT: BalanceDetect = {
-  ...DEFAULT_BALANCE_DETECT,
-  intervalSeconds: 30,
-};
-
 /*
   检测灵敏度三档（2.3.539）：大多数人只需要选一档，不用逐项调。「均衡」就是默认值；改过任何一项就显示「自定义」。
 */
@@ -142,12 +155,10 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
 };
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
 
-/** 抖动「少分」最多降到几分之一。 */
-export const BALANCE_JITTER_REDUCED_SHARE = 0.25;
-/** 切过去至少用多久、原来那台稳定多久才回满份、一小时切几次以上放慢 —— 内置，不给调。 */
-export const BALANCE_ANTI_FLAP = { minHoldSeconds: 60, failbackStableSeconds: 300, maxSwitchesPerHour: 3, slowedHoldSeconds: 300 } as const;
-/** 判断用最近多少次探测。 */
-export const BALANCE_WINDOW_SAMPLES = 30;
+/** 抖动「少分」降到几分之一（FXP 的 fxpTargetReducedShare）。 */
+const BALANCE_JITTER_REDUCED_SHARE = 0.25;
+/** 主备切过去至少用多久（GOST 出口组的 minHoldSeconds；一小时切 3 次以上放慢是 Agent 内置的抖动抑制）—— 不给调。 */
+export const BALANCE_MIN_HOLD_SECONDS = 60;
 
 function clampInt(value: unknown, fallback: number, limits: { min: number; max: number }) {
   const number = Math.round(Number(value));
@@ -241,7 +252,8 @@ export function describeBalanceEffect(input: {
   }
   if (detect.jitterAction !== "ignore") {
     const action = detect.jitterAction === "reduce" ? `把它降到 ${Math.round(1 / BALANCE_JITTER_REDUCED_SHARE)} 分之 1` : "切走";
-    parts.push(`抖动超过 ${detect.jitterMs}ms 持续 ${detect.jitterHoldSeconds} 秒，就${action}`);
+    // 抖动这三项只有 NEX 隧道的 FXP 按它少分 / 切走；GOST 的抖动、丢包已经在自动 / 延迟优先的成本里
+    parts.push(`抖动超过 ${detect.jitterMs}ms 持续 ${detect.jitterHoldSeconds} 秒，就${action}${input.dns ? "" : "（NEX 隧道）"}`);
   }
   parts.push(`恢复要连续通 ${detect.recoverThreshold} 次${detect.slowStart ? "，1 分钟内慢慢加回满份" : ""}`);
   return `${parts.join("；")}。`;
@@ -289,10 +301,3 @@ export function balanceDetectForRuntime(value: unknown, defaults: BalanceDetect 
   return { ...detect };
 }
 
-/**
- * 交给老 FXP 的分配方式：2.2.142 之前的 FXP 不认识 auto / latency（会当轮流），换成最接近的「按负载」。
- */
-export function balanceStrategyForLegacyRuntime(value: unknown): Exclude<BalanceStrategy, "auto" | "latency"> {
-  const strategy = normalizeBalanceStrategy(value) ?? "round_robin";
-  return strategy === "auto" || strategy === "latency" ? "least_load" : strategy;
-}

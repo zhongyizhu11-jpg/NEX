@@ -7,8 +7,7 @@ import { newForwardChainBatchId } from "../forwardChainManualProbe";
 import { ENV } from "../env";
 import { normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../shared/forwardTypes";
-import { normalizeExitGroupStrategy, type ExitGroupStrategy } from "../../shared/exitStrategy";
-import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { type BalanceStrategy, normalizeExitGroupStrategy, serializeBalanceDetect } from "../../shared/loadBalance";
 import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
 import { serializePeerObserverHostIds } from "../forwardGroups/topology";
 import { forwardGroupMirrorRecordType, forwardGroupSupportsDualStack } from "../forwardGroupDualStackDdns";
@@ -50,7 +49,7 @@ export type ForwardGroupInput = {
   name: string;
   remark?: string | null;
   groupMode?: ForwardGroupMode;
-  exitStrategy?: ExitGroupStrategy;
+  exitStrategy?: BalanceStrategy;
   /** 出口组的「检测与切换」（shared/loadBalance.ts）。不传 = 不动原来的。 */
   balanceDetect?: unknown;
   entryGroupId?: number | null;

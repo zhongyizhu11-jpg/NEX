@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -86,55 +87,38 @@ func TestExitGroupSignatureCoversProbeCadenceAndRelayFlag(t *testing.T) {
 	}
 }
 
-// 延迟优先在出口组里是「主备 + 自动择优 + 恢复后切回」。择优把流量切到更快的那台以后，「恢复后切回」不许再按
-// 顺序把它拽回第一台（阶段 1 的 A1）—— 不然就是来回切。
-func TestExitGroupLatencyDoesNotPingPong(t *testing.T) {
-	spec := exitGroupSpec("fallback", 3)
-	spec.PreferFastest = true
-	spec.ScoreHoldSeconds = 30
-	proxy := routeTestProxy(spec)
-	start := time.Now()
-	// 第 2 台（下标 1）整链延迟 20ms，另外两台 200ms：明显更好
-	proxy.spec.Targets[0].ExtraLatencyMs = 190
-	proxy.spec.Targets[1].ExtraLatencyMs = 10
-	proxy.spec.Targets[2].ExtraLatencyMs = 190
-	switches := 0
-	last := proxy.activeIndex
-	for step := 0; step < 900; step++ { // 30 分钟，2 秒一轮
-		now := start.Add(time.Duration(step) * 2 * time.Second)
+// 延迟优先在出口组里和 NEX 出口组同一个意思（lbcore 的 NearSet + 自动）：整链比最快的慢不到门槛的几台一起分，
+// 慢出门槛的不分；门槛是面板「检测与切换」里的那个数（规格的 LatencyMarginMs）。
+func TestExitGroupLatencySpreadsOverTheEquallyFast(t *testing.T) {
+	build := func(extra ...int) *failoverProxy {
+		spec := exitGroupSpec("latency", len(extra))
+		spec.LatencyMarginMs = 30
+		proxy := routeTestProxy(spec)
+		now := time.Now()
 		for i := range proxy.spec.Targets {
+			proxy.spec.Targets[i].ExtraLatencyMs = extra[i]
 			proxy.stats[i].recordProbe(true, 10, now)
 			proxy.lastLatencyMs[i] = 10
 		}
-		proxy.updateFallbackActiveAtLocked(now, "health check")
-		if proxy.activeIndex != last {
-			switches++
-			last = proxy.activeIndex
-		}
+		return proxy
 	}
-	if proxy.activeIndex != 1 {
-		t.Fatalf("应当换到整链最快的第 2 台并留在上面，现在走第 %d 台", proxy.activeIndex+1)
-	}
-	if switches != 1 {
-		t.Fatalf("30 分钟里应当只切一次（换到最快的那台），实际切了 %d 次", switches)
-	}
-	// 三台一样快：谁也不比谁明显好，留在现在这台上
-	even := routeTestProxy(func() failoverSpec {
-		s := exitGroupSpec("fallback", 3)
-		s.PreferFastest = true
-		s.ScoreHoldSeconds = 30
-		return s
-	}())
-	for step := 0; step < 300; step++ {
-		now := start.Add(time.Duration(step) * 2 * time.Second)
-		for i := range even.spec.Targets {
-			even.stats[i].recordProbe(true, 10, now)
-			even.lastLatencyMs[i] = 10
+	count := func(proxy *failoverProxy, n int) []int {
+		counts := make([]int, len(proxy.spec.Targets))
+		for i := 0; i < n; i++ {
+			// 挑中了就占着（在途），自动的成本里算得到负载
+			_, index, _ := proxy.pickReserved("", nil, false)
+			counts[index]++
 		}
-		even.updateFallbackActiveAtLocked(now, "health check")
-		if even.activeIndex != 0 {
-			t.Fatalf("三台一样快时不该换（第 %d 轮换到了第 %d 台）", step, even.activeIndex+1)
-		}
+		return counts
+	}
+	// 整链 200 / 20 / 200：只有第 2 台算快
+	if counts := count(build(190, 10, 190), 60); counts[1] != 60 {
+		t.Fatalf("慢出门槛的不该分到：%v", counts)
+	}
+	// 整链 20 / 35 / 200：差 15ms 在 30ms 的门槛内，前两台一起分，第 3 台不分
+	counts := count(build(10, 25, 190), 60)
+	if counts[0] == 0 || counts[1] == 0 || counts[2] != 0 {
+		t.Fatalf("一样快的两台都该分到、慢的不分：%v", counts)
 	}
 }
 
@@ -497,19 +481,19 @@ func TestExitGroupReportsCumulativePicksAndRecentShare(t *testing.T) {
 
 // 面板下发的规格（server/gostBalancePlan.ts 的字段名）Agent 都认得。
 func TestExitGroupSpecJSONFields(t *testing.T) {
-	raw := `{"enabled":true,"listenPort":41001,"bindAddress":"127.0.0.1","protocol":"both","strategy":"fallback","preferFastest":true,
+	raw := `{"enabled":true,"listenPort":41001,"bindAddress":"127.0.0.1","protocol":"both","strategy":"latency","latencyMarginMs":30,
 	"targets":[{"targetIp":"127.0.0.1","targetPort":47004,"probeIp":"198.51.100.21","probePort":23001,"weight":8,"viaRelay":true,"down":true,"downReason":"出口连不上目标","extraLatencyMs":12},
 	{"targetIp":"127.0.0.1","targetPort":47005,"probeIp":"198.51.100.22","probePort":23002,"weight":5}],
 	"failoverSeconds":2,"recoverSeconds":4,"failureThreshold":2,"probeIntervalSeconds":2,"probeTimeoutMs":1000,"autoFailback":true,"minHoldSeconds":60,
-	"scoreHoldSeconds":30,"noSlowStart":true,"pinnedIndex":1,"pinnedUntil":0,"proxyProtocolReceive":true,"proxyProtocolStrip":true,"proxyProtocolSend":false,
+	"noSlowStart":true,"pinnedIndex":1,"pinnedUntil":0,"proxyProtocolReceive":true,"proxyProtocolStrip":true,"proxyProtocolSend":false,
 	"proxyProtocolVersion":1,"balanceReport":{"tunnelId":1,"hostIds":[21,22]}}`
 	var spec failoverSpec
 	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
 		t.Fatal(err)
 	}
 	spec = normalizeFailoverSpec(spec)
-	if spec.ProbeIntervalSeconds != 2 || spec.ProbeTimeoutMs != 1000 || !spec.NoSlowStart || spec.ScoreHoldSeconds != 30 || !spec.PreferFastest {
-		t.Fatalf("探测节奏 / 慢启动 / 择优没读到：%+v", spec)
+	if spec.ProbeIntervalSeconds != 2 || spec.ProbeTimeoutMs != 1000 || !spec.NoSlowStart || spec.Strategy != "latency" || spec.LatencyMarginMs != 30 {
+		t.Fatalf("探测节奏 / 慢启动 / 延迟优先门槛没读到：%+v", spec)
 	}
 	if !spec.Targets[0].ViaRelay || !spec.Targets[0].Down || spec.Targets[0].ExtraLatencyMs != 12 || spec.Targets[0].Weight != 8 {
 		t.Fatalf("目标字段没读到：%+v", spec.Targets[0])
@@ -519,5 +503,73 @@ func TestExitGroupSpecJSONFields(t *testing.T) {
 	}
 	if !spec.ProxyProtocolReceive || !spec.ProxyProtocolStrip {
 		t.Fatal("PROXY 头的两个开关没读到")
+	}
+}
+
+// 不加密的 tcp / mtcp 出口：进程卡死时内核照样接连接，光连一下判不出来。ProbeRelay 的探测发一个坏请求、等 gost 断开：
+// 活着的（读完就关）算通，卡死的（不读、不关；或者连 accept 都没有，连接停在内核的队列里）算不通。
+func TestExitGroupRelayProbeCatchesFrozenExit(t *testing.T) {
+	listen := func() net.Listener {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { l.Close() })
+		return l
+	}
+	alive := listen()
+	go func() {
+		for {
+			conn, err := alive.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				// 像 gost 的 relay：读满 4 字节的头，版本不对就断开
+				buf := make([]byte, 4)
+				_, _ = io.ReadFull(conn, buf)
+				conn.Close()
+			}()
+		}
+	}()
+	// 卡死：监听着，但从不 accept —— 连接由内核完成握手、停在队列里
+	frozen := listen()
+	// 卡在读之前：accept 了但不读
+	stuck := listen()
+	held := make(chan net.Conn, 8)
+	go func() {
+		for {
+			conn, err := stuck.Accept()
+			if err != nil {
+				return
+			}
+			held <- conn
+		}
+	}()
+	t.Cleanup(func() {
+		for {
+			select {
+			case conn := <-held:
+				conn.Close()
+			default:
+				return
+			}
+		}
+	})
+	port := func(l net.Listener) int { return l.Addr().(*net.TCPAddr).Port }
+	targets := []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: 47100, ProbeIP: "127.0.0.1", ProbePort: port(alive), ProbeRelay: true},
+		{TargetIP: "127.0.0.1", TargetPort: 47101, ProbeIP: "127.0.0.1", ProbePort: port(frozen), ProbeRelay: true},
+		{TargetIP: "127.0.0.1", TargetPort: 47102, ProbeIP: "127.0.0.1", ProbePort: port(stuck), ProbeRelay: true},
+		// 不带 ProbeRelay 的照旧只看连不连得上：卡死的也算通（tls / wss 靠真实连接的握手超时）
+		{TargetIP: "127.0.0.1", TargetPort: 47103, ProbeIP: "127.0.0.1", ProbePort: port(frozen)},
+	}
+	started := time.Now()
+	_, results := probeExitGroupTargets("tcp", targets, 300*time.Millisecond, nil)
+	if !results[0] || results[1] || results[2] || !results[3] {
+		t.Fatalf("活着的通、卡死的不通、不带 ProbeRelay 的照旧：%v", results)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("一轮探测要在两个超时以内结束：%s", elapsed)
 	}
 }

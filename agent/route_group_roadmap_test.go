@@ -20,7 +20,7 @@ import (
 // 以前择优切过去、下一轮「首选恢复，切回」又拽回来，来回切到被抖动抑制钉住。
 func TestFailoverPreferFastestDoesNotFightAutoFailback(t *testing.T) {
 	drainFailoverEvents()
-	proxy := routeTestProxy(failoverSpec{Strategy: "fallback", AutoFailback: true, PreferFastest: true, Targets: routeTargets(2), ScoreMargin: 10, ScoreHoldSeconds: 60})
+	proxy := routeTestProxy(failoverSpec{Strategy: "fallback", AutoFailback: true, PreferFastest: true, Targets: routeTargets(2), ScoreHoldSeconds: 60})
 	proxy.mu.Lock()
 	defer proxy.mu.Unlock()
 	start := time.Now()

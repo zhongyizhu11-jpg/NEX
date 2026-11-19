@@ -1,4 +1,3 @@
-import { normalizeExitGroupStrategy } from "./exitStrategy";
 import { isLinkProbeFresh } from "./linkProbePolicy";
 
 export { LINK_PROBE_FRESH_MS } from "./linkProbePolicy";
@@ -309,15 +308,14 @@ export function buildLinkAvailabilityIndex(input: {
       configurationValid = false;
       configurationMessage = "关联出口组不存在";
     } else if (exitGroup) {
-      const groupMembers = endpointHostMembers(exitGroup, hostById, tunnelById);
-      const members = normalizeExitGroupStrategy(exitGroup.exitStrategy) === "none" ? groupMembers.slice(0, 1) : groupMembers;
+      const members = endpointHostMembers(exitGroup, hostById, tunnelById);
       if (!exitGroup.isEnabled || normalizeGroupMode(exitGroup) !== "exit") {
         configurationValid = false;
         configurationMessage = "关联出口组配置不可用";
       }
       if (routeHostIds.length > 0) requiredHostIds.delete(routeHostIds[routeHostIds.length - 1]);
       alternativeNodeSets.push({ label: "出口组", nodes: members.map((member: any) => hostNode(Number(member.hostId))) });
-    } else if (tunnel?.loadBalanceEnabled && normalizeExitGroupStrategy(tunnel?.loadBalanceStrategy) !== "none") {
+    } else if (tunnel?.loadBalanceEnabled) {
       const rawExitIds: number[] = [
         Number(routeHostIds[routeHostIds.length - 1] || tunnel?.exitHostId || 0),
         ...(Array.isArray(tunnel?.loadBalanceExits)
@@ -428,9 +426,6 @@ export function buildLinkAvailabilityIndex(input: {
           configurationValid = false;
           configurationMessage = `${String(group?.recordType || "A").toUpperCase()} 记录缺少可用成员地址`;
         }
-      }
-      if (mode === "exit" && normalizeExitGroupStrategy(group?.exitStrategy) === "none") {
-        candidates = candidates.slice(0, 1);
       }
       if (String(group?.lastStatus || "").toLowerCase() === "error") {
         configurationValid = false;

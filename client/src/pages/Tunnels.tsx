@@ -103,7 +103,7 @@ import { buildLinkAvailabilityIndex, type LinkAvailabilityResult } from "@shared
 import { MAX_NGINX_PEM_FILES, MAX_NGINX_PEM_UPLOAD_BYTES, parseNginxPemFiles } from "@/lib/nginxPemFiles";
 import { pollingInterval } from "@/lib/polling";
 import { hasQuerySnapshotAfter } from "@/lib/manualTestCache";
-import { getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
+import { exitUdpText, getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { cn } from "@/lib/utils";
@@ -169,13 +169,8 @@ import {
   tunnelRelayFailoverSupported,
   type TunnelRelayMode,
 } from "@shared/tunnelRelay";
-import {
-  EXIT_GROUP_STRATEGY_LABELS,
-  normalizeExitGroupStrategy,
-  type ExitGroupStrategy,
-} from "@shared/exitStrategy";
 import { tunnelExitPinUnsupportedReason } from "@shared/tunnelExitPin";
-import { nginxBalanceBasicSupportNote } from "@shared/loadBalance";
+import { BALANCE_STRATEGY_LABELS, type BalanceStrategy, nginxBalanceBasicSupportNote, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
@@ -230,7 +225,7 @@ type TunnelForm = {
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
-  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback" | "weighted" | "least_load" | "auto" | "latency";
+  loadBalanceStrategy: BalanceStrategy;
   loadBalanceExits: Array<{ hostId: number | null; connectHost: string }>;
   exitGroupId: number | null;
   blockHttp: boolean;
@@ -2250,10 +2245,10 @@ function TunnelsContent() {
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
   const [chainEditRequest, setChainEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
   const [groupEditRequest, setGroupEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
-  const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number; exitStrategy?: ExitGroupStrategy } | null>(null);
+  const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number; exitStrategy?: BalanceStrategy } | null>(null);
   const [linkWizardOpen, setLinkWizardOpen] = useState(false);
   const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | "hot_standby" | null>(null);
-  const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: ExitGroupStrategy } | null>(null);
+  const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: BalanceStrategy } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
   const setReplicateMutation = trpc.tunnels.setReplicate.useMutation({
@@ -2842,9 +2837,7 @@ function TunnelsContent() {
       lossTolerant: transportTuningSupported && !!tunnel.lossTolerant,
       kernelPassthrough: transportTuningSupported && !!(tunnel as any).kernelPassthrough,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
-      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load", "auto", "latency"].includes(String(tunnel.loadBalanceStrategy || ""))
-        ? tunnel.loadBalanceStrategy
-        : "round_robin") as TunnelForm["loadBalanceStrategy"],
+      loadBalanceStrategy: normalizeExitGroupStrategy(tunnel.loadBalanceStrategy),
       loadBalanceExits: exitGroupId ? loadBalanceExits : [],
       exitGroupId,
       blockHttp: false,
@@ -5331,7 +5324,7 @@ function TunnelsContent() {
               </Select>
               {form.exitGroupId ? (
                 <p className="text-xs text-muted-foreground">
-                  出口组固定为隧道出口；策略：{EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)]}。
+                  出口组固定为隧道出口；策略：{BALANCE_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)].label}。
                 </p>
               ) : (
                 <p data-fx-help="" className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>
@@ -5464,7 +5457,7 @@ function TunnelsContent() {
         const hostLookup = new Map((hosts || []).map((host) => [Number(host.id), host] as const));
         const hostName = (hostId: number) => tunnelHopHostName(tunnel, hostId, hosts) || `主机 ${hostId}`;
         // 只要策略名（「按权重」），后面那句解释在编辑框里看
-        const strategy = String(EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(tunnel.loadBalanceStrategy)] || "").split(" - ")[0];
+        const strategy = BALANCE_STRATEGY_LABELS[normalizeExitGroupStrategy(tunnel.loadBalanceStrategy)].label;
         const online = exits.filter((exit) => hostLookup.get(exit.hostId)?.isOnline).length;
         const pinHostId = Number((tunnel as { balancePinHostId?: number | null }).balancePinHostId || 0);
         const pinActive = pinHostId > 0 && exits.some((exit) => exit.hostId === pinHostId);
@@ -5520,8 +5513,12 @@ function TunnelsContent() {
             item.slowerMs != null ? `比平时慢 ${Math.round(item.slowerMs)}ms`
               : item.baselineMs == null ? ""
                 : item.baselineRules > 1 ? "跟平时差不多" : `平时 ${Math.round(item.baselineMs)}ms`,
+            exitUdpText(item),
+            item.peerOutdated ? "对端版本过旧" : "",
             sourceText,
           ].filter(Boolean).join(" · ") || null;
+          // UDP 那一侧单独被拦（TCP 照常）：UDP 新会话已经不给它，标成琥珀
+          if (item.udpDown > 0 && item.unstable === 0) return { tone: "warn" as const, text: `${latency}${jitter}`, sub };
           if (item.unstable > 0) {
             const loss = item.lossPct != null && item.lossPct >= 10 ? ` · 丢包 ${Math.round(item.lossPct)}%` : "";
             return { tone: "warn" as const, text: `${latency}${jitter}${loss} · 不稳定`, sub };

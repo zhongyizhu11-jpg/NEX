@@ -5,7 +5,7 @@ import { getRouteStatus, routeLatencyIntoHost, routeTrippedNodeIds } from "./rou
 import { routeSpecDriftOf, routeStatusSubject } from "./routeStatusView";
 import { describeRouteIssue, describeRouteReason, routeEventMillis, routeGroupOf, splitRouteReason, unwrapRelayDownReason, type RoutePath } from "../shared/routeGroup";
 import { parseRouteLines } from "../shared/routeLines";
-import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "../shared/loadBalance";
 import { routeFaultCounts } from "./ops/routeFaultCounts";
 import { ignoreErrorWith } from "./ignoredError";
 import { poolGroupCapacityIssue } from "./nodePoolGroups";

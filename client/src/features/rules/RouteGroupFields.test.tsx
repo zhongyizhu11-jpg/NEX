@@ -126,12 +126,12 @@ test("手动主备在「怎么切」下面直接选走哪条，没有「自动�
   assert.doesNotMatch(html, /应急人工指定/, "手动模式下没有第二个人工指定");
 });
 
-test("按权重：分法六选一（含「自动」），按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
+test("按权重：分法七选一（含「自动」「延迟优先」），按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
   const html = render(group("weighted"));
-  // 2.3.534 起和出口组同一个下拉框（统一负载均衡）：框里显示选中的那种，下拉里只有线路组能分连接的六种
+  // 2.3.534 起和出口组同一个下拉框（统一负载均衡）：框里显示选中的那种，下拉里只有线路组能分连接的七种
   assert.match(html, /role="combobox"[^>]*aria-label="新连接怎么分"/);
-  assert.deepEqual([...ROUTE_SPREADS], ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto"]);
-  assert.match(render(group("weighted", { spread: "auto" })), /沿途主机的负载自动算权重/, "选中「自动」时下面那句说它会怎么做");
+  assert.deepEqual([...ROUTE_SPREADS], ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto", "latency"]);
+  assert.match(render(group("weighted", { spread: "auto" })), /沿途主机负载和这条上已有的连接合成一个数/, "选中「自动」时下面那句说它会怎么做");
   assert.match(html, /data-testid="route-line-weights"/);
   assert.match(html, /aria-label="主线路 的权重"/);
   assert.match(html, /aria-label="晚高峰 的权重"/);

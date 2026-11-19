@@ -149,13 +149,12 @@ import {
   normalizeTunnelParallelStreams,
   tunnelParallelStreamsUnavailableReason,
 } from "@shared/tunnelParallelStreams";
-import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "@shared/hostIpv6Listen";
 import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { recordHostRateSample } from "./hostRateBuckets";
 import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrategy";
-import { agentSupportsUnifiedBalance, balanceDetectForRuntime, FXP_BALANCE_REPORT_VERSION, GOST_BALANCE_MAX_EXITS } from "@shared/loadBalance";
+import { agentSupportsUnifiedBalance, balanceDetectForRuntime, exitGroupCapacities, exitGroupWeights, FXP_BALANCE_REPORT_VERSION, GOST_BALANCE_MAX_EXITS, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { buildGostBalanceProxySpec, type GostBalanceExit, type GostBalanceProxySpec } from "./gostBalancePlan";
 import { isAgentVersionAtLeast } from "@shared/version";
 import { exitTargetExcludedHostIds, exitTargetProbeSpec, exitTargetStatesForRule, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
@@ -2041,7 +2040,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const hops = tunnelHopsByTunnelId.get(Number(tunnel?.id || 0));
       const lastHop = Array.isArray(hops) && hops.length >= 2 ? hops[hops.length - 1] as any : null;
       const ids = [Number(tunnel?.exitHostId || 0), Number(lastHop?.hostId || 0)];
-      if (runtimeBool(tunnel?.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel?.loadBalanceStrategy) !== "none") {
+      if (runtimeBool(tunnel?.loadBalanceEnabled)) {
         for (const exitNode of tunnelExitNodesByTunnelId.get(Number(tunnel?.id || 0)) || []) {
           if (!runtimeBool((exitNode as any)?.isEnabled, true) || Number((exitNode as any)?.listenPort || 0) <= 0) continue;
           ids.push(Number((exitNode as any)?.hostId || 0));
@@ -2191,7 +2190,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         preferFastest: policy.mode === "smart" || policy.mode === "hybrid",
         // 2.2.198 起的切换保护和计划切换预检；老 Agent 不认这几个字段，照老规矩切。
         failureThreshold: policy.failureThreshold,
-        scoreMargin: policy.scoreMargin,
         scoreHoldSeconds: policy.scoreHoldSeconds,
         prewarmSeconds: policy.prewarmSeconds,
         switchMode: policy.switchMode,
@@ -2504,7 +2502,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && Number(primaryManagedTunnelRuleIdByTunnelId.get(Number((tunnel as any).id || 0)) || 0) === Number((rule as any).id || 0)
     );
     const tunnelExtraExitNodes = (tunnel: any) => (
-      runtimeBool((tunnel as any)?.loadBalanceEnabled) && normalizeExitGroupStrategy((tunnel as any)?.loadBalanceStrategy) !== "none"
+      runtimeBool((tunnel as any)?.loadBalanceEnabled)
         ? (tunnelExitNodesByTunnelId.get(Number(tunnel?.id || 0)) || [])
         : []
     )
@@ -2557,7 +2555,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     };
     const forwardXExtraExitRoutes = async (tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
-      if (!runtimeBool((tunnel as any).loadBalanceEnabled) || normalizeExitGroupStrategy((tunnel as any).loadBalanceStrategy) === "none") return routes;
+      if (!runtimeBool((tunnel as any).loadBalanceEnabled)) return routes;
       const extraNodes = tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || [];
       for (const exitNode of extraNodes as any[]) {
         if (!runtimeBool((exitNode as any).isEnabled, true)) continue;
@@ -2754,7 +2752,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       const hostId = Number(host.id);
       const addCurrentHostExtraExitFilters = () => {
-        if (normalizeExitGroupStrategy((tunnel as any).loadBalanceStrategy) === "none") return;
         const extraExitNodes = (tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || [])
           .filter((node: any) => runtimeBool(node?.isEnabled, true) && Number(node.hostId) === hostId);
         for (const extraExitNode of extraExitNodes) {
@@ -3173,6 +3170,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const balanceHops = tunnelHopsByTunnelId.get(Number(tunnel.id)) || [];
       const viaRelay = balanceHops.length >= 3;
       const lastHopHost = viaRelay ? await getHopDialAddress(balanceHops[balanceHops.length - 1], tunnel) : "";
+      // 不加密的 tcp / mtcp：入口直接探出口机时还要等 gost 回话（进程卡死、只有内核在接连接也判得出来）
+      const transport = gostTunnelTransportType(tunnel.mode);
+      const probeRelay = transport === "tcp" || transport === "mtcp";
       const exits: GostBalancePlan["exits"] = [];
       for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel).slice(0, GOST_BALANCE_MAX_EXITS)) {
         const dialHost = endpoint.primary
@@ -3186,7 +3186,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           dialHost: String(dialHost),
           listenPort: Number(endpoint.listenPort),
           viaRelay,
-          node: gostTunnelNode(`exit-${rule.id}-${exitKey}`, endpointHostPort(dialHost, endpoint.listenPort), gostTunnelTransportType(tunnel.mode), tunnel, protocolPlan.chainConnector),
+          probeRelay,
+          node: gostTunnelNode(`exit-${rule.id}-${exitKey}`, endpointHostPort(dialHost, endpoint.listenPort), transport, tunnel, protocolPlan.chainConnector),
         });
       }
       if (exits.length < 2 || ports.length < exits.length || new Set(exits.map((exit) => exit.hostId)).size !== exits.length) continue;
@@ -3428,7 +3429,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         .find((node: any) => runtimeBool(node?.isEnabled, true) && Number(node.hostId) === Number(host.id));
       const isCurrentHostExtraExit = !!currentHostExtraExitNode;
       const isCurrentHostActiveExit = isCurrentHostPrimaryExit
-        || (isCurrentHostExtraExit && normalizeExitGroupStrategy((tunnel as any).loadBalanceStrategy) !== "none");
+        || isCurrentHostExtraExit;
       const existingHops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       const runtimeFamily = tunnelRuntimeFamily(tunnel);
       if (!runtimeFamily) continue;
@@ -5677,6 +5678,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentVersion: effectiveAgentVersion,
       inbounds: hostTlsInbounds,
       rules,
+      visitorHeaderRuleIds: new Set(gostBalancePlans.keys()),
     });
     const stateSections = buildAgentStateResponseSections({
       runningRules,

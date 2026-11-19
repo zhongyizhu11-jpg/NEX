@@ -110,7 +110,7 @@ export type RoutePath = {
  *   round_robin 轮流
  *   random      随机
  *   ip_hash     按访客固定：同一个访客 IP 一直走同一个落地
- *   auto        自动：按最近延迟和落地主机的负载算权重，随机挑两个取更好的那个（Agent 2.2.251 起）
+ *   auto        自动：延迟、丢包和落地主机负载合成的成本最低的那个（lbcore 的自动）
  * 「怎么切」照旧决定走哪条线路；按权重（整组一起分）、聚合 / 复制时不用它。Agent 2.2.245 起。
  */
 export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash", "auto"] as const;
@@ -129,8 +129,8 @@ export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid"
 
 export type RouteMode = (typeof ROUTE_MODES)[number];
 
-/** 权重负载模式下新连接怎么分：按权重、按负载、轮流、随机、按访客固定、自动（动态权重，Agent 2.2.251 起）。 */
-export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto"] as const;
+/** 权重负载模式下新连接怎么分：主备之外的七种（主备是上面的「怎么切」），算法在 lbcore，和出口组同一套。 */
+export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto", "latency"] as const;
 
 export type RouteSpread = (typeof ROUTE_SPREADS)[number];
 
@@ -155,9 +155,7 @@ export type RouteGuards = {
   minHoldSeconds: number;
   /** 首选恢复后切不切回。 */
   autoFailback: boolean;
-  /** 智能择优：候选要比当前高多少分才算「明显更好」。 */
-  scoreMargin: number;
-  /** 智能择优：明显更好要持续多少秒才切。 */
+  /** 智能择优：明显更好（整链快 50ms 以上、而且快两成，Agent 的 lbcore.SwitchPolicy）要持续多少秒才切。 */
   scoreHoldSeconds: number;
   /** 计划切换提前多少秒开始预热和预检；0 = 不预热。 */
   prewarmSeconds: number;
@@ -170,7 +168,6 @@ export const ROUTE_GUARD_DEFAULTS: RouteGuards = {
   recoverSeconds: 120,
   minHoldSeconds: 0,
   autoFailback: true,
-  scoreMargin: 10,
   scoreHoldSeconds: 180,
   prewarmSeconds: 300,
   switchMode: "smooth",
@@ -185,7 +182,6 @@ export const ROUTE_GUARD_LIMITS = {
   failoverSeconds: { min: 1, max: 3600 },
   recoverSeconds: { min: 1, max: 3600 },
   minHoldSeconds: { min: 0, max: 86400 },
-  scoreMargin: { min: 1, max: 60 },
   scoreHoldSeconds: { min: 5, max: 3600 },
   prewarmSeconds: { min: 0, max: 3600 },
   weight: { min: 1, max: 100 },
@@ -256,7 +252,6 @@ export type RouteGroupRule = {
   routePaths?: unknown;
   routeSwitchMode?: unknown;
   routeFailureThreshold?: unknown;
-  routeScoreMargin?: unknown;
   routeScoreHoldSeconds?: unknown;
   routePrewarmSeconds?: unknown;
   routeDelivery?: unknown;

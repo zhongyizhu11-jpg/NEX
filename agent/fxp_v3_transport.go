@@ -40,10 +40,6 @@ func copyFXPV3Options(dst *fxpSpec, src fxpSpec) {
 	}
 }
 
-func clearFXPV3Options(spec *fxpSpec) {
-	copyFXPV3Options(spec, fxpSpec{})
-}
-
 func normalizeFXPV3Options(spec *fxpSpec) {
 	spec.V3Transport = strings.ToLower(strings.TrimSpace(spec.V3Transport))
 	spec.V3Host = strings.TrimSpace(spec.V3Host)

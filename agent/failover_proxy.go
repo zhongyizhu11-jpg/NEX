@@ -59,9 +59,8 @@ type failoverProxy struct {
 	// 线路会被重置回第 0 条）也要重新计时 —— 这两种情况不算「切换」，不该拿去
 	// 卡最短驻留，但面板要知道「从什么时候起走的这条」。
 	activeSince time.Time
-	// 自动择优的候选，以及它从什么时候开始一直是候选。
-	fastestCandidate int
-	fastestSince     time.Time
+	// 自动择优的候选，以及它从什么时候开始一直领先（fastestIndexLocked）。
+	challenger lbcore.Challenger
 	// 最近一小时里自动切换（不含人工指定）的时刻：切得太勤就把驻留拉长（flapHoldLocked）。
 	autoSwitchTimes []time.Time
 	// flapWarmupUntil：刚起来的这一段（中继、出口还没全起来）里的自动切换不计入抖动抑制，见 flapWarmup。
@@ -137,7 +136,7 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.PreferFastest),
 		failoverScheduleSignature(spec.Schedule),
 		strconv.Itoa(spec.FailureThreshold),
-		strconv.Itoa(spec.ScoreMargin),
+		strconv.Itoa(spec.LatencyMarginMs),
 		strconv.Itoa(spec.ScoreHoldSeconds),
 		strconv.Itoa(spec.PrewarmSeconds),
 		func() string {
@@ -181,6 +180,9 @@ func failoverSignature(spec failoverSpec) string {
 		if target.ViaRelay {
 			weight += "r"
 		}
+		if target.ProbeRelay {
+			weight += "p"
+		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
 	return strings.Join(parts, "|")
@@ -214,8 +216,8 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	if spec.FailureThreshold > 20 {
 		spec.FailureThreshold = 20
 	}
-	if spec.ScoreMargin <= 0 {
-		spec.ScoreMargin = 10
+	if spec.LatencyMarginMs < 0 {
+		spec.LatencyMarginMs = 0
 	}
 	if spec.ScoreHoldSeconds <= 0 {
 		spec.ScoreHoldSeconds = failoverFastestHoldSeconds
@@ -497,7 +499,6 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	n := len(p.spec.Targets)
 	if !p.stateInitialized {
 		p.stateInitialized = true
-		p.fastestCandidate = -1
 		p.prewarmIndex = -1
 		p.precheckFailedIndex = -1
 		p.pinnedLast = -1
@@ -594,8 +595,8 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 	if summary := p.chainScoreInputLocked(index); summary.hasLatency {
 		toChainMs = int(summary.latencyMs)
 	}
-	if reason == "score" && !p.fastestSince.IsZero() && p.fastestCandidate == index {
-		heldSeconds = int(time.Since(p.fastestSince).Seconds())
+	if reason == "score" && !p.challenger.Since.IsZero() && p.challenger.Index == index {
+		heldSeconds = int(time.Since(p.challenger.Since).Seconds())
 	}
 	p.activeIndex = index
 	p.lastSwitchAt = time.Now()

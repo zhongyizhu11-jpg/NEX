@@ -3,7 +3,7 @@ import { isValidTlsServerName } from "./nginxTlsInput";
 import { killByPatternCmd, removeManagedServiceCmd, shQuote, startManagedServiceCmd } from "./agentActionCommands";
 import { cleanEndpointHost, isIpv6Literal } from "./forwardRuntimeConfigs";
 import { forwardRuleProtocols } from "@shared/forwardTypes";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { normalizeExitGroupStrategy } from "@shared/loadBalance";
 
 /*
   nginx stream 运行时：配置文件的拼装（server / upstream 块、证书）、配置哈希与重载命令、
@@ -296,7 +296,7 @@ export const nginxUpstreamBlock = (
 ) => {
   const cleanEndpoints = endpoints.filter((endpoint) => endpoint.addr);
   if (cleanEndpoints.length === 0) return "";
-  // 先归一：库里老的 least_conn 就是「按负载」（shared/exitStrategy.ts），以前在这里直接比字符串，权重被丢掉了。
+  // 先归一：库里老的 least_conn 就是「按负载」（shared/loadBalance.ts 的 normalizeExitGroupStrategy），以前在这里直接比字符串，权重被丢掉了。
   const strategy = cleanEndpoints.length > 1 ? normalizeExitGroupStrategy(strategyRaw || "round_robin") : "round_robin";
   const lines = [`  upstream ${name} {`];
   /*

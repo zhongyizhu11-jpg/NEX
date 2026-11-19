@@ -44,9 +44,9 @@ function state(partial: Partial<ExitTargetState> & { hostId: number }): ExitTarg
   };
 }
 
-test("负载均衡链路才算：开了、而且不是「只用第一个」", () => {
+test("负载均衡链路才算：开了就算（库里老的「只用第一个」是主备，也在几台出口之间换）", () => {
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: true, loadBalanceStrategy: "auto" }), true);
-  assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: true, loadBalanceStrategy: "none" }), false);
+  assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: true, loadBalanceStrategy: "none" }), true);
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: false, loadBalanceStrategy: "auto" }), false);
 });
 
@@ -272,7 +272,3 @@ test("不稳：抖动要持续「持续多久才处理」才算，单次抖动�
   assert.equal(exitTargetUnstable({ jitterMs: 4, lossPct: 12, samples: 30, at, jitterSince: null }, detect), true, "丢包不等");
 });
 
-/*
-  C3：文档写的内置防来回乱切（BALANCE_ANTI_FLAP）以前没有任何代码引用。现在用在 GOST「延迟优先」的排序上：
-  切过去至少用 1 分钟；一小时换了 3 次以上，每次至少用 5 分钟；排第一的那台连不上时不受限制。
-*/

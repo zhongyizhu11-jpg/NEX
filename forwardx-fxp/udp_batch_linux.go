@@ -458,7 +458,6 @@ func newFXPUDPBatchSender(conn *net.UDPConn) *fxpUDPBatchSender {
 	}
 }
 
-func (s *fxpUDPBatchSender) full() bool   { return len(s.pkts) >= fxpUDPBatchSize }
 func (s *fxpUDPBatchSender) pending() int { return len(s.pkts) }
 
 // add 攒一个包。p 在 flush 之前不能被改写或还回池里。

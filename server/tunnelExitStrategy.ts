@@ -1,5 +1,4 @@
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { FXP_TARGET_AWARE_VERSION } from "@shared/loadBalance";
+import { FXP_TARGET_AWARE_VERSION, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { isAgentVersionAtLeast } from "@shared/version";
 
 export type ExitGroupTunnelMember = {
@@ -74,7 +73,6 @@ export function planExitGroupTunnelEndpoints(
  */
 export function forwardXExitStrategy(value: unknown, supportsTargetAware = true) {
   const strategy = normalizeExitGroupStrategy(value);
-  if (strategy === "none") return "round_robin";
   if (!supportsTargetAware && (strategy === "auto" || strategy === "latency")) return "least_load";
   return strategy;
 }

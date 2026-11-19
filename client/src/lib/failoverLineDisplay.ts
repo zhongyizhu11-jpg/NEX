@@ -50,6 +50,7 @@ const spreadText: Record<RoutePolicy["strategy"], string> = {
   random: "随机",
   ip_hash: "按访客",
   auto: "自动",
+  latency: "延迟优先",
 };
 
 export function describeFailoverLineDisplay(

@@ -34,10 +34,17 @@ import { RouteBoardList } from "@/features/rules/RouteBoardList";
 import { SortableList } from "@/components/SortableList";
 import { LINE_PARAM, useSearchIdParam } from "./lineLinks";
 import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
-import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
+import { BALANCE_STRATEGY_LABELS, normalizeBalanceStrategy } from "@shared/loadBalance";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import type { AppRouter } from "../../../../server/routers";
+
+/** 订阅选路组「其余按什么走」：主备是按顺序；认不出的按轮流。 */
+function lineGroupSpreadText(strategy: unknown) {
+  const normalized = normalizeBalanceStrategy(strategy);
+  if (normalized === "fallback") return "按顺序走";
+  return normalized ? BALANCE_STRATEGY_LABELS[normalized].label : "轮流走";
+}
 
 /*
   线路工作台（2.3.496，效果图 ④「所有线路一个入口」）：
@@ -456,7 +463,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
           </div>
           <LineHint>
             {group.members.some((member) => member.checked)
-              ? `流媒体 / AI 按解锁结果自动分流，其余${group.strategy === "fallback" || group.strategy === "none" ? "按顺序走" : LINK_SPREAD_LABELS[group.strategy as keyof typeof LINK_SPREAD_LABELS]?.label || "轮流走"}`
+              ? `流媒体 / AI 按解锁结果自动分流，其余${lineGroupSpreadText(group.strategy)}`
               : "还没做过出口检测：到主机详情「流媒体 / AI 解锁」测一次，订阅里才能按解锁结果分流"}
             {followMenu(group, true)}
           </LineHint>

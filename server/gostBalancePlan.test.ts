@@ -38,21 +38,11 @@ test("门槛只有一处：2.2.264 起能执行统一调度，更老的、没报
   assert.equal(agentSupportsUnifiedBalance(null), false);
 });
 
-test("八种分配方式每一种都对得上调度器的一种策略，没有哪种被悄悄换成别的", () => {
-  const mapped = Object.fromEntries(BALANCE_STRATEGIES.map((strategy) => [strategy, gostBalanceProxyStrategy(strategy)]));
-  assert.deepEqual(mapped, {
-    auto: { strategy: "auto", preferFastest: false },
-    fallback: { strategy: "fallback", preferFastest: false },
-    ip_hash: { strategy: "ip_hash", preferFastest: false },
-    // 延迟优先 = 一次只走整链最好的那台：主备的骨架 + 自动择优
-    latency: { strategy: "fallback", preferFastest: true },
-    least_load: { strategy: "least_load", preferFastest: false },
-    weighted: { strategy: "weighted", preferFastest: false },
-    round_robin: { strategy: "round_robin", preferFastest: false },
-    random: { strategy: "random", preferFastest: false },
-  });
+test("八种分配方式原样交给调度器（和 NEX 隧道同一段算法），没有哪种被悄悄换成别的", () => {
+  for (const strategy of BALANCE_STRATEGIES) assert.equal(gostBalanceProxyStrategy(strategy), strategy);
   // 老值「只用第一个」当主备
-  assert.deepEqual(gostBalanceProxyStrategy("none"), { strategy: "fallback", preferFastest: false });
+  assert.equal(gostBalanceProxyStrategy("none"), "fallback");
+  assert.equal(gostBalanceProxyStrategy("least_conn"), "least_load");
 });
 
 test("探测节奏照「检测与切换」来：默认 2 秒一轮、1 秒超时、第 2 轮失败就判坏、连着通 3 轮恢复", () => {
@@ -116,14 +106,20 @@ test("规格：份数原样带（超过 100 的按比例压）、面板提示、
   assert.equal(buildGostBalanceProxySpec({ ...base, pinHostId: 99 }).pinnedIndex, null);
 });
 
-test("规格：延迟优先带择优和「持续多久才换」；多跳的出口带 viaRelay；出口最多 20 台", () => {
+test("规格：延迟优先原样下发、带「一样快」的门槛；多跳的出口带 viaRelay；出口最多 20 台", () => {
   const latency = buildGostBalanceProxySpec({ ...base, strategy: "latency" });
-  assert.equal(latency.strategy, "fallback");
-  assert.equal(latency.preferFastest, true);
-  assert.equal(latency.autoFailback, true);
-  assert.equal(latency.scoreHoldSeconds, DEFAULT_BALANCE_DETECT.jitterHoldSeconds);
+  assert.equal(latency.strategy, "latency");
+  assert.equal(latency.latencyMarginMs, DEFAULT_BALANCE_DETECT.latencyMarginMs);
+  assert.equal("preferFastest" in latency, false, "不再借主备 + 择优来做延迟优先");
+  assert.equal(buildGostBalanceProxySpec({ ...base, strategy: "latency", detect: { ...DEFAULT_BALANCE_DETECT, latencyMarginMs: 20 } }).latencyMarginMs, 20);
   const relayed = buildGostBalanceProxySpec({ ...base, exits: exits.map((exit) => ({ ...exit, viaRelay: true })) });
   assert.ok(relayed.targets.every((target) => target.viaRelay === true));
+  // tcp / mtcp 隧道：直接探出口机时等 gost 回话；在中转后面的探不到，不带
+  const plain = buildGostBalanceProxySpec({ ...base, exits: exits.map((exit) => ({ ...exit, probeRelay: true })) });
+  assert.ok(plain.targets.every((target) => target.probeRelay === true));
+  const plainRelayed = buildGostBalanceProxySpec({ ...base, exits: exits.map((exit) => ({ ...exit, probeRelay: true, viaRelay: true })) });
+  assert.ok(plainRelayed.targets.every((target) => !("probeRelay" in target)));
+  assert.ok(buildGostBalanceProxySpec(base).targets.every((target) => !("probeRelay" in target)));
   const many = Array.from({ length: 25 }, (_, index) => ({ hostId: 100 + index, localPort: 48000 + index, dialHost: `198.51.100.${index + 1}`, listenPort: 23000 + index }));
   const capped = buildGostBalanceProxySpec({ ...base, exits: many });
   assert.equal(capped.targets.length, GOST_BALANCE_MAX_EXITS);

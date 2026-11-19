@@ -40,8 +40,7 @@ import {
   TUNNEL_PARALLEL_STREAMS_MAX,
   tunnelParallelStreamsUnavailableReason,
 } from "../../shared/tunnelParallelStreams";
-import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
-import { serializeBalanceDetect } from "../../shared/loadBalance";
+import { BALANCE_STRATEGIES, normalizeExitGroupStrategy, serializeBalanceDetect } from "../../shared/loadBalance";
 import { exitTargetSummaryForTunnel, tunnelBalancesExits } from "../exitTargetHealth";
 import { tunnelExitPinUnsupportedReason } from "../../shared/tunnelExitPin";
 import { assertMimicEnvironment } from "../mimicEnvironment";
@@ -93,7 +92,8 @@ const forwardXV3InputFields = {
   v3Multiplex: z.boolean().nullable().optional(),
 };
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
-const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load", "auto", "latency"]);
+// 八种之外的（库里老的 none / least_conn）读的时候由 normalizeExitGroupStrategy 认，写进来的只能是这八种。
+const tunnelLoadBalanceStrategySchema = z.enum(BALANCE_STRATEGIES);
 /** 负载均衡的「检测与切换」（shared/loadBalance.ts），字段不全的按默认值补。 */
 const balanceDetectSchema = z.object({
   intervalSeconds: z.number().int().min(1).max(60).optional(),
@@ -2457,7 +2457,7 @@ export const tunnelsRouter = router({
           return { success: false, latencyMs: null, message, pending: true };
         }
         const extraExitEndpoints = (
-          dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none"
+          dbBool(tunnel.loadBalanceEnabled)
             ? (tunnelExtraExitNodes || [])
             : []
         )

@@ -60,7 +60,7 @@ export function getTunnelRuntimeTopologyStatus(tunnelId: number, topology: Tunne
     .filter((id) => Number.isFinite(id) && id > 0)));
   const hops = unique(topology.hopHostIds || []);
   const entryCandidates = unique(topology.entryHostIds?.length ? topology.entryHostIds : [hops[0]]);
-  const useExtraExits = topology.loadBalanceEnabled === true && String(topology.loadBalanceStrategy || "").toLowerCase() !== "none";
+  const useExtraExits = topology.loadBalanceEnabled === true;
   const exitCandidates = unique([
     Number(topology.primaryExitHostId || hops[hops.length - 1] || 0),
     ...(useExtraExits ? topology.extraExitHostIds || [] : []),

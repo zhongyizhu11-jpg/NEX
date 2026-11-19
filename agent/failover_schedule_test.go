@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -437,8 +438,8 @@ func TestFastestNeedsSustainedAdvantage(t *testing.T) {
 }
 
 func TestFastestResetsWhenCandidateChanges(t *testing.T) {
-	// 候选换人就重新计时：两条线轮流领先的话，谁都不该被选中。（只是明显更快、不是快一半以上，走的是完整的持续时间）
-	proxy := fastestProxy([]int{200, 150, 160}, 0)
+	// 候选换人就重新计时：两条线轮流领先的话，谁都不该被选中。（只是明显更快、不是好得多，走的是完整的持续时间）
+	proxy := fastestProxy([]int{200, 130, 140}, 0)
 	start := time.Now()
 	proxy.mu.Lock()
 	defer proxy.mu.Unlock()
@@ -453,7 +454,8 @@ func TestFastestResetsWhenCandidateChanges(t *testing.T) {
 func TestFastestIgnoresNoiseLevelDifferences(t *testing.T) {
 	start := time.Now()
 
-	proxy := fastestProxy([]int{60, 45}, 0) // 快 15ms，没到 20ms 的绝对门槛
+	// 快 25ms：没到 50ms 的门槛 —— 在「延迟优先」里这两条算一样快，择优也不换（同一把尺）。
+	proxy := fastestProxy([]int{60, 35}, 0)
 	proxy.mu.Lock()
 	absolute := fastestAfterHold(proxy, start)
 	proxy.mu.Unlock()
@@ -461,8 +463,8 @@ func TestFastestIgnoresNoiseLevelDifferences(t *testing.T) {
 		t.Fatalf("差距不到绝对门槛就切了：%d", absolute)
 	}
 
-	// 长肥链路上 25ms 的差距也不该算「明显更快」：过了绝对门槛，但只有 5%。
-	ratio := fastestProxy([]int{500, 475}, 0)
+	// 长肥链路上 60ms 的差距也不该算「明显更快」：过了绝对门槛，但只有 12%（要两成）。
+	ratio := fastestProxy([]int{500, 440}, 0)
 	ratio.mu.Lock()
 	percentage := fastestAfterHold(ratio, start)
 	ratio.mu.Unlock()
@@ -470,8 +472,8 @@ func TestFastestIgnoresNoiseLevelDifferences(t *testing.T) {
 		t.Fatalf("差距不到百分比门槛就切了：%d", percentage)
 	}
 
-	// 对照：同样是 25ms 的差距，放在 60ms 的链路上就该算数（快 42%）。
-	meaningful := fastestProxy([]int{60, 35}, 0)
+	// 对照：同样是 60ms 的差距，放在 120ms 的链路上就该算数（快一半）。
+	meaningful := fastestProxy([]int{120, 60}, 0)
 	meaningful.mu.Lock()
 	defer meaningful.mu.Unlock()
 	if got := fastestAfterHold(meaningful, start); got != 1 {
@@ -577,7 +579,7 @@ func TestFastestSwitchesSoonerWhenDramaticallyBetter(t *testing.T) {
 	if got := proxy.fastestIndexLocked(start.Add(5 * time.Second)); got != -1 {
 		t.Fatalf("才 5 秒就切了：%d", got)
 	}
-	if got := proxy.fastestIndexLocked(start.Add(failoverDramaticHold + time.Second)); got != 1 {
+	if got := proxy.fastestIndexLocked(start.Add(lbcore.DefaultSwitchFastHold + time.Second)); got != 1 {
 		t.Fatalf("557ms 对 3ms，连着 10 秒都更快，应当切过去，拿到 %d", got)
 	}
 
@@ -586,7 +588,7 @@ func TestFastestSwitchesSoonerWhenDramaticallyBetter(t *testing.T) {
 	modest.mu.Lock()
 	defer modest.mu.Unlock()
 	modest.fastestIndexLocked(start)
-	if got := modest.fastestIndexLocked(start.Add(failoverDramaticHold + time.Second)); got != -1 {
+	if got := modest.fastestIndexLocked(start.Add(lbcore.DefaultSwitchFastHold + time.Second)); got != -1 {
 		t.Fatalf("只快一点不该走快速通道：%d", got)
 	}
 }

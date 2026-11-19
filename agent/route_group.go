@@ -9,68 +9,27 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
 
 /*
 线路组（一个入口 + 多条路径 + 一个调度策略）在 Agent 这一侧新加的部分：评分、探测样本
 窗口、计划切换的预检、按权重分连接、断旧连接，以及随心跳带回去的统计快照。选路本身
-还在 main.go 的 failoverProxy 里 —— 这里只是它量「这条线有多好」用的那把尺子。
+还在 failoverProxy 里 —— 这里是它量「这条线有多好」用的样本，「有多好」的算法在 lbcore（Quality、QualityCost）。
 
 入口 Agent 不理解「路径」：每条出站在它眼里就是一个要拨的地址（走中转的路径拨的是第一跳
 中转上那条中继规则）。路径中段挂了由面板从中转机的探测得知，再作为 failoverTarget.Down
 提示下发 —— 所以这里的「能用」= 本机探测通 && 没被面板标掉。
 */
 
-// 评分公式：和 shared/routeScore.ts 逐字一致（运算顺序也一样），两边共用 routeScore.cases.json。
+/*
+计划切换的预检门槛（precheckIssueLocked）：延迟到这么高、丢包到这么多，就不按计划切过去。
+*/
 const (
-	routeScoreLatencyFullMs = 40
-	routeScoreLatencyZeroMs = 400
-	routeScoreLossZeroPct   = 4
-	routeScoreJitterZeroMs  = 100
-	// 主机负载（failoverTarget.LoadPct）从多少起扣分、多少扣满、最多扣几分（2.2.251）。
-	routeScoreLoadFromPct    = 70
-	routeScoreLoadFullPct    = 95
-	routeScoreLoadMaxPenalty = 15
+	routePrecheckLatencyMs = 400
+	routePrecheckLossPct   = 4
 )
-
-func clamp01(value float64) float64 {
-	if !(value > 0) {
-		return 0
-	}
-	if value > 1 {
-		return 1
-	}
-	return value
-}
-
-// 主机负载扣几分（小数）：70% 以下 0，95% 起 15，中间线性。和 shared/routeScore.ts 的 routeLoadPenalty 逐字一致。
-func routeLoadPenalty(loadPct float64) float64 {
-	if math.IsNaN(loadPct) || math.IsInf(loadPct, 0) {
-		return 0
-	}
-	return clamp01((loadPct-routeScoreLoadFromPct)/(routeScoreLoadFullPct-routeScoreLoadFromPct)) * routeScoreLoadMaxPenalty
-}
-
-// 0–100 的整数；探不通是 0；还没探出延迟时 ok=false —— 「等评分」和「0 分」是两回事。
-// loadPct 是沿途主机里最忙那台的负载（面板给的，0 = 不知道）：整体扣分，扣到负数按 0。
-func routeScore(latencyMs float64, hasLatency bool, lossPct float64, jitterMs float64, availabilityPct float64, healthy bool, loadPct float64) (int, bool) {
-	if !healthy {
-		return 0, true
-	}
-	if !hasLatency || math.IsNaN(latencyMs) || math.IsInf(latencyMs, 0) {
-		return 0, false
-	}
-	latency := clamp01((routeScoreLatencyZeroMs-latencyMs)/(routeScoreLatencyZeroMs-routeScoreLatencyFullMs)) * 40
-	loss := clamp01(1-lossPct/routeScoreLossZeroPct) * 30
-	jitter := clamp01(1-jitterMs/routeScoreJitterZeroMs) * 15
-	availability := clamp01(availabilityPct/100) * 15
-	// 负载扣分是整体减的，不进四项里；减到负数按 0（先截再取整，和面板一样）。
-	total := latency + loss + jitter + availability - routeLoadPenalty(loadPct)
-	if total < 0 {
-		total = 0
-	}
-	return int(math.Round(total)), true
-}
 
 /*
 每条出站的探测样本窗口。
@@ -383,19 +342,11 @@ func (p *failoverProxy) healthyLocked(index int) bool {
 	return p.targetHealth[index] && !p.relayDown[index]
 }
 
-// statsLocked 调用方持有写锁；只拿读锁的地方用 statsReadLocked。
+// statsLocked 调用方持有写锁。
 func (p *failoverProxy) statsLocked(index int) *routeTargetStats {
 	p.ensureHealthStateLocked()
 	if index < 0 || index >= len(p.stats) {
 		return &routeTargetStats{}
-	}
-	return p.stats[index]
-}
-
-// statsReadLocked 读锁下用：不分配、不改代理的状态；没有就是 nil（summary / dialSummary 认 nil）。
-func (p *failoverProxy) statsReadLocked(index int) *routeTargetStats {
-	if index < 0 || index >= len(p.stats) {
-		return nil
 	}
 	return p.stats[index]
 }
@@ -449,13 +400,19 @@ func (p *failoverProxy) chainScoreInputLocked(index int) routeStatsSummary {
 	return summary
 }
 
-// 这条出站的评分（按整条链路的延迟，再按面板给的沿途主机负载扣分）；ok=false 表示还没法打分。
+/*
+scoreLocked 这条出站给人看的 0–100 分（「92 优」）：和自动择优、延迟优先比的是同一个成本
+（lbcore.DisplayScore(qualityLocked)，整链延迟 + 抖动、丢包 / 拨号失败、沿途主机负载），只是换算成分数。
+不参与任何决定。探不通是 0；还没量出延迟 ok=false（「等评分」）。
+*/
 func (p *failoverProxy) scoreLocked(index int) (int, bool) {
 	if index < 0 || index >= len(p.spec.Targets) {
 		return 0, false
 	}
-	summary := p.chainScoreInputLocked(index)
-	return routeScore(float64(summary.latencyMs), summary.hasLatency, summary.lossPct, summary.jitterMs, summary.availabilityPct, p.healthyLocked(index), float64(p.spec.Targets[index].LoadPct))
+	if !p.healthyLocked(index) {
+		return 0, true
+	}
+	return lbcore.DisplayScore(p.qualityLocked(index, time.Now(), false))
 }
 
 // 事件和快照里带的分：没法打分记 -1，面板显示成「等评分」。
@@ -495,10 +452,10 @@ func (p *failoverProxy) precheckIssueLocked(index int) string {
 		return "unreachable"
 	}
 	summary := stats.summary()
-	if summary.hasLatency && summary.latencyMs >= routeScoreLatencyZeroMs {
+	if summary.hasLatency && summary.latencyMs >= routePrecheckLatencyMs {
 		return fmt.Sprintf("latency %dms", summary.latencyMs)
 	}
-	if summary.samples >= 3 && summary.lossPct >= routeScoreLossZeroPct {
+	if summary.samples >= 3 && summary.lossPct >= routePrecheckLossPct {
 		return fmt.Sprintf("loss %.0f%%", summary.lossPct)
 	}
 	return ""
@@ -642,8 +599,7 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 		p.activeSince = now
 	}
 	p.roundRobinNext = 0
-	p.fastestCandidate = -1
-	p.fastestSince = time.Time{}
+	p.challenger.Reset()
 	p.prewarmIndex = -1
 	p.precheckFailedIndex = -1
 	p.pinnedLast = -1
@@ -798,7 +754,7 @@ type failoverSpecReport struct {
 	RecoverSeconds   int               `json:"recoverSeconds"`
 	AutoFailback     bool              `json:"autoFailback"`
 	FailureThreshold int               `json:"failureThreshold"`
-	ScoreMargin      int               `json:"scoreMargin"`
+	LatencyMarginMs  int               `json:"latencyMarginMs,omitempty"`
 	ScoreHoldSeconds int               `json:"scoreHoldSeconds"`
 	PrewarmSeconds   int               `json:"prewarmSeconds"`
 	SwitchMode       string            `json:"switchMode"`
@@ -832,7 +788,7 @@ func (p *failoverProxy) specReportLocked(now time.Time) *failoverSpecReport {
 		RecoverSeconds:   p.spec.RecoverSeconds,
 		AutoFailback:     p.spec.AutoFailback,
 		FailureThreshold: p.spec.FailureThreshold,
-		ScoreMargin:      p.spec.ScoreMargin,
+		LatencyMarginMs:  p.spec.LatencyMarginMs,
 		ScoreHoldSeconds: p.spec.ScoreHoldSeconds,
 		PrewarmSeconds:   p.spec.PrewarmSeconds,
 		SwitchMode:       p.spec.SwitchMode,

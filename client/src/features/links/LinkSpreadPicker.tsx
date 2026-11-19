@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 /*
   「新连接怎么分」的选择：线路组的分配方式和出口组的出口策略共用这一个。
 
-  两处以前一个是一排按钮、一个是下拉框，名字也各写各的；现在名字都来自 shared/linkTerms.ts
-  的 LINK_SPREAD_LABELS，样子也一样：一排单选按钮，选中的那个下面写一句它会怎么做。
+  两处以前一个是一排按钮、一个是下拉框，名字也各写各的；现在名字都来自 shared/loadBalance.ts
+  的 BALANCE_STRATEGY_LABELS，样子也一样：一排单选按钮，选中的那个下面写一句它会怎么做。
 */
 
 export function linkChoiceClass(active: boolean) {
