@@ -35,7 +35,7 @@ func (d *fxpConformanceDriver) Start(c lbtest.Case) error {
 		}
 	}
 	// 「不稳」按「切走」处理（用例里的 unstable 是软信号）；轮询 / 加权的相位清零，随机数固定种子。
-	selector := newExitEndpointSelector(endpoints[1:], endpoints[0], c.Strategy, &balanceDetectConfig{JitterAction: "switch"})
+	selector := newExitEndpointSelector(endpoints[1:], endpoints[0], c.Strategy, &balanceDetectConfig{JitterAction: "switch", FastestOnly: c.FastestOnly})
 	selector.random = seededExitRandom(20261119)
 	selector.next = 0
 	for i := range selector.current {
