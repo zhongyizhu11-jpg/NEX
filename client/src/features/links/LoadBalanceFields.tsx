@@ -239,7 +239,7 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
           <SettingRow title="差多少算一样快" hint={value.fastestOnly ? "另一台要快出这么多（并且快两成）才换过去" : "比最快的慢不到这么多的一起分"}>
             <Stepper label="一样快的门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} {...limits.latencyMarginMs} unit="ms" />
           </SettingRow>
-          <SettingRow title="只走最快的一台" hint="按整链延迟只走最快的，别的候补；另一台要快出门槛并且快两成、稳住 60 秒才换过去">
+          <SettingRow title="只走最快的一台" hint="只走整链最快的一台；快出门槛且稳 60 秒才换">
             <Switch aria-label="只走最快的一台" checked={value.fastestOnly} onCheckedChange={(fastestOnly) => patch({ fastestOnly })} />
           </SettingRow>
         </>

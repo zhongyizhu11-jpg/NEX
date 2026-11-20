@@ -139,9 +139,9 @@ test("只走最快的一台不算灵敏度：开着照样是那一档，换档�
 test("只走最快的一台：分配方式那一句、实际效果那一句都说它；只对延迟优先", () => {
   const on = { ...DEFAULT_BALANCE_DETECT, fastestOnly: true };
   assert.equal(balanceStrategyHint("latency"), BALANCE_STRATEGY_LABELS.latency.hint, "不给检测参数时还是原来那句");
-  assert.match(balanceStrategyHint("latency", false, on), /只走整链延迟最快的一个，别的候补；另一个要快出门槛并且快两成、稳住 60 秒才换过去/);
+  assert.match(balanceStrategyHint("latency", false, on), /只走最快的一台，别的候补；快出门槛且稳 60 秒才换/);
   assert.equal(balanceStrategyHint("auto", false, on), BALANCE_STRATEGY_LABELS.auto.hint);
-  assert.match(describeBalanceEffect({ strategy: "latency", detect: on }), /延迟优先：只走最快的一台，别的候补；另一台要快出 50ms 并且快两成、稳住 60 秒才换过去/);
+  assert.match(describeBalanceEffect({ strategy: "latency", detect: on }), /延迟优先：只走最快的一台，别的候补；快出 50ms 且稳 60 秒才换/);
   assert.doesNotMatch(describeBalanceEffect({ strategy: "latency", detect: DEFAULT_BALANCE_DETECT }), /只走最快的一台/);
   assert.doesNotMatch(describeBalanceEffect({ strategy: "auto", detect: on }), /只走最快的一台/);
 });

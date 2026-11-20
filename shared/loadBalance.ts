@@ -53,7 +53,7 @@ export const BALANCE_DEFAULT_STRATEGY: BalanceStrategy = "auto";
  * 延迟优先开了「只走最快的一台」（BalanceDetect.fastestOnly）时那一句换成这句：分配方式还是延迟优先，只是不在
  * 「一样快」的几个里分，只走最快的一个（lbcore/fastest.go，GOST 出口组和 NEX 隧道一样）。
  */
-export const BALANCE_LATENCY_FASTEST_ONLY_HINT = "只走整链延迟最快的一个，别的候补；另一个要快出门槛并且快两成、稳住 60 秒才换过去";
+export const BALANCE_LATENCY_FASTEST_ONLY_HINT = "只走最快的一台，别的候补；快出门槛且稳 60 秒才换";
 
 /** 那一句说明；perSession：只转 UDP 时说「新会话」。detect：给了而且开了「只走最快的一台」时，延迟优先说那一句。 */
 export function balanceStrategyHint(strategy: BalanceStrategy, perSession = false, detect?: Pick<BalanceDetect, "fastestOnly"> | null) {
@@ -303,7 +303,7 @@ export function describeBalanceEffect(input: {
       ? `新连接按 ${ratio} 分${names.length > 0 && names.length <= 4 ? `给 ${names.join("、")}` : ""}`
       : "新连接按线路带宽分（没填权重）");
   } else if (strategy === "latency" && detect.fastestOnly) {
-    parts.push(`延迟优先：只走最快的一台，别的候补；另一台要快出 ${detect.latencyMarginMs}ms 并且快两成、稳住 ${BALANCE_FASTEST_HOLD_SECONDS} 秒才换过去`);
+    parts.push(`延迟优先：只走最快的一台，别的候补；快出 ${detect.latencyMarginMs}ms 且稳 ${BALANCE_FASTEST_HOLD_SECONDS} 秒才换`);
   } else if (strategy) {
     parts.push(BALANCE_STRATEGY_LABELS[strategy].hint);
   }

@@ -72,6 +72,7 @@ export function ExitBalanceDialog({
   });
   // ↑↓ 点了马上换位置（排序要重铺链路，接口要等一会儿）；连点几下时等最后一次回来再交给服务端的顺序
   const [order, setOrder] = useState<number[] | null>(null);
+  const [eventsOpen, setEventsOpen] = useState(false);
   const pending = useRef(0);
   const reorderMutation = trpc.forwardGroups.reorder.useMutation({
     onMutate: () => { pending.current += 1; },
@@ -188,8 +189,17 @@ export function ExitBalanceDialog({
         </ul>
         {events.length > 0 ? (
           <div className="fx-lb-events">
-            <p className="fx-lb-events-title">最近切换</p>
-            <ul>
+            {/* 默认收着（用户：「把最近切换隐藏折叠起来」）：平时看的是每台出口的状态，切换记录点开再看 */}
+            <button
+              type="button"
+              className="fx-lb-events-title flex items-center gap-1 self-start"
+              aria-expanded={eventsOpen}
+              onClick={() => setEventsOpen((open) => !open)}
+            >
+              最近切换
+              {eventsOpen ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
+            </button>
+            {eventsOpen ? <ul>
               {events.slice(0, 3).map((event) => {
                 const item = switchEventView(event);
                 return (
@@ -202,7 +212,7 @@ export function ExitBalanceDialog({
                   </li>
                 );
               })}
-            </ul>
+            </ul> : null}
           </div>
         ) : null}
         {canManagePin && pinUnsupported && !nginxNote ? <p className="text-meta text-muted-foreground">{pinUnsupported}</p> : null}
