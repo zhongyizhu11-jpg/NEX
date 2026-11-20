@@ -14,6 +14,8 @@ Reference 是直接调 lbcore 的那个实现：最简单的「调用方」—�
 */
 type Reference struct {
 	strategy  string
+	fastestOn bool
+	fastest   lbcore.Fastest
 	members   []lbcore.Member
 	peak      []lbcore.PeakEWMA
 	last      []float64
@@ -38,6 +40,7 @@ func (r *Reference) Start(c Case) error {
 	n := len(c.Members)
 	*r = Reference{
 		strategy:  c.Strategy,
+		fastestOn: c.FastestOnly,
 		members:   make([]lbcore.Member, n),
 		peak:      make([]lbcore.PeakEWMA, n),
 		last:      make([]float64, n),
@@ -140,8 +143,8 @@ func (r *Reference) Pick(key string, mode string) (int, error) {
 			return -1, fmt.Errorf("不认识的分配方式 %q", r.strategy)
 		}
 	}
-	state := lbcore.State{WRR: r.wrr, Near: &r.near, Next: &r.next}
-	pick := lbcore.Pick(r.strategy, state, r.members, r.keys, candidates, key, r.now, r.rnd, lbcore.Options{Scratch: r.scratch})
+	state := lbcore.State{WRR: r.wrr, Near: &r.near, Next: &r.next, Fastest: &r.fastest}
+	pick := lbcore.Pick(r.strategy, state, r.members, r.keys, candidates, key, r.now, r.rnd, lbcore.Options{Scratch: r.scratch, FastestOnly: r.fastestOn})
 	return r.settle(pick, mode), nil
 }
 

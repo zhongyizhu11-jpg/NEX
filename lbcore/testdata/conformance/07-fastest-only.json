@@ -1,0 +1,36 @@
+[
+  {
+    "name": "latency-fastest-only",
+    "about": "延迟优先 · 只走最快的一台：所有新连接只给整链最快的 b；a 只比它快 1ms 不换；b 坏了当场换到次快的 a；b 恢复了也只快 1ms，不切回",
+    "strategy": "latency",
+    "fastestOnly": true,
+    "members": [
+      { "name": "a", "latencyMs": 4 },
+      { "name": "b", "latencyMs": 3 },
+      { "name": "c", "latencyMs": 60 },
+      { "name": "d", "latencyMs": 90 }
+    ],
+    "steps": [
+      { "picks": 40, "mode": "burst", "expect": { "counts": { "b": [40, 40] } } },
+      {
+        "about": "b 变慢 2ms（a 比它快 1ms）：不够门槛，不换",
+        "latency": { "b": [[0, 5]] },
+        "picks": 20,
+        "expect": { "counts": { "b": [20, 20] } }
+      },
+      {
+        "about": "b 坏了：当场换到次快的 a，不等",
+        "set": { "b": "down" },
+        "picks": 20,
+        "expect": { "counts": { "a": [20, 20] } }
+      },
+      {
+        "about": "b 恢复、又是 3ms：只快 1ms，留在 a",
+        "set": { "b": "healthy" },
+        "latency": { "b": [[0, 3]] },
+        "picks": 20,
+        "expect": { "counts": { "a": [20, 20] } }
+      }
+    ]
+  }
+]
