@@ -115,13 +115,21 @@
 
 ### 6.1 档位（出口组 / 链路负载均衡的「检测与切换」）
 
-`shared/loadBalance.ts`：均衡 = 默认（`:124`），灵敏 `:140`，稳定 `:150`。
+`shared/loadBalance.ts`：均衡 = 默认（`DEFAULT_BALANCE_DETECT`），灵敏 / 稳定见 `BALANCE_SENSITIVITY_PRESETS`。
 
-| 档 | 间隔 | 几次不通算坏 | 恢复连续通 | 一样快门槛 | 抖动门槛 / 持续 | 界面「约 N 秒内切走」 = ⌈间隔 × (次数 + 0.5)⌉（`:211`） |
-|---|---|---|---|---|---|---|
-| 灵敏 | 1 s | 2 | 3 | 30 ms | 20 ms / 15 s | 3 s |
-| 均衡 | 2 s | 2 | 3 | 50 ms | 30 ms / 30 s | 5 s |
-| 稳定 | 5 s | 3 | 5 | 80 ms | 50 ms / 60 s | 18 s |
+| 档 | 间隔（探出口机，`intervalSeconds`） | 探目标（`targetProbeSeconds`） | 几次不通算坏 | 恢复连续通 | 一样快门槛 | 抖动门槛 / 持续 | 界面「约 N 秒内切走」 = ⌈间隔 × (次数 + 0.5)⌉（`balanceSwitchWithinSeconds`） |
+|---|---|---|---|---|---|---|---|
+| 灵敏 | 1 s | 5 s | 2 | 3 | 30 ms | 20 ms / 15 s | 3 s |
+| 均衡 | 2 s | 10 s | 2 | 3 | 50 ms | 30 ms / 30 s | 5 s |
+| 稳定 | 5 s | 30 s | 3 | 5 | 80 ms | 50 ms / 60 s | 18 s |
+
+两个节拍分开（2.3.541，用户反馈「太频了容易黑洞」）：「间隔」管入口探自己的出口机（GOST：`gostBalanceProbeTiming` →
+Agent `ProbeIntervalSeconds`；FXP：`endpoint_pool.go` 的 `recoverGap`），1–60 s；「探目标」管出口机连规则的目标（GOST：
+`exitTargetProbeSpec` → Agent `route_hop_probe.go`，passive 规格最多认 300 s；FXP：`target_health.go` 的 `targetInterval` →
+`targetProbeInterval`），2–300 s。判坏以后的退避上限是 max(60 s, 节拍)，不会比节拍更勤；「连不上」的新鲜度跟着节拍放宽
+（面板 `exitTargetDownStale` = 2 × 上报间隔 + 余量；FXP `targetDownFreshFor` = max(90 s, 2 × 节拍 + 30 s)）。
+老数据没有 `targetProbeSeconds`：其余各项正好是某一档就取那一档的值，否则 max(5, min(300, 间隔 × 5))（`normalizeBalanceDetect`）；
+老面板下发的 FXP 检测参数没有这个字段时 FXP 照旧按间隔探目标。
 
 线路组没有这三档：用模式模板（`shared/routeGroupPolicy.ts:72`：连续 2 次、异常 3 秒切、恢复观察 300 s、最短驻留
 600 s；智能择优驻留 60 s、择优持续 30 s），不套模板时 `ROUTE_GUARD_DEFAULTS`（`shared/routeGroupModel.ts:165`：3 次 / 60 s /
@@ -147,9 +155,11 @@
    复核时同时直接探一次出口机（多跳的不探）：出口机本身也连不上（进程死掉时 gost 拨它被拒，复核约 1 s 就判坏、比每轮
    的直接探测先到）是机器的问题，按直接探测恢复，不要求经出口（`confirmExitEarlyClose`）。
 3. 面板提示：出口机探规则目标的结果（`server/exitTargetHealth.ts` 的 `exitTargetExcludedHostIds`：有别的已知好的才摘）→ `Down`；
-   出口到目标的中位数 → `ExtraLatencyMs`。
+   出口到目标的中位数 → `ExtraLatencyMs`。节拍是「探目标」那一列（灵敏 5 s / 均衡 10 s / 稳定 30 s，`exitTargetProbeSpec`），
+   不是上面的「间隔」；有到目标的真实连接时直接读内核 RTT（passive），不另外连。所以「出口到目标不通」没有流量时最慢
+   约 探目标 × 次数 + 上报 才经面板摘掉（均衡约 20 s 多），有流量时靠信号 2 当场换走。
 
-| 档 | 黑洞最坏摘掉 | 回来放回 | 实测（`gost-runtime/test/balance-proxy/run.sh`，路线图阶段 2） |
+| 档 | 出口机黑洞最坏摘掉（信号 1） | 回来放回 | 实测（`gost-runtime/test/balance-proxy/run.sh`，路线图阶段 2） |
 |---|---|---|---|
 | 灵敏 | 间隔 + (次数 − 1) × 间隔 + 超时 ≈ 3 s | (恢复 − 1) × 间隔 ≈ 2 s（+ 不到一轮） | 3.3 s / 2.1 s |
 | 均衡 | ≈ 5 s | ≈ 4 s（+ 不到一轮） | 5.0 s / 4.0 s |

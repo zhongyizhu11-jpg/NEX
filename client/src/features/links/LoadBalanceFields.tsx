@@ -1,6 +1,7 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { ChevronDown, Minus, Plus, RotateCcw } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
@@ -15,6 +16,7 @@ import {
   BALANCE_SENSITIVITIES,
   BALANCE_SENSITIVITY_PRESETS,
   BALANCE_STRATEGY_LABELS,
+  BALANCE_TARGET_PROBE_CHOICES,
   DEFAULT_BALANCE_DETECT,
   balanceDetectEquals,
   balanceSensitivityOf,
@@ -32,6 +34,7 @@ import {
 
     分配方式  一个下拉框：自动（推荐）在最上面，其余 7 种在「其他方式」里；每项一句话，选中的那句写在下面。
     检测      灵敏 / 均衡 / 稳定三档，下面一句「坏了约 N 秒内切走」。逐项参数收在「高级」里，默认合着。
+              「多久探一次出口机」和「多久探一次目标」分两项（2.3.541）：后者连的是别人的机器，高防目标会拉黑连得太勤的出口。
 */
 
 export function BalanceStrategySelect({
@@ -107,6 +110,65 @@ function Stepper({ value, onChange, min, max, step = 1, unit, label }: {
   );
 }
 
+/**
+ * 秒数：一排常用的格子 + 下面一个能填任意秒数的框（2.3.541 用户：「自定义要能填任意秒」）。
+ * 值正好是某一格时那格亮着；框里一直是当前值。填的时候不打断，离开框（或回车）时空的、不合法的夹回范围。
+ */
+export function SecondsPicker({ value, onChange, choices, min, max, label }: {
+  value: number;
+  onChange: (value: number) => void;
+  choices: readonly number[];
+  min: number;
+  max: number;
+  label: string;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const clamp = (raw: string) => {
+    const number = Math.round(Number(raw));
+    if (!raw.trim() || !Number.isFinite(number)) return value;
+    return Math.min(max, Math.max(min, number));
+  };
+  const commit = () => {
+    const next = clamp(draft);
+    setDraft(String(next));
+    if (next !== value) onChange(next);
+  };
+  return (
+    <div className="space-y-1.5">
+      <SegmentedControl
+        ariaLabel={label}
+        value={value}
+        options={choices.map((seconds) => ({ value: seconds, label: `${seconds} 秒` }))}
+        onChange={onChange}
+        listClassName="grid grid-flow-col auto-cols-fr gap-1"
+        optionClassName="whitespace-nowrap px-1"
+      />
+      <label className="flex items-center gap-2 text-meta text-muted-foreground">
+        <span className="shrink-0">自定义</span>
+        <Input
+          type="number"
+          inputMode="numeric"
+          min={min}
+          max={max}
+          step={1}
+          aria-label={`${label}（秒，${min}–${max}）`}
+          className="h-8 w-24 tabular-nums"
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            const number = Number(event.target.value);
+            if (event.target.value.trim() && Number.isInteger(number) && number >= min && number <= max && number !== value) onChange(number);
+          }}
+          onBlur={commit}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commit(); } }}
+        />
+        <span className="shrink-0">秒（{min}–{max}）</span>
+      </label>
+    </div>
+  );
+}
+
 function SettingRow({ title, hint, children, stacked = false }: { title: string; hint?: string; children: ReactNode; stacked?: boolean }) {
   return (
     <div className={cn("border-t border-border/50 py-2.5 first:border-t-0", stacked ? "space-y-2" : "flex items-center justify-between gap-3")}>
@@ -141,14 +203,26 @@ function BalanceAdvanced({ value, onChange, strategy, weights, memberNames }: {
           <RotateCcw className="h-3 w-3" />恢复默认
         </button>
       </div>
-      <SettingRow title="多久探一次" hint="越短切得越快；每次只是连一下，流量很小" stacked>
-        <SegmentedControl
-          ariaLabel="多久探一次"
+      <SettingRow title="多久探一次出口机" hint="探自己的出口机，越短切得越快；每次只是连一下" stacked>
+        <SecondsPicker
+          label="多久探一次出口机"
           value={value.intervalSeconds}
-          options={BALANCE_INTERVAL_CHOICES.map((seconds) => ({ value: seconds, label: `${seconds} 秒` }))}
+          choices={BALANCE_INTERVAL_CHOICES}
+          {...limits.intervalSeconds}
           onChange={(intervalSeconds) => patch({ intervalSeconds })}
-          listClassName="grid grid-flow-col auto-cols-fr gap-1"
-          optionClassName="whitespace-nowrap px-1"
+        />
+      </SettingRow>
+      <SettingRow
+        title="多久探一次目标"
+        hint="出口机连一下规则目标就断。高防目标会把连得太勤的出口 IP 拉黑，别低于 5 秒；有真实流量时直接读内核的往返时间，不另外连"
+        stacked
+      >
+        <SecondsPicker
+          label="多久探一次目标"
+          value={value.targetProbeSeconds}
+          choices={BALANCE_TARGET_PROBE_CHOICES}
+          {...limits.targetProbeSeconds}
+          onChange={(targetProbeSeconds) => patch({ targetProbeSeconds })}
         />
       </SettingRow>
       <SettingRow title="几次不通算坏" hint={`默认 ${DEFAULT_BALANCE_DETECT.failThreshold} 次`}>
