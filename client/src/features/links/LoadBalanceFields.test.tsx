@@ -41,7 +41,7 @@ test("只走最快的一台：开着时开关是开的，实际效果、分配�
   assert.match(advanced, /另一台要快出这么多（并且快两成）才换过去/);
   assert.match(advanced, /实际效果：[^<]*延迟优先：只走最快的一台/);
   const fields = renderToStaticMarkup(<LoadBalanceFields strategy="latency" onStrategyChange={noop} detect={detect} onDetectChange={noop} />);
-  assert.match(fields, /只走整链延迟最快的一个/);
+  assert.match(fields, /只走最快的一台，别的候补/);
   assert.match(fields, /延迟优先：只走最快的一台/);
   // 不算灵敏度：还是「均衡」，不变成自定义
   assert.doesNotMatch(fields, />自定义</);

@@ -56,7 +56,7 @@ test("和默认一样存 null（以后改默认跟着走），不一样存 JSON"
 test("探目标和探出口机分开：三档的两个节拍，老数据没有 targetProbeSeconds 时按档推出来", () => {
   assert.deepEqual(
     Object.fromEntries(Object.entries(BALANCE_SENSITIVITY_PRESETS).map(([key, preset]) => [key, [preset.detect.intervalSeconds, preset.detect.targetProbeSeconds]])),
-    { sensitive: [1, 5], balanced: [2, 10], stable: [5, 30] },
+    { sensitive: [2, 5], balanced: [10, 10], stable: [30, 30] },
   );
   assert.deepEqual([...BALANCE_TARGET_PROBE_CHOICES], [5, 10, 30, 60]);
   assert.equal(DEFAULT_BALANCE_DETECT.targetProbeSeconds, 10);
@@ -82,14 +82,16 @@ test("探目标和探出口机分开：三档的两个节拍，老数据没有 t
   assert.equal(serializeBalanceDetect({ ...DEFAULT_BALANCE_DETECT, targetProbeSeconds: undefined }), null);
 });
 
-test("默认参数：每 2 秒探一次、2 次不通算坏，约 5 秒内切走", () => {
-  assert.equal(balanceSwitchWithinSeconds(DEFAULT_BALANCE_DETECT), 5);
+test("默认参数：每 10 秒探一次、2 次不通算坏，约 25 秒内切走（2.3.544 三档 2 / 10 / 30 秒）", () => {
+  assert.equal(balanceSwitchWithinSeconds(DEFAULT_BALANCE_DETECT), 25);
+  assert.equal(balanceSwitchWithinSeconds(BALANCE_SENSITIVITY_PRESETS.sensitive.detect), 5);
+  assert.equal(balanceSwitchWithinSeconds(BALANCE_SENSITIVITY_PRESETS.stable.detect), 105);
 });
 
 test("实际效果那句话跟着设置变", () => {
   const text = describeBalanceEffect({ strategy: "weighted", detect: DEFAULT_BALANCE_DETECT, weights: [5, 3, 2], memberNames: ["A", "B", "C"] });
-  assert.match(text, /每 2 秒探一次出口机、每 10 秒探一次目标，坏了约 5 秒内切走/);
-  assert.match(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT, dns: true }), /^每 2 秒探一次，坏了约 5 秒内改解析/);
+  assert.match(text, /每 10 秒探一次出口机、每 10 秒探一次目标，坏了约 25 秒内切走/);
+  assert.match(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT, dns: true }), /^每 10 秒探一次，坏了约 25 秒内改解析/);
   assert.match(text, /新连接按 5 : 3 : 2 分给 A、B、C/);
   assert.match(text, /抖动超过 30ms 持续 30 秒，就把它降到 4 分之 1/);
   const ignore = describeBalanceEffect({ strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, jitterAction: "ignore" } });

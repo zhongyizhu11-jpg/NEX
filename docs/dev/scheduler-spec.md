@@ -138,9 +138,11 @@
 
 | 档 | 间隔（探出口机，`intervalSeconds`） | 探目标（`targetProbeSeconds`） | 几次不通算坏 | 恢复连续通 | 一样快门槛 | 抖动门槛 / 持续 | 界面「约 N 秒内切走」 = ⌈间隔 × (次数 + 0.5)⌉（`balanceSwitchWithinSeconds`） |
 |---|---|---|---|---|---|---|---|
-| 灵敏 | 1 s | 5 s | 2 | 3 | 30 ms | 20 ms / 15 s | 3 s |
-| 均衡 | 2 s | 10 s | 2 | 3 | 50 ms | 30 ms / 30 s | 5 s |
-| 稳定 | 5 s | 30 s | 3 | 5 | 80 ms | 50 ms / 60 s | 18 s |
+| 灵敏 | 2 s | 5 s | 2 | 3 | 30 ms | 20 ms / 15 s | 5 s |
+| 均衡 | 10 s | 10 s | 2 | 3 | 50 ms | 30 ms / 30 s | 25 s |
+| 稳定 | 30 s | 30 s | 3 | 5 | 80 ms | 50 ms / 60 s | 105 s |
+
+2.3.544 起探出口机的间隔是 2 / 10 / 30 秒（用户：「灵敏度秒数依次改成 2 10 30」；以前 1 / 2 / 5）。
 
 两个节拍分开（2.3.541，用户反馈「太频了容易黑洞」）：「间隔」管入口探自己的出口机（GOST：`gostBalanceProbeTiming` →
 Agent `ProbeIntervalSeconds`；FXP：`endpoint_pool.go` 的 `recoverGap`），1–60 s；「探目标」管出口机连规则的目标（GOST：

@@ -151,7 +151,7 @@ export const BALANCE_DETECT_LIMITS = {
 
 /** 负载均衡（链路、出口组、线路组）的默认值。 */
 export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
-  intervalSeconds: 2,
+  intervalSeconds: 10,
   targetProbeSeconds: 10,
   failThreshold: 2,
   recoverThreshold: 3,
@@ -168,13 +168,14 @@ export const BALANCE_FASTEST_HOLD_SECONDS = 60;
 
 /*
   检测灵敏度三档（2.3.539）：大多数人只需要选一档，不用逐项调。「均衡」就是默认值；改过任何一项就显示「自定义」。
+  探出口机的节奏 2 / 10 / 30 秒（2.3.544，用户：「灵敏度秒数依次改成 2 10 30」；以前 1 / 2 / 5），探目标 5 / 10 / 30 秒。
 */
 export type BalanceSensitivity = "sensitive" | "balanced" | "stable";
 export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: string; hint: string; detect: BalanceDetect }> = {
   sensitive: {
     label: "灵敏",
     hint: "适合游戏、实时通话",
-    detect: { intervalSeconds: 1, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false },
+    detect: { intervalSeconds: 2, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false },
   },
   balanced: {
     label: "均衡",
@@ -184,7 +185,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   stable: {
     label: "稳定",
     hint: "偶尔波动不动，适合下载、长连接",
-    detect: { intervalSeconds: 5, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false },
+    detect: { intervalSeconds: 30, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false },
   },
 };
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];

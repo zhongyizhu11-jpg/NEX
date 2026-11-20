@@ -45,15 +45,15 @@ test("八种分配方式原样交给调度器（和 NEX 隧道同一段算法）
   assert.equal(normalizeExitGroupStrategy("least_conn"), "least_load");
 });
 
-test("探测节奏照「检测与切换」来：默认 2 秒一轮、1 秒超时、第 2 轮失败就判坏、连着通 3 轮恢复", () => {
+test("探测节奏照「检测与切换」来：默认 10 秒一轮、2 秒超时、第 2 轮失败就判坏、连着通 3 轮恢复（灵敏 2 秒一轮、1 秒超时）", () => {
   assert.deepEqual(gostBalanceProbeTiming(DEFAULT_BALANCE_DETECT), {
-    probeIntervalSeconds: 2, probeTimeoutMs: 1000, failureThreshold: 2, failoverSeconds: 2, recoverSeconds: 4,
+    probeIntervalSeconds: 10, probeTimeoutMs: 2000, failureThreshold: 2, failoverSeconds: 10, recoverSeconds: 20,
   });
   assert.deepEqual(gostBalanceProbeTiming(BALANCE_SENSITIVITY_PRESETS.sensitive.detect), {
-    probeIntervalSeconds: 1, probeTimeoutMs: 1000, failureThreshold: 2, failoverSeconds: 1, recoverSeconds: 2,
+    probeIntervalSeconds: 2, probeTimeoutMs: 1000, failureThreshold: 2, failoverSeconds: 2, recoverSeconds: 4,
   });
   assert.deepEqual(gostBalanceProbeTiming(BALANCE_SENSITIVITY_PRESETS.stable.detect), {
-    probeIntervalSeconds: 5, probeTimeoutMs: 2000, failureThreshold: 3, failoverSeconds: 10, recoverSeconds: 20,
+    probeIntervalSeconds: 30, probeTimeoutMs: 2000, failureThreshold: 3, failoverSeconds: 60, recoverSeconds: 120,
   });
 });
 
@@ -71,7 +71,7 @@ test("规格：每台出口一条目标（本机端口 + 直接探出口机）�
   assert.equal(spec.proxyProtocolStrip, true, "规则不往目标发头：这个头只给调度器看，读完扔掉");
   assert.equal(spec.proxyProtocolSend, false);
   assert.equal(spec.pinnedIndex, null);
-  assert.equal(spec.probeIntervalSeconds, 2);
+  assert.equal(spec.probeIntervalSeconds, 10);
   assert.equal(spec.minHoldSeconds, 60);
   assert.equal("noSlowStart" in spec, false);
 });
