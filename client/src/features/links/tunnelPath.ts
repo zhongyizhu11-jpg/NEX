@@ -36,13 +36,8 @@ export type TunnelPathContext = {
   entryGroupMemberHostIds?: number[];
   /** 整条路径的健康状态。逐跳状态目前拿不到，所以整条同色 */
   health?: NetworkHealth;
-  /** 链路探测的延迟（入口→主出口；多出口时是几台里最慢的那台），标在中间那一段上，写成「到出口 X ms」 */
+  /** 链路延迟，标在中间那一段上 */
   latencyMs?: number | null;
-  /**
-   * 面板探的入口到在用出口那一段（服务端 liveExitLatency：链路定时探测里在用那几台的分支，在用哪几台按入口实时上报）。
-   * 负载均衡的链路有它时优先用它：链路探测的总数是几台里最慢的那台，不一定是正在扛流量的那台。
-   */
-  liveExitLatency?: LiveExitLatencyView | null;
   /** 经过什么转发实现（NEX V1/V2、GOST…） */
   via?: string;
   /**
@@ -51,73 +46,6 @@ export type TunnelPathContext = {
    */
   onLoadBalanceClick?: () => void;
 };
-
-export type LiveExitLatencyView = {
-  exitHostId?: number;
-  exitName?: string;
-  exitMs: number;
-  lowMs: number;
-  highMs: number;
-  inUse: number;
-  at?: number;
-};
-
-export type TunnelExitLatency = {
-  lowMs: number;
-  highMs: number;
-  source: "live" | "probe";
-  /** 说清楚这是哪一段、谁量的 */
-  title: string;
-};
-
-type LoadBalanceShape = { loadBalanceEnabled?: unknown; loadBalanceExits?: unknown; [key: string]: unknown } | null | undefined;
-
-function isLoadBalancedTunnel(tunnel: LoadBalanceShape) {
-  const extraExits = Array.isArray(tunnel?.loadBalanceExits)
-    ? (tunnel.loadBalanceExits as Array<{ isEnabled?: unknown } | null>).filter((exit) => exit?.isEnabled !== false).length
-    : 0;
-  return !!tunnel?.loadBalanceEnabled || extraExits > 0;
-}
-
-/**
- * 链路卡的那个延迟数到底是哪一段：一律是「到出口」（入口→出口机，不含到目标；到目标的整链看规则卡）。
- * 负载均衡的链路有在用出口各自的探测数时用它（一台写一个数，几台写区间），没有就用链路探测的总数。
- * 都是面板探的（和诊断同一口径），入口报的建隧道握手时间不拿来显示。
- */
-export function tunnelExitLatency(
-  tunnel: LoadBalanceShape,
-  probeMs: number | null | undefined,
-  live: LiveExitLatencyView | null | undefined,
-): TunnelExitLatency | null {
-  const loadBalanced = isLoadBalancedTunnel(tunnel);
-  if (loadBalanced && live && Number(live.inUse) > 0 && Number.isFinite(Number(live.lowMs)) && Number.isFinite(Number(live.highMs))) {
-    const lowMs = Math.round(Number(live.lowMs));
-    const highMs = Math.round(Number(live.highMs));
-    const name = String(live.exitName || "").trim();
-    const carryingMs = Math.round(Number(live.exitMs));
-    const title = Number(live.inUse) > 1
-      ? name
-        ? `入口到在用出口 ${lowMs}–${highMs} ms（${live.inUse} 台，扛流量最多的 ${name} ${carryingMs} ms；链路探测）`
-        : `入口到在用出口 ${lowMs}–${highMs} ms（${live.inUse} 台；链路探测）`
-      : name
-        ? `入口到在用出口 ${name} ${lowMs} ms（链路探测）`
-        : `入口到在用出口 ${lowMs} ms（链路探测）`;
-    return { lowMs, highMs, source: "live", title };
-  }
-  if (typeof probeMs !== "number" || !Number.isFinite(probeMs)) return null;
-  const ms = Math.round(probeMs);
-  return {
-    lowMs: ms,
-    highMs: ms,
-    source: "probe",
-    title: loadBalanced ? `入口到出口 ${ms} ms（链路探测，几台出口里最慢的那台）` : `入口到主出口 ${ms} ms（链路探测）`,
-  };
-}
-
-/** 「5 ms」「5–7 ms」 */
-export function formatTunnelExitLatency(latency: TunnelExitLatency) {
-  return latency.highMs > latency.lowMs ? `${latency.lowMs}–${latency.highMs} ms` : `${latency.lowMs} ms`;
-}
 
 export type TunnelPath = {
   nodes: NetworkNodeSpec[];
@@ -201,24 +129,20 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
     会出现三个 8ms —— 看的人会以为那是三段各自的延迟，而实际测的是端到端。
   */
   const middle = nodes.length >= 2 ? Math.max(0, Math.floor((nodes.length - 1) / 2)) : 0;
-  const latency = tunnelExitLatency(tunnel, context.latencyMs, context.liveExitLatency);
   const edges: NetworkEdgeSpec[] = nodes.slice(1).map((_, index) => {
     const base: NetworkEdgeSpec = { health };
     if (index !== middle) return base;
     return {
       ...base,
       via: context.via || undefined,
-      // 链路卡的数是「到出口」（入口→出口机），不是规则卡上的整链（再到目标）：线下写明，免得两个数对不上
-      latencyMs: latency ? latency.lowMs : undefined,
-      latencyHighMs: latency && latency.highMs > latency.lowMs ? latency.highMs : undefined,
-      latencyPrefix: latency ? "到出口" : undefined,
+      latencyMs: typeof context.latencyMs === "number" ? context.latencyMs : undefined,
     };
   });
 
   const title = [
     entryGroup ? `入口组：${entryGroupLabel(entryGroup)}` : "",
     nodes.map((node) => node.name).join(" → "),
-    latency ? latency.title : "",
+    typeof context.latencyMs === "number" ? `延迟 ${context.latencyMs} ms` : "",
   ]
     .filter(Boolean)
     .join("；");

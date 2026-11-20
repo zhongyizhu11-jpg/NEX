@@ -315,46 +315,6 @@ export function liveBalanceForTunnel(tunnelId: number, nowMs = Date.now()): Live
     .filter((report): report is LiveRuleReport => !!report);
 }
 
-/**
- * 一条链路现在在用哪几台出口（几条规则合起来：状态 active 的；分到的新连接数加起来，扛流量最多的排第一，
- * 都没有新连接时按入口配置里的顺序，主出口在前）。只给「用哪台」，不给延迟：链路卡「到出口」的数是面板探的
- * （server/ruleLatencyView.ts 的 tunnelInUseExitLatency），入口报的 exitMs 是建隧道握手的时间，不拿来显示。
- */
-export function inUseExitsFromLive(reports: LiveRuleReport[]): Array<{ hostId: number; hostName: string; picks: number }> {
-  const byExit = new Map<number, { hostId: number; hostName: string; picks: number; order: number }>();
-  let order = 0;
-  for (const report of reports) {
-    for (const exit of report.exits) {
-      if (exit.state !== "active" || !(exit.hostId > 0)) continue;
-      const current = byExit.get(exit.hostId) || { hostId: exit.hostId, hostName: exit.hostName, picks: 0, order: order++ };
-      current.picks += Math.max(0, Number(exit.picks) || 0);
-      byExit.set(exit.hostId, current);
-    }
-  }
-  return Array.from(byExit.values())
-    .sort((left, right) => right.picks - left.picks || left.order - right.order)
-    .map(({ hostId, hostName, picks }) => ({ hostId, hostName, picks }));
-}
-
-/** 一批链路各自在用的出口（链路列表用）：只扫一遍上报。没有新鲜上报的链路不在结果里。 */
-export function inUseExitsByTunnel(tunnelIds: number[], nowMs = Date.now()): Map<number, Array<{ hostId: number; hostName: string; picks: number }>> {
-  const wanted = new Set(tunnelIds.map((id) => Number(id)));
-  const rulesByTunnel = new Map<number, Set<number>>();
-  for (const report of reports.values()) {
-    if (!wanted.has(report.tunnelId) || nowMs - report.at > BALANCE_LIVE_STALE_MS) continue;
-    const set = rulesByTunnel.get(report.tunnelId) || new Set<number>();
-    set.add(report.ruleId);
-    rulesByTunnel.set(report.tunnelId, set);
-  }
-  const result = new Map<number, Array<{ hostId: number; hostName: string; picks: number }>>();
-  for (const [tunnelId, ruleIds] of rulesByTunnel) {
-    const lives = Array.from(ruleIds).map((ruleId) => liveBalanceForRule(ruleId, nowMs)).filter((report): report is LiveRuleReport => !!report);
-    const exits = inUseExitsFromLive(lives);
-    if (exits.length > 0) result.set(tunnelId, exits);
-  }
-  return result;
-}
-
 /** 只给测试用 */
 export function resetBalanceLiveForTest() {
   reports.clear();

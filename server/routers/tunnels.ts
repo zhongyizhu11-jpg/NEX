@@ -1,5 +1,3 @@
-import { inUseExitsByTunnel } from "../balanceLive";
-import { tunnelInUseExitLatency } from "../ruleLatencyView";
 import { tunnelBalanceAgentIssues, tunnelRelayRuntimeIssues } from "../tunnelBalanceAgent";
 import { sameNetworkAddress } from "@shared/ipAddress";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
@@ -658,18 +656,6 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
   const enabledGroupHostIds = (group: any) => (group?.members || [])
     .filter((member: any) => member?.memberType === "host" && dbBool(member.isEnabled, true))
     .map((member: any) => Number(member.hostId || 0));
-  // 链路卡「到出口」：面板探的入口到在用出口那一段（在用哪几台按入口实时上报；负载均衡时比链路探测的总数——几台里最慢的——准）
-  const inUseExitsByTunnelId = inUseExitsByTunnel(tunnels.map((tunnel) => Number(tunnel.id)));
-  const liveExitLatencyOf = (tunnel: { id: unknown }) => {
-    const inUse = inUseExitsByTunnelId.get(Number(tunnel.id));
-    if (!inUse) return null;
-    const names = new Map(inUse.map((exit) => [exit.hostId, exit.hostName]));
-    return tunnelInUseExitLatency({
-      tunnelId: tunnel.id,
-      inUseHostIds: inUse.map((exit) => exit.hostId),
-      hostName: (hostId) => String(hostMap.get(hostId)?.name || names.get(hostId) || ""),
-    });
-  };
   return tunnels.map((tunnel) => {
     const fxpIssues = tunnelFxpRuntimeIssues(tunnel, tunnelFxpMemberHostIds(tunnel, {
       hopHostIds: hopHostIdsByTunnel.get(Number(tunnel.id)) || [],
@@ -711,7 +697,6 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
       latestLatencyIsTimeout: latestLatency ? latestLatency.isTimeout : fallbackTimeout,
       latestLatencyAt: latestLatency?.recordedAt ?? (tunnel as any).lastTestAt ?? null,
       latestLatencySeries,
-      liveExitLatency: liveExitLatencyOf(tunnel),
       hopHostIds: hopHostIdsByTunnel.get(Number(tunnel.id)) || [],
       hopConnectHosts: hopConnectHostsByTunnel.get(Number(tunnel.id)) || [],
       hopHosts: (hopHostIdsByTunnel.get(Number(tunnel.id)) || [])

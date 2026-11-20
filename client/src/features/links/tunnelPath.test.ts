@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildTunnelPath, formatTunnelExitLatency, tunnelExitLatency } from "./tunnelPath";
+import { buildTunnelPath } from "./tunnelPath";
 import { tunnelHealthFromAvailability } from "./tunnelHealth";
 
 const hosts = [
@@ -144,46 +144,4 @@ test("手动停用是 standby，协议没启用是 down —— 两者不能混",
   // 停用是按设计没在跑；协议没启用是这条链路根本跑不起来。
   assert.equal(tunnelHealthFromAvailability("available", { enabled: false }), "standby");
   assert.equal(tunnelHealthFromAvailability("available", { supported: false }), "down");
-});
-
-/*
-  延迟口径（2026-11 用户：「转发延迟显示都不统一」）：链路卡上的数是「到出口」（入口→出口机），规则卡上的是「整链」（再到目标）。
-  线下写明「到出口」，悬停写清是哪台、谁测的。
-*/
-test("线下的延迟写成「到出口 X ms」，悬停写入口到主出口（链路探测）", () => {
-  const path = buildTunnelPath(tunnel(), { hosts, latencyMs: 7 });
-  const labelled = path.edges.find((edge) => edge.latencyMs != null);
-  assert.equal(labelled?.latencyPrefix, "到出口");
-  assert.equal(labelled?.latencyMs, 7);
-  assert.equal(labelled?.latencyHighMs, undefined);
-  assert.match(path.title, /入口到主出口 7 ms（链路探测）/);
-});
-
-test("负载均衡：用在用出口各自的探测；一台写一个数，几台写区间；没有就退回链路探测的总数", () => {
-  const balanced = tunnel({ loadBalanceEnabled: true, loadBalanceExits: [{ hostId: 4, isEnabled: true }] });
-  const one = buildTunnelPath(balanced, {
-    hosts,
-    latencyMs: 7,
-    liveExitLatency: { exitHostId: 4, exitName: "HK02", exitMs: 5, lowMs: 5, highMs: 5, inUse: 1 },
-  });
-  const oneEdge = one.edges.find((edge) => edge.latencyMs != null);
-  assert.deepEqual([oneEdge?.latencyPrefix, oneEdge?.latencyMs, oneEdge?.latencyHighMs], ["到出口", 5, undefined]);
-  assert.match(one.title, /入口到在用出口 HK02 5 ms（链路探测）/);
-
-  const several = buildTunnelPath(balanced, {
-    hosts,
-    latencyMs: 7,
-    liveExitLatency: { exitHostId: 4, exitName: "HK02", exitMs: 6, lowMs: 5, highMs: 7, inUse: 2 },
-  });
-  const severalEdge = several.edges.find((edge) => edge.latencyMs != null);
-  assert.deepEqual([severalEdge?.latencyMs, severalEdge?.latencyHighMs], [5, 7]);
-  assert.match(several.title, /入口到在用出口 5–7 ms（2 台，扛流量最多的 HK02 6 ms；链路探测）/);
-
-  const fallback = tunnelExitLatency(balanced, 7, null);
-  assert.equal(fallback?.source, "probe");
-  assert.match(String(fallback?.title), /几台出口里最慢的那台/);
-  assert.equal(formatTunnelExitLatency({ lowMs: 5, highMs: 7, source: "live", title: "" }), "5–7 ms");
-  assert.equal(formatTunnelExitLatency({ lowMs: 5, highMs: 5, source: "probe", title: "" }), "5 ms");
-  // 不是负载均衡的链路：只有一台出口，总数就是到它
-  assert.equal(tunnelExitLatency(tunnel(), 7, { exitMs: 5, lowMs: 5, highMs: 5, inUse: 1 })?.source, "probe");
 });

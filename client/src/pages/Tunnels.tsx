@@ -18,7 +18,7 @@ import { describeNetworkHealth } from "@shared/networkHealth";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { StatusDot } from "@/components/network/StatusDot";
 import { MimicHostsStatus } from "@/components/hosts/MimicInstallPanel";
-import { buildTunnelPath, formatTunnelExitLatency, tunnelExitLatency } from "@/features/links/tunnelPath";
+import { buildTunnelPath } from "@/features/links/tunnelPath";
 import { tunnelHealthFromAvailability } from "@/features/links/tunnelHealth";
 import { TunnelFxpIssueNotice } from "@/features/links/TunnelFxpIssueNotice";
 import { TunnelLinkShapingNotice } from "@/features/links/TunnelLinkShapingNotice";
@@ -2637,8 +2637,6 @@ function TunnelsContent() {
       health,
       // 精简手机行右端已经有延迟标签，线底下不再写一遍（用户 2026-10-23 定的），省下的宽度给名字
       latencyMs: showLatency && typeof tunnel?.lastLatencyMs === "number" ? tunnel.lastLatencyMs : null,
-      // 负载均衡：链路探测里在用那几台出口各自的分支（在用哪几台按入口实时上报），比总数（几台里最慢的）更接近流量真在走的
-      liveExitLatency: showLatency ? tunnel?.liveExitLatency ?? null : null,
       // 链路卡的副标题已经写了模式（「GOST TLS · 直连」），线旁边不再重复一遍，路径就是一行
       via: showVia ? getTunnelModeDisplay(tunnel?.mode, true, tunnel?.forwardxVersion) : undefined,
       onLoadBalanceClick: exitDialog ? () => setExitGroupDialogTunnel(tunnel) : undefined,
@@ -4398,8 +4396,7 @@ function TunnelsContent() {
           ) : (
           <div className="fx-tunnel-foot">
             {hasLatency ? (
-              /* 「到出口」：这是入口→出口机的链路探测（走势图同一份），不是规则卡上的整链（再到目标） */
-              <div className="fx-rule-num" title={tunnelExitLatency(tunnel, latencyMs, null)?.title}><small>到出口</small><b>{Math.round(latencyMs as number)}</b><small>ms</small></div>
+              <div className="fx-rule-num"><b>{Math.round(latencyMs as number)}</b><small>ms</small></div>
             ) : (
               <span className="fx-tunnel-none">{broken ? "不通" : timeout ? "超时" : "未测试"}</span>
             )}
@@ -4430,7 +4427,7 @@ function TunnelsContent() {
             <span
               className="fx-rule-tag fx-tunnel-latency-tag"
               data-tone={hasLatency ? ratingTone : availabilityStatus === "unavailable" || timeout ? "down" : availabilityStatus === "degraded" ? "warn" : "off"}
-              title={hasLatency ? tunnelExitLatency(tunnel, latencyMs, null)?.title : timeout ? "最近一次测试超时" : statusText}
+              title={hasLatency ? "最近一次测得的延迟" : timeout ? "最近一次测试超时" : statusText}
             >
               {hasLatency
                 ? `${Math.round(latencyMs as number)} ms`
@@ -4475,9 +4472,6 @@ function TunnelsContent() {
         : last.name
       : null;
     const relays = Math.max(0, path.nodes.length - 2);
-    // 线上那个数和卡片线下一样：负载均衡时优先在用出口各自的探测；右边那一列是链路探测的总数（和走势图同一份）
-    const probeExitLatency = hasLatency ? tunnelExitLatency(tunnel, latencyMs, null) : null;
-    const edgeExitLatency = hasLatency || tunnel?.liveExitLatency ? tunnelExitLatency(tunnel, hasLatency ? latencyMs : null, broken ? null : tunnel?.liveExitLatency) : null;
     const latencyText = hasLatency ? `${Math.round(latencyMs as number)} ms` : broken ? "中断" : timeout ? "超时" : !supported ? "不支持" : tone === "off" ? statusText : "未测试";
     const latencyTone = hasLatency ? ratingTone : broken || timeout ? "down" : "off";
     const days = buildLatencyHistoryDays(historySummaries);
@@ -4498,12 +4492,12 @@ function TunnelsContent() {
           {!supported ? <span className="fx-ds-link-warn">{tunnelProtocolLabel(protocolKey)} 当前不支持</span> : null}
           <TunnelFxpIssueNotice tunnel={tunnel} as="span" />
         </div>
-        <div className="fx-ds-link-path" title={[path.title, edgeExitLatency?.title].filter(Boolean).join("；")}>
+        <div className="fx-ds-link-path" title={path.title}>
           <span className="fx-ds-link-node">{first?.name || "—"}</span>
           {last ? (
             <span className="fx-ds-link-edge" data-tone={latencyTone}>
               {relays > 0 ? <span className="fx-ds-link-via">+{relays}</span> : null}
-              <span className="fx-ds-link-edge-lat">{broken ? "✕" : edgeExitLatency ? formatTunnelExitLatency(edgeExitLatency) : ""}</span>
+              <span className="fx-ds-link-edge-lat">{broken ? "✕" : hasLatency ? latencyText : ""}</span>
             </span>
           ) : null}
           {last?.id === "load-balance-exits" ? (
@@ -4518,7 +4512,7 @@ function TunnelsContent() {
             </button>
           ) : last ? <span className="fx-ds-link-node">{lastLabel}</span> : null}
         </div>
-        <span className="fx-ds-link-lat" data-tone={latencyTone} title={probeExitLatency?.title}>{latencyText}</span>
+        <span className="fx-ds-link-lat" data-tone={latencyTone}>{latencyText}</span>
         <Sparkline values={spark?.values || []} width={150} height={22} stroke={toneColor} className="fx-ds-link-spark" title="近 24 小时延迟走势" />
         <div className="fx-ds-link-days">
           {supported ? <LatencyHistoryDayStrip variant="compact" summaries={historySummaries} loading={!tunnelHistoryRows} /> : <span className="fx-ds-link-muted">—</span>}
