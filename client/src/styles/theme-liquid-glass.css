@@ -701,3 +701,8 @@ html[data-ui-theme="liquid-glass"] .fx-rule-num > b,
 html[data-ui-theme="liquid-glass"] .fx-host-spec > b { font-weight: 500; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
 
 /* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
+
+/* 手机上页头到第一张卡 260px 左右（用户：「液态玻璃改到 260 左右」；经典 / 靛蓝是 250）：页头底下多留 8px */
+@media (max-width: 767px) {
+  html[data-ui-theme="liquid-glass"] .workspace-main .workspace-header { padding-bottom: 12px; }
+}

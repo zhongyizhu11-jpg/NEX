@@ -89,16 +89,42 @@ export function canReuseRecentTunnelLatencySample(input: {
   return true;
 }
 
-export function tunnelRuleLatencyTopologyKey(rule: any, tunnel: any, targetIp: unknown = rule?.targetIp) {
+/**
+ * 一条隧道规则在某台出口上探目标的拓扑键。exitHostId 默认是主出口；负载均衡链路的别的出口各有自己的键
+ * （2.3.544 起每台出口都探，见 tunnelRuleProbeExitHostIds）。
+ */
+export function tunnelRuleLatencyTopologyKey(rule: any, tunnel: any, targetIp: unknown = rule?.targetIp, exitHostId: unknown = tunnel?.exitHostId) {
   return [
     "rule-latency-v1",
     validId(rule?.id),
     validId(tunnel?.id),
-    validId(tunnel?.exitHostId),
+    validId(exitHostId),
     normalizedTarget(targetIp),
     validPort(rule?.targetPort),
     normalizeForwardRuleProtocol(rule?.protocol),
   ].join(":");
+}
+
+/**
+ * 这条链路上哪几台出口机要探规则的目标：主出口，加上负载均衡启用着的别的出口（exitNodes 里 isEnabled 的）。
+ * 2.3.544（用户：「弹窗测出来的延迟怎么和卡片上的不一样」）：以前只有主出口一分钟探一次目标，流量走别的出口时
+ * 卡片那台「出口到目标」只有快速探测的中位数（和诊断的单次 TCPing 不是一个数）或者干脆没有；现在每台出口都
+ * 按同一个法子探，卡片、诊断、弹窗都是同一种数。
+ */
+export function tunnelRuleProbeExitHostIds(tunnel: { exitHostId?: unknown; loadBalanceEnabled?: unknown } | null | undefined, exitNodes?: ReadonlyArray<{ hostId?: unknown; isEnabled?: unknown }> | null): number[] {
+  const truthy = (value: unknown, fallback: boolean) => value === undefined || value === null
+    ? fallback
+    : value === true || value === 1 || ["1", "true"].includes(String(value).toLowerCase());
+  const ids: number[] = [];
+  const primary = validId(tunnel?.exitHostId);
+  if (primary) ids.push(primary);
+  if (truthy(tunnel?.loadBalanceEnabled, false)) {
+    for (const node of exitNodes || []) {
+      const hostId = validId(node?.hostId);
+      if (hostId && truthy(node?.isEnabled, true) && !ids.includes(hostId)) ids.push(hostId);
+    }
+  }
+  return ids;
 }
 
 export function buildTunnelRuleLatencyProbe(input: {
@@ -106,15 +132,17 @@ export function buildTunnelRuleLatencyProbe(input: {
   rule: any;
   tunnel: any;
   targetIp?: unknown;
+  /** 这条链路上要探目标的出口机（tunnelRuleProbeExitHostIds）；不传只有主出口 */
+  exitHostIds?: readonly number[] | null;
 }) {
   const hostId = validId(input.hostId);
   const ruleId = validId(input.rule?.id);
   const tunnelId = validId(input.tunnel?.id);
-  const exitHostId = validId(input.tunnel?.exitHostId);
+  const exitHostIds = input.exitHostIds && input.exitHostIds.length > 0 ? input.exitHostIds : [validId(input.tunnel?.exitHostId)];
   const targetIp = String(input.targetIp ?? input.rule?.targetIp ?? "").trim();
   const targetPort = validPort(input.rule?.targetPort);
-  if (!hostId || !ruleId || !tunnelId || hostId !== exitHostId || !targetIp || !targetPort) return null;
-  const topologyKey = tunnelRuleLatencyTopologyKey(input.rule, input.tunnel, targetIp);
+  if (!hostId || !ruleId || !tunnelId || !exitHostIds.includes(hostId) || !targetIp || !targetPort) return null;
+  const topologyKey = tunnelRuleLatencyTopologyKey(input.rule, input.tunnel, targetIp, hostId);
   return {
     ruleId,
     tunnelId,
@@ -131,16 +159,19 @@ export function validateTunnelRuleLatencyReport(input: {
   rule: any;
   tunnel: any;
   report: TunnelRuleLatencyReport;
+  /** 这条链路上允许报的出口机（tunnelRuleProbeExitHostIds）；不传只认主出口 */
+  exitHostIds?: readonly number[] | null;
 }) {
   const hostId = validId(input.hostId);
-  if (!hostId || hostId !== validId(input.tunnel?.exitHostId)) return false;
+  const exitHostIds = input.exitHostIds && input.exitHostIds.length > 0 ? input.exitHostIds : [validId(input.tunnel?.exitHostId)];
+  if (!hostId || !exitHostIds.includes(hostId)) return false;
   if (validId(input.rule?.tunnelId) !== validId(input.tunnel?.id)) return false;
   if (input.tunnel?.isEnabled === false || input.rule?.isEnabled === false || input.rule?.pendingDelete) return false;
   const reportTargetPort = Number(input.report?.targetPort || 0);
   if (reportTargetPort > 0 && reportTargetPort !== validPort(input.rule?.targetPort)) return false;
   if (!isRuleLatencyReportMethodCompatible(input.rule?.protocol, input.report?.method)) return false;
   const topologyKey = String(input.report?.topologyKey || "").trim();
-  if (topologyKey && topologyKey !== tunnelRuleLatencyTopologyKey(input.rule, input.tunnel)) return false;
+  if (topologyKey && topologyKey !== tunnelRuleLatencyTopologyKey(input.rule, input.tunnel, input.rule?.targetIp, hostId)) return false;
   return true;
 }
 

@@ -2216,3 +2216,14 @@ html.fx-theme-fading *::after {
   .fx-lb-reset { position: relative; min-height: 0; }
   .fx-lb-reset::after { content: ""; position: absolute; inset: -12px -8px; }
 }
+
+/*
+  手机上页头到第一张卡的节奏（2.3.544，用户：「其他主题的顶栏到规则卡片的距离排版不能低于靛蓝，不要太紧凑」）：
+  靛蓝那套量下来是标题 22px / 30px、页头底下留 4px、分段控件内边距 4px，顶栏到第一张卡 250px；
+  经典和液态玻璃原来是 22px / 24px、0、3px，一共紧 12px。现在三样按靛蓝的定，所有主题起步一样，主题包只能往宽里改。
+*/
+@media (max-width: 767px) {
+  .workspace-main .workspace-header-title { font-size: 22px; line-height: 30px; }
+  .workspace-main .workspace-header { padding-bottom: 4px; }
+  .workspace-tabs { padding: 4px; }
+}

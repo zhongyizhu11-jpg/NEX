@@ -115,9 +115,10 @@ test("换分配方式、手动指定：只换代理的规格，入口机的 gost
   assert.equal(bundles.round_robin.failover!.spec.pinnedIndex, null);
 });
 
-test("检测灵敏度：均衡（默认）2 秒一轮，灵敏 1 秒一轮", () => {
+test("检测灵敏度：均衡（默认）10 秒一轮（2.3.544 三档 2 / 10 / 30 秒）；手填 1 秒的照填的来", () => {
   const balanced = bundles.round_robin.failover!.spec;
-  assert.deepEqual([balanced.probeIntervalSeconds, balanced.probeTimeoutMs, balanced.failureThreshold, balanced.failoverSeconds, balanced.recoverSeconds], [2, 1000, 2, 2, 4]);
+  assert.deepEqual([balanced.probeIntervalSeconds, balanced.probeTimeoutMs, balanced.failureThreshold, balanced.failoverSeconds, balanced.recoverSeconds], [10, 2000, 2, 10, 20]);
+  // gen-configs.mjs 里的 sensitive 样例是逐项填的 intervalSeconds: 1（不是档位）
   const sensitive = bundles.sensitive.failover!.spec;
   assert.deepEqual([sensitive.probeIntervalSeconds, sensitive.failureThreshold, sensitive.failoverSeconds, sensitive.recoverSeconds], [1, 2, 1, 2]);
 });

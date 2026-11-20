@@ -366,7 +366,7 @@ html[data-ui-theme="pearl"] .workspace-main div.flex:has(> .workspace-header:fir
 html[data-ui-theme="pearl"] .workspace-main div.flex:has(> .workspace-header:first-child + [data-slot="badge"]) > .workspace-header { padding-bottom: 0; border-bottom: 0; }
 @media (max-width: 639px) {
   html[data-ui-theme="pearl"] .workspace-main .workspace-header { padding: 2px 0 14px; }
-  html[data-ui-theme="pearl"] .workspace-main .workspace-header-title { font-size: 20px; line-height: 28px; }
+  html[data-ui-theme="pearl"] .workspace-main .workspace-header-title { font-size: 22px; line-height: 30px; }  /* 和靛蓝、经典一样（workspace.css 手机那段） */
   html[data-ui-theme="pearl"] .workspace-main .workspace-header-meta { font-size: 12px; line-height: 16px; }
 }
 /* 首页标题右边的日期铭牌（深色等宽字小牌）+「系统在线」绿边胶囊：PearlHeaderBadges，只在珍珠下渲染 */

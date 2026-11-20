@@ -23,6 +23,7 @@ type TrafficTotals = { bytesIn?: number | null; bytesOut?: number | null };
 
 /** 规则卡整链的两段（面板探的，server/exitTargetHealth.ts 的 RuleChainLatencyView）。 */
 export type RuleChainLatencyLike = {
+  exitHostId?: number | null;
   exitName?: string | null;
   exitMs?: number | null;
   targetMs?: number | null;

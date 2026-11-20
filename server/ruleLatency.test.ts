@@ -8,6 +8,7 @@ import {
   TUNNEL_RULE_LATENCY_FRESH_MS,
   tunnelRuleLatencySampleSucceeded,
   tunnelRuleLatencyTopologyKey,
+  tunnelRuleProbeExitHostIds,
   validateTunnelRuleLatencyReport,
 } from "./ruleLatency";
 
@@ -33,6 +34,21 @@ test("tunnel rule latency probes are created only for the canonical exit host", 
     probeKey: tunnelRuleLatencyTopologyKey(rule, tunnel),
     topologyKey: tunnelRuleLatencyTopologyKey(rule, tunnel),
   });
+});
+
+test("负载均衡链路：每台出口都探目标，各有自己的拓扑键；报上来按报的那台校验（2.3.544）", () => {
+  const balanced = { ...tunnel, loadBalanceEnabled: true };
+  const exitNodes = [{ hostId: 33, isEnabled: true }, { hostId: 44, isEnabled: false }, { hostId: 22 }];
+  assert.deepEqual(tunnelRuleProbeExitHostIds(balanced, exitNodes), [22, 33], "主出口在前，停用的出口不探");
+  assert.deepEqual(tunnelRuleProbeExitHostIds(tunnel, exitNodes), [22], "没开负载均衡只有主出口");
+  const exitHostIds = tunnelRuleProbeExitHostIds(balanced, exitNodes);
+  const onSecond = buildTunnelRuleLatencyProbe({ hostId: 33, rule, tunnel: balanced, exitHostIds });
+  assert.equal(onSecond?.topologyKey, tunnelRuleLatencyTopologyKey(rule, balanced, rule.targetIp, 33));
+  assert.notEqual(onSecond?.topologyKey, tunnelRuleLatencyTopologyKey(rule, balanced), "和主出口的键不一样，面板分得清是哪台报的");
+  assert.equal(buildTunnelRuleLatencyProbe({ hostId: 44, rule, tunnel: balanced, exitHostIds }), null, "停用的出口不探");
+  assert.equal(validateTunnelRuleLatencyReport({ hostId: 33, rule, tunnel: balanced, exitHostIds, report: { targetPort: 443, method: "tcping", topologyKey: onSecond!.topologyKey } }), true);
+  assert.equal(validateTunnelRuleLatencyReport({ hostId: 33, rule, tunnel: balanced, report: { targetPort: 443, method: "tcping", topologyKey: onSecond!.topologyKey } }), false, "没给出口名单时照旧只认主出口");
+  assert.equal(validateTunnelRuleLatencyReport({ hostId: 22, rule, tunnel: balanced, exitHostIds, report: { targetPort: 443, method: "tcping", topologyKey: onSecond!.topologyKey } }), false, "主出口拿着别台的键不算");
 });
 
 test("tunnel rule latency reports reject entry hosts and stale topology", () => {

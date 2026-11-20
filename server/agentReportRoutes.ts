@@ -57,6 +57,7 @@ import { isRuleLatencyReportMethodCompatible } from "../shared/latencyProbe";
 import { completeSupportBundleHost } from "./supportBundle";
 import {
   combineTunnelRuleLatencySample,
+  tunnelRuleProbeExitHostIds,
   validateTunnelRuleLatencyReport,
 } from "./ruleLatency";
 import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
@@ -1980,14 +1981,16 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       console.warn(`[Agent TCPing] route hop probes host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
     });
     const tunnelLatencyById = new Map<number, Promise<any>>();
-    const tunnelContextById = new Map<number, Promise<{ tunnel: any } | null>>();
+    const tunnelContextById = new Map<number, Promise<{ tunnel: any; exitHostIds: number[] } | null>>();
     const getTunnelContext = (tunnelId: number) => {
       let work = tunnelContextById.get(tunnelId);
       if (!work) {
         work = (async () => {
           const tunnel = await db.getTunnelById(tunnelId) as any;
           if (!tunnel) return null;
-          return { tunnel };
+          // 负载均衡链路每台出口都探目标（2.3.544）：允许报的出口机是主出口 + 启用着的别的出口
+          const exitNodes = tunnelBalancesExits(tunnel) ? await db.getTunnelExitNodes(tunnelId).catch(() => []) : [];
+          return { tunnel, exitHostIds: tunnelRuleProbeExitHostIds(tunnel, exitNodes as Array<{ hostId?: unknown; isEnabled?: unknown }>) };
         })();
         tunnelContextById.set(tunnelId, work);
       }
@@ -2040,9 +2043,9 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         rule,
         tunnel: tunnelContext.tunnel,
         report,
+        exitHostIds: tunnelContext.exitHostIds,
       })) return null;
-      collectCounter("rule", ruleId, report);
-      // 出口机到目标那一段（规则卡整链的第二段，server/ruleLatencyView.ts）
+      // 出口机到目标那一段（规则卡整链的第二段，server/ruleLatencyView.ts）：每台出口各记各的
       recordRuleTargetLeg({
         ruleId,
         tunnelId,
@@ -2050,6 +2053,9 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         primaryHostId: tunnelContext.tunnel.exitHostId,
         ms: report.isTimeout ? null : baseLatency,
       });
+      // 规则自己那条记录（延迟记录、超时判断）照旧只记主出口的；别的出口只给卡片 / 诊断 / 弹窗那一段
+      if (Number(host.id) !== Number(tunnelContext.tunnel.exitHostId || 0)) return null;
+      collectCounter("rule", ruleId, report);
       const latestTunnelLatency = report.isTimeout ? null : await getLatestTunnelLatency(tunnelId);
       const combined = combineTunnelRuleLatencySample({
         targetLatencyMs: baseLatency,

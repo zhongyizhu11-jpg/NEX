@@ -29,8 +29,19 @@ test("连不上：分清是出口机本身还是到目标，并说该查什么",
   assert.equal(exit.state, "down");
   assert.equal(exit.reason, "入口连不上这台出口机，已切走");
   assert.match(exit.hint!, /防火墙/);
-  const target = exitRowView(summary({ down: 1, activeRules: 1, reason: "target" }), base);
-  assert.equal(target.reason, "这台连不上目标（1 条规则），已切走");
+  const target = exitRowView(summary({ down: 2, activeRules: 0, reason: "target" }), base);
+  assert.equal(target.state, "down");
+  assert.equal(target.reason, "这台连不上目标，已切走");
+  // 用户面板：hep ix 对「广港hkt/2」的高防目标连不上 30 分钟，另外两条规则照走它 —— 还是在用，写清是哪条
+  const partly = exitRowView(summary({ rules: 3, down: 1, downRuleIds: [33], activeRules: 2, reason: "target" }), { ...base, ruleNames: { 33: "广港hkt/2" } });
+  assert.equal(partly.state, "active");
+  assert.equal(partly.reason, "广港hkt/2到目标连不上（已切走），别的规则照走");
+  const unnamed = exitRowView(summary({ rules: 3, down: 1, activeRules: 2, reason: "target" }), base);
+  assert.equal(unnamed.reason, "1 条规则到目标连不上（已切走），别的规则照走");
+  // 别的规则也不走它了（备用）：连不上，括号里写是哪条
+  const standbyDown = exitRowView(summary({ rules: 3, down: 1, downRuleIds: [33], activeRules: 0, reason: "target" }), { ...base, ruleNames: { 33: "广港hkt/2" } });
+  assert.equal(standbyDown.state, "down");
+  assert.equal(standbyDown.reason, "这台连不上目标（广港hkt/2），已切走");
   const offline = exitRowView(summary(), { ...base, online: false });
   assert.equal(offline.state, "down");
   assert.match(offline.reason!, /离线/);

@@ -48,6 +48,7 @@ export function DiagnoseDialog({
   lastRunAt,
   outcome,
   failureReason,
+  latencyNote,
   onRun,
   checklist,
   extraTabs,
@@ -68,6 +69,8 @@ export function DiagnoseDialog({
   outcome?: DiagnoseOutcome | null;
   /** 没通时的原因（Agent 报上来的那一句），有就写在结果后面。 */
   failureReason?: string | null;
+  /** 画的延迟不是上次诊断那一刻的（规则卡更新了，弹窗跟着画同一个数）：写明是几点的定时探测，见 lib/diagnosisCurrentLatency.ts */
+  latencyNote?: string | null;
   onRun: () => void;
   /** 一键诊断要诊断的对象；不传就只有延迟测试。 */
   checklist?: { kind: DiagnosticSubjectKind; id: number } | null;
@@ -171,7 +174,7 @@ export function DiagnoseDialog({
           <>
             {children}
 
-            <DiagnoseStatusLine testing={testing} lastRunAt={ranBefore ? lastRunAt : null} outcome={outcome} failureReason={failureReason} />
+            <DiagnoseStatusLine testing={testing} lastRunAt={ranBefore ? lastRunAt : null} outcome={outcome} failureReason={failureReason} latencyNote={latencyNote} />
 
             <DialogFooter className="gap-2">
               {actions ? <div className="flex flex-wrap items-center gap-2 sm:mr-auto">{actions}</div> : null}
@@ -247,11 +250,13 @@ export function DiagnoseStatusLine({
   lastRunAt,
   outcome,
   failureReason,
+  latencyNote,
 }: {
   testing: boolean;
   lastRunAt?: string | number | Date | null;
   outcome?: DiagnoseOutcome | null;
   failureReason?: string | null;
+  latencyNote?: string | null;
 }) {
   let content: ReactNode;
   if (testing) {
@@ -272,6 +277,7 @@ export function DiagnoseStatusLine({
           </>
         ) : null}
         {reason ? <span className="break-words">{`：${reason.length > 120 ? `${reason.slice(0, 120)}…` : reason}`}</span> : null}
+        {latencyNote && !reason ? <span className="break-words">{` · ${latencyNote}`}</span> : null}
       </>
     );
   }

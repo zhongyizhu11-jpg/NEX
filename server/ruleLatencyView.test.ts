@@ -22,10 +22,14 @@ test("整链 = 入口到在用出口（链路探测）+ 在用出口到目标（
   recordTunnelExitLeg(7, 3, 6, NOW - 20_000);
   recordRuleTargetLeg({ ruleId: 8, tunnelId: 7, exitHostId: 3, primaryHostId: 2, ms: 3, at: NOW - 10_000 });
   const chain = ruleChainLatency({ ruleId: 8, tunnelId: 7, exitHostId: 3, nowMs: NOW });
-  assert.deepEqual(chain, { exitHostId: 3, totalMs: 9, exitMs: 6, targetMs: 3, at: NOW - 20_000 });
+  assert.deepEqual(chain, { exitHostId: 3, totalMs: 9, exitMs: 6, targetMs: 3, at: NOW - 10_000 }, "at 是两段里新的那一段");
   assert.deepEqual(ruleTunnelOf(8), { tunnelId: 7, primaryHostId: 2 });
-  // 负载均衡快速探测里这台出口到目标的中位数更新：优先用它
-  assert.equal(ruleChainLatency({ ruleId: 8, tunnelId: 7, exitHostId: 3, targetStateMs: 4, targetStateAt: NOW, nowMs: NOW })?.totalMs, 10);
+  // 负载均衡快速探测的中位数（4）和出口机 TCPing（3）不是一个数：有 TCPing 用 TCPing（诊断也是 TCPing），卡片才和诊断一样
+  assert.equal(ruleChainLatency({ ruleId: 8, tunnelId: 7, exitHostId: 3, targetStateMs: 4, targetStateAt: NOW, nowMs: NOW })?.totalMs, 9);
+  // TCPing 过期了（六分钟以前）才退回快速探测的中位数
+  assert.equal(ruleChainLatency({ ruleId: 8, tunnelId: 7, exitHostId: 3, targetStateMs: 4, targetStateAt: NOW, nowMs: NOW + 7 * 60_000 }), null, "入口到出口那段也过期了");
+  recordTunnelExitLeg(7, 3, 6, NOW + 7 * 60_000);
+  assert.equal(ruleChainLatency({ ruleId: 8, tunnelId: 7, exitHostId: 3, targetStateMs: 4, targetStateAt: NOW + 7 * 60_000, nowMs: NOW + 7 * 60_000 })?.totalMs, 10);
 });
 
 test("缺一段返回 null（调用方退回规则的定时探测、再退回诊断）；超时把旧的清掉；过期的不算", () => {
