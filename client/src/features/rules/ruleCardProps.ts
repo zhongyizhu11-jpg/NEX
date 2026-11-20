@@ -21,11 +21,41 @@ type RuleLike = {
 
 type TrafficTotals = { bytesIn?: number | null; bytesOut?: number | null };
 
+/** 规则卡延迟的来历：入口实时探测的那台出口（server/exitTargetHealth.ts 的 RuleLiveLatency）。 */
+export type RuleLiveLatencyLike = {
+  exitName?: string | null;
+  exitMs?: number | null;
+  targetMs?: number | null;
+  targetUnknown?: boolean | null;
+  share?: number | null;
+};
+
 type ProbeEntry = {
   latestLatencyAt?: unknown;
   latestLatencyMs?: unknown;
   latestLatencyIsTimeout?: unknown;
+  latestLatencyLive?: RuleLiveLatencyLike | null;
 };
+
+const roundMs = (value: number) => `${Math.round(value)} ms`;
+
+/**
+ * 卡上延迟的悬停那句（负载均衡链路，入口报了真实状态时）：
+ *   入口实时探测：到 hep ix 3 ms + hep ix 到目标 4 ms（分到 60%）
+ * 到目标那段还没测到时 atLeast（卡上写「≥ X ms」）。没有实时数据返回 null（照旧「最近一次测得的延迟」）。
+ */
+export function describeRuleLiveLatency(live: RuleLiveLatencyLike | null | undefined): { title: string; atLeast: boolean } | null {
+  if (!live || !live.exitName) return null;
+  const name = String(live.exitName);
+  const share = typeof live.share === "number" && Number.isFinite(live.share) ? `（分到 ${Math.round(live.share * 100)}%）` : "";
+  const exitMs = typeof live.exitMs === "number" && Number.isFinite(live.exitMs) ? live.exitMs : null;
+  const targetMs = typeof live.targetMs === "number" && Number.isFinite(live.targetMs) ? live.targetMs : null;
+  if (exitMs === null) return { title: `入口实时探测：经 ${name}${share}`, atLeast: false };
+  if (live.targetUnknown || targetMs === null) {
+    return { title: `入口实时探测：到 ${name} ${roundMs(exitMs)}${share}；${name} 到目标那一段还没测到，实际不止这么多`, atLeast: true };
+  }
+  return { title: `入口实时探测：到 ${name} ${roundMs(exitMs)} + ${name} 到目标 ${roundMs(targetMs)}${share}`, atLeast: false };
+}
 
 export type RuleCardDerivedProps = {
   visualState: ForwardRuleVisualStatus["state"];
@@ -39,7 +69,8 @@ export type RuleCardDerivedProps = {
   dailyOut: number;
   spark: number[];
   routeBoard: RouteBoardStatus | undefined;
-  probe: { at: boolean; stale: boolean; ageText: string; isTimeout: boolean; ms: number | null };
+  /** liveTitle / atLeast：延迟是入口实时探测的（负载均衡链路）时悬停那句、要不要写「≥」（describeRuleLiveLatency） */
+  probe: { at: boolean; stale: boolean; ageText: string; isTimeout: boolean; ms: number | null; liveTitle: string | null; atLeast: boolean };
   /** 到没到期：翻过去的那一刻卡片要重画（RuleLimitSummary 按当下时间写「已于…到期」）。 */
   expiryPassed: boolean;
   entriesExpanded: boolean;
@@ -81,6 +112,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
   const probeAt = probe?.latestLatencyAt;
   const probeStale = !!probeAt && !sources.isProbeFresh(probeAt);
   const probeMs = typeof probe?.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? probe.latestLatencyMs : null;
+  const live = probeMs !== null && !probe?.latestLatencyIsTimeout ? describeRuleLiveLatency(probe?.latestLatencyLive) : null;
   const expiresAt = rule.expiresAt ? new Date(rule.expiresAt as string | number | Date).getTime() : NaN;
   return {
     visualState: visual.state,
@@ -104,6 +136,8 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
       ageText: probeStale ? sources.probeAgeText(probeAt) : "",
       isTimeout: !!probe?.latestLatencyIsTimeout,
       ms: probeMs,
+      liveTitle: live?.title ?? null,
+      atLeast: live?.atLeast ?? false,
     },
     expiryPassed: Number.isFinite(expiresAt) && expiresAt <= nowMs,
     entriesExpanded: sources.expandedEntryRuleIds.has(ruleId),
@@ -122,7 +156,8 @@ function sameFailover(a: RuleCardDerivedProps["failover"], b: RuleCardDerivedPro
 }
 
 function sameProbe(a: RuleCardDerivedProps["probe"], b: RuleCardDerivedProps["probe"]) {
-  return a.at === b.at && a.stale === b.stale && a.ageText === b.ageText && a.isTimeout === b.isTimeout && a.ms === b.ms;
+  return a.at === b.at && a.stale === b.stale && a.ageText === b.ageText && a.isTimeout === b.isTimeout && a.ms === b.ms
+    && a.liveTitle === b.liveTitle && a.atLeast === b.atLeast;
 }
 
 /**
