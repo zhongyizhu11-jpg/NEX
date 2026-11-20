@@ -221,17 +221,21 @@ func (s *exitEndpointSelector) chooseLocked(excluded map[int]bool, selectionKey 
 	s.fillMembersLocked(candidates, now)
 	options := lbcore.Options{Scratch: s.scoreBuf}
 	if s.strategy == lbcore.StrategyLatency {
-		options.Near = lbcore.NearPolicy{Margin: lbcore.DefaultLatencyMargin, Hold: lbcore.DefaultNearHold}
-		if s.targetAware() {
-			options.Near.Margin = s.target.detect.margin
-		}
+		options.Near = lbcore.NearPolicy{Margin: s.latencyMarginLocked(), Hold: lbcore.DefaultNearHold}
 		options.NearScratch = s.nearBuf
+		// 只走最快的一台（exit_fastest.go）：带着排除重挑的（这条连接拨失败过）只挑、不挪在用的那台。
+		options.FastestOnly = s.fastestOnly
+		options.Transient = len(excluded) > 0
 	}
-	state := lbcore.State{WRR: s.current, Near: &s.near, Next: &s.next}
+	state := lbcore.State{WRR: s.current, Near: &s.near, Next: &s.next, Fastest: &s.fastest}
+	before, _ := s.fastest.Current()
 	index := lbcore.Pick(s.strategy, state, s.members, s.hashAddrs, candidates, selectionKey, now, s, options)
+	if s.fastestOnly {
+		s.noteFastestSwitchLocked(before, "new connection")
+	}
 	if s.strategy == lbcore.StrategyLatency {
 		for _, candidate := range candidates {
-			if s.members[candidate].Latency > 0 && !s.near.Contains(candidate) {
+			if s.members[candidate].Latency > 0 && !s.latencyGroupContainsLocked(candidate) {
 				// 这台因为延迟这一轮不分：记下来，维护循环会勤量它（路线图 X10）。
 				s.loads[candidate].noteLatencyStarved(now)
 			}

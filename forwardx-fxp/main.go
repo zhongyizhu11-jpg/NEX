@@ -369,6 +369,9 @@ type exitEndpointSelector struct {
 	current lbcore.SmoothWRR
 	// near：「延迟优先」里哪几台算「一样快」的状态（lbcore.NearSet）。
 	near lbcore.NearSet
+	// fastestOnly / fastest：延迟优先开了「只走最快的一台」，和现在在用的是哪台（lbcore.Fastest，exit_fastest.go）。
+	fastestOnly bool
+	fastest     lbcore.Fastest
 	// loads 是每个端点所在主机的实时负载（exit_load.go），capacities 是每个端点的分量，
 	// weights 是「按权重」用的权重（没填的当 1）。
 	loads      []*fxpHostLoad
@@ -521,6 +524,7 @@ func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strate
 		hashAddrs:  hashAddrs,
 		target:     newTargetAwareness(endpoints, detectConfig),
 	}
+	selector.fastestOnly = selector.strategy == lbcore.StrategyLatency && detectConfig != nil && detectConfig.FastestOnly
 	selector.randomizeStartLocked()
 	return selector
 }
