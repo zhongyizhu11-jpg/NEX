@@ -26,6 +26,10 @@ type failoverTargetHints struct {
 	// 面板算好的、这条路径在下游各段中转上的延迟之和（毫秒）。成本（自动、延迟优先、择优）按
 	// 「本机探测延迟 + 它」算整条链路；上报的 latencyMs 仍只是第一段。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+	// 面板不知道这条路径出口之后那一段多少毫秒（GOST 出口组：这台出口还没报到目标的延迟，同一条规则的别的出口
+	// 报了）。ExtraLatencyMs 这时是 0，可它不是「0 毫秒」：按 0 算的话整链就只剩入口到出口那一段，自动、延迟优先
+	// 反而偏向我们知道得最少的那台。评分时按这条规则里已知的最大值算（悲观，extraLatencyLocked）。
+	ExtraLatencyUnknown bool `json:"extraLatencyUnknown,omitempty"`
 	// 面板算好的、这条路径沿途主机（中转机、落地是 NEX 主机时的那台）里最忙那台的负载，0–100
 	// （CPU 和带宽占用取大；2.2.251 起）。成本按它留的余量算（lbcore.Quality.Utilisation：成本 ÷ (1 − 负载)，
 	// 负载最多按 95% 算）：「自动」少分给它，择优时让一让。0 = 不知道，不算。

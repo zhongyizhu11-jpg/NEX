@@ -395,7 +395,7 @@ func (p *failoverProxy) scoreInputLocked(index int) routeStatsSummary {
 func (p *failoverProxy) chainScoreInputLocked(index int) routeStatsSummary {
 	summary := p.scoreInputLocked(index)
 	if summary.hasLatency && index >= 0 && index < len(p.spec.Targets) {
-		summary.latencyMs += p.spec.Targets[index].ExtraLatencyMs
+		summary.latencyMs += p.extraLatencyLocked(index)
 	}
 	return summary
 }
@@ -847,7 +847,7 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 			ConsecutiveFailures: stats.consecutiveFailures(),
 			Connections:         p.connectionsLocked(index),
 			Samples:             summary.samples,
-			ExtraLatencyMs:      target.ExtraLatencyMs,
+			ExtraLatencyMs:      p.extraLatencyLocked(index),
 			LoadPct:             target.LoadPct,
 		}
 		if !stats.lastProbeAt.IsZero() {

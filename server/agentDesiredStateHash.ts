@@ -7,7 +7,7 @@ import { hashNormalizedConfig, normalizeConfigForHash } from "./configAudit";
 */
 
 /*
-  线路组规格（action.failover）里的运行时提示：中转异常（down / downReason）、下游延迟（extraLatencyMs）、
+  线路组规格（action.failover）里的运行时提示：中转异常（down / downReason）、下游延迟（extraLatencyMs / extraLatencyUnknown）、
   沿途负载（loadPct）、出口 IP（exitIp）。面板每一轮都可能换一次；Agent 那边算签名时也去掉它们
   （agent/route_group.go 的 stripFailoverRelayHints / failoverSpecSignatureJSON），由 runningRules 同步原地换上
   （它们本来就跟着 runningRules 走，每次心跳 Agent 都按它同步一遍调度代理）。
@@ -16,7 +16,7 @@ import { hashNormalizedConfig, normalizeConfigForHash } from "./configAudit";
   「下发」审计；Agent 报上来的已执行摘要也一直对得上，不会被当成落后、反复重发，稳定快路径也不会因此失效。
   没带提示的动作原样返回（同一个对象），摘要和以前逐字节相同。
 */
-const FAILOVER_RUNTIME_HINT_KEYS = ["down", "downReason", "extraLatencyMs", "loadPct", "exitIp"] as const;
+const FAILOVER_RUNTIME_HINT_KEYS = ["down", "downReason", "extraLatencyMs", "extraLatencyUnknown", "loadPct", "exitIp"] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);

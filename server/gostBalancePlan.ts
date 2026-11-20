@@ -60,10 +60,23 @@ export type GostBalanceSpecInput = {
   downHostIds: ReadonlySet<number>;
   /** 每台出口到规则目标的延迟（出口机探的，毫秒） */
   extraLatencyMs: ReadonlyMap<number, number>;
+  /**
+   * 到目标的延迟不知道的出口（别的出口知道、只有它没有：没报、报的过期了、报的不通）。Agent 按这条规则里已知的
+   * 最大值算它（悲观）—— 按 0 算的话它的整链只剩入口到出口那一段，延迟优先 / 自动反而偏向它。
+   * 一台都不知道时不带（大家都是 0，和以前一样）。见 gostBalanceUnknownExtraLatency。
+   */
+  extraLatencyUnknown?: ReadonlySet<number>;
   /** 规则往目标发 PROXY 头（隧道的「入口发送」）：头原样转过去；否则这个头只是给调度器看访客地址的，读完扔掉。 */
   proxyHeaderForward: boolean;
   proxyProtocolVersion: 1 | 2;
 };
+
+/** 到目标延迟不知道的出口：至少一台知道时，其余不知道的那几台（一台都不知道时是空的）。 */
+export function gostBalanceUnknownExtraLatency(hostIds: readonly number[], extraLatencyMs: ReadonlyMap<number, number>): Set<number> {
+  const known = (hostId: number) => (extraLatencyMs.get(hostId) ?? 0) > 0;
+  if (!hostIds.some(known)) return new Set();
+  return new Set(hostIds.filter((hostId) => !known(hostId)));
+}
 
 /** 份数压进调度器认的 1–100，比例不变（手填的份数可以比 100 大）。 */
 export function gostBalanceTargetWeights(weights: readonly number[] | null, count: number): number[] | null {
@@ -127,7 +140,10 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         ...(exit.probeRelay && !exit.viaRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
         ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
-        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.round(extra) } : {}),
+        // 不到 1 毫秒按 1 算：Agent 那边 0 就是「没有」，四舍五入成 0 的话这台就成了「到目标不知道」
+        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.max(1, Math.round(extra)) } : {}),
+        // 运行时提示（agent/failover_hints.go）：变了不重建代理
+        ...((extra == null || !(extra > 0)) && input.extraLatencyUnknown?.has(exit.hostId) ? { extraLatencyUnknown: true } : {}),
       };
     }),
     failoverSeconds: timing.failoverSeconds,
@@ -261,6 +277,7 @@ export async function planGostBalanceRules<R extends BalanceRule, T extends Bala
       pinHostId: await deps.pinnedExitHostId(tunnel),
       downHostIds: deps.exitTargetExcludedHostIds(Number(rule.id), hostIds),
       extraLatencyMs,
+      extraLatencyUnknown: gostBalanceUnknownExtraLatency(hostIds, extraLatencyMs),
       proxyHeaderForward: deps.proxyHeaderForward(rule),
       proxyProtocolVersion: proxyVersion,
     });
