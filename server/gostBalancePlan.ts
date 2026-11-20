@@ -140,7 +140,8 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         ...(exit.probeRelay && !exit.viaRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
         ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
-        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.round(extra) } : {}),
+        // 不到 1 毫秒按 1 算：Agent 那边 0 就是「没有」，四舍五入成 0 的话这台就成了「到目标不知道」
+        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.max(1, Math.round(extra)) } : {}),
         // 运行时提示（agent/failover_hints.go）：变了不重建代理
         ...((extra == null || !(extra > 0)) && input.extraLatencyUnknown?.has(exit.hostId) ? { extraLatencyUnknown: true } : {}),
       };
