@@ -282,7 +282,7 @@ func (p *failoverProxy) spreadStateLocked(members []lbcore.Member, candidates []
 		p.wrrCurrent = make([]int, len(p.spec.Targets))
 		lbcore.SmoothWRR(p.wrrCurrent).Spin(members, candidates, uint64(p.randLocked().Int63()))
 	}
-	return lbcore.State{WRR: p.wrrCurrent, Near: &p.lbNear, Next: &p.roundRobinNext}
+	return lbcore.State{WRR: p.wrrCurrent, Near: &p.lbNear, Next: &p.roundRobinNext, Fastest: &p.lbFastest}
 }
 
 func (p *failoverProxy) randLocked() failoverRandSource {
@@ -314,6 +314,11 @@ spreadPickLocked：整组按 strategy 在候选里挑一条。hashKey 是访客�
 按访客固定时每条路径的标识见 rendezvousKeyLocked。
 */
 func (p *failoverProxy) spreadPickLocked(strategy string, candidates []int, hashKey string, udp bool) int {
+	return p.spreadPickForLocked(strategy, candidates, hashKey, udp, false)
+}
+
+// spreadPickForLocked：transient 为 true 时这一次只挑、不动「只走最快的一台」的在用状态（这条连接拨失败过、带着排除重挑）。
+func (p *failoverProxy) spreadPickForLocked(strategy string, candidates []int, hashKey string, udp bool, transient bool) int {
 	if len(candidates) == 0 {
 		return -1
 	}
@@ -327,13 +332,24 @@ func (p *failoverProxy) spreadPickLocked(strategy string, candidates []int, hash
 		}
 	}
 	state := p.spreadStateLocked(members, candidates, strategy == lbcore.StrategyWeighted)
-	return lbcore.Pick(strategy, state, members, keys, candidates, hashKey, now, p.randLocked(), p.pickOptionsLocked())
+	options := p.pickOptionsLocked()
+	options.Transient = transient
+	before, _ := p.lbFastest.Current()
+	index := lbcore.Pick(strategy, state, members, keys, candidates, hashKey, now, p.randLocked(), options)
+	if options.FastestOnly && !transient {
+		p.noteFastestSwitchLocked(before, "new connection")
+	}
+	return index
 }
 
 // pickOptionsLocked：整组分、线路里几个落地分都用这一份（F5：线路里以前传空的，门槛永远 50ms、不驻留）。
 // 延迟优先的门槛是规格的 LatencyMarginMs（GOST 出口组带面板「检测与切换」里的那个数），和 NEX 出口组一样留组 1 分钟。
+// 延迟优先开了「只走最快的一台」（规格的 FastestOnly）时同一个门槛用来比「另一台快出多少才换」（failover_fastest.go）。
 func (p *failoverProxy) pickOptionsLocked() lbcore.Options {
-	return lbcore.Options{Near: lbcore.NearPolicy{Margin: p.latencyMarginLocked(), Hold: lbcore.DefaultNearHold}}
+	return lbcore.Options{
+		Near:        lbcore.NearPolicy{Margin: p.latencyMarginLocked(), Hold: lbcore.DefaultNearHold},
+		FastestOnly: p.fastestOnlyLocked(),
+	}
 }
 
 // ---- 在途计数（A8，见 failover_pick.go 的 pickReserved） ----

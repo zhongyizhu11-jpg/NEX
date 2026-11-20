@@ -57,7 +57,7 @@ func (p *failoverProxy) pickLocked(hashKey string, exclude map[int]bool, udp boo
 	}
 	var index int
 	if strategy := p.spec.Strategy; strategy != lbcore.StrategyFallback && lbcore.ValidStrategy(strategy) {
-		index = p.spreadPickLocked(strategy, candidates, hashKey, udp)
+		index = p.spreadPickForLocked(strategy, candidates, hashKey, udp, len(exclude) > 0)
 	} else {
 		index = p.spreadWithinLineLocked(p.fallbackPickLocked(candidates, exclude, udp), hashKey, exclude, udp)
 	}
