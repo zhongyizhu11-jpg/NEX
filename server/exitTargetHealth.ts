@@ -675,6 +675,8 @@ export function exitTargetMemorySizeForTest() {
  * 一条规则按现在的分配方式会走哪几台（链路弹窗「怎么走」用）。
  * NEX 隧道：入口的 FXP 自己挑，面板拿不到它每次挑了谁，这里按同一套规则估（不含入口到出口那一段）。
  * GOST：主备 / 延迟优先是真实的节点顺序；其余是随机 / 轮流，摘掉连不上的。
+ * 延迟优先开了「只走最快的一台」（detect.fastestOnly）：两种都只有分数最好的那一台（入口的 lbcore.Fastest；
+ * 这里不估「稳住 60 秒才换」那一段，入口报了真实状态就以入口的为准）。
  */
 function activeExitsForRule(input: {
   strategy: string;
@@ -701,15 +703,16 @@ function activeExitsForRule(input: {
     const scores = candidates.map((hostId) => exitTargetScore(fresh.get(hostId)));
     const known = scores.filter((score): score is number => score != null);
     // GOST：入口机的本机代理一次只走整链最好的那一台（这里只是入口还没报真实状态时的估计）
-    if (known.length === 0) return gost ? [candidates[0]] : candidates;
+    const single = gost || detect.fastestOnly;
+    if (known.length === 0) return single ? [candidates[0]] : candidates;
     const best = Math.min(...known);
-    if (gost) return [candidates[scores.indexOf(best)]];
+    if (single) return [candidates[scores.indexOf(best)]];
     return candidates.filter((_, index) => scores[index] != null && (scores[index] as number) - best <= detect.latencyMarginMs);
   }
   return gost ? usable : dropUnstable(usable);
 }
 
-function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; active: number[]; total: number; names: (ids: number[]) => string; marginMs: number }) {
+function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; active: number[]; total: number; names: (ids: number[]) => string; marginMs: number; fastestOnly?: boolean }) {
   const { strategy, active, names } = input;
   if (active.length === 0) return null;
   if (input.pinned) return `手动指定：只走 ${names(active)}`;
@@ -719,6 +722,7 @@ function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; 
     case "fallback":
       return `主备：走 ${names(active)}${restText}`;
     case "latency":
+      if (input.fastestOnly && active.length === 1) return `延迟优先：只走 ${names(active)}（最快）${restText}`;
       return active.length === 1
         ? `延迟优先：走 ${names(active)}（到目标最快）${restText}`
         : `延迟优先：${names(active)}（差不到 ${input.marginMs}ms，按负载分）${restText}`;
@@ -808,7 +812,7 @@ export function exitTargetSummaryForTunnel(
       const entry = perExit.get(hostId);
       if (entry) entry.activeRules += 1;
     }
-    const how = describeHow({ strategy, gost, pinned: pinHostId > 0 && exitIds.includes(pinHostId), active, total: exitIds.length, names, marginMs: detect.latencyMarginMs });
+    const how = describeHow({ strategy, gost, pinned: pinHostId > 0 && exitIds.includes(pinHostId), active, total: exitIds.length, names, marginMs: detect.latencyMarginMs, fastestOnly: detect.fastestOnly });
     if (how) hows.set(how, (hows.get(how) || 0) + 1);
   }
   let how: string | null = null;
@@ -929,6 +933,8 @@ function exitTargetSummaryFromLive(
     const label = describeHow({ strategy: options.strategy, gost: options.gost, pinned, active: active.map((exit) => exit.hostId), total: exits.length, names, marginMs: options.detect.latencyMarginMs })?.split("：")[0] || "分配";
     let how: string;
     if (pinned) how = `手动指定：只走 ${names(active.map((exit) => exit.hostId))}`;
+    // 延迟优先「只走最快的一台」：入口报的唯一一台 active 就是它（其余 standby，见 lbcore/fastest.go）
+    else if (active.length === 1 && options.strategy === "latency" && options.detect.fastestOnly) how = `${label}：只走 ${active[0].hostName}（最快）${restText}`;
     else if (active.length === 1) how = `${label}：走 ${active[0].hostName}${restText}`;
     else if (totalPicks >= 10) {
       /*

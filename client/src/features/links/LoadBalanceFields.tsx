@@ -18,6 +18,7 @@ import {
   BALANCE_STRATEGY_LABELS,
   BALANCE_TARGET_PROBE_CHOICES,
   DEFAULT_BALANCE_DETECT,
+  applyBalanceSensitivity,
   balanceDetectEquals,
   balanceSensitivityOf,
   balanceStrategyHint,
@@ -35,6 +36,8 @@ import {
     分配方式  一个下拉框：自动（推荐）在最上面，其余 7 种在「其他方式」里；每项一句话，选中的那句写在下面。
     检测      灵敏 / 均衡 / 稳定三档，下面一句「坏了约 N 秒内切走」。逐项参数收在「高级」里，默认合着。
               「多久探一次出口机」和「多久探一次目标」分两项（2.3.541）：后者连的是别人的机器，高防目标会拉黑连得太勤的出口。
+              延迟优先多一个开关「只走最快的一台」（BalanceDetect.fastestOnly）：不在一样快的几台里分，只走最快的那台。
+              它不算灵敏度：选哪一档都留着它（applyBalanceSensitivity），三档也不因为它变成「自定义」。
 */
 
 export function BalanceStrategySelect({
@@ -182,7 +185,7 @@ function SettingRow({ title, hint, children, stacked = false }: { title: string;
 }
 
 /** 「高级」：逐项的检测参数。改过任何一项，上面的三档就显示成「自定义」。 */
-function BalanceAdvanced({ value, onChange, strategy, weights, memberNames }: {
+export function BalanceAdvanced({ value, onChange, strategy, weights, memberNames }: {
   value: BalanceDetect;
   onChange: (value: BalanceDetect) => void;
   strategy: BalanceStrategy | null;
@@ -232,9 +235,14 @@ function BalanceAdvanced({ value, onChange, strategy, weights, memberNames }: {
         <Stepper label="恢复要连续通几次" value={value.recoverThreshold} onChange={(recoverThreshold) => patch({ recoverThreshold })} {...limits.recoverThreshold} unit="次" />
       </SettingRow>
       {strategy === "latency" ? (
-        <SettingRow title="差多少算一样快" hint="比最快的慢不到这么多的一起分">
-          <Stepper label="一样快的门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} {...limits.latencyMarginMs} unit="ms" />
-        </SettingRow>
+        <>
+          <SettingRow title="差多少算一样快" hint={value.fastestOnly ? "另一台要快出这么多（并且快两成）才换过去" : "比最快的慢不到这么多的一起分"}>
+            <Stepper label="一样快的门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} {...limits.latencyMarginMs} unit="ms" />
+          </SettingRow>
+          <SettingRow title="只走最快的一台" hint="按整链延迟只走最快的，别的候补；另一台要快出门槛并且快两成、稳住 60 秒才换过去">
+            <Switch aria-label="只走最快的一台" checked={value.fastestOnly} onCheckedChange={(fastestOnly) => patch({ fastestOnly })} />
+          </SettingRow>
+        </>
       ) : null}
       <SettingRow title="抖动超过多少算抖" hint="抖动这三项只对 NEX 隧道起作用">
         <Stepper label="抖动门槛" value={value.jitterMs} onChange={(jitterMs) => patch({ jitterMs })} {...limits.jitterMs} unit="ms" />
@@ -291,7 +299,7 @@ export function LoadBalanceFields({
         <BalanceStrategySelect value={strategy} onChange={onStrategyChange} />
         {strategy ? (
           <p className="text-meta leading-5 text-muted-foreground" data-testid="balance-strategy-hint">
-            {balanceStrategyHint(strategy)}{note ? `；${note}` : ""}
+            {balanceStrategyHint(strategy, false, detect)}{note ? `；${note}` : ""}
           </p>
         ) : null}
       </div>
@@ -305,14 +313,16 @@ export function LoadBalanceFields({
             ...(sensitivity ? [] : [{ value: "custom", label: "自定义" }]),
           ]}
           onChange={(key) => {
-            const preset = BALANCE_SENSITIVITY_PRESETS[key as keyof typeof BALANCE_SENSITIVITY_PRESETS];
-            if (preset) onDetectChange({ ...preset.detect });
+            if (key in BALANCE_SENSITIVITY_PRESETS) onDetectChange(applyBalanceSensitivity(detect, key as keyof typeof BALANCE_SENSITIVITY_PRESETS));
           }}
           listClassName="grid grid-flow-col auto-cols-fr gap-1"
         />
         <p className="text-meta leading-5 text-muted-foreground">
           {sensitivity ? BALANCE_SENSITIVITY_PRESETS[sensitivity].hint : "按高级里的设置"}；坏了约 {balanceSwitchWithinSeconds(detect)} 秒内切走
         </p>
+        {strategy === "latency" && detect.fastestOnly ? (
+          <p className="text-meta leading-5 text-muted-foreground" data-testid="balance-fastest-only">延迟优先：只走最快的一台</p>
+        ) : null}
       </div>
       <div className="border-t border-border/50">
         <button

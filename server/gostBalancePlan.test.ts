@@ -241,3 +241,13 @@ test("出口到目标的延迟：别的出口知道、这台不知道时带 extr
   const none = (await planGostBalanceRules([rule], states([]))).get(501)!;
   assert.deepEqual(none.spec.targets.map((target) => [target.extraLatencyMs, target.extraLatencyUnknown]), [[undefined, undefined], [undefined, undefined]]);
 });
+
+test("规格：延迟优先开了「只走最快的一台」带 fastestOnly，分配方式仍是 latency；别的分配方式、没开时都不带", () => {
+  const fastest = buildGostBalanceProxySpec({ ...base, strategy: "latency", detect: { ...DEFAULT_BALANCE_DETECT, fastestOnly: true, latencyMarginMs: 30 } });
+  assert.equal(fastest.strategy, "latency", "用户看到的还是延迟优先，不是主备");
+  assert.equal(fastest.fastestOnly, true);
+  assert.equal(fastest.latencyMarginMs, 30);
+  assert.equal("preferFastest" in fastest, false, "不借主备 + 择优");
+  assert.equal("fastestOnly" in buildGostBalanceProxySpec({ ...base, strategy: "latency" }), false);
+  assert.equal("fastestOnly" in buildGostBalanceProxySpec({ ...base, strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, fastestOnly: true } }), false);
+});
