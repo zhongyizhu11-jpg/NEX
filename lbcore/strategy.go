@@ -7,7 +7,8 @@ import "time"
 
 	auto         自动：P2C + peak EWMA 的成本（load.go）
 	least_load   按负载：同一个成本只留负载那一半（load.go）
-	latency      延迟优先：先圈出「一样快」的一组，只在组里用自动的成本（latency.go）
+	latency      延迟优先：先圈出「一样快」的一组，只在组里用自动的成本（latency.go）；
+	             Options.FastestOnly 时只走最快的一台，别的候补（fastest.go）
 	weighted     按权重：平滑加权轮询（wrr.go）
 	round_robin  轮流（wrr.go）
 	random       随机（wrr.go）
@@ -51,13 +52,15 @@ State 是一个挑选器（一条规则 / 一个线路组）跨连接留着的�
 	WRR   按权重的计数（长度 = 成员数）
 	Near  延迟优先里「一样快」那一组的状态
 	Next  轮转计数：轮流的位置、成本一样时从谁数起。给它一个随机初值，各条规则就不会都从第一个成员起步
+	Fastest  延迟优先「只走最快的一台」现在在用的是谁、挑战者是谁
 
-State 本身只是三个引用，每次挑选时现拼一个就行。
+State 本身只是几个引用，每次挑选时现拼一个就行。
 */
 type State struct {
-	WRR  SmoothWRR
-	Near *NearSet
-	Next *int
+	WRR     SmoothWRR
+	Near    *NearSet
+	Next    *int
+	Fastest *Fastest
 }
 
 // Options 是各分配方式的参数，零值 = 全用默认（见各文件开头）。
@@ -70,6 +73,11 @@ type Options struct {
 	Scratch []float64
 	// NearScratch：延迟优先用来放「一样快」那一组的临时区。不给就现分配。
 	NearScratch []int
+	// FastestOnly：延迟优先只走最快的一台（fastest.go）。门槛用 Near.Margin，驻留 FastestHold（≤ 0 = 60 秒）。
+	FastestOnly bool
+	FastestHold time.Duration
+	// Transient：这一次只挑、不改「只走最快的一台」的状态（调用方排除了这条连接拨失败过的成员，见 Fastest.Select）。
+	Transient bool
 }
 
 /*
@@ -92,6 +100,13 @@ func Pick(strategy string, state State, members []Member, keys []string, candida
 	case StrategyLeastLoad:
 		return LeastLoad(members, candidates, next, rnd)
 	case StrategyLatency:
+		if opts.FastestOnly {
+			fastest := state.Fastest
+			if fastest == nil {
+				fastest = &Fastest{}
+			}
+			return fastest.Select(members, candidates, FastestPolicy{Margin: opts.Near.Margin, Hold: opts.FastestHold}, now, !opts.Transient)
+		}
 		near := state.Near
 		if near == nil {
 			near = &NearSet{}

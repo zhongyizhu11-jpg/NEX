@@ -44,11 +44,13 @@ const (
 
 // Case 是一个用例：一组成员、一种分配方式、几步操作和每一步的预期。
 type Case struct {
-	Name     string   `json:"name"`
-	About    string   `json:"about"`
-	Strategy string   `json:"strategy"`
-	Members  []Member `json:"members"`
-	Steps    []Step   `json:"steps"`
+	Name     string `json:"name"`
+	About    string `json:"about"`
+	Strategy string `json:"strategy"`
+	// FastestOnly：延迟优先开了「只走最快的一台」（面板 BalanceDetect.fastestOnly，lbcore/fastest.go）。
+	FastestOnly bool     `json:"fastestOnly,omitempty"`
+	Members     []Member `json:"members"`
+	Steps       []Step   `json:"steps"`
 	// Only：只给这几个实现跑（lbcore / agent / fxp）。不写就是都跑。
 	Only []string `json:"only,omitempty"`
 }
