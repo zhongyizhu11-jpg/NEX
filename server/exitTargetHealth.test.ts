@@ -54,8 +54,19 @@ test("负载均衡链路才算：开了就算（库里老的「只用第一个�
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: false, loadBalanceStrategy: "auto" }), false);
 });
 
-test("探测规格跟着链路的「检测与切换」：默认 2 秒一次、2 次不通算坏、3 次通算好，有真实连接先看真实连接", () => {
-  assert.deepEqual(exitTargetProbeSpec(DEFAULT_BALANCE_DETECT), { intervalMs: 2000, timeoutMs: 2000, failThreshold: 2, recoverOks: 3, passive: true });
+test("探测规格跟着链路的「多久探一次目标」：默认 10 秒一次（不跟探出口机的 2 秒）、2 次不通算坏、3 次通算好，有真实连接先看真实连接", () => {
+  assert.deepEqual(exitTargetProbeSpec(DEFAULT_BALANCE_DETECT), { intervalMs: 10000, timeoutMs: 5000, failThreshold: 2, recoverOks: 3, passive: true });
+  // 出口机探得再勤，目标也按自己的节拍：高防目标会拉黑每秒都来连一下的出口 IP
+  assert.equal(exitTargetProbeSpec({ ...DEFAULT_BALANCE_DETECT, intervalSeconds: 1, targetProbeSeconds: 300 }).intervalMs, 300_000);
+  assert.deepEqual(
+    (({ intervalMs, timeoutMs }) => ({ intervalMs, timeoutMs }))(exitTargetProbeSpec({ ...DEFAULT_BALANCE_DETECT, targetProbeSeconds: 2 })),
+    { intervalMs: 2000, timeoutMs: 2000 },
+  );
+  // 300 秒一次时「连不上」的新鲜度（2 个节拍 + 余量）照样成立
+  const probedAt = 1_000_000;
+  const state = { down: true, at: probedAt, probedAt, probeIntervalMs: 300_000 };
+  assert.equal(exitTargetDownStale(state, probedAt + 400_000), false);
+  assert.equal(exitTargetDownStale(state, probedAt + 700_000), true);
 });
 
 test("不稳：抖动或丢包超过门槛（样本太少不判）", () => {

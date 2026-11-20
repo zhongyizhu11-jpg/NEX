@@ -97,6 +97,7 @@ const tunnelLoadBalanceStrategySchema = z.enum(BALANCE_STRATEGIES);
 /** 负载均衡的「检测与切换」（shared/loadBalance.ts），字段不全的按默认值补。 */
 const balanceDetectSchema = z.object({
   intervalSeconds: z.number().int().min(1).max(60).optional(),
+  targetProbeSeconds: z.number().int().min(2).max(300).optional(),
   failThreshold: z.number().int().min(1).max(10).optional(),
   recoverThreshold: z.number().int().min(1).max(10).optional(),
   latencyMarginMs: z.number().int().min(10).max(2000).optional(),

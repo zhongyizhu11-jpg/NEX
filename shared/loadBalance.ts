@@ -101,8 +101,13 @@ export const BALANCE_JITTER_ACTION_LABELS: Record<BalanceJitterAction, string> =
 };
 
 export type BalanceDetect = {
-  /** 多久探一次（秒） */
+  /** 多久探一次出口机（秒）：入口探自己的出口机，决定坏了多快切走 */
   intervalSeconds: number;
+  /**
+   * 多久探一次规则目标（秒）：出口机连一下目标就断（有真实流量时直接读内核的往返时间，不另外连）。
+   * 和上面分开（2.3.541 用户反馈）：目标是别人的机器，高防目标会把每秒都来连一下的出口 IP 拉黑，所以默认慢得多。
+   */
+  targetProbeSeconds: number;
   /** 连续几次不通算坏 */
   failThreshold: number;
   /** 坏了以后要连续通几次才算恢复 */
@@ -120,9 +125,11 @@ export type BalanceDetect = {
 };
 
 export const BALANCE_INTERVAL_CHOICES = [1, 2, 5, 10, 30] as const;
+export const BALANCE_TARGET_PROBE_CHOICES = [5, 10, 30, 60] as const;
 
 export const BALANCE_DETECT_LIMITS = {
   intervalSeconds: { min: 1, max: 60 },
+  targetProbeSeconds: { min: 2, max: 300 },
   failThreshold: { min: 1, max: 10 },
   recoverThreshold: { min: 1, max: 10 },
   latencyMarginMs: { min: 10, max: 2000, step: 10 },
@@ -133,6 +140,7 @@ export const BALANCE_DETECT_LIMITS = {
 /** 负载均衡（链路、出口组、线路组）的默认值。 */
 export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
   intervalSeconds: 2,
+  targetProbeSeconds: 10,
   failThreshold: 2,
   recoverThreshold: 3,
   latencyMarginMs: 50,
@@ -150,7 +158,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   sensitive: {
     label: "灵敏",
     hint: "适合游戏、实时通话",
-    detect: { intervalSeconds: 1, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true },
+    detect: { intervalSeconds: 1, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true },
   },
   balanced: {
     label: "均衡",
@@ -160,7 +168,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   stable: {
     label: "稳定",
     hint: "偶尔波动不动，适合下载、长连接",
-    detect: { intervalSeconds: 5, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true },
+    detect: { intervalSeconds: 5, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true },
   },
 };
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
@@ -190,7 +198,7 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
     input = value as Record<string, unknown>;
   }
   const action = String(input.jitterAction ?? "").trim().toLowerCase();
-  return {
+  const rest = {
     intervalSeconds: clampInt(input.intervalSeconds, defaults.intervalSeconds, BALANCE_DETECT_LIMITS.intervalSeconds),
     failThreshold: clampInt(input.failThreshold, defaults.failThreshold, BALANCE_DETECT_LIMITS.failThreshold),
     recoverThreshold: clampInt(input.recoverThreshold, defaults.recoverThreshold, BALANCE_DETECT_LIMITS.recoverThreshold),
@@ -200,6 +208,25 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
     jitterAction: (BALANCE_JITTER_ACTIONS as readonly string[]).includes(action) ? action as BalanceJitterAction : defaults.jitterAction,
     slowStart: typeof input.slowStart === "boolean" ? input.slowStart : defaults.slowStart,
   };
+  const hasTarget = input.targetProbeSeconds !== undefined && input.targetProbeSeconds !== null && input.targetProbeSeconds !== "";
+  const targetProbeSeconds = hasTarget
+    ? clampInt(input.targetProbeSeconds, deriveTargetProbeSeconds(rest), BALANCE_DETECT_LIMITS.targetProbeSeconds)
+    : deriveTargetProbeSeconds(rest);
+  const { intervalSeconds, ...others } = rest;
+  return { intervalSeconds, targetProbeSeconds, ...others };
+}
+
+/*
+  老数据（2.3.541 以前存的）没有 targetProbeSeconds：其余各项正好是某一档就用那一档的目标间隔（仍显示那一档），
+  否则按出口机间隔的 5 倍，至少 5 秒、最多 300 秒。
+*/
+function deriveTargetProbeSeconds(rest: Omit<BalanceDetect, "targetProbeSeconds">) {
+  const preset = BALANCE_SENSITIVITIES.find((key) => {
+    const detect = BALANCE_SENSITIVITY_PRESETS[key].detect;
+    return (Object.keys(rest) as (keyof typeof rest)[]).every((field) => rest[field] === detect[field]);
+  });
+  if (preset) return BALANCE_SENSITIVITY_PRESETS[preset].detect.targetProbeSeconds;
+  return Math.max(5, Math.min(BALANCE_DETECT_LIMITS.targetProbeSeconds.max, rest.intervalSeconds * 5));
 }
 
 /** 存库：和默认一样就存 null（以后改默认值时跟着走）。 */
@@ -242,7 +269,10 @@ export function describeBalanceEffect(input: {
   const { detect } = input;
   const strategy = normalizeBalanceStrategy(input.strategy);
   const parts: string[] = [];
-  parts.push(`每 ${detect.intervalSeconds} 秒探一次，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内${input.dns ? "改解析" : "切走"}`);
+  // 转发组 / 入口组靠改解析，只探入口，不探规则目标
+  parts.push(input.dns
+    ? `每 ${detect.intervalSeconds} 秒探一次，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内改解析`
+    : `每 ${detect.intervalSeconds} 秒探一次出口机、每 ${detect.targetProbeSeconds} 秒探一次目标，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内切走`);
   if (strategy === "weighted") {
     const ratio = ratioText(input.weights || []);
     const names = (input.memberNames || []).filter(Boolean);
