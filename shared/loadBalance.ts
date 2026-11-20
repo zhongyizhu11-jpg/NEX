@@ -49,9 +49,15 @@ export const BALANCE_STRATEGY_LABELS: Record<BalanceStrategy, { label: string; h
 /** 新建出口组 / 线路组默认的分配方式：自动（推荐），用户不用选也能用。 */
 export const BALANCE_DEFAULT_STRATEGY: BalanceStrategy = "auto";
 
-/** 那一句说明；perSession：只转 UDP 时说「新会话」。 */
-export function balanceStrategyHint(strategy: BalanceStrategy, perSession = false) {
-  const hint = BALANCE_STRATEGY_LABELS[strategy].hint;
+/**
+ * 延迟优先开了「只走最快的一台」（BalanceDetect.fastestOnly）时那一句换成这句：分配方式还是延迟优先，只是不在
+ * 「一样快」的几个里分，只走最快的一个（lbcore/fastest.go，GOST 出口组和 NEX 隧道一样）。
+ */
+export const BALANCE_LATENCY_FASTEST_ONLY_HINT = "只走整链延迟最快的一个，别的候补；另一个要快出门槛并且快两成、稳住 60 秒才换过去";
+
+/** 那一句说明；perSession：只转 UDP 时说「新会话」。detect：给了而且开了「只走最快的一台」时，延迟优先说那一句。 */
+export function balanceStrategyHint(strategy: BalanceStrategy, perSession = false, detect?: Pick<BalanceDetect, "fastestOnly"> | null) {
+  const hint = strategy === "latency" && detect?.fastestOnly ? BALANCE_LATENCY_FASTEST_ONLY_HINT : BALANCE_STRATEGY_LABELS[strategy].hint;
   return perSession ? hint.replaceAll("新连接", "新会话").replace("连接数", "会话数") : hint;
 }
 
@@ -122,6 +128,12 @@ export type BalanceDetect = {
   jitterAction: BalanceJitterAction;
   /** 刚恢复的 1 分钟内从一小份慢慢加到满份 */
   slowStart: boolean;
+  /**
+   * 延迟优先：只走最快的一台（只对延迟优先起作用，默认关）。按整链延迟只走最快的那台，别的候补；另一台要比它快出
+   * latencyMarginMs 并且快两成、稳住 60 秒（BALANCE_FASTEST_HOLD_SECONDS）才换过去，在用的坏了马上换次快的。
+   * 不算检测灵敏度的一部分：三档都是关，选哪一档都不改它（balanceSensitivityOf 不看它）。
+   */
+  fastestOnly: boolean;
 };
 
 export const BALANCE_INTERVAL_CHOICES = [1, 2, 5, 10, 30] as const;
@@ -148,7 +160,11 @@ export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
   jitterHoldSeconds: 30,
   jitterAction: "reduce",
   slowStart: true,
+  fastestOnly: false,
 };
+
+/** 「只走最快的一台」：另一台要连着快出门槛多久才换过去（lbcore.DefaultFastestHold）。不给调。 */
+export const BALANCE_FASTEST_HOLD_SECONDS = 60;
 
 /*
   检测灵敏度三档（2.3.539）：大多数人只需要选一档，不用逐项调。「均衡」就是默认值；改过任何一项就显示「自定义」。
@@ -158,7 +174,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   sensitive: {
     label: "灵敏",
     hint: "适合游戏、实时通话",
-    detect: { intervalSeconds: 1, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true },
+    detect: { intervalSeconds: 1, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false },
   },
   balanced: {
     label: "均衡",
@@ -168,7 +184,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   stable: {
     label: "稳定",
     hint: "偶尔波动不动，适合下载、长连接",
-    detect: { intervalSeconds: 5, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true },
+    detect: { intervalSeconds: 5, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false },
   },
 };
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
@@ -207,6 +223,8 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
     jitterHoldSeconds: clampInt(input.jitterHoldSeconds, defaults.jitterHoldSeconds, BALANCE_DETECT_LIMITS.jitterHoldSeconds),
     jitterAction: (BALANCE_JITTER_ACTIONS as readonly string[]).includes(action) ? action as BalanceJitterAction : defaults.jitterAction,
     slowStart: typeof input.slowStart === "boolean" ? input.slowStart : defaults.slowStart,
+    // 老数据没有这一项：关（defaults 的也是关）
+    fastestOnly: typeof input.fastestOnly === "boolean" ? input.fastestOnly : defaults.fastestOnly,
   };
   const hasTarget = input.targetProbeSeconds !== undefined && input.targetProbeSeconds !== null && input.targetProbeSeconds !== "";
   const targetProbeSeconds = hasTarget
@@ -223,7 +241,7 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
 function deriveTargetProbeSeconds(rest: Omit<BalanceDetect, "targetProbeSeconds">) {
   const preset = BALANCE_SENSITIVITIES.find((key) => {
     const detect = BALANCE_SENSITIVITY_PRESETS[key].detect;
-    return (Object.keys(rest) as (keyof typeof rest)[]).every((field) => rest[field] === detect[field]);
+    return (Object.keys(rest) as (keyof typeof rest)[]).every((field) => field === "fastestOnly" || rest[field] === detect[field]);
   });
   if (preset) return BALANCE_SENSITIVITY_PRESETS[preset].detect.targetProbeSeconds;
   return Math.max(5, Math.min(BALANCE_DETECT_LIMITS.targetProbeSeconds.max, rest.intervalSeconds * 5));
@@ -239,9 +257,14 @@ export function balanceDetectEquals(left: BalanceDetect, right: BalanceDetect) {
   return (Object.keys(DEFAULT_BALANCE_DETECT) as (keyof BalanceDetect)[]).every((key) => left[key] === right[key]);
 }
 
-/** 这组检测参数是哪一档；逐项改过（哪档都不是）返回 null。 */
+/** 这组检测参数是哪一档；逐项改过（哪档都不是）返回 null。「只走最快的一台」不算灵敏度，不看它。 */
 export function balanceSensitivityOf(detect: BalanceDetect): BalanceSensitivity | null {
-  return BALANCE_SENSITIVITIES.find((key) => balanceDetectEquals(detect, BALANCE_SENSITIVITY_PRESETS[key].detect)) ?? null;
+  return BALANCE_SENSITIVITIES.find((key) => balanceDetectEquals(detect, { ...BALANCE_SENSITIVITY_PRESETS[key].detect, fastestOnly: detect.fastestOnly })) ?? null;
+}
+
+/** 选一档灵敏度：换成那一档的检测参数，「只走最快的一台」留着原来的。 */
+export function applyBalanceSensitivity(detect: BalanceDetect, sensitivity: BalanceSensitivity): BalanceDetect {
+  return { ...BALANCE_SENSITIVITY_PRESETS[sensitivity].detect, fastestOnly: detect.fastestOnly };
 }
 
 /** 坏了最多多少秒切走：最坏是刚探完就坏，等够「几次不通」轮探测。 */
@@ -279,6 +302,8 @@ export function describeBalanceEffect(input: {
     parts.push(ratio
       ? `新连接按 ${ratio} 分${names.length > 0 && names.length <= 4 ? `给 ${names.join("、")}` : ""}`
       : "新连接按线路带宽分（没填权重）");
+  } else if (strategy === "latency" && detect.fastestOnly) {
+    parts.push(`延迟优先：只走最快的一台，别的候补；另一台要快出 ${detect.latencyMarginMs}ms 并且快两成、稳住 ${BALANCE_FASTEST_HOLD_SECONDS} 秒才换过去`);
   } else if (strategy) {
     parts.push(BALANCE_STRATEGY_LABELS[strategy].hint);
   }

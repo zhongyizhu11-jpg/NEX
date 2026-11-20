@@ -105,6 +105,8 @@ const balanceDetectSchema = z.object({
   jitterHoldSeconds: z.number().int().min(5).max(600).optional(),
   jitterAction: z.enum(["reduce", "switch", "ignore"]).optional(),
   slowStart: z.boolean().optional(),
+  // 延迟优先：只走最快的一台
+  fastestOnly: z.boolean().optional(),
 }).nullable();
 const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate", "hot_standby"]);
 const MAX_TUNNEL_HOPS = 10;

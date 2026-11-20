@@ -87,6 +87,8 @@ const baseSchema = z.object({
     jitterHoldSeconds: z.number().int().min(5).max(600).optional(),
     jitterAction: z.enum(["reduce", "switch", "ignore"]).optional(),
     slowStart: z.boolean().optional(),
+    // 延迟优先：只走最快的一台
+    fastestOnly: z.boolean().optional(),
   }).nullable().optional(),
   entryGroupId: z.number().nullable().optional(),
   groupType: z.enum(["host", "tunnel"]),
