@@ -12,6 +12,8 @@ import { isUserspaceForwardType, normalizeForwardRuleProtocol } from "@shared/fo
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import { exitTargetStatesForRule, ruleActiveExit } from "../exitTargetHealth";
+import { liveBalanceForRule } from "../balanceLive";
+import { liveEntryExitSegment } from "../selfTestViaExit";
 import { isLatestRuleProbeTimeout } from "../repositories/metricsRepository";
 import * as hopRepo from "../repositories/tunnelRepository";
 import { dbBool } from "../repositories/repositoryUtils";
@@ -211,12 +213,48 @@ export const selfTestRulesRouter = router({
         const primaryTimeout = primaryReported
           ? false
           : await isLatestRuleProbeTimeout(Number(runtimeRule.id), Number(tunnel.exitHostId), new Date(Date.now() - 5 * 60_000)).catch(() => null) === true;
+        /*
+          从哪台测：扛流量最多的那台（ruleActiveExit 的 hostIds[0]，和规则卡上的延迟、「经」是同一台，见
+          exitTargetHealth.ts 的 liveCarryingExit）。它不是主出口时，「入口 → 出口」那一段也得是它的：入口真实上报的
+          exitMs，没有就让入口现测一次（selfTestViaExit.ts），绝不拿链路自己那份（入口到主出口的）样本凑。
+        */
         const activeExit = ruleActiveExit(Number(runtimeRule.id), Number(tunnel.id), Date.now(), { primaryTimeout });
-        const testExitHostId = activeExit ? activeExit.hostIds[0] : Number(tunnel.exitHostId);
+        const primaryExitHostId = Number(tunnel.exitHostId);
+        const viaActiveExit = !!activeExit && Number(activeExit.hostIds[0] || 0) > 0 && Number(activeExit.hostIds[0]) !== primaryExitHostId;
+        const testExitHostId = viaActiveExit ? Number(activeExit!.hostIds[0]) : primaryExitHostId;
         hostId = testExitHostId;
         const targetIp = runtimeRule.targetIp;
         if (!targetIp) throw new Error("目标地址不可用，请检查规则目标地址");
-        const tunnelLatencyBaseline = await db.getLatestTunnelLatency(Number(tunnel.id));
+        let entryExitTestId = 0;
+        let viaEntryHostId = Number(tunnel.entryHostId || 0);
+        if (viaActiveExit) {
+          const live = liveBalanceForRule(Number(runtimeRule.id));
+          if (live && Number(live.entryHostId) > 0) viaEntryHostId = Number(live.entryHostId);
+          const liveExit = live?.exits.find((exit) => exit.hostId === testExitHostId);
+          const hops = await hopRepo.getTunnelHops(Number(tunnel.id)).catch(() => []) as unknown[];
+          // 多跳（出口在中转后面）：入口连不到出口机，没法直接测这一段
+          if (!liveEntryExitSegment(live, testExitHostId) && liveExit?.host && liveExit.port > 0 && viaEntryHostId > 0 && hops.length < 3) {
+            const [entryHost, exitHost] = await Promise.all([db.getHostById(viaEntryHostId), db.getHostById(testExitHostId)]);
+            entryExitTestId = Number(await db.createForwardTest({
+              ruleId: 0,
+              hostId: viaEntryHostId,
+              userId: rule.userId,
+              status: "pending",
+              listenOk: false,
+              targetReachable: false,
+              forwardOk: false,
+              message: JSON.stringify({
+                kind: "line-segment",
+                targetIp: liveExit.host,
+                targetPort: liveExit.port,
+                method: "tcp",
+                hopLabel: `${(entryHost as { name?: unknown } | undefined)?.name || `主机 #${viaEntryHostId}`} → ${(exitHost as { name?: unknown } | undefined)?.name || `主机 #${testExitHostId}`}`,
+              }),
+            }) || 0);
+            if (entryExitTestId > 0) pushAgentRefresh(viaEntryHostId, "forward-selftest-entry-exit", { urgent: true });
+          }
+        }
+        const tunnelLatencyBaseline = viaActiveExit ? null : await db.getLatestTunnelLatency(Number(tunnel.id));
         // Probe only: a measurement must not invalidate a healthy runtime and
         // queue redundant re-applies ahead of the probe it is waiting for.
         const pushed = await pushTunnelEndpointRefresh(tunnel, "forward-selftest-via-tunnel", {
@@ -226,16 +264,16 @@ export const selfTestRulesRouter = router({
         message = JSON.stringify({
           kind: "forward-via-tunnel",
           tunnelId: tunnel.id,
-          entryHostId: tunnel.entryHostId,
+          entryHostId: viaActiveExit ? viaEntryHostId : tunnel.entryHostId,
           exitHostId: testExitHostId,
-          ...(activeExit ? { primaryExitHostId: Number(tunnel.exitHostId), viaActiveExit: true } : {}),
+          ...(viaActiveExit ? { primaryExitHostId, viaActiveExit: true, ...(entryExitTestId > 0 ? { entryExitTestId } : {}) } : {}),
           targetIp,
           targetPort: runtimeRule.targetPort,
           method: linkProbeMethodForRule(runtimeRule),
           tunnelLatencyBaselineId: Number((tunnelLatencyBaseline as any)?.id || 0),
           refreshPushed: pushed,
         });
-        appendPanelLog("info", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} queued tunnel+target test from exitHost=${testExitHostId}${activeExit ? ` (流量没走主出口 ${tunnel.exitHostId}，测在用的出口)` : ""} to target=${targetIp}:${runtimeRule.targetPort}`);
+        appendPanelLog("info", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} queued tunnel+target test from exitHost=${testExitHostId}${viaActiveExit ? ` (流量主要走 ${testExitHostId}、不是主出口 ${tunnel.exitHostId}，测在用的出口${entryExitTestId > 0 ? `；入口现测到它 test=${entryExitTestId}` : ""})` : ""} to target=${targetIp}:${runtimeRule.targetPort}`);
       }
       const id = await db.createForwardTest({
         ruleId: rule.id,
