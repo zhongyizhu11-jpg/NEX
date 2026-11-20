@@ -108,7 +108,7 @@ func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits 
 		item.Samples = summary.samples
 		exits[i] = item
 	}
-	// 在用的是谁：手动指定的那台能用时只有它；主备是正在走的那条；别的分法能用的都在轮转里。
+	// 在用的是谁：手动指定的那台能用时只有它；主备是正在走的那条；延迟优先只走最快的一台时是那一台；别的分法能用的都在轮转里。
 	pinned := p.pinnedIndexAt(now)
 	switch {
 	case pinned >= 0 && exits[pinned].State != "down":
@@ -116,6 +116,12 @@ func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits 
 	case p.spec.Strategy == "fallback":
 		if p.activeIndex >= 0 && p.activeIndex < len(exits) && exits[p.activeIndex].State != "down" {
 			exits[p.activeIndex].State = "active"
+		}
+	case p.fastestOnlyLocked():
+		// 延迟优先「只走最快的一台」：只有在用的那一台是 active，别的能用的是 standby（候补）。
+		// 这里每秒走一次，顺便当「稳住 60 秒」的钟（evaluateFastestLocked）。
+		if index := p.evaluateFastestLocked(now, "report"); index >= 0 && index < len(exits) && exits[index].State != "down" {
+			exits[index].State = "active"
 		}
 	default:
 		for i := range exits {
