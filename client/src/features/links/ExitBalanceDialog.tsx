@@ -117,6 +117,7 @@ export function ExitBalanceDialog({
       upgradeNeeded: !!upgradeIssue,
       slowStart: detect.slowStart,
       events,
+      ruleNames: summary?.ruleNames,
     }),
   }));
   const inUse = rows.filter((row) => row.view.state === "active" || row.view.state === "pinned" || row.view.state === "warming").length;

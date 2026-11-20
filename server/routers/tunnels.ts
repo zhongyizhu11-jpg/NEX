@@ -849,7 +849,14 @@ export const tunnelsRouter = router({
       const hostNames = new Map(hostRows.map((row) => [Number(row.id), String(row.name || `主机 ${row.id}`)]));
       const pinHostId = Number(tunnel.balancePinHostId || 0);
       const pinOnline = pinHostId > 0 && hostRows.some((row) => Number(row.id) === pinHostId && (row.isOnline === true || row.isOnline === 1));
-      return exitTargetSummaryForTunnel(tunnel, exitHostIds, { hostNames, pinOnline });
+      const summary = exitTargetSummaryForTunnel(tunnel, exitHostIds, { hostNames, pinOnline });
+      // 某台出口只对某几条规则连不上（别的规则还在走它）：弹窗按名字写清是哪几条
+      const downRuleIds = Array.from(new Set(summary.exits.flatMap((exit) => exit.downRuleIds || [])));
+      if (downRuleIds.length > 0) {
+        const rows = await db.getForwardRulesByIds(downRuleIds).catch(() => []) as Array<{ id: number; name?: string | null }>;
+        summary.ruleNames = Object.fromEntries(rows.map((row) => [Number(row.id), String(row.name || `规则 #${row.id}`)]));
+      }
+      return summary;
     }),
   /**
    * 负载均衡手动切换：只用某一台出口（hostId=null 交回自动）。

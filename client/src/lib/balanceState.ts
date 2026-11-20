@@ -51,6 +51,8 @@ const ms = (value: number) => `${Math.round(value)} ms`;
 export type ExitSummaryLike = {
   rules: number;
   down: number;
+  /** 连不上的是哪几条规则（名字在 ExitRowContext.ruleNames 里） */
+  downRuleIds?: number[];
   unstable: number;
   activeRules: number;
   medianMs: number | null;
@@ -93,6 +95,8 @@ export type ExitRowContext = {
   slowStart?: boolean;
   events?: readonly SwitchEventLike[];
   nowMs?: number;
+  /** downRuleIds 对应的规则名 */
+  ruleNames?: Record<number, string>;
 };
 
 export type ExitRowView = {
@@ -178,7 +182,18 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
     return ctx.hostId === ctx.pinHostId ? view("pinned") : view("standby", "已指定走别的出口");
   }
   if (hasData && summary!.down > 0) {
-    const count = summary!.rules > 1 && summary!.down < summary!.rules ? `（${summary!.down} 条规则）` : "";
+    const names = (summary!.downRuleIds || []).map((id) => ctx.ruleNames?.[id]).filter((name): name is string => !!name);
+    const which = names.length > 0 && names.length === summary!.down ? names.join("、") : `${summary!.down} 条规则`;
+    /*
+      这台只对某几条规则连不上、别的规则还在走它（用户面板：hep ix 对「广港hkt/2」的高防目标连不上 30 分钟，
+      另外两条规则照走）：这台还是「在用」，原因里写清是哪条；全都不走它了才是「连不上」。
+    */
+    if (summary!.activeRules > 0) {
+      return summary!.reason === "exit"
+        ? view("active", `${which}入口连不上这台出口机（已切走），别的规则照走`, "检查出口机的防火墙和隧道端口")
+        : view("active", `${which}到目标连不上（已切走），别的规则照走`, "检查这台出口到那条规则目标的网络");
+    }
+    const count = summary!.rules > 1 && summary!.down < summary!.rules ? `（${which}）` : "";
     return summary!.reason === "exit"
       ? view("down", `入口连不上这台出口机${count}，已切走`, "检查出口机的防火墙和隧道端口")
       : view("down", `这台连不上目标${count}，已切走`, "检查这台出口到目标的网络");

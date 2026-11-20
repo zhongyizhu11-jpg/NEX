@@ -8845,5 +8845,8 @@
  "延迟为 {0} 在用出口探目标的结果，和规则卡一致": "Latency is from the active exit's probe to the target at {0}, same as the rule card",
  "只走最快的一台，别的候补；快出门槛且稳 60 秒才换": "Uses only the fastest one; the others stand by. Switches only when another beats the margin steadily for 60 s",
  "只走整链最快的一台；快出门槛且稳 60 秒才换": "Uses only the one with the lowest end-to-end latency; switches only when another beats the margin steadily for 60 s",
- "延迟优先：只走最快的一台，别的候补；快出 {0}ms 且稳 {1} 秒才换": "Latency first: only the fastest exit, the others stand by; switches only when another is faster by {0} ms steadily for {1} s"
+ "延迟优先：只走最快的一台，别的候补；快出 {0}ms 且稳 {1} 秒才换": "Latency first: only the fastest exit, the others stand by; switches only when another is faster by {0} ms steadily for {1} s",
+ "{0}到目标连不上（已切走），别的规则照走": "{0} can't reach its target through this exit (switched away); the other rules still use it",
+ "{0}入口连不上这台出口机（已切走），别的规则照走": "{0}: the entry can't reach this exit host (switched away); the other rules still use it",
+ "检查这台出口到那条规则目标的网络": "Check this exit's network to that rule's target"
 }

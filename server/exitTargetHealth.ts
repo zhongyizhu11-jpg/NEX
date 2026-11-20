@@ -544,6 +544,8 @@ export type ExitTargetExitSummary = {
   rules: number;
   /** 只有这台连不上的规则条数（每台都连不上的算目标的问题，不记在这里） */
   down: number;
+  /** 是哪几条规则连不上（弹窗写名字：这台给别的规则还在用时，不能笼统写「连不上」） */
+  downRuleIds: number[];
   /** 只有这台不稳的规则条数 */
   unstable: number;
   /** 各条规则到目标延迟的中位数（不取最差：目标远的那条规则每台都慢，不是出口的问题） */
@@ -598,6 +600,8 @@ export type ExitTargetTunnelSummary = {
   live?: boolean;
   /** 最近的切换记录（新的在前，最多 10 条；只有真实上报时有） */
   events?: Array<{ at: number; ruleId: number; hostId: number; hostName: string; from: string; to: string; reason: "target" | "exit" | null; text: string }>;
+  /** downRuleIds 里的规则叫什么（路由层补上） */
+  ruleNames?: Record<number, string>;
 };
 
 const middle = (values: number[]) => {
@@ -779,7 +783,7 @@ export function exitTargetSummaryForTunnel(
     byRule.set(state.ruleId, map);
   }
   const perExit = new Map(exitIds.map((hostId) => [hostId, {
-    rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
+    rules: 0, down: 0, downRules: [] as number[], unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
     baselines: [] as number[], slower: 0, traffic: 0, probe: 0,
   }]));
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
@@ -795,8 +799,10 @@ export function exitTargetSummaryForTunnel(
       const entry = perExit.get(state.hostId);
       if (!entry) continue;
       entry.rules += 1;
-      if (state.down && !allDown) entry.down += 1;
-      else if (state.unstable && !allDown && !allUnstable) entry.unstable += 1;
+      if (state.down && !allDown) {
+        entry.down += 1;
+        entry.downRules.push(ruleId);
+      } else if (state.unstable && !allDown && !allUnstable) entry.unstable += 1;
       const median = state.medianMs ?? state.latencyMs;
       if (!state.down && median != null) entry.medians.push(median);
       const baseline = exitTargetBaseline(ruleId, state.hostId);
@@ -839,6 +845,7 @@ export function exitTargetSummaryForTunnel(
         hostId,
         rules: entry.rules,
         down: entry.down,
+        downRuleIds: entry.downRules,
         unstable: entry.unstable,
         medianMs: middle(entry.medians),
         minMs: entry.medians.length > 0 ? Math.min(...entry.medians) : null,
@@ -888,7 +895,7 @@ function exitTargetSummaryFromLive(
     || `主机 ${hostId}`;
   const names = (hostIds: number[]) => hostIds.map(nameOf).join("、");
   const perExit = new Map(ids.map((hostId) => [hostId, {
-    rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
+    rules: 0, down: 0, downRules: [] as number[], unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
     baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
     reason: null as "target" | "exit" | null, shares: [] as number[],
     exitMs: [] as number[], targetMs: [] as number[], targetUnknown: 0, panelTargetMs: [] as number[],
@@ -907,8 +914,10 @@ function exitTargetSummaryFromLive(
       const entry = perExit.get(exit.hostId);
       if (!entry) continue;
       entry.rules += 1;
-      if (exit.state === "down" && !allDown) entry.down += 1;
-      else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
+      if (exit.state === "down" && !allDown) {
+        entry.down += 1;
+        entry.downRules.push(live.ruleId);
+      } else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
       if (exit.state === "active") entry.activeRules += 1;
       if (exit.state === "active" && exit.share != null) entry.shares.push(exit.share);
       // 出口机本身连不上比到目标不行更要紧：有一条规则报 exit 就写 exit
@@ -980,6 +989,7 @@ function exitTargetSummaryFromLive(
         hostId,
         rules: entry.rules,
         down: entry.down,
+        downRuleIds: entry.downRules,
         unstable: entry.unstable,
         medianMs: middle(entry.medians),
         minMs: entry.medians.length > 0 ? Math.min(...entry.medians) : null,
