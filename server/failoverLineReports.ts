@@ -5,6 +5,7 @@ import { timestampMillis } from "../shared/timestamp";
 import { failoverLineEndpoints } from "../shared/failoverActiveLine";
 import { normalizeRouteEventKind, routePathLabel, routePathsOf, type RouteEventKind, type RouteGroupRule } from "../shared/routeGroup";
 import { getRouteStatus, recordRouteAgentStats } from "./routeGroupStats";
+import { refreshTouchedHosts } from "./routeGroups";
 import { hasRouteDrillOnHost, isRouteDrillActive, noteRouteDrillAgentEvent, noteRouteDrillAgentStats } from "./routeDrill";
 import { recordRoutePathQuality } from "./routePathQualityHistory";
 import { notifyRouteSwitch } from "./routeSwitchNotifier";
@@ -265,9 +266,14 @@ export async function ingestFailoverLineReports(input: {
     const storedAt = Math.floor(timestampMillis(rule?.failoverActiveAt) / 1000);
     // 没变就不写：快照每次心跳都来，原样再写一遍是白白的写放大。
     if (String(rule?.failoverActiveTarget || "") === line.target && storedAt === line.at) continue;
+    const switched = String(rule?.failoverActiveTarget || "") !== line.target;
     try {
       await db.updateForwardRuleFailoverActiveLine(ruleId, line.target, line.at);
       written += 1;
+      // 换了在走的线路：中转机的下一跳探测节奏跟着变（在走的快、候补的慢，routeHopProbeSpecForParent），推一次让它们马上换。
+      if (switched && rule) {
+        refreshTouchedHosts({ ...rule, failoverActiveTarget: line.target }, new Set<number>(), "route-active-line-changed").catch(() => undefined);
+      }
     } catch (error) {
       failed = true;
       // 一条规则写不进去不该让整个心跳失败 —— 心跳还带着流量和运行状态。

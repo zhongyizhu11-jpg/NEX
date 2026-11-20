@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -40,14 +41,18 @@ const (
 )
 
 type balanceExitReport struct {
-	HostID   int     `json:"hostId,omitempty"`
-	Host     string  `json:"host"`
-	Port     int     `json:"port"`
-	State    string  `json:"state"`
-	Reason   string  `json:"reason,omitempty"`
-	Share    float64 `json:"share"`
-	Picks    uint64  `json:"picks"`
+	HostID int     `json:"hostId,omitempty"`
+	Host   string  `json:"host"`
+	Port   int     `json:"port"`
+	State  string  `json:"state"`
+	Reason string  `json:"reason,omitempty"`
+	Share  float64 `json:"share"`
+	Picks  uint64  `json:"picks"`
+	// MedianMs 整链延迟（入口到出口的握手 + 出口到目标），和 GOST 入口报的一个口径（2.2.149 起；以前只是出口到目标那一段，
+	// 面板当整链用，规则卡比诊断少一截）。ExitMs / TargetMs 是两段各自的数：出口到目标不知道时只有 ExitMs，MedianMs 不报。
 	MedianMs float64 `json:"medianMs,omitempty"`
+	ExitMs   float64 `json:"exitMs,omitempty"`
+	TargetMs float64 `json:"targetMs,omitempty"`
 	JitterMs float64 `json:"jitterMs,omitempty"`
 	LossPct  float64 `json:"lossPct,omitempty"`
 	Samples  int     `json:"samples,omitempty"`
@@ -86,10 +91,23 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 		}
 		item.UDPState = s.states[i].udpReportState()
 		item.PeerOutdated = item.UDPState == "unverified"
+		// 入口到出口这一段：握手耗时的指数平均（exit_load.go 的 latency，延迟优先比的就是它）
+		if i < len(s.loads) && s.loads[i] != nil {
+			item.ExitMs = roundTenth(s.loads[i].snapshotOf(now, fxpSnapshotAll).latency)
+		}
 		if s.endpointReportsTarget(i) {
 			health := s.target.health[i]
 			stats := health.stats()
-			item.MedianMs = roundTenth(stats.median)
+			if stats.samples > 0 {
+				// 不到 0.05 毫秒的按 0.1 报：0 在 JSON 里会被省掉，面板就当「到目标延迟不知道」
+				item.TargetMs = math.Max(0.1, roundTenth(stats.median))
+				if item.ExitMs > 0 {
+					item.MedianMs = roundTenth(item.ExitMs + item.TargetMs)
+				} else {
+					// 还没拨过这台出口、握手耗时不知道：先报出口到目标那一段（老口径），有了握手样本就是整链
+					item.MedianMs = item.TargetMs
+				}
+			}
 			item.JitterMs = roundTenth(stats.jitter)
 			item.LossPct = roundTenth(stats.loss * 100)
 			item.Samples = stats.samples

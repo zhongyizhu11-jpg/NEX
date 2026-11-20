@@ -200,6 +200,10 @@ FXP 一直按间隔探目标；和 `fastestOnly` 一起补上，没带时签名�
 
 ### 6.3 线路组（入口机 Agent）
 
+候补线路的下一跳（中转机上的快速探测，`routeHopProbeSpecForParent`）：主备里入口报了在走的那条，别的线路上的中继
+每 `ROUTE_HOP_STANDBY_INTERVAL_MS`（10 s）探一次（`routeHopRelayIsStandby`，`server/routeGroups.ts`）；在走的那条、几条
+一起走的、入口还没报在走哪条的照旧按切换节奏（1～5 s）。在走的线路换了（`failoverLineReports.ts`）就推一次中转机换节奏。
+
 探测间隔 = `failoverSeconds ÷ 2`，夹在 1–5 s，±10% 抖动（`agent/failover_health.go:12`）。判坏：探测连续失败
 ≥ `failureThreshold` 且持续 ≥ `failoverSeconds`；或者真实拨号连续 `failureThreshold` 次各自独立的失败当场判坏
 （`markDialFailure`，本机的 fd / 端口耗尽不算）。恢复：连着通满 `recoverSeconds`。中转挂了靠面板从中转机的探测下发 `Down`。

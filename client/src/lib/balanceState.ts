@@ -65,7 +65,7 @@ export type ExitSummaryLike = {
   peerOutdated?: boolean;
   reason?: "target" | "exit" | null;
   share?: number | null;
-  /** GOST 入口真实上报的两段：入口到这台出口、这台出口到目标（老面板 / NEX 隧道没有） */
+  /** 入口真实上报的两段：入口到这台出口、这台出口到目标（老 Agent / FXP 2.2.148 及更早没有） */
   exitMs?: number | null;
   targetMs?: number | null;
   /** 几条规则里这台到目标的延迟不知道 */

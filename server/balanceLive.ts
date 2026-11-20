@@ -26,7 +26,7 @@ export type LiveExit = {
   /** 这段时间新连接分给它的比例（0–1）；这段时间没有新连接时 null */
   share: number | null;
   picks: number;
-  /** 整链延迟（入口经这台出口到目标）：GOST 是 exitMs + targetMs（到目标不知道时只有 exitMs），FXP 是它自己量的 */
+  /** 整链延迟（入口经这台出口到目标）= exitMs + targetMs（到目标不知道时只有 exitMs）；FXP 2.2.148 及更早只报出口到目标那一段 */
   medianMs: number | null;
   /**
    * 入口到这台出口（GOST 的 Agent，这一版起）：入口调度器比的那个数（探测的指数平均），不是最近一次的单个样本。

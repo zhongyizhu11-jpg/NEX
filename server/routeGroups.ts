@@ -34,6 +34,8 @@ import { dbBool } from "./repositories/repositoryUtils";
 import { findAvailablePort, getTunnelById, getTunnelExitNodes, getTunnelsByIds, isPortUsedOnHost } from "./repositories/tunnelRepository";
 import { forgetRouteStats, recordRouteHopFastState, recordRouteHopProbe, routeRuleIdsProbingHost } from "./routeGroupStats";
 import { ROUTE_ENTRY_RELAY_INDEX, routePathRelayPlan, routeRelayTargetNode, type RouteRelayTarget } from "../shared/routeLines";
+import { describeFailoverActiveLine } from "../shared/failoverActiveLine";
+import { routeAgentStrategy, routePolicyOf } from "../shared/routeGroupPolicy";
 import { getForwardRulesByTunnel } from "./repositories/forwardRuleRepository";
 import { reconcileForwardRuleTunnelExits, reserveTunnelExitPort, usesSharedTunnelPrimaryListener } from "./repositories/tunnelRepository";
 import { deleteRoutePathQualityStats } from "./repositories/routePathQualityRepository";
@@ -439,7 +441,7 @@ async function retireRelayRows(rows: RelayRuleRow[], touched: Set<number>) {
   return retired;
 }
 
-async function refreshTouchedHosts(rule: any, touched: Set<number>, reason: string) {
+export async function refreshTouchedHosts(rule: any, touched: Set<number>, reason: string) {
   const hostIds = new Set<number>(touched);
   if (rule) {
     hostIds.add(Number(rule.hostId));
@@ -816,11 +818,36 @@ type RelayRuleLike = {
 };
 type TunnelLike = { id?: unknown; exitHostId?: unknown };
 
-export function routeHopProbeSpecForParent(parent: RelayRuleLike | null | undefined): RouteHopProbeSpec {
+/*
+  候补线路的下一跳探得慢一点（2.3.542）：主备的线路组里只有在走的那条承担流量，候补那几条的下一跳本来按切换节奏
+  1～5 秒连一次，一天几万次 —— 用户实机上落地机把中转机的 IP 当扫描封了半小时、几小时一回（事件里「中转异常：hep ix →
+  落地」反复出现）。候补线路坏没坏只在切过去那一刻才要紧（切之前还有预检），10 秒一次够用。在走的那条照旧；
+  不是主备（轮流 / 按权重…几条一起走）的全按在走算；入口还没报过「现在走哪条」时也按在走算（不知道就别慢）。
+*/
+export const ROUTE_HOP_STANDBY_INTERVAL_MS = 10_000;
+
+export function routeHopProbeSpecForParent(parent: RelayRuleLike | null | undefined, options: { standby?: boolean } = {}): RouteHopProbeSpec {
   const failoverSeconds = Math.max(1, Math.floor(Number(parent?.failoverSeconds) || 60));
-  const intervalMs = Math.min(5000, Math.max(1000, Math.round((failoverSeconds * 1000) / 2)));
+  const fast = Math.min(5000, Math.max(1000, Math.round((failoverSeconds * 1000) / 2)));
+  const intervalMs = options.standby ? Math.max(fast, ROUTE_HOP_STANDBY_INTERVAL_MS) : fast;
   const threshold = Math.min(10, Math.max(1, Math.floor(Number(parent?.routeFailureThreshold) || 3)));
   return { intervalMs, timeoutMs: 2000, failThreshold: threshold, recoverOks: 3 };
+}
+
+/** 这条中继所在的线路是不是候补（主备里、入口报了在走的那条、而且不是它）。 */
+export function routeHopRelayIsStandby(parent: RelayRuleLike & Record<string, unknown>, relay: Pick<RelayRuleLike, "routePathKey">): boolean {
+  const pathKey = String(relay?.routePathKey || "").trim();
+  if (!pathKey) return false;
+  let policy;
+  try {
+    policy = routePolicyOf(parent as unknown as RouteGroupRule);
+  } catch {
+    return false;
+  }
+  if (routeAgentStrategy(policy) !== "fallback") return false;
+  const active = describeFailoverActiveLine(parent as unknown as Parameters<typeof describeFailoverActiveLine>[0]);
+  if (!active || !active.pathKey) return false;
+  return active.pathKey !== pathKey;
 }
 
 /** 这条中继规则的「下一跳」该由哪台机器探：gost 中继是它所在的机器，隧道段是隧道出口机；探不了返回 0。 */
@@ -861,7 +888,7 @@ export async function buildRouteHopFastProbes(input: { hostId: number; rules: re
   for (const relay of relays) {
     const parent = parentById.get(Number(relay.routeParentRuleId));
     if (!parent || dbBool(parent.pendingDelete) || !dbBool(parent.isEnabled)) continue;
-    const spec = routeHopProbeSpecForParent(parent);
+    const spec = routeHopProbeSpecForParent(parent, { standby: routeHopRelayIsStandby(parent as RelayRuleLike & Record<string, unknown>, relay) });
     specByRuleId.set(Number(relay.id), spec);
     if (Number(relay.tunnelId || 0) > 0) continue;
     gostProbes.push({

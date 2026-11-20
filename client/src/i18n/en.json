@@ -733,6 +733,7 @@
  "{0} 直连放进订阅": "Put {0} into subscription as direct",
  "{0} 离线": "{0} offline",
  "{0} 秒": "{0} seconds",
+ "{0} 条规则各走自己最快的一台，用到 {1} 台": "{0} rules each use their own fastest exit, {1} exits in use",
  "{0}秒": "{0} s",
  "{0} 秒 · {1} 条连接": "{0}s · {1} connections",
  "{0} 秒前": "{0} seconds ago",

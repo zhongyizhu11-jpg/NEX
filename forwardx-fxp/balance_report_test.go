@@ -245,4 +245,12 @@ func TestBalanceReportSimulationEntryWithOneExitBlockedByTarget(t *testing.T) {
 	if report.Exits[1].HostID != 3 || report.Exits[1].State != "active" {
 		t.Fatalf("good exit carries the traffic: %#v", report.Exits[1])
 	}
+	// 延迟分两段报（2.2.149）：入口到出口的握手 + 出口到目标；medianMs 是整链，和 GOST 入口一个口径
+	good := report.Exits[1]
+	if good.ExitMs <= 0 || good.TargetMs <= 0 || good.Samples == 0 {
+		t.Fatalf("好的出口应当报两段延迟：%#v", good)
+	}
+	if sum := good.ExitMs + good.TargetMs; good.MedianMs < sum-0.2 || good.MedianMs > sum+0.2 {
+		t.Fatalf("medianMs 应当是两段之和：exit=%v target=%v median=%v", good.ExitMs, good.TargetMs, good.MedianMs)
+	}
 }
