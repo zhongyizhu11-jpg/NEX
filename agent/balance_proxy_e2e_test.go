@@ -1002,11 +1002,15 @@ func TestBalanceProxyE2E(t *testing.T) {
 		if recovered > 8*time.Second {
 			t.Fatalf("放回用了 %s，超过 8 秒（exitCanaryGap 4 秒 + 一条连接）", recovered)
 		}
-		// 放回以后照常分到它
-		after := lab.tcpSpread(12, 6)
-		if after[exits[victim].IP] == 0 {
-			t.Fatalf("放回以后应当又分到 %s：%s", exits[victim].IP, e2eCounts(after, exits))
-		}
+		// 放回以后照常分到它（刚放回的 60 秒里从一成份量慢慢加，所以多开几批、给它一点时间）
+		after := map[string]int{}
+		lab.waitFor("放回以后又分到它", 20*time.Second, func() bool {
+			for ip, count := range lab.tcpSpread(6, 6) {
+				after[ip] += count
+			}
+			return after[exits[victim].IP] > 0
+		})
+		t.Logf("放回以后：%s", e2eCounts(after, exits))
 		lab.noDirect()
 	})
 
