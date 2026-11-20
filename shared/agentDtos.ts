@@ -197,6 +197,14 @@ export type SelfTestMeta =
       targetPort?: number;
       method?: "tcp" | "ping";
       tunnelLatencyBaselineId?: number;
+      entryHostId?: number;
+      /** 测目标的出口（负载均衡链路：扛流量最多的那台） */
+      exitHostId?: number;
+      /** 测目标的不是主出口：「入口 → 出口」那一段用这台的（server/selfTestViaExit.ts），不用链路自己的样本 */
+      viaActiveExit?: boolean;
+      primaryExitHostId?: number;
+      /** 入口现测到这台出口的那一行（line-segment）；入口真实上报里有这一段时不测 */
+      entryExitTestId?: number;
     }
   | {
       kind: "forward-via-tunnel-entry";

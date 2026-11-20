@@ -28,6 +28,8 @@ type failoverProxy struct {
 	slowStartAt []time.Time
 	// lbNear：「延迟优先」里哪几条算「一样快」的状态（lbcore.NearSet，route_group_balance.go）。
 	lbNear lbcore.NearSet
+	// lbFastest：延迟优先「只走最快的一台」现在在用的是谁、挑战者是谁（lbcore.Fastest，failover_fastest.go）。
+	lbFastest lbcore.Fastest
 	// lbQuality：每条路径算好的探测抖动（探测窗口没变就不重算，route_group_balance.go）。
 	lbQuality []routeQualityCache
 	// 在途：已经挑中、还在拨的连接数（A8，route_group_balance.go）。inflightGen 每换一次规格加一，
@@ -105,6 +107,12 @@ type failoverProxy struct {
 	exitConfirming       []bool
 	exitSilentCloseUntil time.Time
 	exitOthersOpenAt     time.Time
+	// 经出口判坏的出口靠真实连接试探恢复（failover_exit_group.go 的 exitCanaryIndexLocked）：上一轮直接探出口机通不通、
+	// 上一次拿真实连接试探它的时刻。
+	exitMachineUp []bool
+	exitCanaryAt  []time.Time
+	// 面板标「连不上目标」的出口被真实连接试探放回了：记下当时那份提示的 DownAt，同一份再发来不按下去（failover_hints.go）。
+	relayDownOverride []int64
 	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
 	// 访客是谁」，建会话时拿它当哈希键（route_group_udp_visitor.go）。
 	udpVisitors map[netip.AddrPort]failoverUDPVisitor
@@ -153,6 +161,10 @@ func failoverSignature(spec failoverSpec) string {
 		}(),
 		strconv.FormatBool(spec.ProxyProtocolReceive),
 		strconv.FormatBool(spec.ProxyProtocolStrip),
+	}
+	// 「只走最快的一台」只在开着时进签名：没开的规格签名和加这个字段之前逐字相同。
+	if spec.FastestOnly {
+		parts = append(parts, "fastest")
 	}
 	// 不带时签名和加这个字段之前逐字相同
 	if spec.BalanceReport != nil {
@@ -578,6 +590,15 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	}
 	if len(p.exitThroughGen) != n {
 		p.exitThroughGen = make([]uint64, n)
+	}
+	if len(p.exitMachineUp) != n {
+		p.exitMachineUp = make([]bool, n)
+	}
+	if len(p.exitCanaryAt) != n {
+		p.exitCanaryAt = make([]time.Time, n)
+	}
+	if len(p.relayDownOverride) != n {
+		p.relayDownOverride = make([]int64, n)
 	}
 
 	p.udpSide.ensure(n)

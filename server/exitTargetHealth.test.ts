@@ -54,8 +54,19 @@ test("负载均衡链路才算：开了就算（库里老的「只用第一个�
   assert.equal(tunnelBalancesExits({ id: 1, loadBalanceEnabled: false, loadBalanceStrategy: "auto" }), false);
 });
 
-test("探测规格跟着链路的「检测与切换」：默认 2 秒一次、2 次不通算坏、3 次通算好，有真实连接先看真实连接", () => {
-  assert.deepEqual(exitTargetProbeSpec(DEFAULT_BALANCE_DETECT), { intervalMs: 2000, timeoutMs: 2000, failThreshold: 2, recoverOks: 3, passive: true });
+test("探测规格跟着链路的「多久探一次目标」：默认 10 秒一次（不跟探出口机的 2 秒）、2 次不通算坏、3 次通算好，有真实连接先看真实连接", () => {
+  assert.deepEqual(exitTargetProbeSpec(DEFAULT_BALANCE_DETECT), { intervalMs: 10000, timeoutMs: 5000, failThreshold: 2, recoverOks: 3, passive: true });
+  // 出口机探得再勤，目标也按自己的节拍：高防目标会拉黑每秒都来连一下的出口 IP
+  assert.equal(exitTargetProbeSpec({ ...DEFAULT_BALANCE_DETECT, intervalSeconds: 1, targetProbeSeconds: 300 }).intervalMs, 300_000);
+  assert.deepEqual(
+    (({ intervalMs, timeoutMs }) => ({ intervalMs, timeoutMs }))(exitTargetProbeSpec({ ...DEFAULT_BALANCE_DETECT, targetProbeSeconds: 2 })),
+    { intervalMs: 2000, timeoutMs: 2000 },
+  );
+  // 300 秒一次时「连不上」的新鲜度（2 个节拍 + 余量）照样成立
+  const probedAt = 1_000_000;
+  const state = { down: true, at: probedAt, probedAt, probeIntervalMs: 300_000 };
+  assert.equal(exitTargetDownStale(state, probedAt + 400_000), false);
+  assert.equal(exitTargetDownStale(state, probedAt + 700_000), true);
 });
 
 test("不稳：抖动或丢包超过门槛（样本太少不判）", () => {
@@ -198,6 +209,17 @@ test("链路弹窗「怎么走」：NEX 延迟优先，差不到门槛的一起�
   const summary = exitTargetSummaryForTunnel(tunnel, [1, 2, 3], { hostNames: new Map([[1, "A"], [2, "B"], [3, "C"]]) });
   assert.deepEqual(summary.exits.map((item) => item.activeRules), [1, 1, 0]);
   assert.equal(summary.how, "延迟优先：A、B（差不到 50ms，按负载分），1 台备用");
+});
+
+test("链路弹窗「怎么走」：NEX 延迟优先开了只走最快的一台，只写最快的那台", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "latency", balanceDetect: JSON.stringify({ fastestOnly: true }) };
+  setExitTargetStateForTest(state({ hostId: 1, medianMs: 10, jitterMs: 2 }));
+  setExitTargetStateForTest(state({ hostId: 2, medianMs: 9, jitterMs: 1 }));
+  setExitTargetStateForTest(state({ hostId: 3, medianMs: 180, jitterMs: 5 }));
+  const summary = exitTargetSummaryForTunnel(tunnel, [1, 2, 3], { hostNames: new Map([[1, "A"], [2, "B"], [3, "C"]]) });
+  assert.deepEqual(summary.exits.map((item) => item.activeRules), [0, 1, 0]);
+  assert.equal(summary.how, "延迟优先：只走 B（最快），2 台备用");
 });
 
 test("平时延迟 = 最低延迟：更低的马上跟下来，更高的只慢慢往上跟", () => {

@@ -23,6 +23,7 @@ forwardx-fxp/ 里各写了一遍，界面上是同一个下拉框，算出来的
     自动        Auto                 P2C + peak EWMA：成本 = 延迟 × 丢包系数 × 负载 ÷ (分量 × 余量)（load.go、latency.go）
     按负载      LeastLoad            同一个成本只留负载那一半，不看延迟、丢包
     延迟优先    NearSet + Auto       先圈出和最快的差不到门槛的一组，只在组里分（latency.go）
+    只走最快    Fastest              延迟优先开了「只走最快的一台」（Options.FastestOnly）：只给最快的一个，别的候补（fastest.go）
     按权重      SmoothWRR.Pick       平滑加权轮询，随机起步（wrr.go）
     轮流        RoundRobin           随机起步；刚恢复的轮到时按几成收（wrr.go）
     随机        Random               （wrr.go）
@@ -49,6 +50,7 @@ candidates 是这一次参与挑选的那几个下标。函数返回成员下标
 	进了「一样快」至少留     1 分钟     DefaultNearHold
 	择优还要低出             两成       DefaultSwitchRatio
 	好得多时只等             10 秒      DefaultSwitchFastHold
+	只走最快的一台换过去要等 60 秒（好得多也不提前）  DefaultFastestHold
 	按访客固定的负载上限     不设       （可选 DefaultHashLoadFactor 1.25，没有分配方式默认开）
 	慢启动                   60 秒、从 10% 起   DefaultSlowStart
 	软信号最多摘掉           五成       DefaultMaxSoftEject

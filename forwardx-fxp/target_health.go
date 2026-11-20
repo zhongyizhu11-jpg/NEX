@@ -115,25 +115,32 @@ func handleExitTargetProbe(sec frameConn, hello helloFrame, cfg config) error {
 
 // balanceDetectConfig：面板「检测与切换」（shared/loadBalance.ts 的 BalanceDetect），原样下发。
 type balanceDetectConfig struct {
-	IntervalSeconds   int    `json:"intervalSeconds,omitempty"`
-	FailThreshold     int    `json:"failThreshold,omitempty"`
-	RecoverThreshold  int    `json:"recoverThreshold,omitempty"`
-	LatencyMarginMs   int    `json:"latencyMarginMs,omitempty"`
-	JitterMs          int    `json:"jitterMs,omitempty"`
-	JitterHoldSeconds int    `json:"jitterHoldSeconds,omitempty"`
-	JitterAction      string `json:"jitterAction,omitempty"`
-	SlowStart         *bool  `json:"slowStart,omitempty"`
+	IntervalSeconds int `json:"intervalSeconds,omitempty"`
+	// 多久探一次规则目标（秒，2–300）：面板 2.3.541 起和探出口机的 intervalSeconds 分开下发。老面板不带，按 intervalSeconds。
+	TargetProbeSeconds int    `json:"targetProbeSeconds,omitempty"`
+	FailThreshold      int    `json:"failThreshold,omitempty"`
+	RecoverThreshold   int    `json:"recoverThreshold,omitempty"`
+	LatencyMarginMs    int    `json:"latencyMarginMs,omitempty"`
+	JitterMs           int    `json:"jitterMs,omitempty"`
+	JitterHoldSeconds  int    `json:"jitterHoldSeconds,omitempty"`
+	JitterAction       string `json:"jitterAction,omitempty"`
+	SlowStart          *bool  `json:"slowStart,omitempty"`
+	// 延迟优先「只走最快的一台」（面板 BalanceDetect.fastestOnly）：只给整链最快的一台，别的候补（exit_fastest.go）。
+	FastestOnly bool `json:"fastestOnly,omitempty"`
 }
 
 type balanceDetect struct {
-	interval   time.Duration
-	fail       int
-	recover    int
-	margin     float64 // ms
-	jitter     float64 // ms
-	jitterHold time.Duration
-	action     string // reduce / switch / ignore
-	slowStart  bool
+	interval time.Duration // 探出口机（端点健康，endpoint_pool.go 的 recoverGap）
+	// 探规则目标（经各台出口连一下目标，targetProbeInterval）：目标是别人的机器，高防目标会拉黑连得太勤的出口 IP，
+	// 所以和 interval 分开、默认慢得多（面板默认 10 秒）
+	targetInterval time.Duration
+	fail           int
+	recover        int
+	margin         float64 // ms
+	jitter         float64 // ms
+	jitterHold     time.Duration
+	action         string // reduce / switch / ignore
+	slowStart      bool
 }
 
 const (
@@ -165,11 +172,14 @@ func clampDetect(value, fallback, min, max int) int {
 }
 
 func resolveBalanceDetect(c *balanceDetectConfig) balanceDetect {
-	d := balanceDetect{interval: 2 * time.Second, fail: 2, recover: 3, margin: 50, jitter: 30, jitterHold: 30 * time.Second, action: "reduce", slowStart: true}
+	d := balanceDetect{interval: 2 * time.Second, targetInterval: 2 * time.Second, fail: 2, recover: 3, margin: 50, jitter: 30, jitterHold: 30 * time.Second, action: "reduce", slowStart: true}
 	if c == nil {
 		return d
 	}
-	d.interval = time.Duration(clampDetect(c.IntervalSeconds, 2, 1, 60)) * time.Second
+	intervalSeconds := clampDetect(c.IntervalSeconds, 2, 1, 60)
+	d.interval = time.Duration(intervalSeconds) * time.Second
+	// 没带 targetProbeSeconds（老面板）：照旧按 intervalSeconds 探目标
+	d.targetInterval = time.Duration(clampDetect(c.TargetProbeSeconds, intervalSeconds, 2, 300)) * time.Second
 	d.fail = clampDetect(c.FailThreshold, 2, 1, 10)
 	d.recover = clampDetect(c.RecoverThreshold, 3, 1, 10)
 	d.margin = float64(clampDetect(c.LatencyMarginMs, 50, 10, 2000))
@@ -477,8 +487,16 @@ func (s *exitEndpointSelector) observeTarget(index int, ok bool, elapsed time.Du
 }
 
 // fxpTargetDownFresh：「到目标不通」的结论多久之内算新鲜。坏着的出口最慢 60 秒探一次（targetProbeInterval），
-// 超过这么久没有新样本说明探测停了，不拿旧结论去拦用户的连接。
+// 超过这么久没有新样本说明探测停了，不拿旧结论去拦用户的连接。「多久探一次目标」设得比这还长时按
+// targetDownFreshFor（两个节拍 + 30 秒）。
 const fxpTargetDownFresh = 90 * time.Second
+
+func targetDownFreshFor(detect balanceDetect) time.Duration {
+	if fresh := 2*detect.targetInterval + 30*time.Second; fresh > fxpTargetDownFresh {
+		return fresh
+	}
+	return fxpTargetDownFresh
+}
 
 // targetDownOnAllLocked：候选的出口到目标全都不通，而且都是刚测的 —— 目标本身挂了。调用方持锁。
 func (s *exitEndpointSelector) targetDownOnAllLocked(candidates []int, now time.Time) bool {
@@ -490,7 +508,7 @@ func (s *exitEndpointSelector) targetDownOnAllLocked(candidates []int, now time.
 			return false
 		}
 		health := s.target.health[index]
-		if !health.down || now.Sub(health.lastSampleAt) > fxpTargetDownFresh {
+		if !health.down || now.Sub(health.lastSampleAt) > targetDownFreshFor(s.target.detect) {
 			return false
 		}
 	}
@@ -616,21 +634,26 @@ targetProbeInterval（2.2.144 起）：判成连不上的出口，探测间隔�
 const fxpTargetProbeBackoffMax = 60 * time.Second
 
 func targetProbeInterval(health *targetHealth, detect balanceDetect) time.Duration {
-	interval := detect.interval
+	interval := detect.targetInterval
 	// 没坏的照常探。坏着、但刚探通了一次的也回到平常的间隔：目标多半回来了，接着探两次就能确认，
 	// 不要再等一个翻过倍的间隔（一次 20 秒的中断，以前目标回来后还要十几秒才恢复，路线图 X9）。
 	if !health.down || health.consecOK > 0 {
 		return interval
 	}
+	// 节拍本身比 60 秒长（「多久探一次目标」设到 60–300 秒）时上限就是节拍：判坏以后不能反而探得更勤
+	backoffMax := fxpTargetProbeBackoffMax
+	if interval > backoffMax {
+		backoffMax = interval
+	}
 	extra := health.consecFail - detect.fail
 	if extra < 0 {
 		extra = 0
 	}
-	for step := 0; step <= extra && interval < fxpTargetProbeBackoffMax; step++ {
+	for step := 0; step <= extra && interval < backoffMax; step++ {
 		interval *= 2
 	}
-	if interval > fxpTargetProbeBackoffMax {
-		interval = fxpTargetProbeBackoffMax
+	if interval > backoffMax {
+		interval = backoffMax
 	}
 	return interval
 }

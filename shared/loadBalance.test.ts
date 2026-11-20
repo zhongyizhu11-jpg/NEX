@@ -4,7 +4,13 @@ import {
   BALANCE_COMMON_STRATEGIES,
   BALANCE_CUSTOM_STRATEGIES,
   BALANCE_STRATEGIES,
+  BALANCE_SENSITIVITY_PRESETS,
+  BALANCE_TARGET_PROBE_CHOICES,
   DEFAULT_BALANCE_DETECT,
+  applyBalanceSensitivity,
+  balanceDetectEquals,
+  balanceDetectForRuntime,
+  balanceSensitivityOf,
   balanceSwitchWithinSeconds,
   balanceStrategyHint,
   BALANCE_STRATEGY_LABELS,
@@ -47,13 +53,43 @@ test("和默认一样存 null（以后改默认跟着走），不一样存 JSON"
   assert.equal(normalizeBalanceDetect(stored).intervalSeconds, 5);
 });
 
+test("探目标和探出口机分开：三档的两个节拍，老数据没有 targetProbeSeconds 时按档推出来", () => {
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(BALANCE_SENSITIVITY_PRESETS).map(([key, preset]) => [key, [preset.detect.intervalSeconds, preset.detect.targetProbeSeconds]])),
+    { sensitive: [1, 5], balanced: [2, 10], stable: [5, 30] },
+  );
+  assert.deepEqual([...BALANCE_TARGET_PROBE_CHOICES], [5, 10, 30, 60]);
+  assert.equal(DEFAULT_BALANCE_DETECT.targetProbeSeconds, 10);
+  for (const key of ["sensitive", "balanced", "stable"] as const) {
+    const { targetProbeSeconds: _drop, ...legacy } = BALANCE_SENSITIVITY_PRESETS[key].detect;
+    const restored = normalizeBalanceDetect(JSON.stringify(legacy));
+    assert.equal(restored.targetProbeSeconds, BALANCE_SENSITIVITY_PRESETS[key].detect.targetProbeSeconds, key);
+    assert.equal(balanceSensitivityOf(restored), key);
+  }
+  // 逐项改过的老数据：出口机间隔的 5 倍，至少 5 秒、最多 300 秒
+  assert.equal(normalizeBalanceDetect({ intervalSeconds: 1, failThreshold: 4 }).targetProbeSeconds, 5);
+  assert.equal(normalizeBalanceDetect({ intervalSeconds: 3 }).targetProbeSeconds, 15);
+  assert.equal(normalizeBalanceDetect({ intervalSeconds: 60 }).targetProbeSeconds, 300);
+  // 存了的照存的，越界夹回 2–300
+  assert.equal(normalizeBalanceDetect({ ...DEFAULT_BALANCE_DETECT, targetProbeSeconds: 45 }).targetProbeSeconds, 45);
+  assert.equal(normalizeBalanceDetect({ targetProbeSeconds: 1 }).targetProbeSeconds, 2);
+  assert.equal(normalizeBalanceDetect({ targetProbeSeconds: 9999 }).targetProbeSeconds, 300);
+  // 只改目标间隔就是自定义，也会存下来
+  const custom = { ...DEFAULT_BALANCE_DETECT, targetProbeSeconds: 60 };
+  assert.equal(balanceSensitivityOf(custom), null);
+  assert.equal(balanceDetectEquals(custom, DEFAULT_BALANCE_DETECT), false);
+  assert.equal(normalizeBalanceDetect(serializeBalanceDetect(custom)).targetProbeSeconds, 60);
+  assert.equal(serializeBalanceDetect({ ...DEFAULT_BALANCE_DETECT, targetProbeSeconds: undefined }), null);
+});
+
 test("默认参数：每 2 秒探一次、2 次不通算坏，约 5 秒内切走", () => {
   assert.equal(balanceSwitchWithinSeconds(DEFAULT_BALANCE_DETECT), 5);
 });
 
 test("实际效果那句话跟着设置变", () => {
   const text = describeBalanceEffect({ strategy: "weighted", detect: DEFAULT_BALANCE_DETECT, weights: [5, 3, 2], memberNames: ["A", "B", "C"] });
-  assert.match(text, /每 2 秒探一次，坏了约 5 秒内切走/);
+  assert.match(text, /每 2 秒探一次出口机、每 10 秒探一次目标，坏了约 5 秒内切走/);
+  assert.match(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT, dns: true }), /^每 2 秒探一次，坏了约 5 秒内改解析/);
   assert.match(text, /新连接按 5 : 3 : 2 分给 A、B、C/);
   assert.match(text, /抖动超过 30ms 持续 30 秒，就把它降到 4 分之 1/);
   const ignore = describeBalanceEffect({ strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, jitterAction: "ignore" } });
@@ -72,4 +108,40 @@ test("每种方式一句话：主备说清先用谁、什么时候换、什么�
   assert.equal(balanceStrategyHint("round_robin", true), "新会话一个一个轮着走");
   assert.match(balanceStrategyHint("least_load", true), /会话数/);
   for (const strategy of BALANCE_STRATEGIES) assert.ok(BALANCE_STRATEGY_LABELS[strategy].hint.length <= 48, strategy);
+});
+
+test("只走最快的一台：默认关、三档都关，老数据读出来是关；开了要存下来、能读回来", () => {
+  assert.equal(DEFAULT_BALANCE_DETECT.fastestOnly, false);
+  for (const preset of Object.values(BALANCE_SENSITIVITY_PRESETS)) assert.equal(preset.detect.fastestOnly, false);
+  const legacy = { intervalSeconds: 5, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true };
+  assert.equal(normalizeBalanceDetect(JSON.stringify(legacy)).fastestOnly, false);
+  assert.equal(normalizeBalanceDetect({ fastestOnly: "yes" }).fastestOnly, false, "不是布尔值的当没填");
+  const on = { ...DEFAULT_BALANCE_DETECT, fastestOnly: true };
+  const stored = serializeBalanceDetect(on);
+  assert.notEqual(stored, null, "和默认不一样，要存");
+  assert.equal(normalizeBalanceDetect(stored).fastestOnly, true);
+  assert.equal(balanceDetectEquals(on, DEFAULT_BALANCE_DETECT), false);
+  assert.equal(balanceDetectForRuntime(stored).fastestOnly, true, "交给 FXP 的检测参数里带着它");
+});
+
+test("只走最快的一台不算灵敏度：开着照样是那一档，换档时留着它", () => {
+  const on = { ...BALANCE_SENSITIVITY_PRESETS.stable.detect, fastestOnly: true };
+  assert.equal(balanceSensitivityOf(on), "stable");
+  assert.equal(balanceSensitivityOf({ ...DEFAULT_BALANCE_DETECT, fastestOnly: true }), "balanced");
+  const switched = applyBalanceSensitivity(on, "sensitive");
+  assert.equal(switched.fastestOnly, true);
+  assert.equal(switched.intervalSeconds, BALANCE_SENSITIVITY_PRESETS.sensitive.detect.intervalSeconds);
+  // 老数据没有 targetProbeSeconds 时按档推，开着它也认得出是哪一档
+  const { targetProbeSeconds: _drop, ...noTarget } = on;
+  assert.equal(normalizeBalanceDetect(noTarget).targetProbeSeconds, BALANCE_SENSITIVITY_PRESETS.stable.detect.targetProbeSeconds);
+});
+
+test("只走最快的一台：分配方式那一句、实际效果那一句都说它；只对延迟优先", () => {
+  const on = { ...DEFAULT_BALANCE_DETECT, fastestOnly: true };
+  assert.equal(balanceStrategyHint("latency"), BALANCE_STRATEGY_LABELS.latency.hint, "不给检测参数时还是原来那句");
+  assert.match(balanceStrategyHint("latency", false, on), /只走整链延迟最快的一个，别的候补；另一个要快出门槛并且快两成、稳住 60 秒才换过去/);
+  assert.equal(balanceStrategyHint("auto", false, on), BALANCE_STRATEGY_LABELS.auto.hint);
+  assert.match(describeBalanceEffect({ strategy: "latency", detect: on }), /延迟优先：只走最快的一台，别的候补；另一台要快出 50ms 并且快两成、稳住 60 秒才换过去/);
+  assert.doesNotMatch(describeBalanceEffect({ strategy: "latency", detect: DEFAULT_BALANCE_DETECT }), /只走最快的一台/);
+  assert.doesNotMatch(describeBalanceEffect({ strategy: "auto", detect: on }), /只走最快的一台/);
 });

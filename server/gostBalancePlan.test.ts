@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BALANCE_SENSITIVITY_PRESETS, BALANCE_STRATEGIES, DEFAULT_BALANCE_DETECT, GOST_BALANCE_MAX_EXITS, UNIFIED_BALANCE_AGENT_VERSION, agentSupportsUnifiedBalance, normalizeExitGroupStrategy } from "../shared/loadBalance";
-import { buildGostBalanceProxySpec, gostBalanceProbeTiming, gostBalanceTargetWeights, planGostBalanceRules } from "./gostBalancePlan";
+import { buildGostBalanceProxySpec, gostBalanceProbeTiming, gostBalanceTargetWeights, gostBalanceUnknownExtraLatency, planGostBalanceRules } from "./gostBalancePlan";
 import { tunnelBalanceAgentIssues, tunnelRelayRuntimeIssues } from "./tunnelBalanceAgent";
 
 /*
@@ -92,6 +92,7 @@ test("规格：份数原样带（超过 100 的按比例压）、面板提示、
     weights: [5, 3, 2],
     pinHostId: 22,
     downHostIds: new Set([23]),
+    downAt: new Map([[23, 1763600000123.7], [22, 1763600000000]]),
     extraLatencyMs: new Map([[21, 12.4], [22, 80]]),
   });
   assert.deepEqual(spec.targets.map((target) => target.weight), [5, 3, 2]);
@@ -99,6 +100,9 @@ test("规格：份数原样带（超过 100 的按比例压）、面板提示、
   assert.deepEqual(spec.targets.map((target) => target.extraLatencyMs), [12, 80, undefined]);
   assert.equal(spec.targets[2].down, true);
   assert.equal(spec.targets[2].downReason, "出口连不上目标");
+  // 带上那份「连不上」探出来的时刻：Agent 拿真实连接试探放回后只认比它新的提示；没标坏的不带
+  assert.equal(spec.targets[2].downAt, 1763600000124);
+  assert.equal("downAt" in spec.targets[1], false);
   assert.deepEqual(gostBalanceTargetWeights([500, 250, 50], 3), [100, 50, 10]);
   assert.equal(gostBalanceTargetWeights([5, 3], 3), null, "数量对不上就不带");
   assert.equal(gostBalanceTargetWeights(null, 3), null);
@@ -215,4 +219,39 @@ test("GOST 本机代理的计划：每台出口一个本机端口；手动指定
   // 端口不够 / 只剩一台出口：不走本机代理
   assert.equal((await planGostBalanceRules([rule], { ...planningDeps(true).deps, balanceExitPorts: () => [47100] })).size, 0);
   assert.equal((await planGostBalanceRules([{ ...rule, isEnabled: 0 }], planningDeps(true).deps)).size, 0);
+});
+
+/*
+  出口到目标的延迟只有几台知道（问题 A）：不知道的那台以前下发 0，整链只剩入口到出口那一段，延迟优先 / 自动反而
+  偏向我们知道得最少的那台。现在带 extraLatencyUnknown（运行时提示，不重建代理），Agent 按已知最大的算。
+  一台都不知道时什么都不带（都是 0，和以前一样）。
+*/
+test("出口到目标的延迟：别的出口知道、这台不知道时带 extraLatencyUnknown；一台都不知道时不带", async () => {
+  assert.deepEqual([...gostBalanceUnknownExtraLatency([21, 22, 23], new Map([[21, 12]]))], [22, 23]);
+  // 同一台机房里不到 1 毫秒：按 1 下发（Agent 那边 0 = 没有）
+  assert.equal(buildGostBalanceProxySpec({ ...base, extraLatencyMs: new Map([[21, 0.3]]) }).targets[0].extraLatencyMs, 1);
+  assert.deepEqual([...gostBalanceUnknownExtraLatency([21, 22], new Map())], []);
+  assert.deepEqual([...gostBalanceUnknownExtraLatency([21, 22], new Map([[21, 12], [22, 30]]))], []);
+  const spec = buildGostBalanceProxySpec({ ...base, extraLatencyMs: new Map([[21, 12]]), extraLatencyUnknown: new Set([22, 23]) });
+  assert.deepEqual(spec.targets.map((target) => [target.extraLatencyMs, target.extraLatencyUnknown]), [[12, undefined], [undefined, true], [undefined, true]]);
+
+  const rule = { id: 501, tunnelId: 9, protocol: "both", isEnabled: 1, pendingDelete: 0 };
+  const states = (list: Array<{ hostId: number; down?: boolean; medianMs?: number | null }>) => ({ ...planningDeps(true).deps, exitTargetStates: () => list });
+  // 主出口报了 9 ms，额外出口没报（或报的不通）：额外出口不知道
+  for (const list of [[{ hostId: 2, medianMs: 9 }], [{ hostId: 2, medianMs: 9 }, { hostId: 3, down: true, medianMs: 4 }]]) {
+    const plan = (await planGostBalanceRules([rule], states(list))).get(501)!;
+    assert.deepEqual(plan.spec.targets.map((target) => [target.extraLatencyMs, target.extraLatencyUnknown]), [[9, undefined], [undefined, true]]);
+  }
+  const none = (await planGostBalanceRules([rule], states([]))).get(501)!;
+  assert.deepEqual(none.spec.targets.map((target) => [target.extraLatencyMs, target.extraLatencyUnknown]), [[undefined, undefined], [undefined, undefined]]);
+});
+
+test("规格：延迟优先开了「只走最快的一台」带 fastestOnly，分配方式仍是 latency；别的分配方式、没开时都不带", () => {
+  const fastest = buildGostBalanceProxySpec({ ...base, strategy: "latency", detect: { ...DEFAULT_BALANCE_DETECT, fastestOnly: true, latencyMarginMs: 30 } });
+  assert.equal(fastest.strategy, "latency", "用户看到的还是延迟优先，不是主备");
+  assert.equal(fastest.fastestOnly, true);
+  assert.equal(fastest.latencyMarginMs, 30);
+  assert.equal("preferFastest" in fastest, false, "不借主备 + 择优");
+  assert.equal("fastestOnly" in buildGostBalanceProxySpec({ ...base, strategy: "latency" }), false);
+  assert.equal("fastestOnly" in buildGostBalanceProxySpec({ ...base, strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, fastestOnly: true } }), false);
 });

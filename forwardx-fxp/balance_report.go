@@ -19,7 +19,8 @@ import (
 
 现在由做决定的这一方直接报：每条有几台出口的规则，每台出口
 
-  state     active（这段时间新连接分给了它，没有新连接时是「现在会挑它」）/ standby（能用、这会儿没分给它）/
+  state     active（这段时间新连接分给了它，没有新连接时是「现在会挑它」；延迟优先「只走最快的一台」只有在用的那台）/
+            standby（能用、这会儿没分给它）/
             down（连不上目标，或出口本身连不上）/ unstable（抖动、丢包超了门槛）
   share     这段时间新连接里分给它的比例（没有新连接时 -1）
   medianMs / jitterMs / lossPct  入口经这台出口连目标的延迟、抖动、丢包（出口回报的结果和主动探测）
@@ -107,6 +108,14 @@ func (s *exitEndpointSelector) balanceSnapshotLocked(now time.Time) []balanceExi
 	if s.strategy == "fallback" {
 		// 主备：实际会挑的那台就是「在用」，哪怕它到目标不稳 / 刚恢复（前面的都连不上时就是它在扛，路线图 X1）。
 		if index, ok := s.fallbackChoiceLocked(nil, now, false); ok && exits[index].State != "down" {
+			exits[index].State = "active"
+		}
+		return exits
+	}
+	if s.fastestOnly {
+		// 延迟优先「只走最快的一台」：只有在用的那台是 active，别的能用的是 standby（候补）。每秒走一次，
+		// 顺便当「稳住 60 秒」的钟（fastestChoiceLocked）。
+		if index := s.fastestChoiceLocked(now); index >= 0 && exits[index].State != "down" {
 			exits[index].State = "active"
 		}
 		return exits

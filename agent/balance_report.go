@@ -16,7 +16,7 @@ GOST 链路负载均衡的真实状态报给面板（2.2.262 起有这份上报�
     或者真实连接被关以后经出口复核确认的）；
   - picks：代理起来以后累计分给它多少条新连接 / 新 UDP 会话（2.2.263 及以前报的是「此刻挂着几条连接」）；
   - share：最近一分钟的新连接里分给它的比例（这一分钟没有新连接是 -1）；
-  - 延迟：入口到出口的探测 + 面板给的出口到目标的延迟。
+  - 延迟：入口到出口（exitMs，调度器比的指数平均）+ 面板给的出口到目标（targetMs），medianMs 是两段的和。
 有变化 1 秒内报，没变化 10 秒报一次。
 */
 
@@ -27,17 +27,24 @@ const (
 )
 
 type agentBalanceExit struct {
-	HostID   int     `json:"hostId,omitempty"`
-	Host     string  `json:"host"`
-	Port     int     `json:"port"`
-	State    string  `json:"state"`
-	Reason   string  `json:"reason,omitempty"`
-	Share    float64 `json:"share"`
-	Picks    int     `json:"picks"`
+	HostID int     `json:"hostId,omitempty"`
+	Host   string  `json:"host"`
+	Port   int     `json:"port"`
+	State  string  `json:"state"`
+	Reason string  `json:"reason,omitempty"`
+	Share  float64 `json:"share"`
+	Picks  int     `json:"picks"`
+	// 整链延迟 = exitMs + targetMs（老面板只认这一个；到目标不知道时只有入口到出口那一段）。
 	MedianMs float64 `json:"medianMs,omitempty"`
-	JitterMs float64 `json:"jitterMs,omitempty"`
-	LossPct  float64 `json:"lossPct,omitempty"`
-	Samples  int     `json:"samples,omitempty"`
+	// 入口到出口：调度器比的那个数（探测延迟的指数平均，还没攒到就用最近一次探到的），不是最近一次的单个样本。
+	ExitMs float64 `json:"exitMs,omitempty"`
+	// 出口到目标：面板给的（出口机探的中位数）；不知道是 0（不带）。
+	TargetMs float64 `json:"targetMs,omitempty"`
+	// 面板说这台出口到目标的延迟不知道（别的出口有）：调度器按最大的那台算了（extraLatencyLocked）。
+	TargetLatencyUnknown bool    `json:"targetLatencyUnknown,omitempty"`
+	JitterMs             float64 `json:"jitterMs,omitempty"`
+	LossPct              float64 `json:"lossPct,omitempty"`
+	Samples              int     `json:"samples,omitempty"`
 }
 
 type agentBalanceEvent struct {
@@ -81,17 +88,27 @@ func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits 
 		}
 		item.Picks = int(p.pickCounts[i])
 		summary := p.statsLocked(i).summary()
-		if latency := p.latencyMsLocked(i); latency > 0 {
-			item.MedianMs = float64(latency + target.ExtraLatencyMs)
-		} else if summary.hasLatency {
-			item.MedianMs = float64(summary.latencyMs + target.ExtraLatencyMs)
+		// 和调度器同一个口径（plainLatencyLocked：指数平均，没有就最近一次）；以前报的是最近一次的单个样本，
+		// 卡上的数和调度器比的数对不上。
+		exitMs := p.plainLatencyLocked(i)
+		if exitMs <= 0 && summary.hasLatency {
+			exitMs = float64(summary.latencyMs)
+		}
+		if target.ExtraLatencyUnknown {
+			item.TargetLatencyUnknown = true
+		} else if target.ExtraLatencyMs > 0 {
+			item.TargetMs = float64(target.ExtraLatencyMs)
+		}
+		if exitMs > 0 {
+			item.ExitMs = roundTenth(exitMs)
+			item.MedianMs = roundTenth(exitMs + item.TargetMs)
 		}
 		item.JitterMs = float64(int64(summary.jitterMs*10+0.5)) / 10
 		item.LossPct = float64(int64(summary.lossPct*10+0.5)) / 10
 		item.Samples = summary.samples
 		exits[i] = item
 	}
-	// 在用的是谁：手动指定的那台能用时只有它；主备是正在走的那条；别的分法能用的都在轮转里。
+	// 在用的是谁：手动指定的那台能用时只有它；主备是正在走的那条；延迟优先只走最快的一台时是那一台；别的分法能用的都在轮转里。
 	pinned := p.pinnedIndexAt(now)
 	switch {
 	case pinned >= 0 && exits[pinned].State != "down":
@@ -99,6 +116,12 @@ func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits 
 	case p.spec.Strategy == "fallback":
 		if p.activeIndex >= 0 && p.activeIndex < len(exits) && exits[p.activeIndex].State != "down" {
 			exits[p.activeIndex].State = "active"
+		}
+	case p.fastestOnlyLocked():
+		// 延迟优先「只走最快的一台」：只有在用的那一台是 active，别的能用的是 standby（候补）。
+		// 这里每秒走一次，顺便当「稳住 60 秒」的钟（evaluateFastestLocked）。
+		if index := p.evaluateFastestLocked(now, "report"); index >= 0 && index < len(exits) && exits[index].State != "down" {
+			exits[index].State = "active"
 		}
 	default:
 		for i := range exits {

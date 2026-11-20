@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.264"
+var Version = "2.2.265"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -617,6 +617,10 @@ type failoverSpec struct {
 	// 不是「谁快切谁」：那样线路会一直漂。候选的成本必须**明显**更低（差出 LatencyMarginMs 而且低两成，
 	// lbcore.SwitchPolicy），而且要连着 ScoreHoldSeconds 都更低，才会被提到最前。
 	PreferFastest bool `json:"preferFastest,omitempty"`
+	// 延迟优先「只走最快的一台」（面板「检测与切换」里的 fastestOnly，GOST 出口组）：只给整链最快的一台，别的候补；
+	// 另一台要快出 LatencyMarginMs 而且快两成、稳住 60 秒才换，在用的坏了当场换次快的（lbcore/fastest.go，
+	// failover_fastest.go）。只对 latency 起作用。
+	FastestOnly bool `json:"fastestOnly,omitempty"`
 	// 连续失败几次才标记异常（探测不通和真实连接拨不通都算）。不带就是 1，即上一版的行为。
 	FailureThreshold int `json:"failureThreshold,omitempty"`
 	// 「一样快」的门槛（毫秒）：延迟优先圈「一样快」的一组、自动择优比成本都按它。不带就是 50。
@@ -873,14 +877,18 @@ type fxpExitEndpoint struct {
 
 // fxpBalanceDetect：负载均衡的「检测与切换」，字段和 FXP 的 balanceDetectConfig 一样，原样转交。
 type fxpBalanceDetect struct {
-	IntervalSeconds   int    `json:"intervalSeconds,omitempty"`
-	FailThreshold     int    `json:"failThreshold,omitempty"`
-	RecoverThreshold  int    `json:"recoverThreshold,omitempty"`
-	LatencyMarginMs   int    `json:"latencyMarginMs,omitempty"`
-	JitterMs          int    `json:"jitterMs,omitempty"`
-	JitterHoldSeconds int    `json:"jitterHoldSeconds,omitempty"`
-	JitterAction      string `json:"jitterAction,omitempty"`
-	SlowStart         *bool  `json:"slowStart,omitempty"`
+	IntervalSeconds int `json:"intervalSeconds,omitempty"`
+	// 多久探一次规则目标（面板 2.3.541 起下发）：以前这里没有这个字段，转交时被丢掉，FXP 一直按 intervalSeconds 探目标。
+	TargetProbeSeconds int    `json:"targetProbeSeconds,omitempty"`
+	FailThreshold      int    `json:"failThreshold,omitempty"`
+	RecoverThreshold   int    `json:"recoverThreshold,omitempty"`
+	LatencyMarginMs    int    `json:"latencyMarginMs,omitempty"`
+	JitterMs           int    `json:"jitterMs,omitempty"`
+	JitterHoldSeconds  int    `json:"jitterHoldSeconds,omitempty"`
+	JitterAction       string `json:"jitterAction,omitempty"`
+	SlowStart          *bool  `json:"slowStart,omitempty"`
+	// 延迟优先「只走最快的一台」（FXP 的 balanceDetectConfig.FastestOnly）。
+	FastestOnly bool `json:"fastestOnly,omitempty"`
 }
 
 // signature：检测参数变了要让 FXP 重读配置（热更新），没设时是空串，签名和旧版一样。
@@ -892,12 +900,20 @@ func (d *fxpBalanceDetect) signature() string {
 	if d.SlowStart != nil {
 		slowStart = strconv.FormatBool(*d.SlowStart)
 	}
-	return strings.Join([]string{
+	parts := []string{
 		"detect",
 		strconv.Itoa(d.IntervalSeconds), strconv.Itoa(d.FailThreshold), strconv.Itoa(d.RecoverThreshold),
 		strconv.Itoa(d.LatencyMarginMs), strconv.Itoa(d.JitterMs), strconv.Itoa(d.JitterHoldSeconds),
 		strings.TrimSpace(d.JitterAction), slowStart,
-	}, ",")
+	}
+	// 后加的两项只在带了时才进签名：没带时签名和以前逐字相同。
+	if d.TargetProbeSeconds > 0 {
+		parts = append(parts, "target="+strconv.Itoa(d.TargetProbeSeconds))
+	}
+	if d.FastestOnly {
+		parts = append(parts, "fastest")
+	}
+	return strings.Join(parts, ",")
 }
 
 type fxpUDPTarget struct {

@@ -7,7 +7,7 @@ import { getRuleLatencyFloors } from "./repositories/metricsRepository";
 import { getHostNamesByIds } from "./repositories/hostRepository";
 import { getTunnelEntryHostIds, getTunnelExitNodesByTunnelIds, getTunnelsByIds } from "./repositories/tunnelRepository";
 import { type BalanceDetect, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeExitGroupStrategy } from "../shared/loadBalance";
-import { liveBalanceForRule, liveBalanceForTunnel, type LiveRuleReport } from "./balanceLive";
+import { liveBalanceForRule, liveBalanceForTunnel, type LiveExit, type LiveRuleReport } from "./balanceLive";
 
 /*
   负载均衡链路：每台出口「连得上规则的目标吗」（2026-11，用户：「规则都这样了，链路负载均衡还是没切机器」）。
@@ -321,11 +321,16 @@ export function tunnelBalanceDetect(tunnel: TunnelRow | null | undefined): Balan
   return normalizeBalanceDetect(tunnel?.balanceDetect ?? null, DEFAULT_BALANCE_DETECT);
 }
 
-/** 给 Agent 的快速探测规格（和线路组「下一跳」同一种）。 */
+/**
+ * 给 Agent 的快速探测规格（和线路组「下一跳」同一种）：出口机探规则目标。
+ * 节拍用 targetProbeSeconds（默认 10 秒），不用探出口机的 intervalSeconds：目标是别人的机器，高防目标会把每一两秒
+ * 就连一下的出口 IP 拉黑（2.3.541 用户反馈）。Agent 对 passive 规格最多认 300 秒（agent/route_hop_probe.go）。
+ */
 export function exitTargetProbeSpec(detect: BalanceDetect) {
+  const intervalMs = Math.max(1000, detect.targetProbeSeconds * 1000);
   return {
-    intervalMs: Math.max(1000, detect.intervalSeconds * 1000),
-    timeoutMs: Math.min(5000, Math.max(1500, detect.intervalSeconds * 1000)),
+    intervalMs,
+    timeoutMs: Math.min(5000, Math.max(1500, intervalMs)),
     failThreshold: detect.failThreshold,
     recoverOks: detect.recoverThreshold,
     // Agent 2.2.260 起：有到这个目标的真实连接就读内核记的 RTT，不再新建连接去探（老 Agent 不认这个字段）
@@ -570,6 +575,11 @@ export type ExitTargetExitSummary = {
   reason?: "target" | "exit" | null;
   /** 新连接分给它的比例（0–1，各条规则的平均；入口真实上报、这段时间有新连接时才有） */
   share?: number | null;
+  /** 整链的两段（GOST 入口真实上报才有，各条规则的中位数）：入口到这台出口、这台出口到目标 */
+  exitMs?: number | null;
+  targetMs?: number | null;
+  /** 几条规则里这台到目标的延迟不知道（入口调度器按最慢的那台算它）：弹窗写「到目标延迟未知」 */
+  targetLatencyUnknown?: number;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -665,6 +675,8 @@ export function exitTargetMemorySizeForTest() {
  * 一条规则按现在的分配方式会走哪几台（链路弹窗「怎么走」用）。
  * NEX 隧道：入口的 FXP 自己挑，面板拿不到它每次挑了谁，这里按同一套规则估（不含入口到出口那一段）。
  * GOST：主备 / 延迟优先是真实的节点顺序；其余是随机 / 轮流，摘掉连不上的。
+ * 延迟优先开了「只走最快的一台」（detect.fastestOnly）：两种都只有分数最好的那一台（入口的 lbcore.Fastest；
+ * 这里不估「稳住 60 秒才换」那一段，入口报了真实状态就以入口的为准）。
  */
 function activeExitsForRule(input: {
   strategy: string;
@@ -691,15 +703,16 @@ function activeExitsForRule(input: {
     const scores = candidates.map((hostId) => exitTargetScore(fresh.get(hostId)));
     const known = scores.filter((score): score is number => score != null);
     // GOST：入口机的本机代理一次只走整链最好的那一台（这里只是入口还没报真实状态时的估计）
-    if (known.length === 0) return gost ? [candidates[0]] : candidates;
+    const single = gost || detect.fastestOnly;
+    if (known.length === 0) return single ? [candidates[0]] : candidates;
     const best = Math.min(...known);
-    if (gost) return [candidates[scores.indexOf(best)]];
+    if (single) return [candidates[scores.indexOf(best)]];
     return candidates.filter((_, index) => scores[index] != null && (scores[index] as number) - best <= detect.latencyMarginMs);
   }
   return gost ? usable : dropUnstable(usable);
 }
 
-function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; active: number[]; total: number; names: (ids: number[]) => string; marginMs: number }) {
+function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; active: number[]; total: number; names: (ids: number[]) => string; marginMs: number; fastestOnly?: boolean }) {
   const { strategy, active, names } = input;
   if (active.length === 0) return null;
   if (input.pinned) return `手动指定：只走 ${names(active)}`;
@@ -709,6 +722,7 @@ function describeHow(input: { strategy: string; gost: boolean; pinned: boolean; 
     case "fallback":
       return `主备：走 ${names(active)}${restText}`;
     case "latency":
+      if (input.fastestOnly && active.length === 1) return `延迟优先：只走 ${names(active)}（最快）${restText}`;
       return active.length === 1
         ? `延迟优先：走 ${names(active)}（到目标最快）${restText}`
         : `延迟优先：${names(active)}（差不到 ${input.marginMs}ms，按负载分）${restText}`;
@@ -798,7 +812,7 @@ export function exitTargetSummaryForTunnel(
       const entry = perExit.get(hostId);
       if (entry) entry.activeRules += 1;
     }
-    const how = describeHow({ strategy, gost, pinned: pinHostId > 0 && exitIds.includes(pinHostId), active, total: exitIds.length, names, marginMs: detect.latencyMarginMs });
+    const how = describeHow({ strategy, gost, pinned: pinHostId > 0 && exitIds.includes(pinHostId), active, total: exitIds.length, names, marginMs: detect.latencyMarginMs, fastestOnly: detect.fastestOnly });
     if (how) hows.set(how, (hows.get(how) || 0) + 1);
   }
   let how: string | null = null;
@@ -869,6 +883,7 @@ function exitTargetSummaryFromLive(
     rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
     baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
     reason: null as "target" | "exit" | null, shares: [] as number[],
+    exitMs: [] as number[], targetMs: [] as number[], targetUnknown: 0,
   }]));
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
   const hows = new Map<string, number>();
@@ -895,6 +910,9 @@ function exitTargetSummaryFromLive(
       else if (exit.udpState === "unverified") entry.udpUnverified += 1;
       entry.peerOutdated ||= exit.peerOutdated;
       if (exit.state !== "down" && exit.medianMs != null) entry.medians.push(exit.medianMs);
+      if (exit.state !== "down" && exit.exitMs != null) entry.exitMs.push(exit.exitMs);
+      if (exit.targetMs != null) entry.targetMs.push(exit.targetMs);
+      if (exit.targetLatencyUnknown) entry.targetUnknown += 1;
       if (exit.state !== "down" && exit.jitterMs != null) entry.jitters.push(exit.jitterMs);
       if (exit.lossPct != null) entry.losses.push(exit.lossPct);
       const baseline = exitTargetBaseline(live.ruleId, exit.hostId);
@@ -915,6 +933,8 @@ function exitTargetSummaryFromLive(
     const label = describeHow({ strategy: options.strategy, gost: options.gost, pinned, active: active.map((exit) => exit.hostId), total: exits.length, names, marginMs: options.detect.latencyMarginMs })?.split("：")[0] || "分配";
     let how: string;
     if (pinned) how = `手动指定：只走 ${names(active.map((exit) => exit.hostId))}`;
+    // 延迟优先「只走最快的一台」：入口报的唯一一台 active 就是它（其余 standby，见 lbcore/fastest.go）
+    else if (active.length === 1 && options.strategy === "latency" && options.detect.fastestOnly) how = `${label}：只走 ${active[0].hostName}（最快）${restText}`;
     else if (active.length === 1) how = `${label}：走 ${active[0].hostName}${restText}`;
     else if (totalPicks >= 10) {
       /*
@@ -962,6 +982,9 @@ function exitTargetSummaryFromLive(
         peerOutdated: entry.peerOutdated,
         reason: entry.reason,
         share: entry.shares.length > 0 ? entry.shares.reduce((sum, value) => sum + value, 0) / entry.shares.length : null,
+        exitMs: middle(entry.exitMs),
+        targetMs: middle(entry.targetMs),
+        targetLatencyUnknown: entry.targetUnknown,
       };
     }),
     targetIssues,
@@ -998,7 +1021,8 @@ export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.no
   latencyMs: number | null;
   at: number;
 } | null {
-  // 入口报了真实状态（FXP 2.2.145 / Agent 2.2.262 起）：直接用，不再按下面的办法估
+  // 入口报了真实状态（FXP 2.2.145 / Agent 2.2.262 起）：直接用，不再按下面的办法估。
+  // 这时 hostIds[0] 是扛流量最多的那台（可能就是主出口），和规则卡上的延迟、「经」是同一台。
   const live = liveBalanceForRule(ruleId, nowMs);
   if (live && live.tunnelId === Number(tunnelId)) return activeExitFromLive(live);
   const meta = tunnelMetaById.get(Number(tunnelId));
@@ -1041,19 +1065,65 @@ export function ruleActiveExit(ruleId: number, tunnelId: number, nowMs = Date.no
   };
 }
 
-/** 入口上报的真实状态 → 「流量没走主出口时，在用的是哪几台」。主出口在用（或都不能用）时 null。 */
+/*
+  入口上报的真实状态 → 现在是哪台出口在扛流量（规则卡的延迟、「经」、诊断从哪台测，三处同一台）。
+
+  2.3.540 以前只在「在用的里面没有主出口」时才换，主出口也在用（自动、轮询分给几台）时卡上照旧是最近一次诊断
+  （主出口那条路径）的数，同一个目标的两条规则一条写「经 3 台出口 · 10 ms」、一条写「经 hep ix · 4 ms」，口径不一样。
+  现在只要入口报了：
+    - 扛流量的那台 = 在用的里面最近分到最多的（入口报的 share；一样多 / 这阵子没有新连接时取整链延迟低的，
+      再一样取配置里靠前的）；
+    - 卡上的延迟 = 它的整链延迟（入口实时探测：入口到它 + 它到目标），诊断也从它测；
+    - hostIds 是在用的那几台，扛流量的排第一（「经」写一台的名字或「N 台出口」）。
+  一台在用的都没有返回 null（照旧按主出口显示）。
+*/
+function liveCarryingExit(live: LiveRuleReport): LiveExit | null {
+  const active = live.exits.filter((exit) => exit.state === "active" && exit.hostId > 0);
+  if (active.length === 0) return null;
+  const order = new Map(live.exits.map((exit, index) => [exit, index]));
+  // 到目标不知道的那台，它的 medianMs 只是下限：比延迟时排在知道的后面（和入口调度器的悲观算法一个意思）
+  const latency = (exit: LiveExit) => (exit.medianMs ?? 1e9) + (exit.targetLatencyUnknown ? 1e6 : 0);
+  return [...active].sort((left, right) => (right.share ?? -1) - (left.share ?? -1)
+    || latency(left) - latency(right)
+    || Number(order.get(left)) - Number(order.get(right)))[0];
+}
+
 function activeExitFromLive(live: LiveRuleReport) {
   const primary = live.exits[0];
-  if (!primary) return null;
-  const active = live.exits.filter((exit) => exit.state === "active" && exit.hostId > 0);
-  if (active.length === 0 || active.some((exit) => exit.hostId === primary.hostId)) return null;
-  const latencies = active.map((exit) => exit.medianMs).filter((value): value is number => value != null && value > 0);
+  const carrying = liveCarryingExit(live);
+  if (!primary || !carrying) return null;
+  const active = [carrying, ...live.exits.filter((exit) => exit !== carrying && exit.state === "active" && exit.hostId > 0)];
   return {
     primaryHostId: primary.hostId,
     hostIds: active.map((exit) => exit.hostId),
     names: active.map((exit) => exit.hostName),
-    latencyMs: latencies.length > 0 ? Math.min(...latencies) : null,
+    latencyMs: carrying.medianMs,
     at: live.at,
+    carrying,
+  };
+}
+
+/** 规则卡延迟的说明（入口实时探测的那台出口、两段各多少、分到多少）；悬停那句由界面拼。 */
+export type RuleLiveLatency = {
+  exitHostId: number;
+  exitName: string;
+  /** 入口到这台出口（null：入口没分开报，比如 NEX 隧道的 FXP、老 Agent） */
+  exitMs: number | null;
+  /** 这台出口到目标（null：不知道 —— targetUnknown 时卡上写「≥」） */
+  targetMs: number | null;
+  targetUnknown: boolean;
+  /** 最近新连接分给它的比例（0–1）；这阵子没有新连接是 null */
+  share: number | null;
+};
+
+function liveLatencyOf(exit: LiveExit): RuleLiveLatency {
+  return {
+    exitHostId: exit.hostId,
+    exitName: exit.hostName,
+    exitMs: exit.exitMs != null ? Math.round(exit.exitMs * 10) / 10 : null,
+    targetMs: exit.targetMs != null ? Math.round(exit.targetMs * 10) / 10 : null,
+    targetUnknown: exit.targetLatencyUnknown,
+    share: exit.share,
   };
 }
 
@@ -1125,6 +1195,8 @@ type RuleExitTargetFields = {
   /** 主出口切走了：现在实际走的出口（名字、主机 id） */
   exitTargetVia: string[] | null;
   exitTargetViaHostIds: number[] | null;
+  /** 卡上的延迟是入口实时探测的（入口报了真实状态）：哪台、两段各多少。没有是 null（延迟是最近一次诊断的） */
+  latestLatencyLive?: RuleLiveLatency | null;
 };
 
 /** 规则卡那几项（经哪台、延迟、几台里几台有问题），用入口上报的真实状态算。 */
@@ -1151,12 +1223,14 @@ function ruleExitTargetFieldsFromLive(live: LiveRuleReport): RuleExitTargetField
     exitTargetNote: describeRuleExitTargetSummary(summary, live.source === "agent"),
     exitTargetVia: via ? via.names : null,
     exitTargetViaHostIds: via ? via.hostIds : null,
+    // 只要入口报了、扛流量的那台有延迟：卡上就是它的整链延迟（一个口径，见 liveCarryingExit）
     ...(via && via.latencyMs != null ? {
       latestLatencyMs: Math.round(via.latencyMs),
       latestLatencyIsTimeout: false,
       latestLatencyAt: new Date(via.at),
       latestProbeFailure: null,
-    } : {}),
+      latestLatencyLive: liveLatencyOf(via.carrying),
+    } : { latestLatencyLive: null }),
   };
 }
 

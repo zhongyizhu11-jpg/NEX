@@ -53,7 +53,10 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     const [row] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
     assert.deepEqual(row.exitTargetVia, ["hep ix", "Jinx(29.9y)"], "经后面写实际在用的出口");
     assert.equal(row.latestLatencyIsTimeout, false);
-    assert.equal(row.latestLatencyMs, 3);
+    // 一个口径：扛流量最多的那台（hep ix 分到 60%）的整链延迟，不是在用的里面最低的那个
+    assert.equal(row.latestLatencyMs, 7);
+    assert.equal(row.latestLatencyLive?.exitName, "hep ix");
+    assert.equal(row.latestLatencyLive?.exitMs, null, "FXP 不分开报两段");
     assert.equal(row.exitTargetTotal, 3);
     assert.equal(row.exitTargetOk, 2);
     assert.match(String(row.exitTargetNote), /jinx\(39\.9y\) 连不上目标，已切走/);
@@ -72,16 +75,64 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     assert.deepEqual(summary.exits.map((exit) => [exit.reason, exit.share]), [["target", null], [null, 0.6], [null, 0.4]]);
     assert.equal(summary.events?.[0]?.text, "jinx(39.9y) 连不上（到目标），已切走");
 
-    // 主出口在用：照旧按主出口，不写「经」
+    // 主出口在用、入口没报它的延迟：延迟照旧（最近一次诊断的），「经」写它
     await live.ingestBalanceLiveReport({ hostId: 1, source: "fxp", rules: [{ ...rule, exits: rule.exits.map((exit, index) => ({ ...exit, state: index === 0 ? "active" : "standby" })) }] });
     const [plain] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 9, latestLatencyIsTimeout: false }]);
-    assert.equal(plain.exitTargetVia, null);
+    assert.deepEqual(plain.exitTargetVia, ["jinx(39.9y)"]);
     assert.equal(plain.latestLatencyMs, 9);
+    assert.equal(plain.latestLatencyLive, null);
+    assert.equal(health.ruleActiveExit(501, 1)?.hostIds[0], 2, "诊断从主出口测（rules.selfTest 不当成 viaActiveExit）");
 
     // 出口机本身连不上（不是到目标）：规则卡那句照实说
     await live.ingestBalanceLiveReport({ hostId: 1, source: "fxp", rules: [{ ...rule, exits: rule.exits.map((exit, index) => (index === 0 ? { ...exit, reason: "exit" } : exit)) }] });
     const [unreachable] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
     assert.match(String(unreachable.exitTargetNote), /连不上 jinx\(39\.9y\) 这台出口机，已切走/);
+
+    /*
+      GOST 入口（Agent）分开报两段：两条规则同一个目标，卡上都是「扛流量最多那台的整链」（问题 B，用户截图里
+      hkt/2「经 3 台出口 · 10 ms」、hkt/3「经 hep ix · 4 ms」口径不一样）。主出口也在用时一样换。
+    */
+    const gostRule = {
+      ...rule,
+      strategy: "auto",
+      exits: [
+        { hostId: 2, host: "198.51.100.2", port: 40001, state: "active", share: 0.2, picks: 2, medianMs: 10, exitMs: 3, targetMs: 7, samples: 30 },
+        { hostId: 3, host: "198.51.100.3", port: 40002, state: "active", share: 0.5, picks: 5, medianMs: 6, exitMs: 2, targetMs: 4, samples: 30 },
+        { hostId: 4, host: "198.51.100.4", port: 40003, state: "active", share: 0.3, picks: 3, medianMs: 5, exitMs: 5, targetLatencyUnknown: true, samples: 30 },
+      ],
+      events: [],
+    };
+    await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [gostRule] });
+    const [gost] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 4, latestLatencyIsTimeout: false, latestLatencyAt: new Date(0) }]);
+    assert.equal(gost.latestLatencyMs, 6, "hep ix 分到 50%：它的整链");
+    assert.deepEqual(gost.latestLatencyLive, { exitHostId: 3, exitName: "hep ix", exitMs: 2, targetMs: 4, targetUnknown: false, share: 0.5 });
+    assert.deepEqual(gost.exitTargetVia, ["hep ix", "jinx(39.9y)", "Jinx(29.9y)"], "扛流量的排第一");
+    assert.equal(health.ruleActiveExit(501, 1)?.hostIds[0], 3, "诊断从同一台测");
+    const unknownExit = live.liveBalanceForRule(501)!.exits[2];
+    assert.deepEqual([unknownExit.exitMs, unknownExit.targetMs, unknownExit.targetLatencyUnknown], [5, null, true]);
+    const gostSummary = health.exitTargetSummaryForTunnel({ id: 1, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "auto" }, [2, 3, 4], {});
+    assert.deepEqual(gostSummary.exits.map((exit) => [exit.exitMs, exit.targetMs, exit.targetLatencyUnknown]), [[3, 7, 0], [2, 4, 0], [5, null, 1]]);
+
+    // 这阵子没有新连接（share 都是空的）：取整链延迟低的；到目标不知道的那台只是下限，排在知道的后面
+    await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, exits: gostRule.exits.map((exit) => ({ ...exit, share: -1 })) }] });
+    const [idle] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 4, latestLatencyIsTimeout: false }]);
+    assert.equal(idle.latestLatencyMs, 6);
+    assert.equal(idle.latestLatencyLive?.exitName, "hep ix");
+    // 只有到目标不知道的那台在用：卡上写「≥」（targetUnknown）
+    await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, exits: gostRule.exits.map((exit, index) => ({ ...exit, state: index === 2 ? "active" : "standby" })) }] });
+    const [lowerBound] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 4, latestLatencyIsTimeout: false }]);
+    assert.equal(lowerBound.latestLatencyMs, 5);
+    assert.equal(lowerBound.latestLatencyLive?.exitName, "Jinx(29.9y)");
+    assert.equal(lowerBound.latestLatencyLive?.targetUnknown, true);
+
+    // 延迟优先「只走最快的一台」：入口报一台 active、其余 standby，弹窗写「只走 X（最快）」，不写主备
+    await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, strategy: "latency", exits: gostRule.exits.map((exit, index) => ({ ...exit, state: index === 1 ? "active" : "standby" })) }] });
+    const fastestSummary = health.exitTargetSummaryForTunnel(
+      { id: 1, mode: "gost", loadBalanceEnabled: true, loadBalanceStrategy: "latency", balanceDetect: JSON.stringify({ fastestOnly: true }) },
+      [2, 3, 4],
+      { hostNames: new Map([[2, "jinx(39.9y)"], [3, "hep ix"], [4, "Jinx(29.9y)"]]) },
+    );
+    assert.equal(fastestSummary.how, "延迟优先：只走 hep ix（最快），2 台备用");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

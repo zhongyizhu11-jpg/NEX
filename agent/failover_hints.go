@@ -23,9 +23,17 @@ type failoverTargetHints struct {
 	// 面板从中转机的探测得知这条路径的中转挂了：按不可用处理，直到面板把它清掉。
 	Down       bool   `json:"down,omitempty"`
 	DownReason string `json:"downReason,omitempty"`
+	// 这份 Down 是面板什么时候探出来的（毫秒时间戳；老面板不带 = 0）。出口组里判坏的出口靠真实连接试探放回以后
+	// （exitCanaryRepliedLocked），同一份（DownAt 不比记下的新）提示再发来不再把它按下去；面板探到新的「连不上」
+	// （DownAt 更新）才算数。
+	DownAt int64 `json:"downAt,omitempty"`
 	// 面板算好的、这条路径在下游各段中转上的延迟之和（毫秒）。成本（自动、延迟优先、择优）按
 	// 「本机探测延迟 + 它」算整条链路；上报的 latencyMs 仍只是第一段。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+	// 面板不知道这条路径出口之后那一段多少毫秒（GOST 出口组：这台出口还没报到目标的延迟，同一条规则的别的出口
+	// 报了）。ExtraLatencyMs 这时是 0，可它不是「0 毫秒」：按 0 算的话整链就只剩入口到出口那一段，自动、延迟优先
+	// 反而偏向我们知道得最少的那台。评分时按这条规则里已知的最大值算（悲观，extraLatencyLocked）。
+	ExtraLatencyUnknown bool `json:"extraLatencyUnknown,omitempty"`
 	// 面板算好的、这条路径沿途主机（中转机、落地是 NEX 主机时的那台）里最忙那台的负载，0–100
 	// （CPU 和带宽占用取大；2.2.251 起）。成本按它留的余量算（lbcore.Quality.Utilisation：成本 ÷ (1 − 负载)，
 	// 负载最多按 95% 算）：「自动」少分给它，择优时让一让。0 = 不知道，不算。
@@ -179,6 +187,12 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 		downReason := strings.TrimSpace(target.DownReason)
 		if !down {
 			downReason = ""
+		}
+		// 真实连接试探过、而且面板这份「连不上」不比那时的新：本地已经放回，不按下去（见 DownAt）。
+		if down && target.DownAt > 0 && i < len(p.relayDownOverride) && target.DownAt <= p.relayDownOverride[i] {
+			down, downReason = false, ""
+		} else if i < len(p.relayDownOverride) {
+			p.relayDownOverride[i] = 0
 		}
 		if down == p.relayDown[i] && downReason == p.relayDownReason[i] {
 			continue

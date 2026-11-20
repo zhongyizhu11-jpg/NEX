@@ -131,3 +131,35 @@ func TestAgentBalanceReportDueOnChange(t *testing.T) {
 		t.Fatalf("switch reported with events: %v %#v", due, rules)
 	}
 }
+
+// 报的延迟和调度器比的是同一个数（指数平均），两段分开报：入口到出口 exitMs、出口到目标 targetMs；
+// 到目标不知道的那台带 targetLatencyUnknown，medianMs 只算入口到出口那一段。
+func TestAgentBalanceSnapshotReportsPickerLatencyAndBothHalves(t *testing.T) {
+	proxy := tunnelBalanceTestProxy("latency")
+	proxy.mu.Lock()
+	proxy.spec.Targets[0].ExtraLatencyUnknown = true
+	proxy.spec.Targets[2].ExtraLatencyMs = 9
+	at := time.Now()
+	for _, ms := range []int{4, 4, 4, 40} {
+		proxy.stats[1].recordProbe(true, ms, at)
+		at = at.Add(time.Second)
+	}
+	proxy.stats[0].recordProbe(true, 3, at)
+	proxy.stats[2].recordProbe(true, 6, at)
+	proxy.lastLatencyMs[1] = 40
+	ewma := proxy.plainLatencyLocked(1)
+	proxy.mu.Unlock()
+	_, _, exits, ok := proxy.balanceSnapshot()
+	if !ok {
+		t.Fatal("not a balance proxy")
+	}
+	if ewma >= 40 || exits[1].ExitMs != roundTenth(ewma) || exits[1].TargetMs != 5 || exits[1].MedianMs != roundTenth(ewma+5) {
+		t.Fatalf("入口到出口报指数平均（%v），不是最近一次的 40：%#v", ewma, exits[1])
+	}
+	if !exits[0].TargetLatencyUnknown || exits[0].TargetMs != 0 || exits[0].ExitMs != 3 || exits[0].MedianMs != 3 {
+		t.Fatalf("到目标不知道：%#v", exits[0])
+	}
+	if exits[2].TargetLatencyUnknown || exits[2].TargetMs != 9 || exits[2].MedianMs != 15 {
+		t.Fatalf("两段都知道：%#v", exits[2])
+	}
+}

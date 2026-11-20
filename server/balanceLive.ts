@@ -26,7 +26,17 @@ export type LiveExit = {
   /** 这段时间新连接分给它的比例（0–1）；这段时间没有新连接时 null */
   share: number | null;
   picks: number;
+  /** 整链延迟（入口经这台出口到目标）：GOST 是 exitMs + targetMs（到目标不知道时只有 exitMs），FXP 是它自己量的 */
   medianMs: number | null;
+  /**
+   * 入口到这台出口（GOST 的 Agent，这一版起）：入口调度器比的那个数（探测的指数平均），不是最近一次的单个样本。
+   * 老 Agent、FXP 不报：null。
+   */
+  exitMs: number | null;
+  /** 这台出口到目标（面板给 Agent 的，出口机探的中位数）；不知道 / 没报是 null */
+  targetMs: number | null;
+  /** 到目标的延迟不知道（入口报了 exitMs，没有 targetMs）：卡上写「≥ X ms」，弹窗写「到目标延迟未知」 */
+  targetLatencyUnknown: boolean;
   jitterMs: number | null;
   lossPct: number | null;
   samples: number;
@@ -87,7 +97,7 @@ function finiteOrNull(value: unknown) {
 
 type RawExit = {
   hostId?: unknown; host?: unknown; port?: unknown; state?: unknown; reason?: unknown; share?: unknown; picks?: unknown;
-  medianMs?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; udpState?: unknown; peerOutdated?: unknown;
+  medianMs?: unknown; exitMs?: unknown; targetMs?: unknown; targetLatencyUnknown?: unknown; jitterMs?: unknown; lossPct?: unknown; samples?: unknown; udpState?: unknown; peerOutdated?: unknown;
 };
 
 const UDP_STATES: readonly LiveUdpState[] = ["ok", "down", "unverified"];
@@ -194,6 +204,9 @@ export async function ingestBalanceLiveReport(input: {
         share: Number.isFinite(share) && share >= 0 && share <= 1 ? share : null,
         picks: Math.max(0, Math.floor(Number(exit?.picks || 0))),
         medianMs: finiteOrNull(exit?.medianMs),
+        exitMs: finiteOrNull(exit?.exitMs),
+        targetMs: exit?.targetLatencyUnknown === true ? null : finiteOrNull(exit?.targetMs),
+        targetLatencyUnknown: exit?.targetLatencyUnknown === true || (finiteOrNull(exit?.exitMs) != null && finiteOrNull(exit?.targetMs) == null),
         jitterMs: finiteOrNull(exit?.jitterMs) ?? (Number(exit?.medianMs) > 0 ? 0 : null),
         lossPct: finiteOrNull(exit?.lossPct) ?? (Number(exit?.samples) > 0 ? 0 : null),
         samples: Math.max(0, Math.floor(Number(exit?.samples || 0))),

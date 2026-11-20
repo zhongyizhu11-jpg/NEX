@@ -28,6 +28,11 @@ import {
   tunnelLatencySampleIsAfterBaseline,
 } from "./tunnelLatencyDetails";
 import { FORWARD_TUNNEL_LATENCY_WAIT_MS } from "./selfTestTiming";
+import { liveBalanceForRule } from "./balanceLive";
+import { viaExitSegmentDetail, waitViaExitSegment } from "./selfTestViaExit";
+
+// 入口现测到在用出口的那一次（line-segment，8 秒超时）最多等多久
+const VIA_EXIT_SEGMENT_WAIT_MS = 10_000;
 
 async function resolveSelfTestTarget(rule: any) {
   return rule?.targetIp;
@@ -191,7 +196,24 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
     const tunnelLatencyBaselineId = meta?.kind === "forward-via-tunnel"
       ? Number((meta as any).tunnelLatencyBaselineId || 0)
       : 0;
-    const refreshedTunnelLatency = meta?.kind === "forward-via-tunnel" && typeof meta.tunnelId === "number"
+    /*
+      负载均衡链路从在用的出口（不是主出口）测的目标：「入口 → 出口」那一段是这台的（入口的真实上报或现测，
+      server/selfTestViaExit.ts），不等、也不用链路自己那份入口到主出口的样本。
+    */
+    const viaExit = meta?.kind === "forward-via-tunnel" && meta.viaActiveExit === true
+      && Number(meta.exitHostId || 0) > 0 && Number(meta.exitHostId) !== Number(meta.primaryExitHostId || 0);
+    const viaSegment = viaExit && meta?.kind === "forward-via-tunnel"
+      ? await waitViaExitSegment({
+        ruleId: Number(t.ruleId),
+        entryHostId: Number(meta.entryHostId || 0),
+        exitHostId: Number(meta.exitHostId),
+        entryExitTestId: Number(meta.entryExitTestId || 0),
+        waitMs: VIA_EXIT_SEGMENT_WAIT_MS,
+        loadLive: (ruleId) => liveBalanceForRule(ruleId),
+        loadTest: (id) => db.getForwardTestById(id),
+      })
+      : null;
+    const refreshedTunnelLatency = meta?.kind === "forward-via-tunnel" && typeof meta.tunnelId === "number" && !viaExit
       ? await waitForTunnelLatencyRefresh({
         tunnelId: meta.tunnelId,
         baselineId: tunnelLatencyBaselineId,
@@ -248,16 +270,23 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
     }
     if (meta?.kind === "forward-via-tunnel" && typeof meta.tunnelId === "number") {
       const tunnel = await db.getTunnelById(meta.tunnelId);
-      const tunnelLatencyRefreshed = tunnelLatencySampleIsAfterBaseline(
+      const tunnelLatencyRefreshed = !viaExit && tunnelLatencySampleIsAfterBaseline(
         refreshedTunnelLatency,
         tunnelLatencyBaselineId,
       );
-      const tunnelProbeReused = !tunnelLatencyRefreshed && canReuseRecentTunnelLatencySample({
+      const tunnelProbeReused = !viaExit && !tunnelLatencyRefreshed && canReuseRecentTunnelLatencySample({
         sample: refreshedTunnelLatency,
         tunnel,
       });
-      const tunnelLatency = tunnelLatencyRefreshed || tunnelProbeReused
-        ? refreshedTunnelLatency
+      const tunnelLatency = viaExit
+        ? (viaSegment ? { latencyMs: viaSegment.latencyMs, isTimeout: viaSegment.isTimeout, recordedAt: new Date(viaSegment.recordedAt) } : null)
+        : tunnelLatencyRefreshed || tunnelProbeReused
+          ? refreshedTunnelLatency
+          : null;
+      const viaNames = viaExit
+        ? await Promise.all([Number(meta.entryHostId || 0), Number(meta.exitHostId || 0)].map(async (id) => (
+          String(((id > 0 ? await db.getHostById(id).catch(() => null) : null) as { name?: unknown } | null | undefined)?.name || (id > 0 ? `主机 #${id}` : "入口"))
+        )))
         : null;
       const combinedLatency = combineTunnelRuleLatencySample({
         targetLatencyMs: cleanLatency,
@@ -277,12 +306,19 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       const tunnelLatencyMs = tunnelSegment && !tunnelSegment.isTimeout && tunnelSegment.latencyMs > 0
         ? Number(tunnelSegment.latencyMs)
         : 0;
-      let tunnelDetails: any[] = tunnelLatency
-        ? await loadFreshTunnelAutoDetails(tunnel, tunnelLatency)
-        : [];
+      let tunnelDetails: any[] = viaExit
+        ? [viaExitSegmentDetail(viaSegment, {
+          entryHostId: Number(meta.entryHostId || 0),
+          exitHostId: Number(meta.exitHostId || 0),
+          entryName: viaNames![0],
+          exitName: viaNames![1],
+        })]
+        : tunnelLatency
+          ? await loadFreshTunnelAutoDetails(tunnel, tunnelLatency)
+          : [];
       const tunnelMessage = typeof (tunnel as any)?.lastTestMessage === "string" ? String((tunnel as any).lastTestMessage).trim() : "";
       const tunnelTestStatus = String((tunnel as any)?.lastTestStatus || "");
-      if (tunnelLatency && tunnelDetails.length === 0 && tunnelMessage.startsWith("{") && tunnelTestStatus !== "pending" && tunnelTestStatus !== "running") {
+      if (!viaExit && tunnelLatency && tunnelDetails.length === 0 && tunnelMessage.startsWith("{") && tunnelTestStatus !== "pending" && tunnelTestStatus !== "running") {
         try {
           const parsedTunnelMessage = JSON.parse(tunnelMessage);
           if (
@@ -328,8 +364,15 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         `隧道整体链路测试 ${overallSuccess ? "成功" : overallTimedOut ? "超时" : "失败"}`,
         `出口到目标 ${target}${success ? ` ${cleanLatency}ms` : ""}${resolvedTargetText ? `，${resolvedTargetText}` : ""}`,
       ];
-      if (tunnelLatencyMs > 0) messageParts.push(`隧道段 ${tunnelLatencyMs}ms`);
-      if (tunnelProbeTimedOut) messageParts.push("隧道段探测超时");
+      if (viaExit) {
+        // 段名写测目标的那台出口（不是主出口）
+        const exitName = viaNames![1];
+        if (tunnelLatencyMs > 0) messageParts.push(`入口到 ${exitName} ${tunnelLatencyMs}ms${viaSegment?.source === "live" ? "（入口实时探测）" : ""}`);
+        else messageParts.push(viaSegment ? `入口到 ${exitName} 测不通` : `入口到 ${exitName} 这一段没测到`);
+      } else {
+        if (tunnelLatencyMs > 0) messageParts.push(`隧道段 ${tunnelLatencyMs}ms`);
+        if (tunnelProbeTimedOut) messageParts.push("隧道段探测超时");
+      }
       if (tunnelProbeReused) messageParts.push("隧道探测未刷新，沿用最近成功样本");
       if (cleanMessage && !success) messageParts.push(cleanMessage);
       const detailMessage = cleanMessage || messageParts.join("; ");

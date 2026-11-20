@@ -79,3 +79,10 @@ test("最近切换：几点、从什么到什么、为什么；同一次变化�
   ];
   assert.deepEqual(dedupeSwitchEvents(events).map((event) => event.hostId), [2, 3]);
 });
+
+// GOST 入口分开报了两段（问题 A / B）：写清楚哪段多少；到目标那段不知道时直说。
+test("GOST 入口报的两段：整链 = 到出口 + 到目标；到目标不知道时写「到目标延迟未知」", () => {
+  assert.equal(exitRowView(summary({ exitMs: 3, targetMs: 9, jitterMs: 0 }), base).detail, "整链 12 ms（到出口 3 ms + 到目标 9 ms）");
+  assert.equal(exitRowView(summary({ exitMs: 5, targetMs: null, targetLatencyUnknown: 2, jitterMs: 0 }), base).detail, "到出口 5 ms · 到目标延迟未知");
+  assert.equal(exitRowView(summary({ exitMs: 3, minMs: 10, maxMs: 212, targetMs: 50, jitterMs: 0 }), base).detail, "整链 10–212 ms（到出口 3 ms）");
+});

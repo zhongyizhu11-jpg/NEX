@@ -46,10 +46,13 @@ BalanceReport.HostIDs 是对应的主机号。带 BalanceReport 的规格就是�
     所以只能拿别的出口比。没有别的出口可比时也不判 —— 不拿这个信号摘掉最后一台。
     - 一直开着 / 收到了数据：是那条连接自己的事（比如落地拒绝了那个客户端），不动这台出口。
     平时不经出口周期性地探：每探一次就是往规则的目标开一条不说话的连接，SSH / MySQL 这类目标会记日志、甚至
-    把出口的 IP 拉黑；出口机自己已经在按同样的节奏探目标并报给面板（第 3 条）。所以「出口到目标不通」在没有
+    把出口的 IP 拉黑；出口机自己已经在按「多久探一次目标」的节奏探目标并报给面板（第 3 条）。所以「出口到目标不通」在没有
     流量、面板又连不上时不会提前发现 —— 第一条撞上去的连接被无感换走，同时触发复核。
 
  3. 面板提示（附加信号）：出口机探规则目标的结果（server/exitTargetHealth.ts）作为 Down / ExtraLatencyMs 下发。
+    节奏是「多久探一次目标」（targetProbeSeconds，灵敏 5 / 均衡 10 / 稳定 30 秒，2–300 秒可调；route_hop_probe.go），
+    和第 1 条探出口机的节奏分开（2.3.541）：目标是别人的机器，高防目标会把每一两秒就连一下的出口 IP 拉黑。有真实
+    流量时直接读内核的往返时间，不另外连。
     「出口到目标不通」没有流量时靠它提前摘；「延迟优先 / 自动」的整链延迟 = 本机探到的入口→出口 + 它给的
     出口→目标。面板连不上时这一项停在最后一次的值上，1、2 照常。
 
@@ -368,6 +371,9 @@ gateExitThroughLocked 一轮探测之后：经出口复核判坏过的出口（e
 */
 func (p *failoverProxy) gateExitThroughLocked(results []bool) {
 	for i := range results {
+		if i < len(p.exitMachineUp) {
+			p.exitMachineUp[i] = results[i]
+		}
 		if i >= len(p.exitThroughFailed) || !p.exitThroughFailed[i] {
 			continue
 		}
@@ -381,6 +387,86 @@ func (p *failoverProxy) gateExitThroughLocked(results []bool) {
 			go p.recheckExitThrough(p.spec.Targets[i], p.exitThroughGen[i])
 		}
 		results[i] = p.exitThroughOKs[i] > 0
+	}
+}
+
+/*
+真实连接试探恢复（2.2.265 起，用户实测：三台出口机都正常、高防目标把其中一台出口「连上不说话」的连接 1 秒就关，
+这台被经出口复核判成「到目标不行」后 11 分钟没放回）。
+
+经出口的恢复探测是一条不说话的连接（上面的 recheckExitThrough），目标要是对这台出口的来源 IP 关得特别快（高防按
+IP 限制、或者就是按 IP 区别对待），它永远「探不通」—— 可真实连接是说话的，照样走得通。所以判坏过（exitThroughFailed）、
+出口机本身探得通（exitMachineUp）的出口，每隔 exitCanaryGap 让**一条真实 TCP 连接**先试它（pickReserved 里，只在新连接
+的第一次挑）：
+  - 上游回了东西（markEarlyReply → exitCanaryRepliedLocked）：走得通，当场放回，不等恢复门槛 —— 这是比探测硬的证据；
+  - 一个字节没回就被关：保护期照常把这条连接换到别的出口重发（failover_early_close.go），客户端无感，这台继续判坏，
+    下一次到点再试。出口到目标真不通时，每 exitCanaryGap 只有一条连接多付一次拨号的时间（被拒 1 毫秒、黑洞 3 秒）。
+
+不说话的恢复探测照旧跑着（没有 TCP 流量、只转 UDP 的规则靠它）。手动指定了别的出口时不试（只走指定的那台）。
+
+面板提示「出口连不上目标」（relayDown，健康类的原因）的出口同样试（实验室：出口机断网又恢复以后，出口机到目标的
+探测放慢了（2.3.541 起最快 5 秒一次、坏着时更慢），面板那份「连不上」要半分钟才撤，这半分钟 GOST 不给它流量）：
+真实连接回了东西就本地先放回，记下那份提示的 DownAt（relayDownOverride），面板再发同一份不按下去；面板探到更新的
+「连不上」（DownAt 更新）才重新算数。老面板不带 DownAt 的提示不试（没法分辨新旧）。管理类的（暂停 / 维护 / 流量用完）不试。
+*/
+const exitCanaryGap = exitConfirmWindow
+
+// exitCanaryIndexLocked 此刻该拿这条新连接试哪台判坏的出口；没有返回 -1。调用方持有 p.mu。
+func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
+	if !p.exitGroupLocked() || p.done == nil || p.retired() {
+		return -1
+	}
+	p.ensureHealthStateLocked()
+	if pinned := p.pinnedIndexAt(now); pinned >= 0 && p.usableLocked(pinned, false) {
+		return -1
+	}
+	gap := exitCanaryGap
+	if interval := time.Duration(p.spec.ProbeIntervalSeconds) * time.Second; interval > gap {
+		gap = interval
+	}
+	for i := range p.spec.Targets {
+		if !p.exitMachineUp[i] || !p.exitCanaryDueLocked(i) {
+			continue
+		}
+		if !p.exitCanaryAt[i].IsZero() && now.Sub(p.exitCanaryAt[i]) < gap {
+			continue
+		}
+		p.exitCanaryAt[i] = now
+		return i
+	}
+	return -1
+}
+
+// exitCanaryDueLocked 这台出口是不是「值得拿真实连接试一下」的判坏：经出口复核判的，或者面板健康类提示标的（带 DownAt）。
+func (p *failoverProxy) exitCanaryDueLocked(i int) bool {
+	if p.exitThroughFailed[i] && !p.targetHealth[i] {
+		return true
+	}
+	return p.relayDown[i] && p.targetHealth[i] && p.spec.Targets[i].DownAt > 0 && !failoverAdminDownReason(p.relayDownReason[i])
+}
+
+// exitCanaryRepliedLocked 经出口判坏的出口上一条真实连接收到了上游的回复：放回。调用方持有 p.mu。
+func (p *failoverProxy) exitCanaryRepliedLocked(index int) {
+	if !p.exitGroupLocked() || index >= len(p.exitThroughFailed) {
+		return
+	}
+	changed := false
+	if p.exitThroughFailed[index] && !p.targetHealth[index] {
+		p.exitThroughGen[index]++ // 正在跑的不说话探测作废
+		p.readmitForLocked(index, time.Now(), "a real connection got a reply through the exit")
+		changed = true
+	}
+	if p.relayDown[index] && p.spec.Targets[index].DownAt > 0 && !failoverAdminDownReason(p.relayDownReason[index]) {
+		p.relayDownOverride[index] = p.spec.Targets[index].DownAt
+		p.relayDown[index] = false
+		p.relayDownReason[index] = ""
+		p.spec.Targets[index].Down, p.spec.Targets[index].DownReason = false, ""
+		logf("failover target relay recovered rule=%d source=%d index=%d target=%s reason=a real connection got a reply through the exit (panel hint overridden)", p.ruleID, p.sourcePort, index, failoverTargetLabel(p.spec.Targets[index]))
+		p.recordTargetEventLocked(index, "recovered", "a real connection got a reply through the exit")
+		changed = true
+	}
+	if changed {
+		p.updateFallbackActiveLocked("canary reply")
 	}
 }
 

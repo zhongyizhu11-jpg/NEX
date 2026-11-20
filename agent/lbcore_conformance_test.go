@@ -42,7 +42,7 @@ func (d *agentConformanceDriver) Start(c lbtest.Case) error {
 	for i, member := range c.Members {
 		targets[i] = failoverTarget{TargetIP: fmt.Sprintf("10.8.%d.1", i), TargetPort: 7000 + i, Weight: int(member.Weight*scale + 0.5)}
 	}
-	spec := normalizeFailoverSpec(failoverSpec{Enabled: true, BindAddress: "127.0.0.1", ListenPort: 64200, Strategy: c.Strategy, Targets: targets})
+	spec := normalizeFailoverSpec(failoverSpec{Enabled: true, BindAddress: "127.0.0.1", ListenPort: 64200, Strategy: c.Strategy, FastestOnly: c.FastestOnly, Targets: targets})
 	if spec.Strategy != c.Strategy {
 		return fmt.Errorf("分配方式 %q 被规整成了 %q", c.Strategy, spec.Strategy)
 	}

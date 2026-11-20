@@ -65,6 +65,11 @@ export type ExitSummaryLike = {
   peerOutdated?: boolean;
   reason?: "target" | "exit" | null;
   share?: number | null;
+  /** GOST 入口真实上报的两段：入口到这台出口、这台出口到目标（老面板 / NEX 隧道没有） */
+  exitMs?: number | null;
+  targetMs?: number | null;
+  /** 几条规则里这台到目标的延迟不知道 */
+  targetLatencyUnknown?: number;
 };
 
 export type SwitchEventLike = { at: number; hostId: number; from: string; to: string; reason?: "target" | "exit" | null };
@@ -109,6 +114,16 @@ function recoveredAt(events: readonly SwitchEventLike[] | undefined, hostId: num
 function latencyText(summary: ExitSummaryLike) {
   const low = summary.minMs ?? null;
   const high = summary.maxMs ?? null;
+  /*
+    GOST 入口分开报了两段：写清楚哪段多少。到目标那段不知道时直说（入口调度器这时按最慢的那台算它，
+    不会因为少了这一段就把它当最快的）。
+  */
+  if (summary.exitMs != null) {
+    if (summary.targetMs == null) return `到出口 ${ms(summary.exitMs)} · 到目标延迟未知`;
+    if (low != null && high != null && high - low >= 5) return `整链 ${Math.round(low)}–${ms(high)}（到出口 ${ms(summary.exitMs)}）`;
+    const unknown = (summary.targetLatencyUnknown || 0) > 0 ? "（有规则到目标延迟未知）" : "";
+    return `整链 ${ms(summary.exitMs + summary.targetMs)}（到出口 ${ms(summary.exitMs)} + 到目标 ${ms(summary.targetMs)}）${unknown}`;
+  }
   // 几条规则的目标远近不同：写成范围，不取平均
   if (low != null && high != null && high - low >= 5) return `到目标 ${Math.round(low)}–${ms(high)}`;
   return summary.medianMs != null ? `到目标 ${ms(summary.medianMs)}` : null;

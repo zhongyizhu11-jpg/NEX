@@ -34,6 +34,7 @@
 | `QualityCost`、`SwitchPolicy.Better / HoldFor`、`Challenger`（`switch.go`） | 主备里「B 好到值得换过去吗」 |
 | `DisplayScore`（`switch.go:129`） | 给人看的 0–100，从 `QualityCost` 换算，不参与决定 |
 | `PeakEWMA`、`NearSet`（`latency.go`） | 自动用的延迟读数；延迟优先「一样快」的那一组 |
+| `Fastest`（`fastest.go`） | 延迟优先「只走最快的一台」：在用的是谁、挑战者是谁（`Options.FastestOnly` 时 `Pick` 走它） |
 | `SlowStart`（`slowstart.go`）、`FlapDamper`（`flap.go`） | 慢启动；抖动抑制 |
 
 成本（`load.go:47` `costOf`）：
@@ -58,11 +59,29 @@
 | 自动 `auto` | `Auto`：上面的自动成本取最小，P2C | 延迟填 PeakEWMA 读数（时间常数 `DefaultPeakDecay` 10 s；两次样本之间停在最近一个样本上、不往 0 落，`latency.go`；线路组喂「探测耗时 + 下游延迟」整链的数） | 每条新连接挑 | 每个新会话挑 |
 | 主备 `fallback` | 不走 `Pick`。线路组：`activeIndex` 状态机（§5）；FXP：每次 `First`；GOST 出口组：同线路组 | 切过去至少 `minHoldSeconds`（GOST 出口组 60 s，`BALANCE_MIN_HOLD_SECONDS`，`shared/loadBalance.ts:161`） | 新连接走在用的那条 | 同；TCP+UDP 规格的 UDP 那一侧另判 |
 | 按访客固定 `ip_hash` | `Rendezvous`：加权 rendezvous（FNV-1a + 终混），**不设负载上限** | 访客的成员能用就一直是它，压了多少都不挪（出口 IP 不变是这个分法的意义；以前带 1.25 倍的有界负载，一个访客自己开十几条连接就换了出口）；有界负载仍可选（`RendezvousOptions.LoadFactor > 0`，`DefaultHashLoadFactor` 1.25），没有分配方式默认开；FXP 叠加连接按会话固定也是不设上限的；不乘慢启动；不知道访客时按轮流 | 访客 = PROXY 头里的地址（gost 先发的头；SNI 分流器在 GOST 负载均衡规则上发 v2 头，`server/tlsInboundRuntime.ts` 的 `visitorHeaderRuleIds`） | 访客 = 每个新会话第一个只有 v2 头的包（`agent/route_group_udp_visitor.go`）；FXP 用 UDP 访客地址包（类型 5，`forwardx-fxp/udp_ping.go:38`） |
-| 延迟优先 `latency` | `NearSet.Select`（`latency.go:113`）圈出「一样快」的一组，组里 `Auto` | 门槛：线路组 `DefaultLatencyMargin` 50 ms（`latency.go:91`）；GOST / NEX 出口组用「检测与切换」里的 `latencyMarginMs`（默认 50）；进组至少留 `DefaultNearHold` 1 分钟（`latency.go:94`），出组不等；比的是普通平均延迟 + 抖动 | 同自动 | 同自动 |
+| 延迟优先 `latency` | `NearSet.Select`（`latency.go:113`）圈出「一样快」的一组，组里 `Auto`；开了「只走最快的一台」时 `Fastest.Select`（见下） | 门槛：线路组 `DefaultLatencyMargin` 50 ms（`latency.go:91`）；GOST / NEX 出口组用「检测与切换」里的 `latencyMarginMs`（默认 50）；进组至少留 `DefaultNearHold` 1 分钟（`latency.go:94`），出组不等；比的是普通平均延迟 + 抖动 | 同自动 | 同自动 |
 | 按负载 `least_load` | `LeastLoad`：负载那一半成本，P2C | 线路组 `Utilisation` = 面板给的沿途主机负载；FXP `Utilisation` = 流量 ÷ 线路带宽（`exit_select.go:164`，只在配了线路带宽时），`Weight` = 线路带宽（有一台不知道就都一样大，`exitGroupCapacities`）；GOST `Weight` = 线路带宽份数（`exitGroupWeights`） | 在途 + 活动连接 | 活动会话一起算 |
 | 按权重 `weighted` | `SmoothWRR.Pick`（`wrr.go:22`），随机起步 | 权重：线路组每条路径的权重；出口组手填份数，否则线路带宽 | | |
 | 轮流 `round_robin` | `RoundRobin`（`wrr.go:123`），随机起步，刚恢复的按几成收 | | | |
 | 随机 `random` | `Random`（`wrr.go:143`），按 `Share` 抽 | | | |
+
+**延迟优先 · 只走最快的一台**（`BalanceDetect.fastestOnly`，默认关；只有 GOST / NEX 出口组有，线路组没有这个开关）：
+不在「一样快」的几台里分，新连接、新 UDP 会话只给一台 —— 整链延迟（和 `NearSet` 同一个数：入口到出口 + 出口到目标，再加
+抖动）最低的那台，别的候补。`lbcore.Fastest`（`lbcore/fastest.go`）：
+
+- 起步、或者在用的那台不在候选里（连不上、被摘、到目标不通）：当场换到候选里最快的，不等；一台都不知道延迟时取候选里第一个。
+  在用的那台没量出延迟而别的量出来了，也当场换（只在刚起来时碰到）。
+- 否则另一台要快出 `latencyMarginMs` **并且**快两成（`SwitchPolicy.Better`，和线路组主备择优同一把尺），连着领先
+  `DefaultFastestHold` 60 s（`Challenger`；「好得多」也不提前，`FastHold = Hold`）才换；中间一次不够格就重新计时。
+- 带排除的重挑（这条连接拨在用的那台失败、换路重拨）只给这条连接换，不挪在用的（`Options.Transient`）。
+- 手动指定照旧压过它；按访客固定不涉及。不经抖动抑制（`FlapDamper`）：60 s 的驻留加两道门槛已经限住了来回换。
+- 钟：新连接挑的时候算一次；GOST 每轮探测后（`updateFallbackActiveAtLocked` → `evaluateFastestLocked`，`agent/failover_fastest.go`）、
+  两边每秒的负载均衡上报（`balanceSnapshot` / `balanceSnapshotLocked`）也各算一次，没有新连接时也按时换。
+- 上报：只有在用的那台 `active`，其余能用的 `standby`，`strategy` 仍是 `latency`；面板「怎么走」写「延迟优先：只走 X（最快）」
+  （`server/exitTargetHealth.ts`）。
+- 下发：GOST 出口组规格带 `fastestOnly: true`（`server/gostBalancePlan.ts`，分配方式还是 `latency`，不借主备 + 择优 —— 那一套
+  起步和逃生按出口先后，比的成本还掺丢包和负载，上报也会变成主备）；NEX 隧道随 `balanceDetect` 原样下发
+  （Agent 的 `fxpBalanceDetect` 转交，FXP 的 `balanceDetectConfig.FastestOnly`）。老 Agent / 老 FXP 不认这一项，照旧按「一样快」的几台分。
 
 慢启动（除按访客固定、主备外都乘）：`DefaultSlowStart` 60 s，从 10% 线性到满份（`slowstart.go:20`）。
 
@@ -115,13 +134,25 @@
 
 ### 6.1 档位（出口组 / 链路负载均衡的「检测与切换」）
 
-`shared/loadBalance.ts`：均衡 = 默认（`:124`），灵敏 `:140`，稳定 `:150`。
+`shared/loadBalance.ts`：均衡 = 默认（`DEFAULT_BALANCE_DETECT`），灵敏 / 稳定见 `BALANCE_SENSITIVITY_PRESETS`。
 
-| 档 | 间隔 | 几次不通算坏 | 恢复连续通 | 一样快门槛 | 抖动门槛 / 持续 | 界面「约 N 秒内切走」 = ⌈间隔 × (次数 + 0.5)⌉（`:211`） |
-|---|---|---|---|---|---|---|
-| 灵敏 | 1 s | 2 | 3 | 30 ms | 20 ms / 15 s | 3 s |
-| 均衡 | 2 s | 2 | 3 | 50 ms | 30 ms / 30 s | 5 s |
-| 稳定 | 5 s | 3 | 5 | 80 ms | 50 ms / 60 s | 18 s |
+| 档 | 间隔（探出口机，`intervalSeconds`） | 探目标（`targetProbeSeconds`） | 几次不通算坏 | 恢复连续通 | 一样快门槛 | 抖动门槛 / 持续 | 界面「约 N 秒内切走」 = ⌈间隔 × (次数 + 0.5)⌉（`balanceSwitchWithinSeconds`） |
+|---|---|---|---|---|---|---|---|
+| 灵敏 | 1 s | 5 s | 2 | 3 | 30 ms | 20 ms / 15 s | 3 s |
+| 均衡 | 2 s | 10 s | 2 | 3 | 50 ms | 30 ms / 30 s | 5 s |
+| 稳定 | 5 s | 30 s | 3 | 5 | 80 ms | 50 ms / 60 s | 18 s |
+
+两个节拍分开（2.3.541，用户反馈「太频了容易黑洞」）：「间隔」管入口探自己的出口机（GOST：`gostBalanceProbeTiming` →
+Agent `ProbeIntervalSeconds`；FXP：`endpoint_pool.go` 的 `recoverGap`），1–60 s；「探目标」管出口机连规则的目标（GOST：
+`exitTargetProbeSpec` → Agent `route_hop_probe.go`，passive 规格最多认 300 s；FXP：`target_health.go` 的 `targetInterval` →
+`targetProbeInterval`），2–300 s。判坏以后的退避上限是 max(60 s, 节拍)，不会比节拍更勤；「连不上」的新鲜度跟着节拍放宽
+（面板 `exitTargetDownStale` = 2 × 上报间隔 + 余量；FXP `targetDownFreshFor` = max(90 s, 2 × 节拍 + 30 s)）。
+老数据没有 `targetProbeSeconds`：其余各项正好是某一档就取那一档的值，否则 max(5, min(300, 间隔 × 5))（`normalizeBalanceDetect`）；
+老面板下发的 FXP 检测参数没有这个字段时 FXP 照旧按间隔探目标。（Agent 转交 FXP 检测参数的 `fxpBalanceDetect` 以前漏了这一项，
+FXP 一直按间隔探目标；和 `fastestOnly` 一起补上，没带时签名不变。）
+
+「延迟优先：只走最快的一台」（`fastestOnly`）不是档位的一部分：三档都是关，开着时照样显示那一档，换档时留着它
+（`balanceSensitivityOf`、`applyBalanceSensitivity`）。
 
 线路组没有这三档：用模式模板（`shared/routeGroupPolicy.ts:72`：连续 2 次、异常 3 秒切、恢复观察 300 s、最短驻留
 600 s；智能择优驻留 60 s、择优持续 30 s），不套模板时 `ROUTE_GUARD_DEFAULTS`（`shared/routeGroupModel.ts:165`：3 次 / 60 s /
@@ -146,10 +177,20 @@
    到目标恢复后最多一轮间隔 + 2 × 4 s ≈ 10 s 放回；中间直接探失败过，那之前发起的经出口探测作废（`exitThroughGen`）。
    复核时同时直接探一次出口机（多跳的不探）：出口机本身也连不上（进程死掉时 gost 拨它被拒，复核约 1 s 就判坏、比每轮
    的直接探测先到）是机器的问题，按直接探测恢复，不要求经出口（`confirmExitEarlyClose`）。
+   **真实连接试探恢复**（Agent 2.2.265，`exitCanaryIndexLocked`）：经出口判坏过、出口机本身探得通的出口，每隔
+   `exitCanaryGap`（4 s，探测间隔更长时按间隔）让一条新的真实 TCP 连接先试它（`pickReserved`，只在新连接的第一次挑，换路重拨
+   不试，手动指定了别的出口时不试）：上游回了东西（`markEarlyReply`）当场放回、不等恢复门槛；一个字节没回就被关，保护期照常
+   换到别的出口重发，客户端无感，继续判坏。为什么要它：不说话的恢复探测对高防目标不可靠 —— 目标按来源 IP 把「连上不说话」
+   的连接关得特别快时，这台出口永远探不通，可说话的真实连接走得通（用户实测：三台机器都正常，一台 11 分钟没放回）。
+   面板提示「出口连不上目标」（信号 3 的 `Down`，带 `downAt` = 那份结论探出来的时刻）的出口同样试：回了东西就本地先放回，
+   记下那份提示的 `downAt`（`relayDownOverride`），面板再发同一份不按下去，探到更新的「连不上」才重新算数（实验室：
+   出口机断网又恢复后，出口到目标的探测放慢了，面板那份「连不上」要半分钟才撤，这半分钟本来不给它流量）。
 3. 面板提示：出口机探规则目标的结果（`server/exitTargetHealth.ts` 的 `exitTargetExcludedHostIds`：有别的已知好的才摘）→ `Down`；
-   出口到目标的中位数 → `ExtraLatencyMs`。
+   出口到目标的中位数 → `ExtraLatencyMs`。节拍是「探目标」那一列（灵敏 5 s / 均衡 10 s / 稳定 30 s，`exitTargetProbeSpec`），
+   不是上面的「间隔」；有到目标的真实连接时直接读内核 RTT（passive），不另外连。所以「出口到目标不通」没有流量时最慢
+   约 探目标 × 次数 + 上报 才经面板摘掉（均衡约 20 s 多），有流量时靠信号 2 当场换走。
 
-| 档 | 黑洞最坏摘掉 | 回来放回 | 实测（`gost-runtime/test/balance-proxy/run.sh`，路线图阶段 2） |
+| 档 | 出口机黑洞最坏摘掉（信号 1） | 回来放回 | 实测（`gost-runtime/test/balance-proxy/run.sh`，路线图阶段 2） |
 |---|---|---|---|
 | 灵敏 | 间隔 + (次数 − 1) × 间隔 + 超时 ≈ 3 s | (恢复 − 1) × 间隔 ≈ 2 s（+ 不到一轮） | 3.3 s / 2.1 s |
 | 均衡 | ≈ 5 s | ≈ 4 s（+ 不到一轮） | 5.0 s / 4.0 s |

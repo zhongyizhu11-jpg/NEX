@@ -305,3 +305,47 @@ func TestRouteRebuildKeepsRoundRobinStart(t *testing.T) {
 		t.Fatalf("换规格把轮流的位置清掉了：%d", p.roundRobinNext)
 	}
 }
+
+// 面板说这台出口到目标的延迟不知道（别的出口报了）：按已知最大的那台算，不按 0 算 —— 按 0 的话延迟优先、自动
+// 会偏向我们知道得最少的那台。一台都不知道时大家都是 0，和以前一样。
+func TestRouteUnknownExtraLatencyCountsAsTheWorstKnown(t *testing.T) {
+	spec := normalizeFailoverSpec(failoverSpec{Strategy: "latency", LatencyMarginMs: 20, Targets: []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: 1, Weight: 1, failoverTargetHints: failoverTargetHints{ExtraLatencyUnknown: true}},
+		{TargetIP: "127.0.0.2", TargetPort: 2, Weight: 1, failoverTargetHints: failoverTargetHints{ExtraLatencyMs: 80}},
+		{TargetIP: "127.0.0.3", TargetPort: 3, Weight: 1, failoverTargetHints: failoverTargetHints{ExtraLatencyMs: 10}},
+	}})
+	p := &failoverProxy{spec: spec}
+	p.ensureHealthStateLocked()
+	at := time.Now()
+	for i := range spec.Targets {
+		p.stats[i].recordProbe(true, 5, at)
+	}
+	if got := p.extraLatencyLocked(0); got != 80 {
+		t.Fatalf("不知道的按已知最大的算：%d", got)
+	}
+	if got := p.qualityLocked(0, at, false).Latency; got != 85 {
+		t.Fatalf("延迟优先的整链：%v", got)
+	}
+	if got := p.peakLatencyLocked(0, at); got < 84 || got > 86 {
+		t.Fatalf("自动的整链（peak EWMA）：%v", got)
+	}
+	if got := p.chainScoreInputLocked(0).latencyMs; got != 85 {
+		t.Fatalf("整链评分输入：%d", got)
+	}
+	counts := map[int]int{}
+	for i := 0; i < 60; i++ {
+		_, index, _ := p.pickReserved("", nil, false)
+		counts[index]++
+	}
+	if counts[0] != 0 || counts[1] != 0 || counts[2] == 0 {
+		t.Fatalf("不知道到目标多少的那台不该当成最快的：%v", counts)
+	}
+
+	none := &failoverProxy{spec: normalizeFailoverSpec(failoverSpec{Strategy: "latency", Targets: []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: 1}, {TargetIP: "127.0.0.2", TargetPort: 2},
+	}})}
+	none.ensureHealthStateLocked()
+	if none.extraLatencyLocked(0) != 0 || none.extraLatencyLocked(1) != 0 {
+		t.Fatal("一台都没报时都是 0")
+	}
+}

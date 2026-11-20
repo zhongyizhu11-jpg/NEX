@@ -58,12 +58,27 @@ export type GostBalanceSpecInput = {
   pinHostId: number;
   /** 面板从出口机的探测得知「到目标不通」的出口 */
   downHostIds: ReadonlySet<number>;
+  /** 每台被标「连不上目标」的出口，那份结论探出来的时刻（毫秒）：Agent 拿真实连接试探放回后，只认比它新的提示 */
+  downAt?: ReadonlyMap<number, number>;
   /** 每台出口到规则目标的延迟（出口机探的，毫秒） */
   extraLatencyMs: ReadonlyMap<number, number>;
+  /**
+   * 到目标的延迟不知道的出口（别的出口知道、只有它没有：没报、报的过期了、报的不通）。Agent 按这条规则里已知的
+   * 最大值算它（悲观）—— 按 0 算的话它的整链只剩入口到出口那一段，延迟优先 / 自动反而偏向它。
+   * 一台都不知道时不带（大家都是 0，和以前一样）。见 gostBalanceUnknownExtraLatency。
+   */
+  extraLatencyUnknown?: ReadonlySet<number>;
   /** 规则往目标发 PROXY 头（隧道的「入口发送」）：头原样转过去；否则这个头只是给调度器看访客地址的，读完扔掉。 */
   proxyHeaderForward: boolean;
   proxyProtocolVersion: 1 | 2;
 };
+
+/** 到目标延迟不知道的出口：至少一台知道时，其余不知道的那几台（一台都不知道时是空的）。 */
+export function gostBalanceUnknownExtraLatency(hostIds: readonly number[], extraLatencyMs: ReadonlyMap<number, number>): Set<number> {
+  const known = (hostId: number) => (extraLatencyMs.get(hostId) ?? 0) > 0;
+  if (!hostIds.some(known)) return new Set();
+  return new Set(hostIds.filter((hostId) => !known(hostId)));
+}
 
 /** 份数压进调度器认的 1–100，比例不变（手填的份数可以比 100 大）。 */
 export function gostBalanceTargetWeights(weights: readonly number[] | null, count: number): number[] | null {
@@ -102,6 +117,9 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     面板的分配方式原样交给调度器：八种名字在 Agent 和 FXP 里是同一段算法（lbcore，见 docs/dev/scheduler-spec.md）。
     主备（fallback）是「按顺序用第一台，坏了换下一台，好了切回（切过去至少待 1 分钟）」；延迟优先在「一样快」
     （整链差不到「检测与切换」里那个毫秒数）的几台里按自动分，和 NEX 隧道一样。
+    延迟优先开了「只走最快的一台」（detect.fastestOnly）时规格多带 fastestOnly：分配方式仍然是 latency（上报、界面都还是
+    「延迟优先」），Agent 只走整链最快的一台，另一台快出门槛并且快两成、稳住 60 秒才换（agent/failover_fastest.go）。
+    不用「主备 + 择优」凑：那一套起步和逃生都按出口的先后、不按快慢，择优比的成本还掺了丢包和负载，上报也会变成「主备」。
   */
   const strategy = normalizeExitGroupStrategy(input.strategy);
   const weights = gostBalanceTargetWeights(input.weights, exits.length);
@@ -115,6 +133,8 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     strategy,
     // 延迟优先「一样快」的门槛（毫秒）：「检测与切换」高级里的「延迟优先：差多少算一样快」
     latencyMarginMs: input.detect.latencyMarginMs,
+    // 延迟优先：只走最快的一台（只对延迟优先下发）
+    ...(strategy === "latency" && input.detect.fastestOnly ? { fastestOnly: true } : {}),
     targets: exits.map((exit, index) => {
       const extra = input.extraLatencyMs.get(exit.hostId);
       return {
@@ -126,8 +146,13 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         ...(exit.viaRelay ? { viaRelay: true } : {}),
         ...(exit.probeRelay && !exit.viaRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
-        ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
-        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.round(extra) } : {}),
+        ...(input.downHostIds.has(exit.hostId)
+          ? { down: true, downReason: "出口连不上目标", ...(input.downAt?.get(exit.hostId) ? { downAt: Math.round(Number(input.downAt.get(exit.hostId))) } : {}) }
+          : {}),
+        // 不到 1 毫秒按 1 算：Agent 那边 0 就是「没有」，四舍五入成 0 的话这台就成了「到目标不知道」
+        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.max(1, Math.round(extra)) } : {}),
+        // 运行时提示（agent/failover_hints.go）：变了不重建代理
+        ...((extra == null || !(extra > 0)) && input.extraLatencyUnknown?.has(exit.hostId) ? { extraLatencyUnknown: true } : {}),
       };
     }),
     failoverSeconds: timing.failoverSeconds,
@@ -182,7 +207,7 @@ export type GostBalancePlanningDeps<R extends BalanceRule, T extends BalanceTunn
   transportOf: (tunnel: T) => string;
   buildNode: (name: string, addr: string, transport: string, tunnel: T, connector: unknown) => N;
   endpointAddr: (host: string, port: number) => string;
-  exitTargetStates: (ruleId: number) => Array<{ hostId: number; down?: boolean; medianMs?: number | null; latencyMs?: number | null }>;
+  exitTargetStates: (ruleId: number) => Array<{ hostId: number; down?: boolean; medianMs?: number | null; latencyMs?: number | null; probedAt?: number; at?: number }>;
   exitTargetExcludedHostIds: (ruleId: number, hostIds: number[]) => ReadonlySet<number>;
   /** 份数（和 FXP 同一个来源）；按访客固定按线路带宽加权。 */
   weightsFor: (strategy: string, hostIds: number[], tunnel: T) => Promise<number[] | null>;
@@ -260,7 +285,9 @@ export async function planGostBalanceRules<R extends BalanceRule, T extends Bala
       // 手动指定的那台离线时不理它、照常自动分（和 NEX 隧道同一条规矩）；在线却连不上的由代理当场不理它。
       pinHostId: await deps.pinnedExitHostId(tunnel),
       downHostIds: deps.exitTargetExcludedHostIds(Number(rule.id), hostIds),
+      downAt: new Map(Array.from(fresh.values()).map((state) => [state.hostId, Number(state.probedAt ?? state.at ?? 0)])),
       extraLatencyMs,
+      extraLatencyUnknown: gostBalanceUnknownExtraLatency(hostIds, extraLatencyMs),
       proxyHeaderForward: deps.proxyHeaderForward(rule),
       proxyProtocolVersion: proxyVersion,
     });

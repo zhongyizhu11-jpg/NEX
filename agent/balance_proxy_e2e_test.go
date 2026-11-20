@@ -66,6 +66,17 @@ type e2eTarget struct {
 	peers map[string]int // "tcp 127.0.0.11" → 次数
 	tcp   net.Listener
 	udp   net.PacketConn
+	// 高防的脾气：这些来源（出口）的连接「连上不说话」超过这么久就关（别的来源不限）。
+	silentClose map[string]time.Duration
+}
+
+func (target *e2eTarget) closeSilentFrom(host string, after time.Duration) {
+	target.mu.Lock()
+	if target.silentClose == nil {
+		target.silentClose = map[string]time.Duration{}
+	}
+	target.silentClose[host] = after
+	target.mu.Unlock()
 }
 
 func startE2ETarget(t *testing.T, port int) *e2eTarget {
@@ -116,6 +127,12 @@ func (target *e2eTarget) serveTCP(conn net.Conn) {
 	defer conn.Close()
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 	target.note("tcp", host)
+	target.mu.Lock()
+	silent := target.silentClose[host]
+	target.mu.Unlock()
+	if silent > 0 {
+		_ = conn.SetReadDeadline(time.Now().Add(silent))
+	}
 	reader := bufio.NewReader(conn)
 	proxySource := "-"
 	// 只看前 6 个字节（访客最短就发 6 个字节，多等会卡住）：v1 是 "PROXY "，v2 是固定签名的开头
@@ -148,6 +165,7 @@ func (target *e2eTarget) serveTCP(conn net.Conn) {
 		if err != nil {
 			return
 		}
+		_ = conn.SetReadDeadline(time.Time{})
 		if _, err := fmt.Fprintf(conn, "%s %s %s", host, proxySource, line); err != nil {
 			return
 		}
@@ -417,11 +435,19 @@ func (lab *e2eLab) tcpOnce(visitor string, prefix string, timeout time.Duration)
 }
 
 func (lab *e2eLab) tcpOpen(visitor string, prefix string, timeout time.Duration) (net.Conn, e2eReply, error) {
+	return lab.tcpOpenAfter(visitor, prefix, timeout, 0)
+}
+
+// tcpOpenAfter：连上以后先等 delay 再说话（高防目标会把「连上不说话」的连接关掉）。
+func (lab *e2eLab) tcpOpenAfter(visitor string, prefix string, timeout time.Duration, delay time.Duration) (net.Conn, e2eReply, error) {
 	started := time.Now()
 	dialer := net.Dialer{Timeout: timeout, LocalAddr: &net.TCPAddr{IP: net.ParseIP(visitor)}}
 	conn, err := dialer.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", lab.bundle.EntryPort))
 	if err != nil {
 		return nil, e2eReply{}, err
+	}
+	if delay > 0 {
+		time.Sleep(delay)
 	}
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write([]byte(prefix + "hello\n")); err != nil {
@@ -923,6 +949,68 @@ func TestBalanceProxyE2E(t *testing.T) {
 		if recovered > 12*time.Second {
 			t.Fatalf("恢复用了 %s，超过 12 秒", recovered)
 		}
+		lab.noDirect()
+	})
+
+	t.Run("高防目标只把一台出口「连上不说话」的连接提前关掉：误判后靠真实连接放回", func(t *testing.T) {
+		/*
+			用户实测（2026-11-20）：三台出口机都正常，目标是高防，把 Jinx 那台出口「连上不说话」的连接 1 秒就关 —— 经出口
+			复核把它判成「到目标不行」，之后不说话的恢复探测同样被关，11 分钟没放回；可说话的真实连接走它根本没问题。
+			现在判坏过、出口机本身探得通的出口，每隔 exitCanaryGap 让一条真实连接先试它，回了东西就当场放回。
+		*/
+		lab := newE2ELab(t, "round_robin")
+		exits := lab.bundle.Exits
+		victim := 1
+		lab.target.closeSilentFrom(exits[victim].IP, time.Second)
+		// 几条连上以后 1.5 秒才说话的连接：经 victim 的被目标关掉、无感换走，复核时经 victim 的不说话探测又被关而别的开着 → 判坏
+		for i := 0; i < 6; i++ {
+			conn, _, err := lab.tcpOpenAfter(e2eVisitor(i), "", 6*time.Second, 1500*time.Millisecond)
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if err != nil {
+				t.Fatalf("第 %d 条晚说话的连接失败了（被关了就该无感换走）: %v", i+1, err)
+			}
+		}
+		lab.waitFor("经出口复核判坏", 6*time.Second, func() bool { return !lab.healthy(victim) })
+		judged := time.Now()
+		p := lab.proxy()
+		p.mu.RLock()
+		through := p.exitThroughFailed[victim]
+		p.mu.RUnlock()
+		if !through {
+			t.Fatal("应当是经出口复核判的坏")
+		}
+		// 正常（马上说话）的流量继续：到点的那条连接先试 victim，目标回了话 → 放回
+		recovered := time.Duration(0)
+		counts := map[string]int{}
+		for i := 0; i < 40 && recovered == 0; i++ {
+			reply, err := lab.tcpOnce(e2eVisitor(i), "", 6*time.Second)
+			if err != nil {
+				t.Fatalf("正常连接失败: %v", err)
+			}
+			counts[reply.exitIP]++
+			if lab.healthy(victim) {
+				recovered = time.Since(judged)
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+		if recovered == 0 {
+			t.Fatalf("有正常流量，判错的出口却一直没放回：%s", e2eCounts(counts, exits))
+		}
+		t.Logf("高防把 %s 不说话的连接 1 秒就关：判坏后 %s 由一条真实连接放回（%s）", exits[victim].IP, recovered.Round(10*time.Millisecond), e2eCounts(counts, exits))
+		if recovered > 8*time.Second {
+			t.Fatalf("放回用了 %s，超过 8 秒（exitCanaryGap 4 秒 + 一条连接）", recovered)
+		}
+		// 放回以后照常分到它（刚放回的 60 秒里从一成份量慢慢加，所以多开几批、给它一点时间）
+		after := map[string]int{}
+		lab.waitFor("放回以后又分到它", 20*time.Second, func() bool {
+			for ip, count := range lab.tcpSpread(6, 6) {
+				after[ip] += count
+			}
+			return after[exits[victim].IP] > 0
+		})
+		t.Logf("放回以后：%s", e2eCounts(after, exits))
 		lab.noDirect()
 	})
 
