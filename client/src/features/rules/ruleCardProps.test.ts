@@ -132,7 +132,7 @@ test("规则卡延迟的悬停：面板两段相加 / 最近一次诊断 / 定�
   const now = new Date(2026, 10, 20, 19, 0).getTime();
   assert.equal(
     describeRuleChainLatency({ exitName: "hep ix", exitMs: 6, targetMs: 3, share: 1 }, 9, "18:48"),
-    "整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48，分到 100%）",
+    "整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48）",
   );
   assert.deepEqual(
     describeRuleLatency({ latestLatencyAt: at, latestLatencyMs: 9, latestLatencyChain: { exitName: "hep ix", exitMs: 6, targetMs: 3, share: null }, latestLatencySource: "panel" }, 9, now),

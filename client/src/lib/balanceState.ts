@@ -121,22 +121,32 @@ function latencyText(summary: ExitSummaryLike, live = false) {
     两段：面板探的优先（链路定时探测的这台出口分支 + 出口机探目标，和规则卡、诊断一个口径）；面板没测到的那段是入口
     自己报的，标「Agent 自测」（FXP 报的到出口是建隧道握手的时间，比 TCPing 大一截）。
   */
-  const tag = (source: ExitSummaryLike["exitMsSource"]) => (source === "agent" ? "（Agent 自测）" : "");
+  // 整句写全（界面翻译按整句的模板套，不拼半句）
   if (summary.exitMs != null) {
-    const exitPart = `到出口 ${ms(summary.exitMs)}${tag(summary.exitMsSource)}`;
-    if (summary.targetMs == null) return `${exitPart} · 到目标延迟未知`;
+    const a = ms(summary.exitMs);
+    const exitAgent = summary.exitMsSource === "agent";
+    if (summary.targetMs == null) return exitAgent ? `到出口 ${a}（Agent 自测） · 到目标延迟未知` : `到出口 ${a} · 到目标延迟未知`;
     // 几条规则的目标远近不同（入口报的整链各条规则不一样）：写成范围，不取平均。面板的两段已经是中位数了，不再写范围
-    if (summary.exitMsSource !== "panel" && low != null && high != null && high - low >= 5) return `整链 ${Math.round(low)}–${ms(high)}（${exitPart}）`;
+    if (summary.exitMsSource !== "panel" && low != null && high != null && high - low >= 5) return `整链 ${Math.round(low)}–${ms(high)}（到出口 ${a}）`;
+    const b = ms(summary.targetMs);
+    const total = ms(summary.exitMs + summary.targetMs);
+    const targetAgent = summary.targetMsSource === "agent";
     const unknown = (summary.targetLatencyUnknown || 0) > 0 && summary.targetMsSource !== "panel" ? "（有规则到目标延迟未知）" : "";
-    return `整链 ${ms(summary.exitMs + summary.targetMs)}（${exitPart} + 到目标 ${ms(summary.targetMs)}${tag(summary.targetMsSource)}）${unknown}`;
+    if (exitAgent && targetAgent) return `整链 ${total}（到出口 ${a} + 到目标 ${b}；两段都是 Agent 自测）${unknown}`;
+    if (exitAgent) return `整链 ${total}（到出口 ${a} + 到目标 ${b}；到出口是 Agent 自测）${unknown}`;
+    if (targetAgent) return `整链 ${total}（到出口 ${a} + 到目标 ${b}；到目标是 Agent 自测）${unknown}`;
+    return `整链 ${total}（到出口 ${a} + 到目标 ${b}）${unknown}`;
   }
   // 面板测到了到目标、入口到这台出口那段还没测到
   if (summary.targetMs != null && summary.targetMsSource === "panel") return `到目标 ${ms(summary.targetMs)}（到出口那段还没测到）`;
   // 入口实时上报、两段都没有：出口机的 FXP 太旧（2.2.148 及更早），只报了出口到目标的中位数
-  const legacy = live && summary.exitMsSource === null && summary.targetMsSource === null ? "（出口机 FXP 太旧，没报到出口那段）" : "";
+  const legacy = live && summary.exitMsSource === null && summary.targetMsSource === null;
   // 几条规则的目标远近不同：写成范围，不取平均
-  if (low != null && high != null && high - low >= 5) return `到目标 ${Math.round(low)}–${ms(high)}${legacy}`;
-  return summary.medianMs != null ? `到目标 ${ms(summary.medianMs)}${legacy}` : null;
+  if (low != null && high != null && high - low >= 5) {
+    return legacy ? `到目标 ${Math.round(low)}–${ms(high)}（出口机 FXP 太旧，没报到出口那段）` : `到目标 ${Math.round(low)}–${ms(high)}`;
+  }
+  if (summary.medianMs == null) return null;
+  return legacy ? `到目标 ${ms(summary.medianMs)}（出口机 FXP 太旧，没报到出口那段）` : `到目标 ${ms(summary.medianMs)}`;
 }
 
 function udpNote(summary: ExitSummaryLike): { reason: string; hint: string | null } | null {

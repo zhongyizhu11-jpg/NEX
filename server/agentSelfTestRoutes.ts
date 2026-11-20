@@ -1,3 +1,4 @@
+import { tunnelExitLatency } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, parseSelfTestMeta } from "./agentRouteUtils";
@@ -210,6 +211,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         entryExitTestId: Number(meta.entryExitTestId || 0),
         waitMs: VIA_EXIT_SEGMENT_WAIT_MS,
         loadLive: (ruleId) => liveBalanceForRule(ruleId),
+        loadPanel: () => tunnelExitLatency(Number(meta.tunnelId || 0), Number(meta.exitHostId)),
         loadTest: (id) => db.getForwardTestById(id),
       })
       : null;

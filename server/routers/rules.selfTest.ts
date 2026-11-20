@@ -1,3 +1,4 @@
+import { tunnelExitLatency } from "../ruleLatencyView";
 import { protectedProcedure, router } from "../_core/trpc";
 import { ruleSourcePortEnd } from "@shared/portRange";
 import { z } from "zod";
@@ -13,7 +14,6 @@ import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import { exitTargetStatesForRule, ruleActiveExit } from "../exitTargetHealth";
 import { liveBalanceForRule } from "../balanceLive";
-import { liveEntryExitSegment } from "../selfTestViaExit";
 import { isLatestRuleProbeTimeout } from "../repositories/metricsRepository";
 import * as hopRepo from "../repositories/tunnelRepository";
 import { dbBool } from "../repositories/repositoryUtils";
@@ -233,7 +233,8 @@ export const selfTestRulesRouter = router({
           const liveExit = live?.exits.find((exit) => exit.hostId === testExitHostId);
           const hops = await hopRepo.getTunnelHops(Number(tunnel.id)).catch(() => []) as unknown[];
           // 多跳（出口在中转后面）：入口连不到出口机，没法直接测这一段
-          if (!liveEntryExitSegment(live, testExitHostId) && liveExit?.host && liveExit.port > 0 && viaEntryHostId > 0 && hops.length < 3) {
+          // 面板的链路探测里这台出口那一段还新鲜就用它（和卡片一个口径），没有就让入口现测一次（入口报的握手延迟只兜底）
+          if (!tunnelExitLatency(Number(tunnel.id), testExitHostId) && liveExit?.host && liveExit.port > 0 && viaEntryHostId > 0 && hops.length < 3) {
             const [entryHost, exitHost] = await Promise.all([db.getHostById(viaEntryHostId), db.getHostById(testExitHostId)]);
             entryExitTestId = Number(await db.createForwardTest({
               ruleId: 0,

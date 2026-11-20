@@ -95,7 +95,7 @@ test("弹窗每台出口：面板两段写成整链；入口报的那段标「Ag
   );
   assert.equal(
     exitRowView(summary({ exitMs: 12, targetMs: 3, exitMsSource: "agent", targetMsSource: "panel", jitterMs: 0 }), base).detail,
-    "整链 15 ms（到出口 12 ms（Agent 自测） + 到目标 3 ms）",
+    "整链 15 ms（到出口 12 ms + 到目标 3 ms；到出口是 Agent 自测）",
   );
   assert.equal(
     exitRowView(summary({ exitMs: null, targetMs: null, exitMsSource: null, targetMsSource: null, jitterMs: 0 }), base).detail,

@@ -29,7 +29,7 @@ const liveReport = (exits: Array<Partial<LiveRuleReport["exits"][number]> & { ho
   })),
 });
 
-test("入口 → 在用出口那一段：入口实时上报优先，连不上出口机算超时，没有就等入口现测的那一次", async () => {
+test("入口 → 在用出口那一段：面板的链路探测优先，没有就等入口现测的那一次，最后才用入口实时上报", async () => {
   const live = liveReport([{ hostId: 2, exitMs: 7.4 }, { hostId: 3, exitMs: 2.2 }, { hostId: 4, state: "down", reason: "exit" }], 1000);
   assert.deepEqual(liveEntryExitSegment(live, 3), { entryHostId: 1, exitHostId: 3, recordedAt: 1000, source: "live", latencyMs: 2, isTimeout: false });
   assert.equal(liveEntryExitSegment(live, 4)?.isTimeout, true);
@@ -50,6 +50,19 @@ test("入口 → 在用出口那一段：入口实时上报优先，连不上出
   });
   assert.equal(waited?.source, "tcping");
   assert.equal(waited?.latencyMs, 4);
+  // 面板的链路探测有这台那一段：直接用，不等现测、不用入口报的握手时间
+  const panel = await waitViaExitSegment({
+    ruleId: 100, entryHostId: 1, exitHostId: 3, entryExitTestId: 77, waitMs: 10_000,
+    loadLive: () => live, loadPanel: () => ({ ms: 1.4, at: 3000 }), loadTest: async () => ({ status: "pending" }),
+  });
+  assert.deepEqual(panel, { entryHostId: 1, exitHostId: 3, latencyMs: 1, isTimeout: false, recordedAt: 3000, source: "panel" });
+  // 现测没回来、面板也没有：最后才用入口报的
+  clock = 0;
+  const fallback = await waitViaExitSegment({
+    ruleId: 100, entryHostId: 1, exitHostId: 3, entryExitTestId: 77, waitMs: 1_000,
+    loadLive: () => live, loadTest: async () => ({ status: "pending" }), sleep: async (ms) => { clock += ms; }, now: () => clock,
+  });
+  assert.equal(fallback?.source, "live");
   assert.equal(await waitViaExitSegment({ ruleId: 100, entryHostId: 1, exitHostId: 3, waitMs: 10_000, loadLive: () => null, loadTest: async () => null }), null, "没现测就不等");
   clock = 0;
   assert.equal(await waitViaExitSegment({
@@ -101,8 +114,11 @@ test("诊断从扛流量的出口测：入口 → 出口那一段用这台的（
       { hostId: 4, host: "198.51.100.4", port: 40004, state: "active", share: 0.2, picks: 2, medianMs: 9, exitMs: 4, targetMs: 5, samples: 20 },
     ];
 
-    // 1. 入口报了 hep ix 的 exitMs：从 hep ix 测目标，入口 → hep ix 用实时上报的 2 ms
-    await ingest(exits({ medianMs: 6, exitMs: 2.2, targetMs: 4 }));
+    // 1. 链路定时探测里有 hep ix 那条分支（2 ms）：从 hep ix 测目标，入口 → hep ix 用面板探的，不用入口报的握手时间（9）
+    const view = await import("./ruleLatencyView");
+    view.resetRuleLatencyViewForTest();
+    view.recordTunnelExitLeg(30, 3, 2.2);
+    await ingest(exits({ medianMs: 13, exitMs: 9, targetMs: 4 }));
     const first = await db.getForwardTestById((await caller.startSelfTest({ ruleId: 100 })).id) as any;
     assert.equal(first.hostId, 3, "从扛流量的 hep ix 测");
     const meta = utils.parseSelfTestMeta(first.requestMessage) as any;
@@ -116,9 +132,11 @@ test("诊断从扛流量的出口测：入口 → 出口那一段用这台的（
     assert.deepEqual([segment.fromHostId, segment.toHostId, segment.latencyMs, segment.routeLabel], [1, 3, 2, "po0 -> hep ix"]);
     assert.equal(message.details.some((detail: any) => detail.toHostId === 2 || detail.fromHostId === 2), false, "主出口不出现在路径里");
     assert.match(message.message, /入口到 hep ix 2ms/);
+    assert.equal(segment.message, "链路探测");
 
-    // 2. 入口没报 hep ix 的 exitMs（老 Agent）：开始诊断时让入口现测一次到 hep ix 的 tcping
-    await ingest(exits({ medianMs: 4 }));
+    // 2. 面板没测到 hep ix 那一段（不管入口报没报 exitMs）：开始诊断时让入口现测一次到 hep ix 的 tcping
+    view.resetRuleLatencyViewForTest();
+    await ingest(exits({ medianMs: 13, exitMs: 9, targetMs: 4 }));
     const second = await db.getForwardTestById((await caller.startSelfTest({ ruleId: 100 })).id) as any;
     const secondMeta = utils.parseSelfTestMeta(second.requestMessage) as any;
     assert.ok(secondMeta.entryExitTestId > 0, "排了一次入口现测");

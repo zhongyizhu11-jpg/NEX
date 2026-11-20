@@ -660,7 +660,7 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
     .map((member: any) => Number(member.hostId || 0));
   // 链路卡「到出口」：面板探的入口到在用出口那一段（在用哪几台按入口实时上报；负载均衡时比链路探测的总数——几台里最慢的——准）
   const inUseExitsByTunnelId = inUseExitsByTunnel(tunnels.map((tunnel) => Number(tunnel.id)));
-  const liveExitLatencyOf = (tunnel: any) => {
+  const liveExitLatencyOf = (tunnel: { id: unknown }) => {
     const inUse = inUseExitsByTunnelId.get(Number(tunnel.id));
     if (!inUse) return null;
     const names = new Map(inUse.map((exit) => [exit.hostId, exit.hostName]));

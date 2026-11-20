@@ -41,7 +41,7 @@ const roundMs = (value: number) => `${Math.round(value)} ms`;
 
 /**
  * 卡上延迟的悬停那句（两段都是面板探的）。规则卡的数一律是「整链」（入口→在用出口→目标），和诊断的合计同一口径：
- *   整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48，分到 100%）
+ *   整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48）
  * 没有两段返回 null。totalMs：卡上那个数（服务端算好的整链）；不传时两段相加。
  */
 export function describeRuleChainLatency(chain: RuleChainLatencyLike | null | undefined, totalMs?: number | null, at = ""): string | null {
@@ -50,11 +50,18 @@ export function describeRuleChainLatency(chain: RuleChainLatencyLike | null | un
   const targetMs = typeof chain.targetMs === "number" && Number.isFinite(chain.targetMs) ? chain.targetMs : null;
   if (exitMs === null || targetMs === null) return null;
   const name = String(chain.exitName || "").trim();
-  const total = typeof totalMs === "number" && Number.isFinite(totalMs) ? totalMs : exitMs + targetMs;
-  const share = typeof chain.share === "number" && Number.isFinite(chain.share) ? `，分到 ${Math.round(chain.share * 100)}%` : "";
-  const exitPart = name ? `入口到 ${name} ${roundMs(exitMs)}` : `入口到出口 ${roundMs(exitMs)}`;
-  const targetPart = name ? `${name} 到目标 ${roundMs(targetMs)}` : `出口到目标 ${roundMs(targetMs)}`;
-  return `整链 ${roundMs(total)} = ${exitPart} + ${targetPart}（面板探测${at ? `，${at}` : ""}${share}）`;
+  const total = roundMs(typeof totalMs === "number" && Number.isFinite(totalMs) ? totalMs : exitMs + targetMs);
+  const exit = roundMs(exitMs);
+  const target = roundMs(targetMs);
+  // 整句写全（不拼半句）：界面翻译按整句的模板套
+  if (name) {
+    return at
+      ? `整链 ${total} = 入口到 ${name} ${exit} + ${name} 到目标 ${target}（面板探测，${at}）`
+      : `整链 ${total} = 入口到 ${name} ${exit} + ${name} 到目标 ${target}（面板探测）`;
+  }
+  return at
+    ? `整链 ${total} = 入口到出口 ${exit} + 出口到目标 ${target}（面板探测，${at}）`
+    : `整链 ${total} = 入口到出口 ${exit} + 出口到目标 ${target}（面板探测）`;
 }
 
 function clockText(at: unknown, nowMs: number) {
@@ -80,11 +87,12 @@ export function describeRuleLatency(probe: ProbeEntry | null | undefined, ms: nu
   const chain = describeRuleChainLatency(probe?.latestLatencyChain, ms, at);
   if (chain) return { title: chain, atLeast: false };
   const source = String(probe?.latestLatencySource || "");
+  const value = roundMs(ms);
   if (source === "exit-target") {
-    return { title: `整链 ≥ ${roundMs(ms)}：只有在用出口到目标那段（出口机探测${at ? ` ${at}` : ""}），入口到出口那段没算`, atLeast: true };
+    return { title: `整链 ≥ ${value}：只有在用出口到目标那段，入口到出口那段没算（出口机探测${at ? ` ${at}` : ""}）`, atLeast: true };
   }
-  if (source === "diagnosis") return { title: `整链 ${roundMs(ms)}（最近一次诊断${at ? ` ${at}` : ""}）`, atLeast: false };
-  return { title: `整链 ${roundMs(ms)}（定时探测${at ? ` ${at}` : ""}）`, atLeast: false };
+  if (source === "diagnosis") return { title: at ? `整链 ${value}（最近一次诊断 ${at}）` : `整链 ${value}（最近一次诊断）`, atLeast: false };
+  return { title: at ? `整链 ${value}（定时探测 ${at}）` : `整链 ${value}（定时探测）`, atLeast: false };
 }
 
 export type RuleCardDerivedProps = {

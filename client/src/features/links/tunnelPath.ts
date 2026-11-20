@@ -70,9 +70,11 @@ export type TunnelExitLatency = {
   title: string;
 };
 
-function isLoadBalancedTunnel(tunnel: any) {
+type LoadBalanceShape = { loadBalanceEnabled?: unknown; loadBalanceExits?: unknown; [key: string]: unknown } | null | undefined;
+
+function isLoadBalancedTunnel(tunnel: LoadBalanceShape) {
   const extraExits = Array.isArray(tunnel?.loadBalanceExits)
-    ? tunnel.loadBalanceExits.filter((exit: any) => exit?.isEnabled !== false).length
+    ? (tunnel.loadBalanceExits as Array<{ isEnabled?: unknown } | null>).filter((exit) => exit?.isEnabled !== false).length
     : 0;
   return !!tunnel?.loadBalanceEnabled || extraExits > 0;
 }
@@ -83,7 +85,7 @@ function isLoadBalancedTunnel(tunnel: any) {
  * 都是面板探的（和诊断同一口径），入口报的建隧道握手时间不拿来显示。
  */
 export function tunnelExitLatency(
-  tunnel: any,
+  tunnel: LoadBalanceShape,
   probeMs: number | null | undefined,
   live: LiveExitLatencyView | null | undefined,
 ): TunnelExitLatency | null {
@@ -92,9 +94,14 @@ export function tunnelExitLatency(
     const lowMs = Math.round(Number(live.lowMs));
     const highMs = Math.round(Number(live.highMs));
     const name = String(live.exitName || "").trim();
+    const carryingMs = Math.round(Number(live.exitMs));
     const title = Number(live.inUse) > 1
-      ? `入口到在用出口 ${lowMs}–${highMs} ms（${live.inUse} 台${name ? `，扛流量最多的 ${name} ${Math.round(Number(live.exitMs))} ms` : ""}；链路探测）`
-      : `入口到在用出口${name ? ` ${name}` : ""} ${lowMs} ms（链路探测）`;
+      ? name
+        ? `入口到在用出口 ${lowMs}–${highMs} ms（${live.inUse} 台，扛流量最多的 ${name} ${carryingMs} ms；链路探测）`
+        : `入口到在用出口 ${lowMs}–${highMs} ms（${live.inUse} 台；链路探测）`
+      : name
+        ? `入口到在用出口 ${name} ${lowMs} ms（链路探测）`
+        : `入口到在用出口 ${lowMs} ms（链路探测）`;
     return { lowMs, highMs, source: "live", title };
   }
   if (typeof probeMs !== "number" || !Number.isFinite(probeMs)) return null;

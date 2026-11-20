@@ -2688,8 +2688,9 @@ export async function getTrafficSummaryByRule(opts: {
     时间用诊断的 updatedAt —— 过了期照旧灰掉。顺序：入口实时（withRuleExitTargets 再补）→ 定时探测 → 最近一次诊断。
   */
   const diagnosisFallbackIds = ruleIds.filter((ruleId) => !latestByRule.has(ruleId));
-  const latestDiagnosisRows = diagnosisFallbackIds.length > 0
-    ? await queryRaw<any>(
+  type DiagnosisRow = { ruleId: unknown; latencyMs: unknown; updatedAt: unknown; createdAt: unknown };
+  const latestDiagnosisRows: DiagnosisRow[] = diagnosisFallbackIds.length > 0
+    ? await queryRaw<DiagnosisRow>(
       `SELECT ft.${q("ruleId")} AS ${q("ruleId")},
               ft.${q("latencyMs")} AS ${q("latencyMs")},
               ft.${q("updatedAt")} AS ${q("updatedAt")},
@@ -2707,9 +2708,9 @@ export async function getTrafficSummaryByRule(opts: {
           AND ft.${q("latencyMs")} IS NOT NULL
         ORDER BY ft.${q("updatedAt")} DESC, ft.${q("createdAt")} DESC`,
       diagnosisFallbackIds,
-    ).catch(() => [])
+    ).catch(() => [] as DiagnosisRow[])
     : [];
-  for (const row of latestDiagnosisRows as any[]) {
+  for (const row of latestDiagnosisRows) {
     const ruleId = Number(row.ruleId);
     if (latestByRule.has(ruleId)) continue;
     const latencyMs = Number(row.latencyMs);
