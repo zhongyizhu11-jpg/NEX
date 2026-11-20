@@ -119,6 +119,11 @@ export function ExitBalanceDialog({
     }),
   }));
   const inUse = rows.filter((row) => row.view.state === "active" || row.view.state === "pinned" || row.view.state === "warming").length;
+  // 「只走最快的一台」是每条规则各挑自己目标最快的：几条规则目标不同时会有两台都「在用」——写清楚，不然像没生效
+  const ruleCount = Math.max(0, ...(summary?.exits || []).map((item) => Number(item.rules) || 0));
+  const inUseText = strategy === "latency" && detect.fastestOnly && ruleCount > 1 && inUse > 1
+    ? `${ruleCount} 条规则各走自己最快的一台，用到 ${inUse} 台`
+    : `${inUse} 台在用`;
   const targetDown = (summary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
   const targetUnstable = (summary?.targetIssues || []).length - targetDown;
 
@@ -149,7 +154,7 @@ export function ExitBalanceDialog({
             {nginxNote ? <BalanceStatePill state="basic" /> : upgradeIssue ? <BalanceStatePill state="upgrade" /> : null}
           </DialogTitle>
           <DialogDescription>
-            {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {exits.length} 台出口 · {inUse} 台在用
+            {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {exits.length} 台出口 · {inUseText}
           </DialogDescription>
           {!pinActive && !upgradeIssue ? <p className="text-meta leading-5 text-muted-foreground">{balanceStrategyHint(strategy, false, nginxNote ? null : detect)}</p> : null}
         </DialogHeader>
