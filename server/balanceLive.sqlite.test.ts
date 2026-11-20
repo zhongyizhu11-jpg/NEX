@@ -124,6 +124,15 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     assert.equal(lowerBound.latestLatencyMs, 5);
     assert.equal(lowerBound.latestLatencyLive?.exitName, "Jinx(29.9y)");
     assert.equal(lowerBound.latestLatencyLive?.targetUnknown, true);
+
+    // 延迟优先「只走最快的一台」：入口报一台 active、其余 standby，弹窗写「只走 X（最快）」，不写主备
+    await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, strategy: "latency", exits: gostRule.exits.map((exit, index) => ({ ...exit, state: index === 1 ? "active" : "standby" })) }] });
+    const fastestSummary = health.exitTargetSummaryForTunnel(
+      { id: 1, mode: "gost", loadBalanceEnabled: true, loadBalanceStrategy: "latency", balanceDetect: JSON.stringify({ fastestOnly: true }) },
+      [2, 3, 4],
+      { hostNames: new Map([[2, "jinx(39.9y)"], [3, "hep ix"], [4, "Jinx(29.9y)"]]) },
+    );
+    assert.equal(fastestSummary.how, "延迟优先：只走 hep ix（最快），2 台备用");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

@@ -211,6 +211,17 @@ test("链路弹窗「怎么走」：NEX 延迟优先，差不到门槛的一起�
   assert.equal(summary.how, "延迟优先：A、B（差不到 50ms，按负载分），1 台备用");
 });
 
+test("链路弹窗「怎么走」：NEX 延迟优先开了只走最快的一台，只写最快的那台", () => {
+  resetExitTargetStates();
+  const tunnel = { id: 3, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "latency", balanceDetect: JSON.stringify({ fastestOnly: true }) };
+  setExitTargetStateForTest(state({ hostId: 1, medianMs: 10, jitterMs: 2 }));
+  setExitTargetStateForTest(state({ hostId: 2, medianMs: 9, jitterMs: 1 }));
+  setExitTargetStateForTest(state({ hostId: 3, medianMs: 180, jitterMs: 5 }));
+  const summary = exitTargetSummaryForTunnel(tunnel, [1, 2, 3], { hostNames: new Map([[1, "A"], [2, "B"], [3, "C"]]) });
+  assert.deepEqual(summary.exits.map((item) => item.activeRules), [0, 1, 0]);
+  assert.equal(summary.how, "延迟优先：只走 B（最快），2 台备用");
+});
+
 test("平时延迟 = 最低延迟：更低的马上跟下来，更高的只慢慢往上跟", () => {
   resetExitTargetStates();
   const base = Date.now();

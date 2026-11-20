@@ -151,7 +151,7 @@ export function ExitBalanceDialog({
           <DialogDescription>
             {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {exits.length} 台出口 · {inUse} 台在用
           </DialogDescription>
-          {!pinActive && !upgradeIssue ? <p className="text-meta leading-5 text-muted-foreground">{balanceStrategyHint(strategy)}</p> : null}
+          {!pinActive && !upgradeIssue ? <p className="text-meta leading-5 text-muted-foreground">{balanceStrategyHint(strategy, false, nginxNote ? null : detect)}</p> : null}
         </DialogHeader>
         {notice ? (
           <div className={cn("fx-lb-pin-banner", notice.tone === "warn" && "is-warn")} data-balance-notice={nginxNote ? "basic" : upgradeIssue ? "upgrade" : pinActive ? "pin" : "target"}>

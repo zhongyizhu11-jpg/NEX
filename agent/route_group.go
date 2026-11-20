@@ -509,6 +509,7 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 		p.wrrCurrent = carried(p.wrrCurrent, from)
 	}
 	p.lbNear = p.lbNear.Remap(from)
+	p.lbFastest = p.lbFastest.Remap(from)
 	p.udpSide = p.udpSide.carried(from)
 	// 正在复核的不带：复核的协程回来按地址重新找下标（indexOfTargetLocked）。
 	p.exitConfirming = make([]bool, len(spec.Targets))

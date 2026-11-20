@@ -28,6 +28,8 @@ type failoverProxy struct {
 	slowStartAt []time.Time
 	// lbNear：「延迟优先」里哪几条算「一样快」的状态（lbcore.NearSet，route_group_balance.go）。
 	lbNear lbcore.NearSet
+	// lbFastest：延迟优先「只走最快的一台」现在在用的是谁、挑战者是谁（lbcore.Fastest，failover_fastest.go）。
+	lbFastest lbcore.Fastest
 	// lbQuality：每条路径算好的探测抖动（探测窗口没变就不重算，route_group_balance.go）。
 	lbQuality []routeQualityCache
 	// 在途：已经挑中、还在拨的连接数（A8，route_group_balance.go）。inflightGen 每换一次规格加一，
@@ -159,6 +161,10 @@ func failoverSignature(spec failoverSpec) string {
 		}(),
 		strconv.FormatBool(spec.ProxyProtocolReceive),
 		strconv.FormatBool(spec.ProxyProtocolStrip),
+	}
+	// 「只走最快的一台」只在开着时进签名：没开的规格签名和加这个字段之前逐字相同。
+	if spec.FastestOnly {
+		parts = append(parts, "fastest")
 	}
 	// 不带时签名和加这个字段之前逐字相同
 	if spec.BalanceReport != nil {

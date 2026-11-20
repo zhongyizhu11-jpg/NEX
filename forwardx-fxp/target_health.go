@@ -125,6 +125,8 @@ type balanceDetectConfig struct {
 	JitterHoldSeconds  int    `json:"jitterHoldSeconds,omitempty"`
 	JitterAction       string `json:"jitterAction,omitempty"`
 	SlowStart          *bool  `json:"slowStart,omitempty"`
+	// 延迟优先「只走最快的一台」（面板 BalanceDetect.fastestOnly）：只给整链最快的一台，别的候补（exit_fastest.go）。
+	FastestOnly bool `json:"fastestOnly,omitempty"`
 }
 
 type balanceDetect struct {

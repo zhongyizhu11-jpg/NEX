@@ -117,6 +117,9 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     面板的分配方式原样交给调度器：八种名字在 Agent 和 FXP 里是同一段算法（lbcore，见 docs/dev/scheduler-spec.md）。
     主备（fallback）是「按顺序用第一台，坏了换下一台，好了切回（切过去至少待 1 分钟）」；延迟优先在「一样快」
     （整链差不到「检测与切换」里那个毫秒数）的几台里按自动分，和 NEX 隧道一样。
+    延迟优先开了「只走最快的一台」（detect.fastestOnly）时规格多带 fastestOnly：分配方式仍然是 latency（上报、界面都还是
+    「延迟优先」），Agent 只走整链最快的一台，另一台快出门槛并且快两成、稳住 60 秒才换（agent/failover_fastest.go）。
+    不用「主备 + 择优」凑：那一套起步和逃生都按出口的先后、不按快慢，择优比的成本还掺了丢包和负载，上报也会变成「主备」。
   */
   const strategy = normalizeExitGroupStrategy(input.strategy);
   const weights = gostBalanceTargetWeights(input.weights, exits.length);
@@ -130,6 +133,8 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     strategy,
     // 延迟优先「一样快」的门槛（毫秒）：「检测与切换」高级里的「延迟优先：差多少算一样快」
     latencyMarginMs: input.detect.latencyMarginMs,
+    // 延迟优先：只走最快的一台（只对延迟优先下发）
+    ...(strategy === "latency" && input.detect.fastestOnly ? { fastestOnly: true } : {}),
     targets: exits.map((exit, index) => {
       const extra = input.extraLatencyMs.get(exit.hostId);
       return {

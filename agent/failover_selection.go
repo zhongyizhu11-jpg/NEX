@@ -257,6 +257,11 @@ func (p *failoverProxy) notePrecheckFailedLocked(index int, issue string) {
 窗口命中 —— 测试照常绿，但什么都没验证。这种测试比没有更糟，因为它看起来在保护。
 */
 func (p *failoverProxy) updateFallbackActiveAtLocked(now time.Time, reason string) {
+	// 延迟优先「只走最快的一台」：每轮探测、每次判坏 / 恢复也重新看一遍在用的是谁（failover_fastest.go）。
+	if p.fastestOnlyLocked() {
+		p.evaluateFastestLocked(now, reason)
+		return
+	}
 	if len(p.spec.Targets) == 0 || p.spec.Strategy != "fallback" {
 		return
 	}
