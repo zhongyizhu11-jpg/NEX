@@ -234,3 +234,28 @@
 最终检查：tsc、lint（基线内）、`pnpm test:all` 4760 项（4753 过 / 0 失败 / 7 跳过）、lbcore / Agent / FXP `go test ./...` 与 `-race`、`gost-runtime/test/balance-proxy/run.sh` 全部场景通过（连跑两遍）。
 
 没做：全部出口恢复时让其他出口立即重探（目前靠各自下一次探测，超时类约 4 秒、被拒类最长约 60 秒，期间入口的「没回就换」兜着）。
+
+### 2.3.541 跟进（2026-11-20，Agent 2.2.265 / FXP 2.2.148）
+
+用户实机（NEX 隧道 3 出口、延迟优先、目标为高防）反馈「每台机器都正常，一台出口却一直显示连不上目标」，顺着查出来并修掉的：
+
+| 项 | 落点 |
+|---|---|
+| 经出口判坏的出口靠真实连接试探放回（不说话的恢复探测对高防不可靠：对某台出口 IP 的「连上不说话」连接关得特别快，永远探不通） | `agent/failover_exit_group.go` 的 `exitCanaryIndexLocked` / `exitCanaryRepliedLocked`（`pickReserved` 里只在新连接第一次挑），面板提示「连不上目标」的出口同样试，提示带 `downAt`（`server/gostBalancePlan.ts`），试探放回后同一份提示不按下去 |
+| 探出口机和探目标分成两个节拍 | `BalanceDetect.targetProbeSeconds`（灵敏 5 / 均衡 10 / 稳定 30 秒，2–300 可填）；面板 `exitTargetProbeSpec`、FXP `targetProbeInterval`；Agent 退避上限 `max(60 s, 节拍)`，Passive 规格间隔上限 300 s；界面 `SecondsPicker` |
+| 出口到目标的延迟缺了按 0 算（延迟优先 / 自动偏向信息最少的那台） | 提示 `extraLatencyUnknown`，Agent 按这条规则已知的最大值算（`extraLatencyLocked`），上报 `targetLatencyUnknown` |
+| 规则卡延迟一个口径（扛流量最多那台的整链延迟，两段分开报） | `agent/balance_report.go` 报 `exitMs` / `targetMs`（平滑值）、`server/exitTargetHealth.ts` 的 `liveCarryingExit` / `latestLatencyLive`、规则卡提示 |
+| 诊断把「隧道到主出口」的旧样本和「在用出口到目标」拼成一条链 | `server/selfTestViaExit.ts`：从在用出口测时入口段用入口实时报的 `exitMs`，节点名按它写 |
+
+实验室（`scenarios.sh 1–5` + `fixhints/readmit.sh` + 高防场景）：
+
+| 场景 | 结果 |
+|---|---|
+| 目标只把 exit2 的「连上不说话」连接 1 秒就关 | 修前：exit2 4 秒内判「到目标不行」，2 分钟不放回；修后：判坏后第一条正常连接（7 秒）放回，之后三台一起分 |
+| 三台出口全黑洞 | 36 条全部失败、0 条绕过 |
+| 只黑洞 exit2，各 30 条 | GOST 16/14、V1 16/14、V3 15/15，0 失败 |
+| exit2 恢复后放回（单独计时） | GOST 6.0 秒（探目标节奏放慢后一度 36 秒，靠真实连接覆盖面板提示修回），V1 4.7 秒 |
+| UDP 会话所在出口 / 中转黑洞 | V1、V3 约 2 秒、GOST 约 4 秒换出口；线路组约 3 秒换路 |
+| 目标本身挂了 | 每条连接几十毫秒内失败 |
+
+检查：tsc、lint、`pnpm test:all` 4768 项 0 失败、Agent / FXP / lbcore `go test ./...` 与 `-race`、`gost-runtime/test/balance-proxy/run.sh` 全过（含新加的高防场景）。
