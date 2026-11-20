@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { LINE_TONE_TEXT, LinePill } from "@/features/lines/LineUi";
 import { BALANCE_STATE_TONE, BALANCE_STATE_WORDS, type BalanceStateKey } from "@/lib/balanceState";
@@ -44,6 +44,7 @@ export function BalanceStateRow({
   dim?: boolean;
 }) {
   const tone = BALANCE_STATE_TONE[state];
+  const [detailOpen, setDetailOpen] = useState(false);
   return (
     <li className={cn("flex min-w-0 items-center gap-2.5 px-3 py-2.5", dim && "opacity-60")} data-balance-state={state}>
       {leading}
@@ -52,7 +53,18 @@ export function BalanceStateRow({
           <span className="min-w-0 truncate text-[14.5px] font-medium leading-5">{name}</span>
           <BalanceStatePill state={state} />
         </div>
-        {detail ? <p className="truncate text-meta leading-5 text-muted-foreground tabular-nums">{detail}</p> : null}
+        {detail ? (
+          // 手机上一行放不下（几条规则的整链范围 + 两段 + 分到多少）：点一下展开看全，再点收起
+          <button
+            type="button"
+            className={cn("block w-full min-w-0 text-left text-meta leading-5 text-muted-foreground tabular-nums", detailOpen ? "whitespace-normal break-words" : "truncate")}
+            title={detail}
+            aria-expanded={detailOpen}
+            onClick={() => setDetailOpen((open) => !open)}
+          >
+            {detail}
+          </button>
+        ) : null}
         {reason ? (
           <p className={cn("text-meta leading-5", tone === "gray" || tone === "ok" || tone === "acc" ? "text-muted-foreground" : LINE_TONE_TEXT[tone])}>
             {reason}
