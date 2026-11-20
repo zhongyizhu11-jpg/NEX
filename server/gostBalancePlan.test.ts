@@ -224,6 +224,8 @@ test("GOST 本机代理的计划：每台出口一个本机端口；手动指定
 */
 test("出口到目标的延迟：别的出口知道、这台不知道时带 extraLatencyUnknown；一台都不知道时不带", async () => {
   assert.deepEqual([...gostBalanceUnknownExtraLatency([21, 22, 23], new Map([[21, 12]]))], [22, 23]);
+  // 同一台机房里不到 1 毫秒：按 1 下发（Agent 那边 0 = 没有）
+  assert.equal(buildGostBalanceProxySpec({ ...base, extraLatencyMs: new Map([[21, 0.3]]) }).targets[0].extraLatencyMs, 1);
   assert.deepEqual([...gostBalanceUnknownExtraLatency([21, 22], new Map())], []);
   assert.deepEqual([...gostBalanceUnknownExtraLatency([21, 22], new Map([[21, 12], [22, 30]]))], []);
   const spec = buildGostBalanceProxySpec({ ...base, extraLatencyMs: new Map([[21, 12]]), extraLatencyUnknown: new Set([22, 23]) });
