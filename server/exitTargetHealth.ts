@@ -321,11 +321,16 @@ export function tunnelBalanceDetect(tunnel: TunnelRow | null | undefined): Balan
   return normalizeBalanceDetect(tunnel?.balanceDetect ?? null, DEFAULT_BALANCE_DETECT);
 }
 
-/** 给 Agent 的快速探测规格（和线路组「下一跳」同一种）。 */
+/**
+ * 给 Agent 的快速探测规格（和线路组「下一跳」同一种）：出口机探规则目标。
+ * 节拍用 targetProbeSeconds（默认 10 秒），不用探出口机的 intervalSeconds：目标是别人的机器，高防目标会把每一两秒
+ * 就连一下的出口 IP 拉黑（2.3.541 用户反馈）。Agent 对 passive 规格最多认 300 秒（agent/route_hop_probe.go）。
+ */
 export function exitTargetProbeSpec(detect: BalanceDetect) {
+  const intervalMs = Math.max(1000, detect.targetProbeSeconds * 1000);
   return {
-    intervalMs: Math.max(1000, detect.intervalSeconds * 1000),
-    timeoutMs: Math.min(5000, Math.max(1500, detect.intervalSeconds * 1000)),
+    intervalMs,
+    timeoutMs: Math.min(5000, Math.max(1500, intervalMs)),
     failThreshold: detect.failThreshold,
     recoverOks: detect.recoverThreshold,
     // Agent 2.2.260 起：有到这个目标的真实连接就读内核记的 RTT，不再新建连接去探（老 Agent 不认这个字段）

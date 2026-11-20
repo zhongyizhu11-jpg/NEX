@@ -79,6 +79,7 @@ const baseSchema = z.object({
   /** 出口组的「检测与切换」（shared/loadBalance.ts），不传 = 不动原来的。 */
   balanceDetect: z.object({
     intervalSeconds: z.number().int().min(1).max(60).optional(),
+    targetProbeSeconds: z.number().int().min(2).max(300).optional(),
     failThreshold: z.number().int().min(1).max(10).optional(),
     recoverThreshold: z.number().int().min(1).max(10).optional(),
     latencyMarginMs: z.number().int().min(10).max(2000).optional(),

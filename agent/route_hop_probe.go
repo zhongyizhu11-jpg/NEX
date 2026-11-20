@@ -279,12 +279,26 @@ func (r *routeHopProbeRunner) usePassive(state *routeHopProbeState) bool {
 	return true
 }
 
+const (
+	routeHopHopProbeMaxIntervalMs     = 30000
+	routeHopPassiveProbeMaxIntervalMs = 300000
+)
+
+func routeHopProbeMaxIntervalMs(spec routeHopProbeSpec) int {
+	if spec.Passive {
+		return routeHopPassiveProbeMaxIntervalMs
+	}
+	return routeHopHopProbeMaxIntervalMs
+}
+
 func normalizeRouteHopProbeSpec(spec routeHopProbeSpec) routeHopProbeSpec {
 	if spec.IntervalMs < 500 {
 		spec.IntervalMs = 1500
 	}
-	if spec.IntervalMs > 30000 {
-		spec.IntervalMs = 30000
+	// 线路组的下一跳（自己的中转机）最多 30 秒一次；负载均衡「出口到规则目标」（Passive）最多 300 秒一次：
+	// 面板按「多久探一次目标」（targetProbeSeconds，2–300 秒）下发，高防目标会拉黑连得太勤的出口 IP（2.3.541）。
+	if maxMs := routeHopProbeMaxIntervalMs(spec); spec.IntervalMs > maxMs {
+		spec.IntervalMs = maxMs
 	}
 	if spec.TimeoutMs <= 0 {
 		spec.TimeoutMs = 2000
@@ -406,10 +420,15 @@ func routeHopProbeInterval(state *routeHopProbeState) time.Duration {
 	if !state.spec.Passive || !state.down || state.oks > 0 {
 		return interval
 	}
+	// 退避的上限：60 秒，节拍本身就比 60 秒长时（「多久探一次目标」设到 60–300 秒）就是节拍 —— 判坏以后不能反而探得更勤
+	backoffMax := routeHopProbeBackoffMax
+	if interval > backoffMax {
+		backoffMax = interval
+	}
 	if state.rejectStreak == 0 {
 		// 超时 / 不可达：最多两倍节拍
-		if interval*2 > routeHopProbeBackoffMax {
-			return routeHopProbeBackoffMax
+		if interval*2 > backoffMax {
+			return backoffMax
 		}
 		return interval * 2
 	}
@@ -417,11 +436,11 @@ func routeHopProbeInterval(state *routeHopProbeState) time.Duration {
 	if extra < 0 {
 		extra = 0
 	}
-	for step := 0; step <= extra && interval < routeHopProbeBackoffMax; step++ {
+	for step := 0; step <= extra && interval < backoffMax; step++ {
 		interval *= 2
 	}
-	if interval > routeHopProbeBackoffMax {
-		interval = routeHopProbeBackoffMax
+	if interval > backoffMax {
+		interval = backoffMax
 	}
 	return interval
 }
