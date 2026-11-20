@@ -109,6 +109,8 @@ type failoverProxy struct {
 	// 上一次拿真实连接试探它的时刻。
 	exitMachineUp []bool
 	exitCanaryAt  []time.Time
+	// 面板标「连不上目标」的出口被真实连接试探放回了：记下当时那份提示的 DownAt，同一份再发来不按下去（failover_hints.go）。
+	relayDownOverride []int64
 	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
 	// 访客是谁」，建会话时拿它当哈希键（route_group_udp_visitor.go）。
 	udpVisitors map[netip.AddrPort]failoverUDPVisitor
@@ -588,6 +590,9 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	}
 	if len(p.exitCanaryAt) != n {
 		p.exitCanaryAt = make([]time.Time, n)
+	}
+	if len(p.relayDownOverride) != n {
+		p.relayDownOverride = make([]int64, n)
 	}
 
 	p.udpSide.ensure(n)
