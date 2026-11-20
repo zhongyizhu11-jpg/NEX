@@ -139,10 +139,10 @@ export function SecondsPicker({ value, onChange, choices, min, max, label }: {
       <SegmentedControl
         ariaLabel={label}
         value={value}
-        options={choices.map((seconds) => ({ value: seconds, label: `${seconds} 秒` }))}
+        options={choices.map((seconds) => ({ value: seconds, label: `${seconds}秒` }))}
         onChange={onChange}
         listClassName="grid grid-flow-col auto-cols-fr gap-1"
-        optionClassName="whitespace-nowrap px-1"
+        optionClassName="whitespace-nowrap px-0.5"
       />
       <label className="flex items-center gap-2 text-meta text-muted-foreground">
         <span className="shrink-0">自定义</span>
