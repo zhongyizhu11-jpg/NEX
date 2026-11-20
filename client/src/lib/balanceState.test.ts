@@ -86,3 +86,23 @@ test("GOST 入口报的两段：整链 = 到出口 + 到目标；到目标不知
   assert.equal(exitRowView(summary({ exitMs: 5, targetMs: null, targetLatencyUnknown: 2, jitterMs: 0 }), base).detail, "到出口 5 ms · 到目标延迟未知");
   assert.equal(exitRowView(summary({ exitMs: 3, minMs: 10, maxMs: 212, targetMs: 50, jitterMs: 0 }), base).detail, "整链 10–212 ms（到出口 3 ms）");
 });
+
+// 延迟口径：两段先用面板探的；面板没测到的那段是入口自己报的，写「Agent 自测」；FXP 太旧只报了到目标的写明。
+test("弹窗每台出口：面板两段写成整链；入口报的那段标「Agent 自测」；FXP 太旧的写明没报到出口那段", () => {
+  assert.equal(
+    exitRowView(summary({ exitMs: 6, targetMs: 3, exitMsSource: "panel", targetMsSource: "panel", minMs: 10, maxMs: 30, jitterMs: 0 }), base).detail,
+    "整链 9 ms（到出口 6 ms + 到目标 3 ms）",
+  );
+  assert.equal(
+    exitRowView(summary({ exitMs: 12, targetMs: 3, exitMsSource: "agent", targetMsSource: "panel", jitterMs: 0 }), base).detail,
+    "整链 15 ms（到出口 12 ms + 到目标 3 ms；到出口是 Agent 自测）",
+  );
+  assert.equal(
+    exitRowView(summary({ exitMs: null, targetMs: null, exitMsSource: null, targetMsSource: null, jitterMs: 0 }), base).detail,
+    "到目标 12 ms（出口机 FXP 太旧，没报到出口那段）",
+  );
+  assert.equal(
+    exitRowView(summary({ exitMs: null, targetMs: 4, exitMsSource: null, targetMsSource: "panel", jitterMs: 0 }), base).detail,
+    "到目标 4 ms（到出口那段还没测到）",
+  );
+});

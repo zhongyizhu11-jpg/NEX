@@ -1,3 +1,4 @@
+import { recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, parseSelfTestMeta } from "./agentRouteUtils";
@@ -210,6 +211,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         entryExitTestId: Number(meta.entryExitTestId || 0),
         waitMs: VIA_EXIT_SEGMENT_WAIT_MS,
         loadLive: (ruleId) => liveBalanceForRule(ruleId),
+        loadPanel: () => tunnelExitLatency(Number(meta.tunnelId || 0), Number(meta.exitHostId)),
         loadTest: (id) => db.getForwardTestById(id),
       })
       : null;
@@ -288,6 +290,17 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
           String(((id > 0 ? await db.getHostById(id).catch(() => null) : null) as { name?: unknown } | null | undefined)?.name || (id > 0 ? `主机 #${id}` : "入口"))
         )))
         : null;
+      /*
+        诊断测到的两段也是面板探的：记进 ruleLatencyView，规则卡马上就是同一个整链（负载均衡链路上非主出口那台，
+        出口到目标平时没有定时探测，只有诊断测过它）。入口报的握手延迟（source live）不记。
+      */
+      const diagnosedExitHostId = Number(meta.exitHostId || 0) || Number(tunnel?.exitHostId || 0);
+      if (cleanLatency != null || !success) {
+        recordRuleTargetLeg({ ruleId: t.ruleId, tunnelId: meta.tunnelId, exitHostId: diagnosedExitHostId, primaryHostId: tunnel?.exitHostId, ms: success ? cleanLatency : null });
+      }
+      if (viaExit && viaSegment && viaSegment.source === "tcping") {
+        recordTunnelExitLeg(meta.tunnelId, diagnosedExitHostId, viaSegment.isTimeout ? null : viaSegment.latencyMs, viaSegment.recordedAt);
+      }
       const combinedLatency = combineTunnelRuleLatencySample({
         targetLatencyMs: cleanLatency,
         targetIsTimeout: !success,

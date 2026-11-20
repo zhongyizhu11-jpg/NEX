@@ -3,7 +3,7 @@ import test from "node:test";
 import { replaceEqualDeep } from "@tanstack/react-query";
 
 import { reuseStableRows } from "@/lib/stableRows";
-import { buildRuleCardDerivedProps, describeRuleLiveLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "./ruleCardProps";
+import { buildRuleCardDerivedProps, describeRuleChainLatency, describeRuleLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "./ruleCardProps";
 
 /*
   规则卡是 React.memo 的（Rules.tsx 的 RuleCard）：props 比得上就不重画。这里把规则页一轮轮询
@@ -126,15 +126,29 @@ test("比较函数：走势线按内容比，线路组、探测按字段比，�
   assert.equal(ruleCardPropsEqual(base, { ...base, rule: { ...base.rule } }), false);
 });
 
-// 负载均衡链路的卡上延迟是入口实时探测的（问题 B）：悬停写两段各多少、分到多少；到目标那段没测到写「≥」。
-test("负载均衡链路的卡上延迟：入口实时探测的两段，到目标不知道时写「≥」", () => {
-  assert.deepEqual(describeRuleLiveLatency({ exitName: "hep ix", exitMs: 2.2, targetMs: 4, targetUnknown: false, share: 0.6 }), {
-    title: "入口实时探测：到 hep ix 2 ms + hep ix 到目标 4 ms（分到 60%）",
-    atLeast: false,
-  });
-  const unknown = describeRuleLiveLatency({ exitName: "hep ix", exitMs: 5, targetMs: null, targetUnknown: true, share: null });
-  assert.equal(unknown?.atLeast, true);
-  assert.match(String(unknown?.title), /^入口实时探测：到 hep ix 5 ms；hep ix 到目标那一段还没测到/);
-  assert.deepEqual(describeRuleLiveLatency({ exitName: "hep ix", exitMs: null, share: 0.5 }), { title: "入口实时探测：经 hep ix（分到 50%）", atLeast: false }, "FXP 不分两段");
-  assert.equal(describeRuleLiveLatency(null), null);
+// 规则卡的数一律是「整链」（2026-11 用户：「转发延迟显示都不统一」）：悬停写明是哪几段、谁测的、几点测的。
+test("规则卡延迟的悬停：面板两段相加 / 最近一次诊断 / 定时探测 / 只有出口到目标那段写「≥」", () => {
+  const at = new Date(2026, 10, 20, 18, 48);
+  const now = new Date(2026, 10, 20, 19, 0).getTime();
+  assert.equal(
+    describeRuleChainLatency({ exitName: "hep ix", exitMs: 6, targetMs: 3, share: 1 }, 9, "18:48"),
+    "整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48）",
+  );
+  assert.deepEqual(
+    describeRuleLatency({ latestLatencyAt: at, latestLatencyMs: 9, latestLatencyChain: { exitName: "hep ix", exitMs: 6, targetMs: 3, share: null }, latestLatencySource: "panel" }, 9, now),
+    { title: "整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48）", atLeast: false },
+  );
+  assert.deepEqual(
+    describeRuleLatency({ latestLatencyAt: at, latestLatencyMs: 8, latestLatencySource: "diagnosis" }, 8, now),
+    { title: "整链 8 ms（最近一次诊断 18:48）", atLeast: false },
+  );
+  assert.deepEqual(describeRuleLatency({ latestLatencyAt: at, latestLatencyMs: 9, latestLatencySource: "probe" }, 9, now).title, "整链 9 ms（定时探测 18:48）");
+  // 不是今天测的：带上日期
+  assert.equal(describeRuleLatency({ latestLatencyAt: new Date(2026, 10, 19, 7, 5), latestLatencySource: "diagnosis" }, 8, now).title, "整链 8 ms（最近一次诊断 11-19 07:05）");
+  const partial = describeRuleLatency({ latestLatencyAt: at, latestLatencySource: "exit-target" }, 4, now);
+  assert.equal(partial.atLeast, true);
+  assert.match(partial.title, /^整链 ≥ 4 ms：只有在用出口到目标那段/);
+  // 只有一段：不拼「整链 = …」
+  assert.equal(describeRuleChainLatency({ exitName: "hep ix", exitMs: 6, targetMs: null }), null);
+  assert.equal(describeRuleChainLatency(null), null);
 });

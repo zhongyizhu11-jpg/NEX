@@ -2186,6 +2186,7 @@ function withEmptyTrafficLatency(rows: TrafficSummaryRow[]) {
     latestLatencyMs: null as number | null,
     latestLatencyIsTimeout: false,
     latestLatencyAt: null as Date | null,
+    latestLatencySource: null as RuleLatencySource | null,
   }));
 }
 
@@ -2379,7 +2380,7 @@ export async function getTrafficCounterSummaryByRule(opts: {
     ruleIds: latencyRuleIds,
     includeLatency: true,
   }).catch(() => [] as any[]);
-  const latestByRuleId = new Map<number, { latestLatencyMs: number | null; latestLatencyIsTimeout: boolean; latestLatencyAt: Date | string | null }>();
+  const latestByRuleId = new Map<number, { latestLatencyMs: number | null; latestLatencyIsTimeout: boolean; latestLatencyAt: Date | string | null; latestLatencySource: RuleLatencySource | null }>();
   for (const row of latencyRows as any[]) {
     const ruleId = Number(row.ruleId || 0);
     if (ruleId <= 0) continue;
@@ -2391,6 +2392,7 @@ export async function getTrafficCounterSummaryByRule(opts: {
         latestLatencyMs: row.latestLatencyMs === null || row.latestLatencyMs === undefined ? null : Number(row.latestLatencyMs),
         latestLatencyIsTimeout: !!row.latestLatencyIsTimeout,
         latestLatencyAt: row.latestLatencyAt || null,
+        latestLatencySource: row.latestLatencySource ?? null,
       });
     }
   }
@@ -2680,6 +2682,47 @@ export async function getTrafficSummaryByRule(opts: {
       latestByRule.set(ruleId, candidate);
     }
   }
+  /*
+    既没有定时探测、也没算上链路诊断的规则（单出口链路上没开定时探测的、nftables 转发组……）：卡上原来什么都不写，
+    可诊断明明测过（用户 2026-11：链路 9 上的规则诊断 8 ms、卡上空着）。退回最近一次成功的诊断合计（整链），
+    时间用诊断的 updatedAt —— 过了期照旧灰掉。顺序：入口实时（withRuleExitTargets 再补）→ 定时探测 → 最近一次诊断。
+  */
+  const diagnosisFallbackIds = ruleIds.filter((ruleId) => !latestByRule.has(ruleId));
+  type DiagnosisRow = { ruleId: unknown; latencyMs: unknown; updatedAt: unknown; createdAt: unknown };
+  const latestDiagnosisRows: DiagnosisRow[] = diagnosisFallbackIds.length > 0
+    ? await queryRaw<DiagnosisRow>(
+      `SELECT ft.${q("ruleId")} AS ${q("ruleId")},
+              ft.${q("latencyMs")} AS ${q("latencyMs")},
+              ft.${q("updatedAt")} AS ${q("updatedAt")},
+              ft.${q("createdAt")} AS ${q("createdAt")}
+         FROM ${q("forward_tests")} ft
+         INNER JOIN (
+           SELECT ${q("ruleId")}, MAX(${q("updatedAt")}) AS ${q("updatedAt")}
+             FROM ${q("forward_tests")}
+            WHERE ${q("ruleId")} IN (${diagnosisFallbackIds.map(() => "?").join(",")})
+              AND ${q("status")} = 'success'
+              AND ${q("latencyMs")} IS NOT NULL
+            GROUP BY ${q("ruleId")}
+         ) latest ON latest.${q("ruleId")} = ft.${q("ruleId")} AND latest.${q("updatedAt")} = ft.${q("updatedAt")}
+        WHERE ft.${q("status")} = 'success'
+          AND ft.${q("latencyMs")} IS NOT NULL
+        ORDER BY ft.${q("updatedAt")} DESC, ft.${q("createdAt")} DESC`,
+      diagnosisFallbackIds,
+    ).catch(() => [] as DiagnosisRow[])
+    : [];
+  for (const row of latestDiagnosisRows) {
+    const ruleId = Number(row.ruleId);
+    if (latestByRule.has(ruleId)) continue;
+    const latencyMs = Number(row.latencyMs);
+    if (!Number.isFinite(latencyMs) || latencyMs < 0) continue;
+    latestByRule.set(ruleId, {
+      ruleId,
+      latencyMs,
+      isTimeout: false,
+      recordedAt: rowDate(row.updatedAt || row.createdAt),
+      source: "forward_test",
+    });
+  }
   return result.map((item) => {
     const latest = latestByRule.get(item.ruleId);
     return {
@@ -2687,9 +2730,14 @@ export async function getTrafficSummaryByRule(opts: {
       latestLatencyMs: latest && latest.isTimeout ? null : latest?.latencyMs ?? null,
       latestLatencyIsTimeout: !!latest?.isTimeout,
       latestLatencyAt: latest?.recordedAt ?? null,
+      // 卡上悬停写明这个数是怎么来的：probe 定时探测、diagnosis 最近一次诊断（入口实时的 withRuleExitTargets 再改成 live）
+      latestLatencySource: latest ? (latest.source === "forward_test" ? "diagnosis" : "probe") as RuleLatencySource : null,
     };
   });
 }
+
+/** live 入口实时（整链）、probe 定时探测、diagnosis 最近一次诊断合计（整链）、exit-target 在用出口探目标（只有后半段） */
+export type RuleLatencySource = "live" | "probe" | "diagnosis" | "exit-target";
 
 /** Aggregate traffic series for one rule by time bucket. */
 export async function getTrafficSeriesByRule(
