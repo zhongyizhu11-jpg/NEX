@@ -71,7 +71,7 @@ func (p *failoverProxy) peakLatencyLocked(index int, now time.Time) float64 {
 	if index < 0 || index >= len(p.stats) || index >= len(p.spec.Targets) || p.stats[index] == nil {
 		return 0
 	}
-	extra := float64(p.spec.Targets[index].ExtraLatencyMs)
+	extra := float64(p.extraLatencyLocked(index))
 	stats := p.stats[index]
 	probes := stats.samples
 	if len(probes) > routePeakSamples {
@@ -99,6 +99,30 @@ func (p *failoverProxy) peakLatencyLocked(index int, now time.Time) float64 {
 		dials = dials[1:]
 	}
 	return peak.Value(now, 0)
+}
+
+/*
+extraLatencyLocked：评分时这条路径出口之后那一段按多少毫秒算（面板给的 ExtraLatencyMs）。
+
+面板说这条不知道（ExtraLatencyUnknown：同一条规则别的出口报了到目标的延迟，只有它没报）时，按这条规则里已知的
+最大值算 —— 悲观。按 0 算的话它的整链只剩入口到出口那一段，自动、延迟优先偏偏挑中我们知道得最少的那台。
+一台都没报时面板不带这个标记，大家都是 0，和以前一样。
+*/
+func (p *failoverProxy) extraLatencyLocked(index int) int {
+	if index < 0 || index >= len(p.spec.Targets) {
+		return 0
+	}
+	target := p.spec.Targets[index]
+	if !target.ExtraLatencyUnknown {
+		return target.ExtraLatencyMs
+	}
+	worst := 0
+	for _, other := range p.spec.Targets {
+		if !other.ExtraLatencyUnknown && other.ExtraLatencyMs > worst {
+			worst = other.ExtraLatencyMs
+		}
+	}
+	return worst
 }
 
 func maxFloat(a, b float64) float64 {
@@ -174,7 +198,7 @@ const (
 /*
 qualityLocked：这条路径有多好（lbcore.Quality）。peak 为 true 时延迟取整链的 peak EWMA 读数（自动），
 否则取指数平均（延迟优先要按毫秒门槛比）。两种都是本机探出了延迟才加面板给的下游延迟 ExtraLatencyMs
-（和整链评分一个口径：没探出就是不知道，不能靠下游那几段凑一个数）。
+（不知道时按 extraLatencyLocked 的悲观值；和整链评分一个口径：没探出就是不知道，不能靠下游那几段凑一个数）。
 */
 func (p *failoverProxy) qualityLocked(index int, now time.Time, peak bool) lbcore.Quality {
 	quality := lbcore.Quality{}
@@ -187,7 +211,7 @@ func (p *failoverProxy) qualityLocked(index int, now time.Time, peak bool) lbcor
 	}
 	if quality.Latency <= 0 {
 		if plain := p.plainLatencyLocked(index); plain > 0 {
-			quality.Latency = plain + float64(target.ExtraLatencyMs)
+			quality.Latency = plain + float64(p.extraLatencyLocked(index))
 		}
 	}
 	if index < len(p.stats) && p.stats[index] != nil {
