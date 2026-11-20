@@ -368,6 +368,9 @@ gateExitThroughLocked 一轮探测之后：经出口复核判坏过的出口（e
 */
 func (p *failoverProxy) gateExitThroughLocked(results []bool) {
 	for i := range results {
+		if i < len(p.exitMachineUp) {
+			p.exitMachineUp[i] = results[i]
+		}
 		if i >= len(p.exitThroughFailed) || !p.exitThroughFailed[i] {
 			continue
 		}
@@ -382,6 +385,58 @@ func (p *failoverProxy) gateExitThroughLocked(results []bool) {
 		}
 		results[i] = p.exitThroughOKs[i] > 0
 	}
+}
+
+/*
+真实连接试探恢复（2.2.265 起，用户实测：三台出口机都正常、高防目标把其中一台出口「连上不说话」的连接 1 秒就关，
+这台被经出口复核判成「到目标不行」后 11 分钟没放回）。
+
+经出口的恢复探测是一条不说话的连接（上面的 recheckExitThrough），目标要是对这台出口的来源 IP 关得特别快（高防按
+IP 限制、或者就是按 IP 区别对待），它永远「探不通」—— 可真实连接是说话的，照样走得通。所以判坏过（exitThroughFailed）、
+出口机本身探得通（exitMachineUp）的出口，每隔 exitCanaryGap 让**一条真实 TCP 连接**先试它（pickReserved 里，只在新连接
+的第一次挑）：
+  - 上游回了东西（markEarlyReply → exitCanaryRepliedLocked）：走得通，当场放回，不等恢复门槛 —— 这是比探测硬的证据；
+  - 一个字节没回就被关：保护期照常把这条连接换到别的出口重发（failover_early_close.go），客户端无感，这台继续判坏，
+    下一次到点再试。出口到目标真不通时，每 exitCanaryGap 只有一条连接多付一次拨号的时间（被拒 1 毫秒、黑洞 3 秒）。
+
+不说话的恢复探测照旧跑着（没有 TCP 流量、只转 UDP 的规则靠它）。手动指定了别的出口时不试（只走指定的那台）。
+*/
+const exitCanaryGap = exitConfirmWindow
+
+// exitCanaryIndexLocked 此刻该拿这条新连接试哪台判坏的出口；没有返回 -1。调用方持有 p.mu。
+func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
+	if !p.exitGroupLocked() || p.done == nil || p.retired() {
+		return -1
+	}
+	p.ensureHealthStateLocked()
+	if pinned := p.pinnedIndexAt(now); pinned >= 0 && p.usableLocked(pinned, false) {
+		return -1
+	}
+	gap := exitCanaryGap
+	if interval := time.Duration(p.spec.ProbeIntervalSeconds) * time.Second; interval > gap {
+		gap = interval
+	}
+	for i := range p.spec.Targets {
+		if !p.exitThroughFailed[i] || p.targetHealth[i] || !p.exitMachineUp[i] || p.relayDown[i] {
+			continue
+		}
+		if !p.exitCanaryAt[i].IsZero() && now.Sub(p.exitCanaryAt[i]) < gap {
+			continue
+		}
+		p.exitCanaryAt[i] = now
+		return i
+	}
+	return -1
+}
+
+// exitCanaryRepliedLocked 经出口判坏的出口上一条真实连接收到了上游的回复：放回。调用方持有 p.mu。
+func (p *failoverProxy) exitCanaryRepliedLocked(index int) {
+	if !p.exitGroupLocked() || index >= len(p.exitThroughFailed) || !p.exitThroughFailed[index] || p.targetHealth[index] {
+		return
+	}
+	p.exitThroughGen[index]++ // 正在跑的不说话探测作废
+	p.readmitForLocked(index, time.Now(), "a real connection got a reply through the exit")
+	p.updateFallbackActiveLocked("canary reply")
 }
 
 // exitThroughRecoveredLocked 这台出口经出口那一关过了没有（没经出口判坏过的不用过）。调用方持有 p.mu。

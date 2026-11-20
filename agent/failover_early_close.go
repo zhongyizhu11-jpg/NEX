@@ -384,7 +384,8 @@ func failoverVisitorKnown(visitor string) bool {
 	return ip != nil && !ip.IsLoopback() && !ip.IsUnspecified()
 }
 
-// markEarlyReply 上游正常回了：「回之前就关」的计数清零。
+// markEarlyReply 上游正常回了：「回之前就关」的计数清零。出口组里经出口判坏过的出口（真实连接试探它，见
+// exitCanaryIndexLocked）回了东西就是走得通：当场放回。
 func (p *failoverProxy) markEarlyReply(index int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -392,4 +393,5 @@ func (p *failoverProxy) markEarlyReply(index int) {
 		return
 	}
 	p.stats[index].earlyClose = failoverEarlyCloseState{}
+	p.exitCanaryRepliedLocked(index)
 }

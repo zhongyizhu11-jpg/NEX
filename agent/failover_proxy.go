@@ -105,6 +105,10 @@ type failoverProxy struct {
 	exitConfirming       []bool
 	exitSilentCloseUntil time.Time
 	exitOthersOpenAt     time.Time
+	// 经出口判坏的出口靠真实连接试探恢复（failover_exit_group.go 的 exitCanaryIndexLocked）：上一轮直接探出口机通不通、
+	// 上一次拿真实连接试探它的时刻。
+	exitMachineUp []bool
+	exitCanaryAt  []time.Time
 	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
 	// 访客是谁」，建会话时拿它当哈希键（route_group_udp_visitor.go）。
 	udpVisitors map[netip.AddrPort]failoverUDPVisitor
@@ -578,6 +582,12 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	}
 	if len(p.exitThroughGen) != n {
 		p.exitThroughGen = make([]uint64, n)
+	}
+	if len(p.exitMachineUp) != n {
+		p.exitMachineUp = make([]bool, n)
+	}
+	if len(p.exitCanaryAt) != n {
+		p.exitCanaryAt = make([]time.Time, n)
 	}
 
 	p.udpSide.ensure(n)

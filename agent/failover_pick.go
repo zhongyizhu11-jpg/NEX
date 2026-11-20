@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"time"
 
 	"github.com/zhongyizhu11-jpg/NEX/lbcore"
 )
@@ -76,6 +77,13 @@ func (p *failoverProxy) pickReserved(hashKey string, exclude map[int]bool, udp b
 	// 挑和记在同一把锁里：分两次拿锁的话，同时到的另一条连接可以插在中间，看不见这一笔在途。
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// 出口组：经出口判坏过的出口到点了，这条真实 TCP 连接先试它（failover_exit_group.go 的 exitCanaryIndexLocked）。
+	// 只在新连接的第一次挑（exclude 空）；换路重拨不试。
+	if !udp && len(exclude) == 0 {
+		if canary := p.exitCanaryIndexLocked(time.Now()); canary >= 0 {
+			return p.spec.Targets[canary], canary, p.reserveLocked(canary)
+		}
+	}
 	target, index := p.pickLocked(hashKey, exclude, udp)
 	if index < 0 {
 		return target, index, failoverReservation{}

@@ -218,6 +218,11 @@ readmitLocked 把判坏的路径放回（TCP 那一侧 / 不分侧的主健康�
 经出口探通够次数（recheckExitThrough）。重新选路由调用方做。调用方持有 p.mu、下标有效。
 */
 func (p *failoverProxy) readmitLocked(i int, now time.Time) {
+	p.readmitForLocked(i, now, "health check")
+}
+
+// readmitForLocked：readmitLocked 带原因（日志和事件里写的那个）。
+func (p *failoverProxy) readmitForLocked(i int, now time.Time, reason string) {
 	target := p.spec.Targets[i]
 	p.targetHealth[i] = true
 	p.recoveredSince[i] = time.Time{}
@@ -229,8 +234,8 @@ func (p *failoverProxy) readmitLocked(i int, now time.Time) {
 	}
 	// 恢复了：拨号那本账也从头来，不然恢复前攒的失败会让它再拨坏一次就又被判坏。
 	p.statsLocked(i).dialFailures = 0
-	logf("failover target recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
-	p.recordTargetEventLocked(i, "recovered", "health check")
+	logf("failover target recovered rule=%d source=%d index=%d target=%s:%d reason=%s", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort, reason)
+	p.recordTargetEventLocked(i, "recovered", reason)
 }
 
 // probeTimeoutLocked 一次直接探测的超时：规格给了 ProbeTimeoutMs 就用它。调用方持有 p.mu（读锁就行）。

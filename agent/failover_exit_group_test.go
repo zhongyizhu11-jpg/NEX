@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -937,5 +938,97 @@ func TestExitGroupRelayProbeCatchesFrozenExit(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("一轮探测要在两个超时以内结束：%s", elapsed)
+	}
+}
+
+/*
+真实连接试探恢复：经出口判坏（exitThroughFailed）、出口机本身探得通的出口，每隔 exitCanaryGap 让一条真实 TCP 连接
+先试它；上游回了东西就当场放回，一个字节没回就被关则继续判坏。实验室复现（高防目标把这台出口「连上不说话」的连接
+1 秒就关）：不说话的恢复探测永远探不通，以前 11 分钟都放不回来。
+*/
+func TestExitGroupCanaryRealConnectionReadmitsAThroughFailedExit(t *testing.T) {
+	spec := exitGroupSpec("round_robin", 3)
+	spec.ProbeIntervalSeconds = 0 // 试探间隔就是 exitCanaryGap
+	proxy := routeTestProxy(spec)
+	proxy.done = make(chan struct{})
+	drainFailoverEvents()
+	proxy.mu.Lock()
+	proxy.gateExitThroughLocked([]bool{true, true, true}) // 这一轮直接探：三台出口机都通
+	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	proxy.mu.Unlock()
+
+	_, first, reservation := proxy.pickReserved("", nil, false)
+	proxy.releaseReservation(reservation)
+	if first != 1 {
+		t.Fatalf("新连接的第一次挑应当先试判坏的那台（1），挑到了 %d", first)
+	}
+	// 还没到下一次试探的时刻：照常在能用的里挑；换路重拨（exclude 非空）也不试
+	for i := 0; i < 6; i++ {
+		_, index, reservation := proxy.pickReserved("", nil, false)
+		proxy.releaseReservation(reservation)
+		if index == 1 {
+			t.Fatalf("exitCanaryGap 之内不该再拿连接去试它（第 %d 次挑到了 1）", i)
+		}
+	}
+	if _, index, reservation := proxy.pickReserved("", map[int]bool{0: true}, false); index == 1 {
+		proxy.releaseReservation(reservation)
+		t.Fatal("换路重拨不该拿去试判坏的出口")
+	} else {
+		proxy.releaseReservation(reservation)
+	}
+
+	// 试探的那条被关：继续判坏
+	proxy.markEarlyClose(1, "203.0.113.9")
+	proxy.mu.RLock()
+	down := !proxy.targetHealth[1] && proxy.exitThroughFailed[1]
+	proxy.mu.RUnlock()
+	if !down {
+		t.Fatal("试探的连接被关了，这台应当还是判坏的")
+	}
+
+	// 下一次试探回了东西：当场放回，不等恢复门槛
+	proxy.mu.Lock()
+	proxy.exitCanaryAt[1] = time.Now().Add(-2 * exitCanaryGap)
+	proxy.mu.Unlock()
+	if _, index, reservation := proxy.pickReserved("", nil, false); index != 1 {
+		proxy.releaseReservation(reservation)
+		t.Fatalf("到点了应当再试它，挑到了 %d", index)
+	} else {
+		proxy.releaseReservation(reservation)
+	}
+	proxy.markEarlyReply(1)
+	proxy.mu.RLock()
+	healthy, through := proxy.targetHealth[1], proxy.exitThroughFailed[1]
+	proxy.mu.RUnlock()
+	events := routeEventsOfKind(drainFailoverEvents(), "recovered")
+	if !healthy || through {
+		t.Fatalf("真实连接回了东西就该放回：healthy=%v through=%v", healthy, through)
+	}
+	if len(events) == 0 || !strings.Contains(events[len(events)-1].Reason, "real connection") {
+		t.Fatalf("放回的事件应当写明是真实连接回了东西：%+v", events)
+	}
+
+	// 出口机本身探不通（直接探失败）的不试；手动指定了别的出口时也不试
+	proxy.mu.Lock()
+	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	proxy.exitCanaryAt[1] = time.Time{}
+	proxy.gateExitThroughLocked([]bool{true, false, true})
+	proxy.mu.Unlock()
+	if _, index, reservation := proxy.pickReserved("", nil, false); index == 1 {
+		proxy.releaseReservation(reservation)
+		t.Fatal("出口机本身探不通时不该拿真实连接去试")
+	} else {
+		proxy.releaseReservation(reservation)
+	}
+	proxy.mu.Lock()
+	proxy.gateExitThroughLocked([]bool{true, true, true})
+	pinned := 0
+	proxy.spec.PinnedIndex = &pinned
+	proxy.mu.Unlock()
+	if _, index, reservation := proxy.pickReserved("", nil, false); index != 0 {
+		proxy.releaseReservation(reservation)
+		t.Fatalf("手动指定了 0 时只走它，挑到了 %d", index)
+	} else {
+		proxy.releaseReservation(reservation)
 	}
 }
