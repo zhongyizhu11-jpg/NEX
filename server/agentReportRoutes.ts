@@ -1,3 +1,4 @@
+import { recordRuleTargetLeg, recordTunnelExitLeg } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { reconcileRuleLimits, recordRuleQuotaTraffic, ruleLimitRootId } from "./ruleLimits";
@@ -42,7 +43,7 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopFastReports, ingestRouteHopProbeReports } from "./routeGroups";
-import { ingestExitTargetReports, noteLiveBaselines } from "./exitTargetHealth";
+import { ingestExitTargetReports, noteLiveBaselines, tunnelBalancesExits } from "./exitTargetHealth";
 import { ingestBalanceLiveReport } from "./balanceLive";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { recordRuleProbeFailure } from "./ruleProbeFailure";
@@ -1610,6 +1611,11 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const relayFailover = isTunnelRelayFailover(tunnel, hops);
       const relayCandidateCount = relayFailover ? tunnelRelayCandidates(hops).length : 0;
       const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>();
+      // 链路卡「到出口」、规则卡整链的第一段（server/ruleLatencyView.ts）：只有一台出口时总数就是入口到它
+      const noteSingleExitLeg = (latencyMs: number | null, isTimeout: boolean) => {
+        if (tunnelBalancesExits(tunnel)) return;
+        recordTunnelExitLeg(tunnelId, tunnel.exitHostId, isTimeout ? null : latencyMs);
+      };
       for (const report of reports) {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
         collectCounter("tunnel", tunnelId, report);
@@ -1678,6 +1684,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             seriesLabel: aggregate.partial ? "可用入口最大延迟" : "多入口最大延迟",
             recordedAt,
           }, { preserveMessage: true });
+          noteSingleExitLeg(aggregate.success ? aggregate.latencyMs : null, !aggregate.success);
           if (aggregate.success && !tunnel.isRunning) {
             await db.updateTunnelRunningStatus(tunnelId, true);
             tunnel.isRunning = true;
@@ -1749,6 +1756,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             seriesKey: "total",
             seriesLabel: "总延迟",
           }, { preserveMessage: true });
+          noteSingleExitLeg(aggregate.success ? aggregate.latencyMs : null, !aggregate.success);
           if (aggregate.success && !tunnel.isRunning) {
             await db.updateTunnelRunningStatus(tunnelId, true);
             tunnel.isRunning = true;
@@ -1764,6 +1772,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           seriesKey: "total",
           seriesLabel: "总延迟",
         }, { preserveMessage: true });
+        noteSingleExitLeg(latencyValue, isTimeout);
         if (!isTimeout && !tunnel.isRunning) {
           await db.updateTunnelRunningStatus(tunnelId, true);
           tunnel.isRunning = true;
@@ -1806,6 +1815,12 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const branches = Array.from(branchByKey.values());
       if (branches.length === 0) return;
       const recordedAt = new Date();
+      // 每台出口一条分支（primary / exit-N）：入口到这台出口机，链路卡「到出口」、规则卡整链、弹窗都用它
+      for (const branch of branches) {
+        if (branch.key !== "primary" && !/^exit-\d+$/.test(branch.key)) continue;
+        const exitHostId = tunnelProbeTargetHostId(tunnel, hops, exitNodes, {} as AgentTunnelTcpingResult, branch.key);
+        recordTunnelExitLeg(tunnelId, exitHostId, branch.isTimeout ? null : branch.latencyMs, recordedAt.getTime());
+      }
       await mapWithConcurrency(branches, 4, async (branch) => {
         await db.insertTunnelLatencyStat({
           tunnelId,
@@ -2027,6 +2042,14 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         report,
       })) return null;
       collectCounter("rule", ruleId, report);
+      // 出口机到目标那一段（规则卡整链的第二段，server/ruleLatencyView.ts）
+      recordRuleTargetLeg({
+        ruleId,
+        tunnelId,
+        exitHostId: host.id,
+        primaryHostId: tunnelContext.tunnel.exitHostId,
+        ms: report.isTimeout ? null : baseLatency,
+      });
       const latestTunnelLatency = report.isTimeout ? null : await getLatestTunnelLatency(tunnelId);
       const combined = combineTunnelRuleLatencySample({
         targetLatencyMs: baseLatency,

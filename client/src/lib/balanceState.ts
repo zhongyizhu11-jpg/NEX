@@ -65,9 +65,12 @@ export type ExitSummaryLike = {
   peerOutdated?: boolean;
   reason?: "target" | "exit" | null;
   share?: number | null;
-  /** 入口真实上报的两段：入口到这台出口、这台出口到目标（老 Agent / FXP 2.2.148 及更早没有） */
+  /** 两段：入口到这台出口、这台出口到目标（面板探的优先；没有时是入口自己报的，老 Agent / FXP 2.2.148 及更早没有） */
   exitMs?: number | null;
   targetMs?: number | null;
+  /** 那两段是谁测的：panel 面板探测（和诊断一个口径）、agent 入口自己报的（弹窗写「Agent 自测」）；新面板没有数时是 null */
+  exitMsSource?: "panel" | "agent" | null;
+  targetMsSource?: "panel" | "agent" | null;
   /** 几条规则里这台到目标的延迟不知道 */
   targetLatencyUnknown?: number;
 };
@@ -111,22 +114,29 @@ function recoveredAt(events: readonly SwitchEventLike[] | undefined, hostId: num
   return (last.from === "down" || last.from === "unstable") && (last.to === "active" || last.to === "standby") ? last.at : null;
 }
 
-function latencyText(summary: ExitSummaryLike) {
+function latencyText(summary: ExitSummaryLike, live = false) {
   const low = summary.minMs ?? null;
   const high = summary.maxMs ?? null;
   /*
-    GOST 入口分开报了两段：写清楚哪段多少。到目标那段不知道时直说（入口调度器这时按最慢的那台算它，
-    不会因为少了这一段就把它当最快的）。
+    两段：面板探的优先（链路定时探测的这台出口分支 + 出口机探目标，和规则卡、诊断一个口径）；面板没测到的那段是入口
+    自己报的，标「Agent 自测」（FXP 报的到出口是建隧道握手的时间，比 TCPing 大一截）。
   */
+  const tag = (source: ExitSummaryLike["exitMsSource"]) => (source === "agent" ? "（Agent 自测）" : "");
   if (summary.exitMs != null) {
-    if (summary.targetMs == null) return `到出口 ${ms(summary.exitMs)} · 到目标延迟未知`;
-    if (low != null && high != null && high - low >= 5) return `整链 ${Math.round(low)}–${ms(high)}（到出口 ${ms(summary.exitMs)}）`;
-    const unknown = (summary.targetLatencyUnknown || 0) > 0 ? "（有规则到目标延迟未知）" : "";
-    return `整链 ${ms(summary.exitMs + summary.targetMs)}（到出口 ${ms(summary.exitMs)} + 到目标 ${ms(summary.targetMs)}）${unknown}`;
+    const exitPart = `到出口 ${ms(summary.exitMs)}${tag(summary.exitMsSource)}`;
+    if (summary.targetMs == null) return `${exitPart} · 到目标延迟未知`;
+    // 几条规则的目标远近不同（入口报的整链各条规则不一样）：写成范围，不取平均。面板的两段已经是中位数了，不再写范围
+    if (summary.exitMsSource !== "panel" && low != null && high != null && high - low >= 5) return `整链 ${Math.round(low)}–${ms(high)}（${exitPart}）`;
+    const unknown = (summary.targetLatencyUnknown || 0) > 0 && summary.targetMsSource !== "panel" ? "（有规则到目标延迟未知）" : "";
+    return `整链 ${ms(summary.exitMs + summary.targetMs)}（${exitPart} + 到目标 ${ms(summary.targetMs)}${tag(summary.targetMsSource)}）${unknown}`;
   }
+  // 面板测到了到目标、入口到这台出口那段还没测到
+  if (summary.targetMs != null && summary.targetMsSource === "panel") return `到目标 ${ms(summary.targetMs)}（到出口那段还没测到）`;
+  // 入口实时上报、两段都没有：出口机的 FXP 太旧（2.2.148 及更早），只报了出口到目标的中位数
+  const legacy = live && summary.exitMsSource === null && summary.targetMsSource === null ? "（出口机 FXP 太旧，没报到出口那段）" : "";
   // 几条规则的目标远近不同：写成范围，不取平均
-  if (low != null && high != null && high - low >= 5) return `到目标 ${Math.round(low)}–${ms(high)}`;
-  return summary.medianMs != null ? `到目标 ${ms(summary.medianMs)}` : null;
+  if (low != null && high != null && high - low >= 5) return `到目标 ${Math.round(low)}–${ms(high)}${legacy}`;
+  return summary.medianMs != null ? `到目标 ${ms(summary.medianMs)}${legacy}` : null;
 }
 
 function udpNote(summary: ExitSummaryLike): { reason: string; hint: string | null } | null {
@@ -141,7 +151,7 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
   const hasData = !!summary && summary.rules > 0;
   const parts: string[] = [];
   if (hasData) {
-    const latency = latencyText(summary!);
+    const latency = latencyText(summary!, ctx.live);
     if (latency) parts.push(latency);
     if (summary!.jitterMs != null && summary!.jitterMs >= 1) parts.push(`抖动 ${ms(summary!.jitterMs)}`);
     if (summary!.share != null && summary!.activeRules > 0) parts.push(`分到 ${Math.round(summary!.share * 100)}%`);

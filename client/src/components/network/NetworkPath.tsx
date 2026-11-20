@@ -52,6 +52,10 @@ export type NetworkEdgeSpec = {
   via?: string;
   /** 这一段的延迟。数字本身是视觉元素，所以单独一档字号 */
   latencyMs?: number | null;
+  /** 有它时写成区间「5–7 ms」（负载均衡几台在用出口） */
+  latencyHighMs?: number | null;
+  /** 写在数字前面的一小段，说清这是哪一段的延迟（链路卡：「到出口」） */
+  latencyPrefix?: string;
   health?: NetworkHealth;
   /** 不传则由 health 决定；只有需要覆盖默认画法时才显式传 */
   lineStyle?: NetworkLineStyle;
@@ -142,7 +146,8 @@ export function NetworkEdge({
       {edge.via ? <span className="truncate text-meta text-muted-foreground">{edge.via}</span> : null}
       {typeof edge.latencyMs === "number" ? (
         <span className="text-meta font-medium tabular-nums text-foreground">
-          {edge.latencyMs}
+          {edge.latencyPrefix ? <span className="mr-1 font-normal text-muted-foreground">{edge.latencyPrefix}</span> : null}
+          {typeof edge.latencyHighMs === "number" && edge.latencyHighMs > edge.latencyMs ? `${edge.latencyMs}–${edge.latencyHighMs}` : edge.latencyMs}
           <span className="ml-1 font-normal text-muted-foreground">ms</span>
         </span>
       ) : null}

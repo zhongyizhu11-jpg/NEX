@@ -602,6 +602,12 @@ export function filterTunnelFieldsForUser(tunnel: any, scope: LinkAccessScope) {
       ...exit,
       host: allowedHost(scope, exit?.hostId) ? exit?.host ?? null : null,
     })),
+    // 到出口的实时延迟数字照给，看不到的出口机不报名字和主机号。
+    liveExitLatency: rest.liveExitLatency
+      ? (allowedHost(scope, rest.liveExitLatency.exitHostId)
+        ? rest.liveExitLatency
+        : { ...rest.liveExitLatency, exitHostId: 0, exitName: "" })
+      : rest.liveExitLatency ?? null,
     // 隧道不通的原因要让用的人知道，但看不到的主机不报名字和版本。
     fxpIssues: (Array.isArray(rest.fxpIssues) ? rest.fxpIssues : [])
       .map((issue: any) => redactTunnelFxpRuntimeIssue(issue, allowedHost(scope, issue?.hostId))),

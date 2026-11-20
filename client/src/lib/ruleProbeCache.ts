@@ -6,8 +6,10 @@ export type RuleProbeSummary = {
   latestLatencyAt?: Date | string | number | null;
   /** 最近一次不通的种类（shared/probeFailure）；只在 latestLatencyIsTimeout 时有。 */
   latestProbeFailure?: string | null;
-  /** 负载均衡链路：这个延迟是入口实时探测的哪台出口、两段各多少（server/exitTargetHealth.ts 的 RuleLiveLatency） */
-  latestLatencyLive?: { exitName?: string | null; exitMs?: number | null; targetMs?: number | null; targetUnknown?: boolean | null; share?: number | null } | null;
+  /** 这个延迟是面板探的两段相加：在用的哪台出口、两段各多少（server/exitTargetHealth.ts 的 RuleChainLatencyView） */
+  /** 这个延迟从哪来：live 入口实时、probe 定时探测、diagnosis 最近一次诊断 */
+  latestLatencySource?: string | null;
+  latestLatencyChain?: { exitName?: string | null; exitMs?: number | null; targetMs?: number | null; share?: number | null } | null;
 };
 
 type InvalidationBoundary = {

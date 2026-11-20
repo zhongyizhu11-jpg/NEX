@@ -52,11 +52,19 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
 
     const [row] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
     assert.deepEqual(row.exitTargetVia, ["hep ix", "Jinx(29.9y)"], "经后面写实际在用的出口");
+    // 面板还没测到在用那台的两段：不写主出口那条的「超时」（流量在别的出口上照走），也不拿入口报的数顶
     assert.equal(row.latestLatencyIsTimeout, false);
-    // 一个口径：扛流量最多的那台（hep ix 分到 60%）的整链延迟，不是在用的里面最低的那个
-    assert.equal(row.latestLatencyMs, 7);
-    assert.equal(row.latestLatencyLive?.exitName, "hep ix");
-    assert.equal(row.latestLatencyLive?.exitMs, null, "FXP 不分开报两段");
+    assert.equal(row.latestLatencyMs, null);
+    assert.equal(row.latestLatencyChain, null);
+    // 面板测到了扛流量最多那台（hep ix 分到 60%）的两段：整链 = 入口到它 + 它到目标，入口报的 7.2 不用
+    const view = await import("./ruleLatencyView");
+    view.resetRuleLatencyViewForTest();
+    view.recordTunnelExitLeg(1, 3, 6);
+    view.recordRuleTargetLeg({ ruleId: 501, tunnelId: 1, exitHostId: 3, primaryHostId: 2, ms: 3 });
+    const [measured] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+    assert.equal(measured.latestLatencyMs, 9);
+    assert.equal(measured.latestLatencySource, "panel");
+    assert.deepEqual(measured.latestLatencyChain, { exitHostId: 3, exitName: "hep ix", exitMs: 6, targetMs: 3, share: 0.6 });
     assert.equal(row.exitTargetTotal, 3);
     assert.equal(row.exitTargetOk, 2);
     assert.match(String(row.exitTargetNote), /jinx\(39\.9y\) 连不上目标，已切走/);
@@ -80,7 +88,7 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     const [plain] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 9, latestLatencyIsTimeout: false }]);
     assert.deepEqual(plain.exitTargetVia, ["jinx(39.9y)"]);
     assert.equal(plain.latestLatencyMs, 9);
-    assert.equal(plain.latestLatencyLive, null);
+    assert.equal(plain.latestLatencyChain, null, "主出口的两段面板还没测到：留着规则自己的定时探测");
     assert.equal(health.ruleActiveExit(501, 1)?.hostIds[0], 2, "诊断从主出口测（rules.selfTest 不当成 viaActiveExit）");
 
     // 出口机本身连不上（不是到目标）：规则卡那句照实说
@@ -104,26 +112,29 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     };
     await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [gostRule] });
     const [gost] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 4, latestLatencyIsTimeout: false, latestLatencyAt: new Date(0) }]);
-    assert.equal(gost.latestLatencyMs, 6, "hep ix 分到 50%：它的整链");
-    assert.deepEqual(gost.latestLatencyLive, { exitHostId: 3, exitName: "hep ix", exitMs: 2, targetMs: 4, targetUnknown: false, share: 0.5 });
+    assert.equal(gost.latestLatencyMs, 9, "hep ix 分到 50%：它的整链，面板探的两段（6 + 3），不是入口报的 2 + 4");
+    assert.deepEqual(gost.latestLatencyChain, { exitHostId: 3, exitName: "hep ix", exitMs: 6, targetMs: 3, share: 0.5 });
     assert.deepEqual(gost.exitTargetVia, ["hep ix", "jinx(39.9y)", "Jinx(29.9y)"], "扛流量的排第一");
     assert.equal(health.ruleActiveExit(501, 1)?.hostIds[0], 3, "诊断从同一台测");
     const unknownExit = live.liveBalanceForRule(501)!.exits[2];
     assert.deepEqual([unknownExit.exitMs, unknownExit.targetMs, unknownExit.targetLatencyUnknown], [5, null, true]);
     const gostSummary = health.exitTargetSummaryForTunnel({ id: 1, mode: "forwardx", loadBalanceEnabled: true, loadBalanceStrategy: "auto" }, [2, 3, 4], {});
-    assert.deepEqual(gostSummary.exits.map((exit) => [exit.exitMs, exit.targetMs, exit.targetLatencyUnknown]), [[3, 7, 0], [2, 4, 0], [5, null, 1]]);
+    // 弹窗：面板测到的那台用面板的两段，没测到的用入口自己报的并标出来
+    assert.deepEqual(
+      gostSummary.exits.map((exit) => [exit.exitMs, exit.targetMs, exit.exitMsSource, exit.targetMsSource, exit.targetLatencyUnknown]),
+      [[3, 7, "agent", "agent", 0], [6, 3, "panel", "panel", 0], [5, null, "agent", null, 1]],
+    );
 
     // 这阵子没有新连接（share 都是空的）：取整链延迟低的；到目标不知道的那台只是下限，排在知道的后面
     await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, exits: gostRule.exits.map((exit) => ({ ...exit, share: -1 })) }] });
     const [idle] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 4, latestLatencyIsTimeout: false }]);
-    assert.equal(idle.latestLatencyMs, 6);
-    assert.equal(idle.latestLatencyLive?.exitName, "hep ix");
-    // 只有到目标不知道的那台在用：卡上写「≥」（targetUnknown）
+    assert.equal(idle.latestLatencyMs, 9);
+    assert.equal(idle.latestLatencyChain?.exitName, "hep ix");
+    // 在用的那台面板没测到：留着规则自己的定时探测（4），不拿入口报的数
     await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, exits: gostRule.exits.map((exit, index) => ({ ...exit, state: index === 2 ? "active" : "standby" })) }] });
     const [lowerBound] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: 4, latestLatencyIsTimeout: false }]);
-    assert.equal(lowerBound.latestLatencyMs, 5);
-    assert.equal(lowerBound.latestLatencyLive?.exitName, "Jinx(29.9y)");
-    assert.equal(lowerBound.latestLatencyLive?.targetUnknown, true);
+    assert.equal(lowerBound.latestLatencyMs, 4);
+    assert.equal(lowerBound.latestLatencyChain, null);
 
     // 延迟优先「只走最快的一台」：入口报一台 active、其余 standby，弹窗写「只走 X（最快）」，不写主备
     await live.ingestBalanceLiveReport({ hostId: 1, source: "agent", rules: [{ ...gostRule, strategy: "latency", exits: gostRule.exits.map((exit, index) => ({ ...exit, state: index === 1 ? "active" : "standby" })) }] });

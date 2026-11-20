@@ -1,3 +1,4 @@
+import { ruleChainLatency, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
 import { appendPanelLog } from "./_core/panelLogger";
 import { dbBool } from "./repositories/repositoryUtils";
 import { ExitTargetPushDebouncer } from "./exitTargetPush";
@@ -575,9 +576,14 @@ export type ExitTargetExitSummary = {
   reason?: "target" | "exit" | null;
   /** 新连接分给它的比例（0–1，各条规则的平均；入口真实上报、这段时间有新连接时才有） */
   share?: number | null;
-  /** 整链的两段（GOST 入口真实上报才有，各条规则的中位数）：入口到这台出口、这台出口到目标 */
+  /**
+   * 整链的两段（各条规则的中位数）：入口到这台出口、这台出口到目标。面板探的优先（链路定时探测的出口分支、出口机探目标，
+   * 和规则卡、诊断一个口径）；面板没测到才是入口自己报的（source = agent，弹窗写「Agent 自测」）。
+   */
   exitMs?: number | null;
   targetMs?: number | null;
+  exitMsSource?: "panel" | "agent" | null;
+  targetMsSource?: "panel" | "agent" | null;
   /** 几条规则里这台到目标的延迟不知道（入口调度器按最慢的那台算它）：弹窗写「到目标延迟未知」 */
   targetLatencyUnknown?: number;
 };
@@ -844,6 +850,8 @@ export function exitTargetSummaryForTunnel(
         baselineRules: entry.baselines.length,
         slowerMs: entry.slower > 0 ? entry.slower : null,
         source: entry.traffic + entry.probe === 0 ? null : entry.traffic >= entry.probe ? "traffic" : "probe",
+        // 面板探的两段（出口机探目标的就是 medians）
+        ...panelOrAgentLegs(tunnelId, hostId, { exitMs: [], targetMs: [], panelTargetMs: entry.medians }),
         udpOk: 0,
         udpDown: 0,
         udpUnverified: 0,
@@ -883,8 +891,9 @@ function exitTargetSummaryFromLive(
     rules: 0, down: 0, unstable: 0, medians: [] as number[], jitters: [] as number[], losses: [] as number[], activeRules: 0,
     baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
     reason: null as "target" | "exit" | null, shares: [] as number[],
-    exitMs: [] as number[], targetMs: [] as number[], targetUnknown: 0,
+    exitMs: [] as number[], targetMs: [] as number[], targetUnknown: 0, panelTargetMs: [] as number[],
   }]));
+  const tunnelId = Number(lives[0]?.tunnelId || 0);
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
   const hows = new Map<string, number>();
   const pinned = options.pinHostId > 0 && ids.includes(options.pinHostId);
@@ -912,6 +921,12 @@ function exitTargetSummaryFromLive(
       if (exit.state !== "down" && exit.medianMs != null) entry.medians.push(exit.medianMs);
       if (exit.state !== "down" && exit.exitMs != null) entry.exitMs.push(exit.exitMs);
       if (exit.targetMs != null) entry.targetMs.push(exit.targetMs);
+      // 面板自己探的这台出口到这条规则目标（快速探测优先，再是规则的定时探测）：和诊断同一口径
+      const panelState = statesByRule.get(Number(live.ruleId))?.get(exit.hostId);
+      const panelTarget = panelState && !panelState.down && Date.now() - panelState.at <= EXIT_TARGET_STALE_MS
+        ? panelState.medianMs ?? panelState.latencyMs
+        : ruleTargetLatency(live.ruleId, exit.hostId)?.ms ?? null;
+      if (exit.state !== "down" && panelTarget != null) entry.panelTargetMs.push(panelTarget);
       if (exit.targetLatencyUnknown) entry.targetUnknown += 1;
       if (exit.state !== "down" && exit.jitterMs != null) entry.jitters.push(exit.jitterMs);
       if (exit.lossPct != null) entry.losses.push(exit.lossPct);
@@ -982,8 +997,11 @@ function exitTargetSummaryFromLive(
         peerOutdated: entry.peerOutdated,
         reason: entry.reason,
         share: entry.shares.length > 0 ? entry.shares.reduce((sum, value) => sum + value, 0) / entry.shares.length : null,
-        exitMs: middle(entry.exitMs),
-        targetMs: middle(entry.targetMs),
+        /*
+          两段先用面板探的（链路定时探测的这台出口分支、出口机探目标），和规则卡、诊断一个口径；面板一段都没测到才用
+          入口自己报的（FXP 的 exitMs 是建隧道握手的时间，比 TCPing 大），弹窗上写「Agent 自测」。
+        */
+        ...panelOrAgentLegs(tunnelId, hostId, entry),
         targetLatencyUnknown: entry.targetUnknown,
       };
     }),
@@ -991,6 +1009,23 @@ function exitTargetSummaryFromLive(
     how,
     live: true,
     events,
+  };
+}
+
+function panelOrAgentLegs(
+  tunnelId: number,
+  hostId: number,
+  entry: { exitMs: number[]; targetMs: number[]; panelTargetMs: number[] },
+): { exitMs: number | null; targetMs: number | null; exitMsSource: "panel" | "agent" | null; targetMsSource: "panel" | "agent" | null } {
+  const panelExit = tunnelExitLatency(tunnelId, hostId)?.ms ?? null;
+  const panelTarget = middle(entry.panelTargetMs);
+  const agentExit = middle(entry.exitMs);
+  const agentTarget = middle(entry.targetMs);
+  return {
+    exitMs: panelExit ?? agentExit,
+    targetMs: panelTarget ?? agentTarget,
+    exitMsSource: panelExit != null ? "panel" : agentExit != null ? "agent" : null,
+    targetMsSource: panelTarget != null ? "panel" : agentTarget != null ? "agent" : null,
   };
 }
 
@@ -1103,29 +1138,18 @@ function activeExitFromLive(live: LiveRuleReport) {
   };
 }
 
-/** 规则卡延迟的说明（入口实时探测的那台出口、两段各多少、分到多少）；悬停那句由界面拼。 */
-export type RuleLiveLatency = {
+/**
+ * 规则卡整链的两段（都是面板探的，server/ruleLatencyView.ts）：在用的那台出口、入口到它、它到目标、分到多少。
+ * 悬停那句由界面拼：「整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48）」。
+ */
+export type RuleChainLatencyView = {
   exitHostId: number;
   exitName: string;
-  /** 入口到这台出口（null：入口没分开报，比如 NEX 隧道的 FXP、老 Agent） */
-  exitMs: number | null;
-  /** 这台出口到目标（null：不知道 —— targetUnknown 时卡上写「≥」） */
-  targetMs: number | null;
-  targetUnknown: boolean;
-  /** 最近新连接分给它的比例（0–1）；这阵子没有新连接是 null */
+  exitMs: number;
+  targetMs: number;
+  /** 最近新连接分给它的比例（0–1，入口实时上报的）；不知道是 null */
   share: number | null;
 };
-
-function liveLatencyOf(exit: LiveExit): RuleLiveLatency {
-  return {
-    exitHostId: exit.hostId,
-    exitName: exit.hostName,
-    exitMs: exit.exitMs != null ? Math.round(exit.exitMs * 10) / 10 : null,
-    targetMs: exit.targetMs != null ? Math.round(exit.targetMs * 10) / 10 : null,
-    targetUnknown: exit.targetLatencyUnknown,
-    share: exit.share,
-  };
-}
 
 /*
   旧的「连不上」不拿来摘出口（实验室实测，Agent 2.2.264、GOST 三出口）：三台出口一起断了一阵（都在 Agent 的退避里，
@@ -1195,8 +1219,10 @@ type RuleExitTargetFields = {
   /** 主出口切走了：现在实际走的出口（名字、主机 id） */
   exitTargetVia: string[] | null;
   exitTargetViaHostIds: number[] | null;
-  /** 卡上的延迟是入口实时探测的（入口报了真实状态）：哪台、两段各多少。没有是 null（延迟是最近一次诊断的） */
-  latestLatencyLive?: RuleLiveLatency | null;
+  /** 卡上的延迟是面板探的两段相加（入口→在用出口 + 在用出口→目标）：哪台、两段各多少。没有是 null */
+  latestLatencyChain?: RuleChainLatencyView | null;
+  /** 卡上延迟从哪来（metricsRepository 的 RuleLatencySource）：panel 两段相加、exit-target 只有在用出口探目标那段 */
+  latestLatencySource?: string | null;
 };
 
 /** 规则卡那几项（经哪台、延迟、几台里几台有问题），用入口上报的真实状态算。 */
@@ -1223,23 +1249,69 @@ function ruleExitTargetFieldsFromLive(live: LiveRuleReport): RuleExitTargetField
     exitTargetNote: describeRuleExitTargetSummary(summary, live.source === "agent"),
     exitTargetVia: via ? via.names : null,
     exitTargetViaHostIds: via ? via.hostIds : null,
-    // 只要入口报了、扛流量的那台有延迟：卡上就是它的整链延迟（一个口径，见 liveCarryingExit）
-    ...(via && via.latencyMs != null ? {
-      latestLatencyMs: Math.round(via.latencyMs),
-      latestLatencyIsTimeout: false,
-      latestLatencyAt: new Date(via.at),
-      latestProbeFailure: null,
-      latestLatencyLive: liveLatencyOf(via.carrying),
-    } : { latestLatencyLive: null }),
+  };
+}
+
+/**
+ * 规则卡的延迟（一个口径：和诊断一样是面板探的几段）：
+ *   1. 在用那台出口（入口实时上报里扛流量最多的；没上报用估的在用 / 主出口）两段都测到了 → 整链 = 入口到它 + 它到目标；
+ *   2. 缺一段 → 留着规则自己的定时探测（metricsRepository 已经填了），再没有是最近一次诊断。
+ * 入口实时上报里的延迟（FXP 的 exitMs 是建隧道握手的时间）不拿来当卡上的数。
+ */
+function ruleChainFields(
+  row: { ruleId: number | string; latestLatencyIsTimeout?: unknown },
+  inUse: { tunnelId: number; hostId: number; name: string; share: number | null } | null,
+  nowMs: number,
+): Record<string, unknown> {
+  if (!inUse || !(inUse.hostId > 0)) return { latestLatencyChain: null };
+  const state = exitTargetStatesForRule(Number(row.ruleId), nowMs).find((item) => item.hostId === inUse.hostId && !item.down);
+  const chain = ruleChainLatency({
+    ruleId: row.ruleId,
+    tunnelId: inUse.tunnelId,
+    exitHostId: inUse.hostId,
+    targetStateMs: state ? state.medianMs ?? state.latencyMs : null,
+    targetStateAt: state?.at ?? null,
+    nowMs,
+  });
+  if (!chain) return { latestLatencyChain: null };
+  return {
+    latestLatencyMs: Math.round(chain.totalMs),
+    latestLatencyIsTimeout: false,
+    latestLatencyAt: new Date(chain.at),
+    latestProbeFailure: null,
+    latestLatencySource: "panel",
+    latestLatencyChain: {
+      exitHostId: chain.exitHostId,
+      exitName: inUse.name || state?.hostName || "",
+      exitMs: Math.round(chain.exitMs * 10) / 10,
+      targetMs: Math.round(chain.targetMs * 10) / 10,
+      share: inUse.share,
+    } satisfies RuleChainLatencyView,
   };
 }
 
 export function withRuleExitTargets<T extends { ruleId: number | string }>(rows: T[], nowMs = Date.now()): Array<T & RuleExitTargetFields> {
   return rows.map((row) => {
     const live = liveBalanceForRule(Number(row.ruleId), nowMs);
-    if (live) return { ...row, ...ruleExitTargetFieldsFromLive(live) } as T & RuleExitTargetFields;
+    if (live) {
+      const carrying = liveCarryingExit(live);
+      const chain = ruleChainFields(row, carrying ? { tunnelId: live.tunnelId, hostId: carrying.hostId, name: carrying.hostName, share: carrying.share } : null, nowMs);
+      /*
+        两段没测全、规则自己的定时探测是主出口那条的超时，可入口报着流量在别的出口上走：别写「超时」（那等于说转发断了），
+        空着等面板测到；入口报的握手延迟不拿来顶。
+      */
+      const neutral = !("latestLatencyMs" in chain) && carrying && (row as { latestLatencyIsTimeout?: unknown }).latestLatencyIsTimeout === true
+        ? { latestLatencyMs: null, latestLatencyIsTimeout: false, latestProbeFailure: null, latestLatencySource: null }
+        : {};
+      return { ...row, ...ruleExitTargetFieldsFromLive(live), ...neutral, ...chain } as T & RuleExitTargetFields;
+    }
     const fresh = exitTargetStatesForRule(Number(row.ruleId), nowMs);
-    if (fresh.length === 0) return { ...row, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null, exitTargetVia: null, exitTargetViaHostIds: null };
+    if (fresh.length === 0) {
+      // 没有负载均衡的数据：在用的就是主出口（规则定时探测上报时记下的那台）
+      const known = ruleTunnelOf(row.ruleId);
+      const chain = ruleChainFields(row, known ? { tunnelId: known.tunnelId, hostId: known.primaryHostId, name: "", share: null } : null, nowMs);
+      return { ...row, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null, exitTargetVia: null, exitTargetViaHostIds: null, ...chain };
+    }
     /*
       流量没走主出口（连不上、不稳被摘、手动指定、延迟优先挑了别的）：规则的「最新延迟」换成在用那台到目标的延迟
       （规则的普通探测是主出口测的，它连不上时一直超时，拿它显示等于说转发断了，可流量照走）。
@@ -1255,9 +1327,20 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
           latestLatencyIsTimeout: false,
           latestLatencyAt: new Date(via.at),
           latestProbeFailure: null,
+          // 在用那台出口探目标的数：只有出口到目标那一段，卡上写「≥」
+          latestLatencySource: "exit-target",
         } : {}),
       }
       : { exitTargetVia: null, exitTargetViaHostIds: null };
+    // 两段都测到了就是整链（盖过上面那个只有出口到目标的数）
+    const primaryHostId = ruleTunnelOf(row.ruleId)?.primaryHostId || 0;
+    const inUseHostId = via ? via.hostIds[0] : primaryHostId;
+    Object.assign(viaFields, ruleChainFields(row, inUseHostId > 0 ? {
+      tunnelId: fresh[0].tunnelId,
+      hostId: inUseHostId,
+      name: via ? via.names[0] : fresh.find((state) => state.hostId === inUseHostId)?.hostName || "",
+      share: null,
+    } : null, nowMs));
     // 只有一台出口报了：没法说「几台里几台有问题」，只给在用的出口
     if (fresh.length < 2) return { ...row, ...viaFields, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null } as T & RuleExitTargetFields;
     const bad = fresh.filter((state) => state.down || state.unstable).map((state) => ({

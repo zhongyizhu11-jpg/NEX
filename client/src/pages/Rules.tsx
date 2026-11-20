@@ -164,7 +164,7 @@ import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failover
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
-import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources, type RuleLiveLatencyLike } from "@/features/rules/ruleCardProps";
+import { buildRuleCardDerivedProps, describeRuleLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources, type RuleChainLatencyLike } from "@/features/rules/ruleCardProps";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -1031,20 +1031,20 @@ function deriveRuleView({
     const activeChain = failover ? routeBoardActiveChain(routeBoard) : null;
     if (activeChain && activeChain.totalMs !== null && !activeChain.broken) {
       const ms = Math.round(activeChain.totalMs);
-      tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={activeChain.partial ? "当前路径已测各段相加（有一段还没测到）" : "当前路径各段延迟相加"}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
+      tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={activeChain.partial ? `整链 ≥ ${ms} ms：当前路径已测各段相加（有一段还没测到）` : `整链 ${ms} ms：当前路径各段延迟相加`}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
     } else if (activeChain?.broken) {
       tag = <span className="fx-rule-tag" data-tone="down" title="当前路径有一段不通">不通</span>;
     } else if (probe.at && probe.stale) {
       // 过期的探测：灰掉并写明多久以前，不再把三天前的 12 ms 画成绿的。
       const text = probe.isTimeout ? "超时" : probe.ms !== null ? `${Math.round(probe.ms)} ms` : "";
-      if (text) tag = <span className="fx-rule-tag" data-tone="off" title={`${probe.ageText}测的，已过期；··· › 诊断 重新测`}>{text} · {probe.ageText}</span>;
+      if (text) tag = <span className="fx-rule-tag" data-tone="off" title={`整链 ${text}：${probe.ageText}测的，已过期；··· › 诊断 重新测`}>{text} · {probe.ageText}</span>;
     } else if (probe.at) {
       if (probe.isTimeout) {
         tag = <span className="fx-rule-tag" data-tone="down" title="最近一次测试超时">超时</span>;
       } else if (probe.ms !== null) {
         const ms = probe.ms;
-        // 负载均衡链路：入口实时探测的、扛流量最多那台出口的整链延迟（悬停写两段各多少）；到目标那段还没测到时写「≥」
-        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={probe.liveTitle || "最近一次测得的延迟"}>{probe.atLeast ? "≥ " : ""}{ms} ms</span>;
+        // 一律是整链（入口→在用出口→目标）：悬停写明来历（入口实时两段各多少 / 定时探测 / 最近一次诊断）；只有一段时写「≥」
+        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={probe.liveTitle || `整链 ${Math.round(ms)} ms`}>{probe.atLeast ? "≥ " : ""}{ms} ms</span>;
       }
     }
     // 精简的列表行：这个位置固定是延迟（用户 2026-10-21 圈的），没测过也占着，写「未测试」
@@ -5732,8 +5732,10 @@ function RulesContent() {
       /** 负载均衡链路：入口报的在用出口（扛流量最多的排第一；2.3.537 起只在主出口切走时有，现在入口报了就有） */
       exitTargetVia: string[] | null;
       exitTargetViaHostIds: number[] | null;
-      /** 卡上的延迟是入口实时探测的那台出口的整链延迟（server/exitTargetHealth.ts 的 RuleLiveLatency） */
-      latestLatencyLive: RuleLiveLatencyLike | null;
+      /** 卡上的延迟是面板探的两段相加：在用那台出口、入口到它、它到目标（server/exitTargetHealth.ts 的 RuleChainLatencyView） */
+      latestLatencyChain: RuleChainLatencyLike | null;
+      /** 卡上这个延迟从哪来：live 入口实时、probe 定时探测、diagnosis 最近一次诊断（悬停写明） */
+      latestLatencySource: string | null;
     }>();
     dailyTrafficSummaryRows.forEach((t: any) => {
       const rid = Number(t.ruleId);
@@ -5759,7 +5761,8 @@ function RulesContent() {
           prev.latestLatencyIsTimeout = !!t.latestLatencyIsTimeout;
           prev.latestLatencyAt = t.latestLatencyAt || null;
           prev.latestProbeFailure = t.latestProbeFailure || null;
-          prev.latestLatencyLive = t.latestLatencyLive || null;
+          prev.latestLatencyChain = t.latestLatencyChain || null;
+          prev.latestLatencySource = t.latestLatencySource || null;
         }
       } else {
         m.set(rid, {
@@ -5775,7 +5778,8 @@ function RulesContent() {
           exitTargetNote: t.exitTargetNote || null,
           exitTargetVia: Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null,
           exitTargetViaHostIds: Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null,
-          latestLatencyLive: t.latestLatencyLive || null,
+          latestLatencyChain: t.latestLatencyChain || null,
+          latestLatencySource: t.latestLatencySource || null,
         });
       }
     });
@@ -8124,7 +8128,7 @@ function RulesContent() {
     // 过了新鲜期的探测只能说明「当时」：数字灰掉、写明多久以前，不再冒充现在的延迟。
     if (!isLinkProbeFresh(t.latestLatencyAt)) {
       return (
-        <span className="whitespace-nowrap text-xs text-muted-foreground" title={`${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
+        <span className="whitespace-nowrap text-xs text-muted-foreground" title={`整链：${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
           {t.latestLatencyIsTimeout ? describeProbeFailureShort(t.latestProbeFailure) : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
         </span>
       );
@@ -8133,7 +8137,12 @@ function RulesContent() {
       return <LatencyRating isTimeout timeoutText="超时" className="whitespace-nowrap" />;
     }
     if (typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs)) {
-      return <LatencyRating latencyMs={t.latestLatencyMs} className="whitespace-nowrap" badge={false} />;
+      // 和卡片同一句悬停：整链，写明是入口实时 / 定时探测 / 最近一次诊断
+      return (
+        <span title={describeRuleLatency(t, t.latestLatencyMs).title}>
+          <LatencyRating latencyMs={t.latestLatencyMs} className="whitespace-nowrap" badge={false} />
+        </span>
+      );
     }
     return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
   };

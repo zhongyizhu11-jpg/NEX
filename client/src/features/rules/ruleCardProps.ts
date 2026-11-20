@@ -21,12 +21,11 @@ type RuleLike = {
 
 type TrafficTotals = { bytesIn?: number | null; bytesOut?: number | null };
 
-/** 规则卡延迟的来历：入口实时探测的那台出口（server/exitTargetHealth.ts 的 RuleLiveLatency）。 */
-export type RuleLiveLatencyLike = {
+/** 规则卡整链的两段（面板探的，server/exitTargetHealth.ts 的 RuleChainLatencyView）。 */
+export type RuleChainLatencyLike = {
   exitName?: string | null;
   exitMs?: number | null;
   targetMs?: number | null;
-  targetUnknown?: boolean | null;
   share?: number | null;
 };
 
@@ -34,27 +33,58 @@ type ProbeEntry = {
   latestLatencyAt?: unknown;
   latestLatencyMs?: unknown;
   latestLatencyIsTimeout?: unknown;
-  latestLatencyLive?: RuleLiveLatencyLike | null;
+  latestLatencyChain?: RuleChainLatencyLike | null;
+  latestLatencySource?: string | null;
 };
 
 const roundMs = (value: number) => `${Math.round(value)} ms`;
 
 /**
- * 卡上延迟的悬停那句（负载均衡链路，入口报了真实状态时）：
- *   入口实时探测：到 hep ix 3 ms + hep ix 到目标 4 ms（分到 60%）
- * 到目标那段还没测到时 atLeast（卡上写「≥ X ms」）。没有实时数据返回 null（照旧「最近一次测得的延迟」）。
+ * 卡上延迟的悬停那句（两段都是面板探的）。规则卡的数一律是「整链」（入口→在用出口→目标），和诊断的合计同一口径：
+ *   整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48，分到 100%）
+ * 没有两段返回 null。totalMs：卡上那个数（服务端算好的整链）；不传时两段相加。
  */
-export function describeRuleLiveLatency(live: RuleLiveLatencyLike | null | undefined): { title: string; atLeast: boolean } | null {
-  if (!live || !live.exitName) return null;
-  const name = String(live.exitName);
-  const share = typeof live.share === "number" && Number.isFinite(live.share) ? `（分到 ${Math.round(live.share * 100)}%）` : "";
-  const exitMs = typeof live.exitMs === "number" && Number.isFinite(live.exitMs) ? live.exitMs : null;
-  const targetMs = typeof live.targetMs === "number" && Number.isFinite(live.targetMs) ? live.targetMs : null;
-  if (exitMs === null) return { title: `入口实时探测：经 ${name}${share}`, atLeast: false };
-  if (live.targetUnknown || targetMs === null) {
-    return { title: `入口实时探测：到 ${name} ${roundMs(exitMs)}${share}；${name} 到目标那一段还没测到，实际不止这么多`, atLeast: true };
+export function describeRuleChainLatency(chain: RuleChainLatencyLike | null | undefined, totalMs?: number | null, at = ""): string | null {
+  if (!chain) return null;
+  const exitMs = typeof chain.exitMs === "number" && Number.isFinite(chain.exitMs) ? chain.exitMs : null;
+  const targetMs = typeof chain.targetMs === "number" && Number.isFinite(chain.targetMs) ? chain.targetMs : null;
+  if (exitMs === null || targetMs === null) return null;
+  const name = String(chain.exitName || "").trim();
+  const total = typeof totalMs === "number" && Number.isFinite(totalMs) ? totalMs : exitMs + targetMs;
+  const share = typeof chain.share === "number" && Number.isFinite(chain.share) ? `，分到 ${Math.round(chain.share * 100)}%` : "";
+  const exitPart = name ? `入口到 ${name} ${roundMs(exitMs)}` : `入口到出口 ${roundMs(exitMs)}`;
+  const targetPart = name ? `${name} 到目标 ${roundMs(targetMs)}` : `出口到目标 ${roundMs(targetMs)}`;
+  return `整链 ${roundMs(total)} = ${exitPart} + ${targetPart}（面板探测${at ? `，${at}` : ""}${share}）`;
+}
+
+function clockText(at: unknown, nowMs: number) {
+  const date = at instanceof Date ? at : new Date(typeof at === "number" && at > 0 && at < 1_000_000_000_000 ? at * 1000 : at as string);
+  const ms = date.getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const now = new Date(nowMs);
+  const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  return sameDay ? hhmm : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hhmm}`;
+}
+
+/**
+ * 规则卡延迟那一枚的悬停（不管哪种来历都写成「整链 …」）：
+ *   两段都测到：见 describeRuleChainLatency
+ *   最近一次诊断：整链 9 ms（最近一次诊断 18:48）
+ *   定时探测：整链 9 ms（定时探测 18:48）
+ *   只有在用出口探目标那段（主出口切走了）：整链 ≥ 4 ms：只有在用出口到目标那段……
+ */
+export function describeRuleLatency(probe: ProbeEntry | null | undefined, ms: number, nowMs = Date.now()): { title: string; atLeast: boolean } {
+  const at = clockText(probe?.latestLatencyAt, nowMs);
+  const chain = describeRuleChainLatency(probe?.latestLatencyChain, ms, at);
+  if (chain) return { title: chain, atLeast: false };
+  const source = String(probe?.latestLatencySource || "");
+  if (source === "exit-target") {
+    return { title: `整链 ≥ ${roundMs(ms)}：只有在用出口到目标那段（出口机探测${at ? ` ${at}` : ""}），入口到出口那段没算`, atLeast: true };
   }
-  return { title: `入口实时探测：到 ${name} ${roundMs(exitMs)} + ${name} 到目标 ${roundMs(targetMs)}${share}`, atLeast: false };
+  if (source === "diagnosis") return { title: `整链 ${roundMs(ms)}（最近一次诊断${at ? ` ${at}` : ""}）`, atLeast: false };
+  return { title: `整链 ${roundMs(ms)}（定时探测${at ? ` ${at}` : ""}）`, atLeast: false };
 }
 
 export type RuleCardDerivedProps = {
@@ -69,7 +99,7 @@ export type RuleCardDerivedProps = {
   dailyOut: number;
   spark: number[];
   routeBoard: RouteBoardStatus | undefined;
-  /** liveTitle / atLeast：延迟是入口实时探测的（负载均衡链路）时悬停那句、要不要写「≥」（describeRuleLiveLatency） */
+  /** liveTitle / atLeast：卡上延迟的悬停（「整链 …」，写明是面板两段相加 / 定时探测 / 最近一次诊断）、要不要写「≥」（describeRuleLatency） */
   probe: { at: boolean; stale: boolean; ageText: string; isTimeout: boolean; ms: number | null; liveTitle: string | null; atLeast: boolean };
   /** 到没到期：翻过去的那一刻卡片要重画（RuleLimitSummary 按当下时间写「已于…到期」）。 */
   expiryPassed: boolean;
@@ -112,7 +142,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
   const probeAt = probe?.latestLatencyAt;
   const probeStale = !!probeAt && !sources.isProbeFresh(probeAt);
   const probeMs = typeof probe?.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? probe.latestLatencyMs : null;
-  const live = probeMs !== null && !probe?.latestLatencyIsTimeout ? describeRuleLiveLatency(probe?.latestLatencyLive) : null;
+  const live = probeMs !== null && !probe?.latestLatencyIsTimeout ? describeRuleLatency(probe, probeMs, nowMs) : null;
   const expiresAt = rule.expiresAt ? new Date(rule.expiresAt as string | number | Date).getTime() : NaN;
   return {
     visualState: visual.state,
