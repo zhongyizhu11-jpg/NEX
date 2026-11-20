@@ -109,13 +109,15 @@ export type RuleChainLatency = {
   totalMs: number;
   exitMs: number;
   targetMs: number;
-  /** 两段里旧的那一段是什么时候测的 */
+  /** 最近一次更新是什么时候（两段里新的那一段）：诊断弹窗按它判断卡片有没有比上次诊断新的数 */
   at: number;
 };
 
 /**
  * 一条链路规则的整链（入口 → 在用出口 → 目标），两段都是面板探的。缺一段返回 null（调用方退回规则的定时探测、再退回诊断）。
- * targetStateMs：负载均衡快速探测里这台出口到目标的中位数（exitTargetStatesForRule），有就优先用，它比一分钟一次的普通探测新。
+ * 出口到目标那一段先用出口机一分钟一次的 TCPing（诊断也是这么测的，2.3.544 起每台出口都探）；没有新鲜的才用负载均衡
+ * 快速探测的中位数（targetStateMs，exitTargetStatesForRule）—— 那是一窗口样本的中位数，和诊断的单次 TCPing 不是一个数，
+ * 用户面板上 149 对 153.8、3 对 7，卡片和诊断就对不上。
  */
 export function ruleChainLatency(input: {
   ruleId: unknown;
@@ -131,16 +133,15 @@ export function ruleChainLatency(input: {
   const exitLeg = tunnelExitLatency(input.tunnelId, exitHostId, nowMs);
   if (!exitLeg) return null;
   const stateMs = latency(input.targetStateMs);
-  const targetLeg = stateMs !== null && stateMs > 0
-    ? { ms: stateMs, at: Number(input.targetStateAt) || nowMs }
-    : ruleTargetLatency(input.ruleId, exitHostId, nowMs);
+  const targetLeg = ruleTargetLatency(input.ruleId, exitHostId, nowMs)
+    ?? (stateMs !== null && stateMs > 0 ? { ms: stateMs, at: Number(input.targetStateAt) || nowMs } : null);
   if (!targetLeg) return null;
   return {
     exitHostId,
     totalMs: exitLeg.ms + targetLeg.ms,
     exitMs: exitLeg.ms,
     targetMs: targetLeg.ms,
-    at: Math.min(exitLeg.at, targetLeg.at),
+    at: Math.max(exitLeg.at, targetLeg.at),
   };
 }
 

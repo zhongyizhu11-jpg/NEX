@@ -17,9 +17,10 @@ import { formatBytes } from "@shared/formatBytes";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, DiagnoseSubjectActions, formatDiagnoseTime, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
+import { applyRuleCurrentLatency, describeRuleCurrentLatency, type RuleCurrentLatency } from "@/lib/diagnosisCurrentLatency";
 import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
@@ -9221,6 +9222,7 @@ function RulesContent() {
           targetLabel={selfTestLinkTestNodeData.targetLabel}
           nodeMeta={selfTestLinkTestNodeData.nodeMeta}
           plannedSegments={selfTestLinkTestNodeData.plannedSegments}
+          current={trafficByRule.get(Number(selfTestRule.id)) ?? null}
           open={!!selfTestRule}
           onOpenChange={(v) => { if (!v) setSelfTestRule(null); }}
           initialTab={selfTestRule.tab}
@@ -10794,6 +10796,7 @@ function SelfTestDialog({
   targetLabel,
   nodeMeta,
   plannedSegments,
+  current,
   open,
   onOpenChange,
   extraTabs,
@@ -10806,6 +10809,8 @@ function SelfTestDialog({
   targetLabel?: string;
   nodeMeta?: Record<string, any>;
   plannedSegments?: LinkTestPlannedSegment[];
+  /** 规则卡那一行的延迟（trafficSummary）：比上次诊断新就画它，弹窗和卡片一个数（lib/diagnosisCurrentLatency.ts） */
+  current?: RuleCurrentLatency | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   /** 并进来的页（延迟记录）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
@@ -10885,7 +10890,14 @@ function SelfTestDialog({
   const isSuccess = status === "success";
   const isTimeout = status === "timeout";
   const isFailed = !!latest && !isTesting && !isSuccess && !isTimeout;
-  const parsedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
+  const diagnosedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
+  // 规则卡上的延迟比上次诊断新（定时探测又测了一轮）：画卡片上的那份，两边一个数；测试中、诊断没通、卡片没数就画诊断的
+  const currentView = useMemo(
+    () => (isTesting || !isSuccess ? null : applyRuleCurrentLatency({ parsed: diagnosedMessage, diagnosisAt: latest?.updatedAt, diagnosisSuccess: isSuccess, current })),
+    [current, diagnosedMessage, isSuccess, isTesting, latest?.updatedAt],
+  );
+  const parsedMessage = currentView?.parsed ?? diagnosedMessage;
+  const latencyNote = currentView ? describeRuleCurrentLatency(currentView, (at) => formatDiagnoseTime(at)) : null;
   const plannedSegmentCount = plannedSegments?.length || 0;
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
   const lastFailureToastKey = useRef("");
@@ -10915,6 +10927,7 @@ function SelfTestDialog({
       lastRunAt={latest?.updatedAt ?? null}
       outcome={isSuccess ? "success" : isTimeout ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
+      latencyNote={latencyNote}
       checklist={{ kind: "rule", id: ruleId }}
       extraTabs={extraTabs}
       initialTab={initialTab}
@@ -10928,7 +10941,7 @@ function SelfTestDialog({
     >
       <LinkTestProbeView
         parsed={parsedMessage}
-        fallbackLatencyMs={typeof latest?.latencyMs === "number" && latest.latencyMs > 0 ? latest.latencyMs : null}
+        fallbackLatencyMs={currentView ? currentView.latencyMs : typeof latest?.latencyMs === "number" && latest.latencyMs > 0 ? latest.latencyMs : null}
         isSuccess={isSuccess}
         isTesting={isTesting}
         sourceLabel={sourceLabel}

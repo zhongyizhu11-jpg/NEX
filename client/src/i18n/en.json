@@ -8843,5 +8843,7 @@
  "；国内 {0}": "; China {0}",
  "；手动设的 {0} Mbps 不受影响": "; the manually set {0} Mbps is unaffected",
  "；新连接拨不通也算一次失败": "; a new connection failing to dial also counts as one failure",
- "；这台还没装 FXP 运行时，升级会一并装上": "; this host has no FXP runtime yet, upgrading will install it too"
+ "；这台还没装 FXP 运行时，升级会一并装上": "; this host has no FXP runtime yet, upgrading will install it too",
+ "延迟为 {0} 的定时探测，和规则卡一致": "Latency is from the scheduled probe at {0}, same as the rule card",
+ "延迟为 {0} 在用出口探目标的结果，和规则卡一致": "Latency is from the active exit's probe to the target at {0}, same as the rule card"
 }

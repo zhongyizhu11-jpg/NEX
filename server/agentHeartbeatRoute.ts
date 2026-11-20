@@ -166,7 +166,7 @@ import {
 } from "./configAudit";
 import { approveMimicInterfaceRemovals } from "./mimicRemovalGuard";
 import { mimicRuntimeLifecycles } from "./mimicRuntimeLifecycle";
-import { buildTunnelRuleLatencyProbe } from "./ruleLatency";
+import { buildTunnelRuleLatencyProbe, tunnelRuleProbeExitHostIds } from "./ruleLatency";
 import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAddressSelection";
 import {
   normalizeAgentLocalRuntimeState,
@@ -4680,11 +4680,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       .map((rule: any) => {
         // 接了 Shadowsocks 出口：出口机拨的是本机的 SS 客户端，测它没有意义 —— 测出口机到 SS 落地这一段。
         const egressHelper = tunnelEgressHelpers.get(Number(rule.id));
+        // 负载均衡链路：每台出口都探（2.3.544，规则卡 / 诊断 / 弹窗要的是在用那台「出口到目标」的 TCPing）
+        const probeTunnel = tunnelById.get(Number(rule.tunnelId || 0));
         const probe = buildTunnelRuleLatencyProbe({
           hostId: host.id,
           rule: egressHelper ? { ...rule, targetPort: egressHelper.runtime.port } : rule,
-          tunnel: tunnelById.get(Number(rule.tunnelId || 0)),
+          tunnel: probeTunnel,
           targetIp: egressHelper ? egressHelper.runtime.server : processTarget(rule),
+          exitHostIds: tunnelRuleProbeExitHostIds(probeTunnel, tunnelExitNodesByTunnelId.get(Number(rule.tunnelId || 0)) || []),
         });
         return probe ? {
           ...probe,
