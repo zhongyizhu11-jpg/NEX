@@ -92,6 +92,7 @@ test("规格：份数原样带（超过 100 的按比例压）、面板提示、
     weights: [5, 3, 2],
     pinHostId: 22,
     downHostIds: new Set([23]),
+    downAt: new Map([[23, 1763600000123.7], [22, 1763600000000]]),
     extraLatencyMs: new Map([[21, 12.4], [22, 80]]),
   });
   assert.deepEqual(spec.targets.map((target) => target.weight), [5, 3, 2]);
@@ -99,6 +100,9 @@ test("规格：份数原样带（超过 100 的按比例压）、面板提示、
   assert.deepEqual(spec.targets.map((target) => target.extraLatencyMs), [12, 80, undefined]);
   assert.equal(spec.targets[2].down, true);
   assert.equal(spec.targets[2].downReason, "出口连不上目标");
+  // 带上那份「连不上」探出来的时刻：Agent 拿真实连接试探放回后只认比它新的提示；没标坏的不带
+  assert.equal(spec.targets[2].downAt, 1763600000124);
+  assert.equal("downAt" in spec.targets[1], false);
   assert.deepEqual(gostBalanceTargetWeights([500, 250, 50], 3), [100, 50, 10]);
   assert.equal(gostBalanceTargetWeights([5, 3], 3), null, "数量对不上就不带");
   assert.equal(gostBalanceTargetWeights(null, 3), null);

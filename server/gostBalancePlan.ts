@@ -58,6 +58,8 @@ export type GostBalanceSpecInput = {
   pinHostId: number;
   /** 面板从出口机的探测得知「到目标不通」的出口 */
   downHostIds: ReadonlySet<number>;
+  /** 每台被标「连不上目标」的出口，那份结论探出来的时刻（毫秒）：Agent 拿真实连接试探放回后，只认比它新的提示 */
+  downAt?: ReadonlyMap<number, number>;
   /** 每台出口到规则目标的延迟（出口机探的，毫秒） */
   extraLatencyMs: ReadonlyMap<number, number>;
   /**
@@ -139,7 +141,9 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         ...(exit.viaRelay ? { viaRelay: true } : {}),
         ...(exit.probeRelay && !exit.viaRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
-        ...(input.downHostIds.has(exit.hostId) ? { down: true, downReason: "出口连不上目标" } : {}),
+        ...(input.downHostIds.has(exit.hostId)
+          ? { down: true, downReason: "出口连不上目标", ...(input.downAt?.get(exit.hostId) ? { downAt: Math.round(Number(input.downAt.get(exit.hostId))) } : {}) }
+          : {}),
         // 不到 1 毫秒按 1 算：Agent 那边 0 就是「没有」，四舍五入成 0 的话这台就成了「到目标不知道」
         ...(extra != null && extra > 0 ? { extraLatencyMs: Math.max(1, Math.round(extra)) } : {}),
         // 运行时提示（agent/failover_hints.go）：变了不重建代理
@@ -198,7 +202,7 @@ export type GostBalancePlanningDeps<R extends BalanceRule, T extends BalanceTunn
   transportOf: (tunnel: T) => string;
   buildNode: (name: string, addr: string, transport: string, tunnel: T, connector: unknown) => N;
   endpointAddr: (host: string, port: number) => string;
-  exitTargetStates: (ruleId: number) => Array<{ hostId: number; down?: boolean; medianMs?: number | null; latencyMs?: number | null }>;
+  exitTargetStates: (ruleId: number) => Array<{ hostId: number; down?: boolean; medianMs?: number | null; latencyMs?: number | null; probedAt?: number; at?: number }>;
   exitTargetExcludedHostIds: (ruleId: number, hostIds: number[]) => ReadonlySet<number>;
   /** 份数（和 FXP 同一个来源）；按访客固定按线路带宽加权。 */
   weightsFor: (strategy: string, hostIds: number[], tunnel: T) => Promise<number[] | null>;
@@ -276,6 +280,7 @@ export async function planGostBalanceRules<R extends BalanceRule, T extends Bala
       // 手动指定的那台离线时不理它、照常自动分（和 NEX 隧道同一条规矩）；在线却连不上的由代理当场不理它。
       pinHostId: await deps.pinnedExitHostId(tunnel),
       downHostIds: deps.exitTargetExcludedHostIds(Number(rule.id), hostIds),
+      downAt: new Map(Array.from(fresh.values()).map((state) => [state.hostId, Number(state.probedAt ?? state.at ?? 0)])),
       extraLatencyMs,
       extraLatencyUnknown: gostBalanceUnknownExtraLatency(hostIds, extraLatencyMs),
       proxyHeaderForward: deps.proxyHeaderForward(rule),

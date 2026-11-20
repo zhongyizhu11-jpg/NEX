@@ -403,6 +403,11 @@ IP 限制、或者就是按 IP 区别对待），它永远「探不通」—— 
     下一次到点再试。出口到目标真不通时，每 exitCanaryGap 只有一条连接多付一次拨号的时间（被拒 1 毫秒、黑洞 3 秒）。
 
 不说话的恢复探测照旧跑着（没有 TCP 流量、只转 UDP 的规则靠它）。手动指定了别的出口时不试（只走指定的那台）。
+
+面板提示「出口连不上目标」（relayDown，健康类的原因）的出口同样试（实验室：出口机断网又恢复以后，出口机到目标的
+探测放慢了（2.3.541 起最快 5 秒一次、坏着时更慢），面板那份「连不上」要半分钟才撤，这半分钟 GOST 不给它流量）：
+真实连接回了东西就本地先放回，记下那份提示的 DownAt（relayDownOverride），面板再发同一份不按下去；面板探到更新的
+「连不上」（DownAt 更新）才重新算数。老面板不带 DownAt 的提示不试（没法分辨新旧）。管理类的（暂停 / 维护 / 流量用完）不试。
 */
 const exitCanaryGap = exitConfirmWindow
 
@@ -420,7 +425,7 @@ func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
 		gap = interval
 	}
 	for i := range p.spec.Targets {
-		if !p.exitThroughFailed[i] || p.targetHealth[i] || !p.exitMachineUp[i] || p.relayDown[i] {
+		if !p.exitMachineUp[i] || !p.exitCanaryDueLocked(i) {
 			continue
 		}
 		if !p.exitCanaryAt[i].IsZero() && now.Sub(p.exitCanaryAt[i]) < gap {
@@ -432,14 +437,37 @@ func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
 	return -1
 }
 
+// exitCanaryDueLocked 这台出口是不是「值得拿真实连接试一下」的判坏：经出口复核判的，或者面板健康类提示标的（带 DownAt）。
+func (p *failoverProxy) exitCanaryDueLocked(i int) bool {
+	if p.exitThroughFailed[i] && !p.targetHealth[i] {
+		return true
+	}
+	return p.relayDown[i] && p.targetHealth[i] && p.spec.Targets[i].DownAt > 0 && !failoverAdminDownReason(p.relayDownReason[i])
+}
+
 // exitCanaryRepliedLocked 经出口判坏的出口上一条真实连接收到了上游的回复：放回。调用方持有 p.mu。
 func (p *failoverProxy) exitCanaryRepliedLocked(index int) {
-	if !p.exitGroupLocked() || index >= len(p.exitThroughFailed) || !p.exitThroughFailed[index] || p.targetHealth[index] {
+	if !p.exitGroupLocked() || index >= len(p.exitThroughFailed) {
 		return
 	}
-	p.exitThroughGen[index]++ // 正在跑的不说话探测作废
-	p.readmitForLocked(index, time.Now(), "a real connection got a reply through the exit")
-	p.updateFallbackActiveLocked("canary reply")
+	changed := false
+	if p.exitThroughFailed[index] && !p.targetHealth[index] {
+		p.exitThroughGen[index]++ // 正在跑的不说话探测作废
+		p.readmitForLocked(index, time.Now(), "a real connection got a reply through the exit")
+		changed = true
+	}
+	if p.relayDown[index] && p.spec.Targets[index].DownAt > 0 && !failoverAdminDownReason(p.relayDownReason[index]) {
+		p.relayDownOverride[index] = p.spec.Targets[index].DownAt
+		p.relayDown[index] = false
+		p.relayDownReason[index] = ""
+		p.spec.Targets[index].Down, p.spec.Targets[index].DownReason = false, ""
+		logf("failover target relay recovered rule=%d source=%d index=%d target=%s reason=a real connection got a reply through the exit (panel hint overridden)", p.ruleID, p.sourcePort, index, failoverTargetLabel(p.spec.Targets[index]))
+		p.recordTargetEventLocked(index, "recovered", "a real connection got a reply through the exit")
+		changed = true
+	}
+	if changed {
+		p.updateFallbackActiveLocked("canary reply")
+	}
 }
 
 // exitThroughRecoveredLocked 这台出口经出口那一关过了没有（没经出口判坏过的不用过）。调用方持有 p.mu。

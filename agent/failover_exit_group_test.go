@@ -1032,3 +1032,55 @@ func TestExitGroupCanaryRealConnectionReadmitsAThroughFailedExit(t *testing.T) {
 		proxy.releaseReservation(reservation)
 	}
 }
+
+// 面板提示「出口连不上目标」的出口：真实连接回了东西就本地放回，同一份提示再发来不按下去，面板探到更新的才算。
+func TestExitGroupCanaryOverridesStalePanelDownHint(t *testing.T) {
+	spec := exitGroupSpec("round_robin", 3)
+	spec.ProbeIntervalSeconds = 0
+	proxy := routeTestProxy(spec)
+	proxy.done = make(chan struct{})
+	drainFailoverEvents()
+	hinted := func(downAt int64) []failoverTarget {
+		targets := make([]failoverTarget, len(proxy.spec.Targets))
+		copy(targets, proxy.spec.Targets)
+		targets[1].Down, targets[1].DownReason, targets[1].DownAt = true, "出口连不上目标", downAt
+		return targets
+	}
+	proxy.mu.Lock()
+	proxy.gateExitThroughLocked([]bool{true, true, true})
+	proxy.applyRelayHintsLocked(hinted(1000))
+	down := proxy.relayDown[1]
+	proxy.mu.Unlock()
+	if !down {
+		t.Fatal("面板提示应当先把它标坏")
+	}
+	if _, index, reservation := proxy.pickReserved("", nil, false); index != 1 {
+		proxy.releaseReservation(reservation)
+		t.Fatalf("提示标坏的出口到点了该拿真实连接试，挑到了 %d", index)
+	} else {
+		proxy.releaseReservation(reservation)
+	}
+	proxy.markEarlyReply(1)
+	proxy.mu.Lock()
+	cleared := !proxy.relayDown[1] && !proxy.spec.Targets[1].Down
+	proxy.applyRelayHintsLocked(hinted(1000)) // 面板再发同一份
+	same := !proxy.relayDown[1]
+	proxy.applyRelayHintsLocked(hinted(2000)) // 面板探到了新的「连不上」
+	newer := proxy.relayDown[1]
+	proxy.mu.Unlock()
+	if !cleared || !same || !newer {
+		t.Fatalf("回复后放回=%v 同一份提示不按下去=%v 更新的提示算数=%v", cleared, same, newer)
+	}
+	// 老面板（不带 DownAt）的提示不试
+	proxy.mu.Lock()
+	targets := hinted(0)
+	proxy.applyRelayHintsLocked(targets)
+	proxy.exitCanaryAt[1] = time.Time{}
+	proxy.mu.Unlock()
+	if _, index, reservation := proxy.pickReserved("", nil, false); index == 1 {
+		proxy.releaseReservation(reservation)
+		t.Fatal("不带 DownAt 的提示分不出新旧，不该拿真实连接去试")
+	} else {
+		proxy.releaseReservation(reservation)
+	}
+}
