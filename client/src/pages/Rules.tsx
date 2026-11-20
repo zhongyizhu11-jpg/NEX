@@ -164,7 +164,7 @@ import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failover
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
-import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
+import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources, type RuleLiveLatencyLike } from "@/features/rules/ruleCardProps";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -1043,7 +1043,8 @@ function deriveRuleView({
         tag = <span className="fx-rule-tag" data-tone="down" title="最近一次测试超时">超时</span>;
       } else if (probe.ms !== null) {
         const ms = probe.ms;
-        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title="最近一次测得的延迟">{ms} ms</span>;
+        // 负载均衡链路：入口实时探测的、扛流量最多那台出口的整链延迟（悬停写两段各多少）；到目标那段还没测到时写「≥」
+        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={probe.liveTitle || "最近一次测得的延迟"}>{probe.atLeast ? "≥ " : ""}{ms} ms</span>;
       }
     }
     // 精简的列表行：这个位置固定是延迟（用户 2026-10-21 圈的），没测过也占着，写「未测试」
@@ -5728,9 +5729,11 @@ function RulesContent() {
       exitTargetTotal: number | null;
       exitTargetOk: number | null;
       exitTargetNote: string | null;
-      /** 主出口连不上目标、已切走时，现在实际走的出口（2.3.537） */
+      /** 负载均衡链路：入口报的在用出口（扛流量最多的排第一；2.3.537 起只在主出口切走时有，现在入口报了就有） */
       exitTargetVia: string[] | null;
       exitTargetViaHostIds: number[] | null;
+      /** 卡上的延迟是入口实时探测的那台出口的整链延迟（server/exitTargetHealth.ts 的 RuleLiveLatency） */
+      latestLatencyLive: RuleLiveLatencyLike | null;
     }>();
     dailyTrafficSummaryRows.forEach((t: any) => {
       const rid = Number(t.ruleId);
@@ -5756,6 +5759,7 @@ function RulesContent() {
           prev.latestLatencyIsTimeout = !!t.latestLatencyIsTimeout;
           prev.latestLatencyAt = t.latestLatencyAt || null;
           prev.latestProbeFailure = t.latestProbeFailure || null;
+          prev.latestLatencyLive = t.latestLatencyLive || null;
         }
       } else {
         m.set(rid, {
@@ -5771,6 +5775,7 @@ function RulesContent() {
           exitTargetNote: t.exitTargetNote || null,
           exitTargetVia: Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null,
           exitTargetViaHostIds: Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null,
+          latestLatencyLive: t.latestLatencyLive || null,
         });
       }
     });
@@ -6456,8 +6461,12 @@ function RulesContent() {
         || `主机 #${hostId}`;
     };
     const configuredRouteHostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
-    // 主出口连不上目标、已切走（2.3.537）：诊断的路径画现在实际走的那台出口，诊断也是从它测的（rules.selfTest）
-    const viaExitHostId = tunnel ? Number(trafficByRule.get(Number(rule.id))?.exitTargetViaHostIds?.[0] || 0) : 0;
+    /*
+      负载均衡链路：诊断的路径画扛流量最多的那台出口（入口真实上报，和卡上的延迟、「经」同一台），诊断也是从它测的
+      （rules.selfTest）。它就是主出口时照旧（链路自己的延迟可以拿来填入口到出口那一段）。
+    */
+    const viaExitCandidate = tunnel ? Number(trafficByRule.get(Number(rule.id))?.exitTargetViaHostIds?.[0] || 0) : 0;
+    const viaExitHostId = viaExitCandidate > 0 && viaExitCandidate !== Number(configuredRouteHostIds[configuredRouteHostIds.length - 1] || 0) ? viaExitCandidate : 0;
     const routeHostIds = viaExitHostId > 0 && configuredRouteHostIds.length >= 2
       ? [...configuredRouteHostIds.slice(0, -1), viaExitHostId]
       : configuredRouteHostIds;
