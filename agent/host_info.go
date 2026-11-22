@@ -412,6 +412,16 @@ type cpuTimes struct {
 	Total uint64
 }
 
+/*
+CPU 占用 = 两次读 /proc/stat 之间 busy / total。两次读得太近（心跳被唤醒连着发两次、面板看实时指标时每秒一读）
+窗口只有几十毫秒，这几十毫秒里正好是 Agent 自己在拼心跳，一核小机上读出来就是 80–90%，可机器的平均负载只有 0.01
+（用户面板 2026-11-22：Jinx(29.9y) 一核、负载 0.01，线路组上却一直写「负载 84%」）。窗口不到 cpuUsageMinWindow
+的这一次不算，报上一次的数、也不动基准，等窗口攒够了再量。
+*/
+const cpuUsageMinWindow = 2 * time.Second
+
+var cpuUsageNow = time.Now
+
 func cpuUsage() int {
 	current, ok := readCPUTimes()
 	if !ok {
@@ -421,6 +431,7 @@ func cpuUsage() int {
 	ready := previousCPUReady
 	if !ready {
 		previousCPUTimes = current
+		previousCPUAt = cpuUsageNow()
 		previousCPUReady = true
 	}
 	cpuUsageMu.Unlock()
@@ -429,17 +440,27 @@ func cpuUsage() int {
 		if next, ok := readCPUTimes(); ok {
 			current = next
 		}
+		return cpuUsageFromTimesAt(current, previousCPUAt.Add(200*time.Millisecond), 200*time.Millisecond)
 	}
-	return cpuUsageFromTimes(current)
+	return cpuUsageFromTimesAt(current, cpuUsageNow(), cpuUsageMinWindow)
 }
 
 func cpuUsageFromTimes(current cpuTimes) int {
+	return cpuUsageFromTimesAt(current, cpuUsageNow(), 0)
+}
+
+func cpuUsageFromTimesAt(current cpuTimes, now time.Time, minWindow time.Duration) int {
 	cpuUsageMu.Lock()
 	defer cpuUsageMu.Unlock()
+	if minWindow > 0 && !previousCPUAt.IsZero() && now.Sub(previousCPUAt) < minWindow {
+		return lastCPUUsage
+	}
 	previous := previousCPUTimes
 	previousCPUTimes = current
+	previousCPUAt = now
 	previousCPUReady = true
 	if current.Total <= previous.Total {
+		lastCPUUsage = 0
 		return 0
 	}
 	totalDelta := current.Total - previous.Total
@@ -448,16 +469,18 @@ func cpuUsageFromTimes(current cpuTimes) int {
 		idleDelta = current.Idle - previous.Idle
 	}
 	if idleDelta >= totalDelta {
+		lastCPUUsage = 0
 		return 0
 	}
 	busyDelta := totalDelta - idleDelta
 	usage := int((busyDelta*100 + totalDelta/2) / totalDelta)
 	if usage < 0 {
-		return 0
+		usage = 0
 	}
 	if usage > 100 {
-		return 100
+		usage = 100
 	}
+	lastCPUUsage = usage
 	return usage
 }
 
