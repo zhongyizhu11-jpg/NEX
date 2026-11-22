@@ -371,7 +371,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
     const wantsHtml = !options.pathFormat && !req.query.format && !req.query.target
       && String(req.headers.accept || "").includes("text/html") && client.browser;
     if (wantsHtml && settings.landingPageEnabled) {
-      const html = await renderLandingPage(req, gated.context, panelUrl, options.byAlias);
+      const html = await renderLandingPage(req, gated.context, panelUrl, options.byAlias, String(res.locals.cspNonce || ""));
       logAccess(req, context, client, { format: "html", profile: false, result: "page", hwid: "", bytes: html.length });
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Robots-Tag", "noindex");
@@ -563,7 +563,7 @@ function queryOverrides(req: Request): { options: Partial<ProxySubTokenContext["
   return { options, scope };
 }
 
-async function renderLandingPage(req: Request, context: ProxySubTokenContext, panelUrl: string, byAlias: boolean): Promise<string> {
+async function renderLandingPage(req: Request, context: ProxySubTokenContext, panelUrl: string, byAlias: boolean, cspNonce: string): Promise<string> {
   const { token, settings } = context;
   const origin = panelUrl || `${req.protocol}://${req.get("host") || ""}`;
   const origins = [origin, ...settings.domains.filter((item) => item.replace(/\/+$/, "") !== origin.replace(/\/+$/, ""))];
@@ -592,6 +592,7 @@ async function renderLandingPage(req: Request, context: ProxySubTokenContext, pa
     // 二维码生成不了就不显示，地址照样在。
   }
   return renderProxySubPage({
+    cspNonce,
     appName: context.appName,
     username: context.username,
     tokenName: String(token.name || ""),

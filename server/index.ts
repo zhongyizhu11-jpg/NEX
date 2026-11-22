@@ -42,6 +42,8 @@ import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatab
 import { startDatabaseHealthMonitor } from "./databaseHealthMonitor";
 import { startPerfSamplerFromEnv } from "./perfSampler";
 import { installWriteBatcherShutdownHooks } from "./dbWriteBatcher";
+import { buildContentSecurityPolicy, injectScriptNonce, newCspNonce } from "./securityHeaders";
+import fs from "fs";
 
 installPanelLogger();
 startPerfSamplerFromEnv();
@@ -91,9 +93,24 @@ function serveStatic(app: express.Express) {
     );
   }
   app.use(express.static(clientDist, { index: false }));
+  /*
+    index.html 不再原样 sendFile：每个请求把 CSP 的 nonce 写到它的 <script> 标签上（server/securityHeaders.ts），
+    script-src 里不再有 'unsafe-inline'。模板读一次放内存（构建产物不会变）；读不到（开发环境没构建）就退回 sendFile。
+  */
+  const indexPath = path.join(clientDist, "index.html");
+  let indexTemplate: string | null = null;
   app.get("*", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");
-    res.sendFile(path.join(clientDist, "index.html"));
+    const nonce = String(res.locals.cspNonce || "");
+    if (indexTemplate === null) {
+      try {
+        indexTemplate = fs.readFileSync(indexPath, "utf8");
+      } catch {
+        res.sendFile(indexPath);
+        return;
+      }
+    }
+    res.type("html").send(nonce ? injectScriptNonce(indexTemplate, nonce) : indexTemplate);
   });
 }
 
@@ -147,6 +164,9 @@ function installSecurityHeaders(app: express.Express) {
   app.use((req, res, next) => {
     const customSidebarEmbed = String(req.query?.__forwardx_embed || "") === "1";
     const frameAncestors = customSidebarEmbed ? "'self'" : "'none'";
+    // 每个请求一个 nonce：index.html 和订阅页的内联脚本带着它才能跑（server/securityHeaders.ts）。
+    const nonce = newCspNonce();
+    res.locals.cspNonce = nonce;
     res.setHeader("X-Content-Type-Options", "nosniff");
     // Only a custom sidebar iframe may opt the panel's own pages into
     // same-origin framing. External sites still control their own
@@ -154,10 +174,7 @@ function installSecurityHeaders(app: express.Express) {
     res.setHeader("X-Frame-Options", customSidebarEmbed ? "SAMEORIGIN" : "DENY");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    res.setHeader(
-      "Content-Security-Policy",
-      `default-src 'self'; base-uri 'self'; frame-ancestors ${frameAncestors}; object-src 'none'; img-src 'self' data: blob: https: http:; font-src 'self' data:; style-src 'self' 'unsafe-inline' https://fastly.jsdelivr.net; script-src 'self' 'unsafe-inline' https://fastly.jsdelivr.net https://cdn.jsdelivr.net https://cubism.live2d.com; connect-src 'self' https: http: wss: ws:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' data: https: http:; media-src 'self' data: blob: https: http:`,
-    );
+    res.setHeader("Content-Security-Policy", buildContentSecurityPolicy({ nonce, frameAncestors }));
     if (req.secure) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     next();
   });
