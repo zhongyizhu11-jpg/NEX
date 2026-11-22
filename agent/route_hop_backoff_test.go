@@ -138,6 +138,10 @@ func TestRouteHopReportCarriesProbeAgeAndInterval(t *testing.T) {
 		runner.probe(due)
 	}
 	clock = clock.Add(1500 * time.Millisecond)
+	// 有真实流量时才是面板下发的节拍（闲着的出口放慢到 30 秒，见 routeHopIdleStretch）
+	for _, state := range runner.states {
+		state.passiveSeenAt = clock
+	}
 	got := runner.report()
 	if len(got) != 1 {
 		t.Fatalf("first result reported: %#v", got)

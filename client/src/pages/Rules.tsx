@@ -20,7 +20,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog, DiagnoseSubjectActions, formatDiagnoseTime, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
-import { applyRuleCurrentLatency, describeRuleCurrentLatency, type RuleCurrentLatency } from "@/lib/diagnosisCurrentLatency";
+import { applyRuleCurrentLatency, describeOutdatedDiagnosisRoute, describeRuleCurrentLatency, type RuleCurrentLatency } from "@/lib/diagnosisCurrentLatency";
 import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
@@ -10890,14 +10890,36 @@ function SelfTestDialog({
   const isSuccess = status === "success";
   const isTimeout = status === "timeout";
   const isFailed = !!latest && !isTesting && !isSuccess && !isTimeout;
-  const diagnosedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
+  /*
+    上次诊断是旧路线测的（规则换了隧道 / 目标、隧道换了出口 / 入口 / 中转，shared/diagnosisRoute.ts，服务端算好）：
+    不画它那条旧路线，按现在的配置（plannedSegments）画、写明原因，并自动重测一次（2.3.547，用户：「隧道换了出口，
+    转发的不实时变过来？」）。重测排出去之后 latest 换成新的一行，这个标记自然就没了。
+  */
+  const routeOutdated = !!latest && !isTesting && (latest as { routeOutdated?: boolean }).routeOutdated === true;
+  const routeChangedAt = (latest as { routeChangedAt?: string | Date | null } | null)?.routeChangedAt ?? null;
+  const autoRetestRef = useRef(0);
+  useEffect(() => {
+    if (!open || !routeOutdated || isTesting || startMutation.isPending) return;
+    if (autoRetestRef.current === latestTestId) return;
+    autoRetestRef.current = latestTestId;
+    setOptimisticTesting(true);
+    setActiveTestId(null);
+    startMutation.mutate({ ruleId });
+  }, [open, routeOutdated, isTesting, latestTestId, ruleId, startMutation]);
+  const diagnosedMessage = useMemo(() => {
+    const parsed = parseLinkTestMessage(latest?.message);
+    // 旧路线的两段不画：只留现在配置里的节点（LinkTestProbeView 没有 details 时按 plannedSegments 画）
+    return routeOutdated ? { ...parsed, message: "", details: [], totalLatencyMs: null, tunnelLatencyMs: null, tunnelProbeTimedOut: false } : parsed;
+  }, [latest?.message, routeOutdated]);
   // 规则卡上的延迟比上次诊断新（定时探测又测了一轮）：画卡片上的那份，两边一个数；测试中、诊断没通、卡片没数就画诊断的
   const currentView = useMemo(
-    () => (isTesting || !isSuccess ? null : applyRuleCurrentLatency({ parsed: diagnosedMessage, diagnosisAt: latest?.updatedAt, diagnosisSuccess: isSuccess, current })),
-    [current, diagnosedMessage, isSuccess, isTesting, latest?.updatedAt],
+    () => (isTesting || !isSuccess || routeOutdated ? null : applyRuleCurrentLatency({ parsed: diagnosedMessage, diagnosisAt: latest?.updatedAt, diagnosisSuccess: isSuccess, current })),
+    [current, diagnosedMessage, isSuccess, isTesting, latest?.updatedAt, routeOutdated],
   );
   const parsedMessage = currentView?.parsed ?? diagnosedMessage;
-  const latencyNote = currentView ? describeRuleCurrentLatency(currentView, (at) => formatDiagnoseTime(at)) : null;
+  const latencyNote = routeOutdated
+    ? describeOutdatedDiagnosisRoute({ routeChangedAt, diagnosedAt: latest?.updatedAt ?? null }, (at) => formatDiagnoseTime(at))
+    : currentView ? describeRuleCurrentLatency(currentView, (at) => formatDiagnoseTime(at)) : null;
   const plannedSegmentCount = plannedSegments?.length || 0;
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
   const lastFailureToastKey = useRef("");
@@ -10923,9 +10945,9 @@ function SelfTestDialog({
       subjectName={ruleName}
       scope="从入口一段段测到目标地址"
       sizeClassName={probeDialogSizeClass}
-      testing={isTesting}
+      testing={isTesting || routeOutdated}
       lastRunAt={latest?.updatedAt ?? null}
-      outcome={isSuccess ? "success" : isTimeout ? "timeout" : isFailed ? "failed" : null}
+      outcome={routeOutdated ? null : isSuccess ? "success" : isTimeout ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
       latencyNote={latencyNote}
       checklist={{ kind: "rule", id: ruleId }}
@@ -10942,8 +10964,8 @@ function SelfTestDialog({
       <LinkTestProbeView
         parsed={parsedMessage}
         fallbackLatencyMs={currentView ? currentView.latencyMs : typeof latest?.latencyMs === "number" && latest.latencyMs > 0 ? latest.latencyMs : null}
-        isSuccess={isSuccess}
-        isTesting={isTesting}
+        isSuccess={isSuccess && !routeOutdated}
+        isTesting={isTesting || routeOutdated}
         sourceLabel={sourceLabel}
         targetLabel={targetLabel}
         nodeMeta={nodeMeta}

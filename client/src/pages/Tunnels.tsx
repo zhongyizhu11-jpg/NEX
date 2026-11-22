@@ -2841,6 +2841,7 @@ function TunnelsContent() {
       utils.tunnels.options.invalidate();
       utils.tunnels.listPage.invalidate();
       utils.tunnels.mapItems.invalidate();
+      void utils.rules.invalidate();
       setShowDialog(false);
       setShowCreateTypeDialog(false);
       setActiveSection("tunnels");
@@ -2890,6 +2891,8 @@ function TunnelsContent() {
         utils.tunnels.listPage.invalidate(),
         utils.tunnels.mapItems.invalidate(),
         utils.tunnels.listAll.invalidate(),
+        // 链路换了出口 / 入口 / 中转：规则卡的「经 xxx」、延迟、诊断都要按新路线重取（server/tunnelTopologyChange.ts）
+        utils.rules.invalidate(),
         utils.forwardGroups.options.invalidate(),
         utils.forwardGroups.listPage.invalidate(),
         utils.rules.list.invalidate(),
@@ -2911,6 +2914,8 @@ function TunnelsContent() {
         utils.tunnels.listPage.invalidate(),
         utils.tunnels.mapItems.invalidate(),
         utils.tunnels.listAll.invalidate(),
+        // 链路换了出口 / 入口 / 中转：规则卡的「经 xxx」、延迟、诊断都要按新路线重取（server/tunnelTopologyChange.ts）
+        utils.rules.invalidate(),
         utils.forwardGroups.options.invalidate(),
         utils.forwardGroups.listPage.invalidate(),
         utils.rules.list.invalidate(),

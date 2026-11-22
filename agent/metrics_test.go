@@ -1694,9 +1694,9 @@ func TestTCPLatencyWithProbesPreservesPartialTCPFailures(t *testing.T) {
 
 	var calls atomic.Int32
 	dialNetworkTimeout = func(string, string, time.Duration) (net.Conn, error) {
-		// Two of the three synthetic connection attempts succeed.  The returned
+		// 第一次连不上才并发补两次：补的两次都通 → 2/3（通的时候只连一次，见 2.2.267）。The returned
 		// pipe is closed immediately by tcpLatencyResolved after the dial sample.
-		if calls.Add(1) <= 2 {
+		if calls.Add(1) >= 2 {
 			conn, peer := net.Pipe()
 			_ = peer.Close()
 			return conn, nil
@@ -1752,16 +1752,40 @@ func TestTCPLatencyWithProbesConfirmsBatchFailureBeforeReportingLoss(t *testing.
 	}
 }
 
+func TestTCPLatencyWithProbesDialsOnceWhenTargetIsUp(t *testing.T) {
+	originalDial := dialNetworkTimeout
+	t.Cleanup(func() { dialNetworkTimeout = originalDial })
+
+	// 通的时候只连一次（2.2.267）：高防目标把一分钟里连好几次又什么都不发的 IP 拉黑。
+	var calls atomic.Int32
+	dialNetworkTimeout = func(string, string, time.Duration) (net.Conn, error) {
+		calls.Add(1)
+		conn, peer := net.Pipe()
+		_ = peer.Close()
+		return conn, nil
+	}
+	measurement := tcpLatencyWithProbes("192.0.2.1", 443, time.Second, tcpingTCPProbeCount)
+	if !measurement.Reachable || measurement.ProbeCount != 1 || measurement.ProbeSuccesses != 1 || measurement.LatencyMs < 1 {
+		t.Fatalf("a reachable target should be one clean success: %+v", measurement)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("reachable target dialed %d times, want 1", calls.Load())
+	}
+}
+
 func TestTCPLatencyWithProbesReportsMedianNotMean(t *testing.T) {
 	originalDial := dialNetworkTimeout
 	t.Cleanup(func() { dialNetworkTimeout = originalDial })
 
 	var calls atomic.Int32
 	dialNetworkTimeout = func(string, string, time.Duration) (net.Conn, error) {
-		// 两次很快、一次慢 120ms：平均会被拉到 40ms 以上，中间值应该还是快的那档。
-		if calls.Add(1) == 1 {
+		// 第一次连不上才并发补测：补的两次一次慢 120ms、一次 5ms，报的是中间值（小的那个），不是平均。
+		switch calls.Add(1) {
+		case 1:
+			return nil, errors.New("synthetic tcp timeout")
+		case 2:
 			time.Sleep(120 * time.Millisecond)
-		} else {
+		default:
 			time.Sleep(5 * time.Millisecond)
 		}
 		conn, peer := net.Pipe()
@@ -1769,11 +1793,49 @@ func TestTCPLatencyWithProbesReportsMedianNotMean(t *testing.T) {
 		return conn, nil
 	}
 	measurement := tcpLatencyWithProbes("192.0.2.1", 443, time.Second, tcpingTCPProbeCount)
-	if !measurement.Reachable || measurement.ProbeSuccesses != tcpingTCPProbeCount {
-		t.Fatalf("all probes should succeed: %+v", measurement)
+	if !measurement.Reachable || measurement.ProbeCount != tcpingTCPProbeCount || measurement.ProbeSuccesses != tcpingTCPProbeCount-1 {
+		t.Fatalf("one miss then two hits: %+v", measurement)
 	}
 	if measurement.LatencyMs >= 60 {
 		t.Fatalf("latency %dms follows the one slow probe; want the median of the fast ones", measurement.LatencyMs)
+	}
+}
+
+func TestRunTCPingTasksSharesOneMeasurementPerTarget(t *testing.T) {
+	originalDial := dialNetworkTimeout
+	t.Cleanup(func() { dialNetworkTimeout = originalDial })
+
+	// 两条规则探同一个目标：一轮只连一次，两条各报各的（用户面板：hep ix 给两条隧道的规则探同一个高防目标）。
+	var calls atomic.Int32
+	dialNetworkTimeout = func(string, string, time.Duration) (net.Conn, error) {
+		calls.Add(1)
+		conn, peer := net.Pipe()
+		_ = peer.Close()
+		return conn, nil
+	}
+	tasks := []tcpingTask{
+		{Kind: "rule", RuleID: 8, TunnelID: 6, Method: "tcping", TargetIP: "192.0.2.10", TargetPort: 24895, ProbeKey: "rule:8"},
+		{Kind: "rule", RuleID: 57, TunnelID: 10, Method: "tcping", TargetIP: " 192.0.2.10 ", TargetPort: 24895, ProbeKey: "rule:57"},
+		{Kind: "rule", RuleID: 9, TunnelID: 6, Method: "tcping", TargetIP: "192.0.2.10", TargetPort: 24896, ProbeKey: "rule:9"},
+	}
+	results, _, _, _ := runTCPingTasks(tasks)
+	if len(results) != 3 {
+		t.Fatalf("every rule reports: got %d results", len(results))
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("same target dialed %d times, want 2 (two distinct targets)", calls.Load())
+	}
+	seen := map[string]bool{}
+	for _, result := range results {
+		seen[result["probeKey"].(string)] = true
+		if result["isTimeout"] != false {
+			t.Fatalf("shared measurement should be reachable: %v", result)
+		}
+	}
+	for _, key := range []string{"rule:8", "rule:57", "rule:9"} {
+		if !seen[key] {
+			t.Fatalf("missing report for %s: %v", key, results)
+		}
 	}
 }
 
@@ -1783,7 +1845,8 @@ func TestExecuteTCPingTaskReportsPartialTCPFailures(t *testing.T) {
 
 	var calls atomic.Int32
 	dialNetworkTimeout = func(string, string, time.Duration) (net.Conn, error) {
-		if calls.Add(1) == 1 {
+		// 第一次连不上才并发补两次：补的两次一通一不通 → 1/3（通的时候只连一次，见 2.2.267）
+		if calls.Add(1) == 2 {
 			conn, peer := net.Pipe()
 			_ = peer.Close()
 			return conn, nil

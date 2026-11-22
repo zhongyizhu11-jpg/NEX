@@ -568,6 +568,8 @@ type tcpingTask struct {
 type tcpingTaskResult struct {
 	Kind    string
 	Payload map[string]any
+	// 这一次的测量（同一目标的几条规则共用它拼各自的上报）
+	Measurement probeMeasurement
 }
 
 // probeMeasurement keeps packet-level information that used to be collapsed
@@ -2043,11 +2045,20 @@ func tcpingBorrowedRuleLimit(limit int, total int, maximum int) int {
 	return scaled
 }
 
-func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []map[string]any, []map[string]any) {
+func runTCPingTasks(allTasks []tcpingTask) ([]map[string]any, []map[string]any, []map[string]any, []map[string]any) {
+	tasks, followers := tcpingDedupeTasks(allTasks)
 	workerCount := tcpingTaskConcurrency(len(tasks))
 	borrowed := tcpingBorrowableWorkers(len(tasks), workerCount)
-	out := make(chan tcpingTaskResult, len(tasks))
-	jobs := make(chan tcpingTask, workerCount+borrowed)
+	type indexedResult struct {
+		index  int
+		result tcpingTaskResult
+	}
+	type indexedTask struct {
+		index int
+		task  tcpingTask
+	}
+	out := make(chan indexedResult, len(tasks))
+	jobs := make(chan indexedTask, workerCount+borrowed)
 	var wg sync.WaitGroup
 	for worker := 0; worker < workerCount+borrowed; worker++ {
 		wg.Add(1)
@@ -2058,16 +2069,16 @@ func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []m
 				if isBorrowed && selfTestBusy() {
 					return
 				}
-				task, ok := <-jobs
+				job, ok := <-jobs
 				if !ok {
 					return
 				}
-				out <- executeTCPingTask(task)
+				out <- indexedResult{index: job.index, result: executeTCPingTask(job.task)}
 			}
 		}()
 	}
-	for _, task := range tasks {
-		jobs <- task
+	for index, task := range tasks {
+		jobs <- indexedTask{index: index, task: task}
 	}
 	close(jobs)
 	wg.Wait()
@@ -2076,7 +2087,17 @@ func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []m
 	tunnels := []map[string]any{}
 	forwardGroups := []map[string]any{}
 	services := []map[string]any{}
-	for result := range out {
+	collected := make([]tcpingTaskResult, 0, len(allTasks))
+	for item := range out {
+		collected = append(collected, item.result)
+		if item.result.Payload == nil {
+			continue
+		}
+		for _, follower := range followers[item.index] {
+			collected = append(collected, tcpingTaskResultFromMeasurement(follower, item.result.Measurement))
+		}
+	}
+	for _, result := range collected {
 		if result.Payload == nil {
 			continue
 		}
@@ -2147,6 +2168,19 @@ func executeTCPingTaskWithProbes(
 	wireGuardProbe func(int, string, int, time.Duration) (int, wireGuardProbeStatus),
 	pingProbe func(string, time.Duration, int) probeMeasurement,
 ) tcpingTaskResult {
+	measurement, ok := measureTCPingTask(task, wireGuardProbe, pingProbe)
+	if !ok {
+		return tcpingTaskResult{}
+	}
+	return tcpingTaskResultFromMeasurement(task, measurement)
+}
+
+// measureTCPingTask 只量，不拼上报；ok 为 false 是这一轮没法量（WireGuard 对端还没就绪）。
+func measureTCPingTask(
+	task tcpingTask,
+	wireGuardProbe func(int, string, int, time.Duration) (int, wireGuardProbeStatus),
+	pingProbe func(string, time.Duration, int) probeMeasurement,
+) (probeMeasurement, bool) {
 	measurement := probeMeasurement{ProbeCount: 1}
 	// 实际去测的地址。上报里的 targetIp 仍是原来的域名（面板按它核对这条服务没被改过）。
 	probeTarget := task.TargetIP
@@ -2177,7 +2211,7 @@ func executeTCPingTaskWithProbes(
 			latency, status = wireGuardProbe(task.TunnelID, task.WireGuardPeerID, task.TargetPort, tcpingWireGuardTimeout)
 		}
 		if status == wireGuardProbeNotReady {
-			return tcpingTaskResult{}
+			return probeMeasurement{}, false
 		}
 		measurement.LatencyMs = latency
 		measurement.Reachable = status == wireGuardProbeSuccess
@@ -2199,6 +2233,11 @@ func executeTCPingTaskWithProbes(
 	if measurement.ProbeSuccesses == 0 {
 		measurement.Reachable = false
 	}
+	return measurement, true
+}
+
+// tcpingTaskResultFromMeasurement 把一次测量拼成上报（几条规则共用一次测量时各拼各的）。
+func tcpingTaskResultFromMeasurement(task tcpingTask, measurement probeMeasurement) tcpingTaskResult {
 	payload := map[string]any{}
 	switch task.Kind {
 	case "rule":
@@ -2263,7 +2302,47 @@ func executeTCPingTaskWithProbes(
 	}
 	applyForwardGroupHealthDecision(task, measurement.Reachable, payload, time.Now())
 	applyForwardGroupPeerProbeReport(task, measurement.Reachable, payload)
-	return tcpingTaskResult{Kind: task.Kind, Payload: payload}
+	return tcpingTaskResult{Kind: task.Kind, Payload: payload, Measurement: measurement}
+}
+
+/*
+同一台机器上几条规则探同一个目标（同地址、同端口、同地址族的 TCPing）一轮只连一次（2.2.267）：
+用户面板上 hep ix 给两条隧道的规则探同一个高防目标，每轮两份连接。结果各按自己的规则 / probeKey 上报。
+只合并规则的 TCPing：探测服务、链路、转发组各有各的语义不合并；ping / WireGuard 也不合并。
+*/
+func tcpingSharedTargetKey(task tcpingTask) string {
+	if task.Kind != "rule" || task.WireGuardPeerID != "" {
+		return ""
+	}
+	method := strings.ToLower(strings.TrimSpace(task.Method))
+	if method != "" && method != "tcping" && method != "tcp" {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(task.TargetIP))
+	if host == "" || task.TargetPort <= 0 {
+		return ""
+	}
+	return host + ":" + strconv.Itoa(task.TargetPort) + "|" + strings.ToLower(strings.TrimSpace(task.Family))
+}
+
+// tcpingDedupeTasks：每个目标留一条去量（leaders），其余等它的结果（followers，按 leader 的下标归组）。
+func tcpingDedupeTasks(tasks []tcpingTask) (leaders []tcpingTask, followers map[int][]tcpingTask) {
+	followers = map[int][]tcpingTask{}
+	leaderIndex := map[string]int{}
+	for _, task := range tasks {
+		key := tcpingSharedTargetKey(task)
+		if key == "" {
+			leaders = append(leaders, task)
+			continue
+		}
+		if index, ok := leaderIndex[key]; ok {
+			followers[index] = append(followers[index], task)
+			continue
+		}
+		leaderIndex[key] = len(leaders)
+		leaders = append(leaders, task)
+	}
+	return leaders, followers
 }
 
 // tcpLatencyWithProbes performs a bounded batch of TCP connection attempts
@@ -2291,10 +2370,23 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 		reachable bool
 		failure   string
 	}
-	results := make(chan result, count)
 	deadline := time.Now().Add(timeout)
+	/*
+	  通的时候只连一次（2.2.267）：以前每轮并发连 3 次，高防目标把一分钟里连好几次又什么都不发的 IP 当成扫描拉黑
+	  （用户面板：出口到 hkboil.ddos.top 每小时被封 25 分钟）。第一次连不上才把剩下的几次并发补上，照旧能看出
+	  部分丢包（2/3），一批全失败照旧单独再确认一次。
+	*/
+	firstLatency, firstReachable, _, firstFailure := tcpLatencyResolvedWithFailure(host, port, timeout)
+	if firstReachable {
+		if firstLatency < 1 {
+			firstLatency = 1
+		}
+		return probeMeasurement{ProbeCount: 1, ProbeSuccesses: 1, Reachable: true, LatencyMs: firstLatency}
+	}
+	results := make(chan result, count)
+	results <- result{failure: firstFailure}
 	var wg sync.WaitGroup
-	for i := 0; i < count; i++ {
+	for i := 1; i < count; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

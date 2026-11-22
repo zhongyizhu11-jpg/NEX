@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyRuleCurrentLatency, describeRuleCurrentLatency } from "./diagnosisCurrentLatency";
+import { applyRuleCurrentLatency, describeOutdatedDiagnosisRoute, describeRuleCurrentLatency } from "./diagnosisCurrentLatency";
 
 /*
   用户面板（2026-11-20 23:14）：规则「广港us/2」诊断 入口→hep ix 6 + hep ix→目标 149 = 155，规则卡 159（5 + 153.8，23:16 测的）。
@@ -97,4 +97,13 @@ test("定时探测只有合计（没有两段）：两段多于一跳时只换�
   assert.ok(view);
   assert.equal(view.parsed.totalLatencyMs, 157);
   assert.deepEqual(view.parsed.details.map((detail) => detail.latencyMs), [6, 149], "两段没有新的数，留着诊断的");
+});
+
+test("旧路线的诊断：状态行写明链路几点换的、上次诊断几点测的；规则自己改的没有换拓扑时间", () => {
+  const fmt = (at: number) => new Date(at).toISOString().slice(11, 16);
+  assert.equal(
+    describeOutdatedDiagnosisRoute({ routeChangedAt: "2026-11-22T05:57:00Z", diagnosedAt: "2026-11-22T05:56:50Z" }, fmt),
+    "链路 05:57 换过出口 / 入口，上次诊断（05:56）测的是旧路线，正在按现在的路线重测",
+  );
+  assert.equal(describeOutdatedDiagnosisRoute({ routeChangedAt: null, diagnosedAt: null }, fmt), "规则的隧道或目标改过，上次诊断测的是旧路线，正在按现在的路线重测");
 });

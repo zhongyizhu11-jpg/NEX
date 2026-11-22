@@ -65,6 +65,7 @@ import {
 import { planManualTunnelTestRefresh } from "../tunnelRuntimePlan";
 import { TUNNEL_LINK_MBPS_MAX, normalizeTunnelLinkShapingMode, isForwardXTunnel, tunnelFxpMemberHostIds, tunnelFxpRuntimeIssues, tunnelFxpRuntimeIssueSummary, tunnelLinkShaping as tunnelLinkShapingConfig } from "../tunnelFxpRuntime";
 import { tunnelLinkShapingStatusView } from "../tunnelLinkShapingView";
+import { noteTunnelTopologyChanged } from "../tunnelTopologyChange";
 import {
   filterTunnelFieldsForUser,
   getLinkAccessScope,
@@ -2058,6 +2059,10 @@ export const tunnelsRouter = router({
           ];
           // 提交后再推送，Agent 才不会在提交前拉到旧配置（也排在上面的出口映射校正之后）。
           await afterDatabaseCommit(() => refreshTunnelRuntimeHosts(id, affectedHostIds, hopChanged ? "tunnel-hop-updated" : "tunnel-updated", { urgent: true }));
+          if (topologyChanged) {
+            // 拓扑变了：面板内存里旧路线的探测整段忘掉、记下时间，Agent 拉到新配置后给规则自动重测（server/tunnelTopologyChange.ts）
+            await afterDatabaseCommit(() => noteTunnelTopologyChanged(id, { reason: hopChanged ? "tunnel-hop-updated" : "tunnel-updated" }).then(() => undefined));
+          }
         }
         const updatedTunnel = await db.getTunnelById(id);
         const hydratedTunnel = updatedTunnel ? (await attachTunnelEndpointHosts([updatedTunnel as any]))[0] : null;

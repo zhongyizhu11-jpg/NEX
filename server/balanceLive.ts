@@ -315,6 +315,22 @@ export function liveBalanceForTunnel(tunnelId: number, nowMs = Date.now()): Live
     .filter((report): report is LiveRuleReport => !!report);
 }
 
+/**
+ * 链路换了拓扑（server/tunnelTopologyChange.ts）：入口上一份实时上报说的还是旧的那几台出口，忘掉，
+ * 等入口按新配置再报（最多 35 秒内规则卡都不再写旧出口的「经 xxx」和比例）。
+ */
+export function forgetBalanceLiveTunnel(tunnelId: number, ruleIds: readonly number[] = []) {
+  const rules = new Set(ruleIds.map(Number));
+  for (const [key, report] of reports) {
+    if (report.tunnelId === Number(tunnelId) || rules.has(report.ruleId)) reports.delete(key);
+  }
+}
+
+/** 只给测试用：直接放一份上报（不查库） */
+export function setBalanceLiveReportForTest(report: LiveRuleReport, hostId = 0) {
+  reports.set(`${report.ruleId}:${hostId}`, report);
+}
+
 /** 只给测试用 */
 export function resetBalanceLiveForTest() {
   reports.clear();
