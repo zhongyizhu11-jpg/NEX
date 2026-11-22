@@ -1,5 +1,6 @@
 # 转发性能与稳定性专项（2026-11-22）
 
+> 状态：已完成。所有改动在分支 `claude/nice-goldberg-inty9l`，提交见 git log「转发专项」「FXP 封帧流水线」「Agent 转发组保护期」。
 > 范围：真正搬字节的代码 —— `forwardx-fxp/`（NEX 隧道的入口 / 中转 / 出口，TCP 帧流与 UDP 直连）、`agent/` 自己跑的转发（转发组 failover 代理的 TCP / UDP、协议防护代理、SNI 共享入口、管理中继）、`lbcore/`（出口 / 线路挑选）。iptables / nftables / realm / gost / nginx 这些由 Agent 配置但不经 Agent 进程搬字节的运行时不在本次代码审计范围内。
 > 方法：按数据流逐函数读代码取证，先跑一遍基线基准再改，改完回归全部 Go 测试 / race / staticcheck 并重跑基准对比。本文所有数字都来自本机 4 核回环（`scripts/bench/dataplane.sh`），只用于同一台机器上的前后对比，不代表线上吞吐。
 
@@ -49,7 +50,7 @@
 | F1 | `forwardx-fxp/copy_pipeline.go:writeChunk` | 每块明文（128 KiB）切帧时 `var frames [2][]byte` 作为变参传给接口方法 `writeFrames`，切片头数组逃逸到堆：**每块一次分配**，是 TCP 隧道稳态下每 GB 八千多次分配里的大头（基准 allocs/GB 8588，其中 ≈8192 来自这里） | 中（性能，GC） | 变参 + 接口调用的逃逸 |
 | F1b | `forwardx-fxp/copy_pipeline.go` 读 → 封帧交接 | 每次交接向进程级缓冲池借 / 还一块 128 KiB 读缓冲，池每档 128 个槽位、所有连接共用。审计时怀疑多流下槽位耗尽会变成 1:1 分配；**A/B 实测 1 / 4 / 32 流下与改前持平（±5%）**，说明 32 流还没到槽位上限。改成每连接局部复用后不再依赖池的槽位数，收益要在更多并发大流时才看得到，本机未能验证 | 低 | 池是进程级有界池 |
 | F2 | `forwardx-fxp/copy_pipeline.go` `fxpPlainPipeline.drain` | 大帧（多路径）要就地写之前等写出协程清空，用 `time.After(1ms)` 轮询：每轮一次定时器分配、最多 1 ms 的额外延迟 | 低（延迟 / 分配，多路径大帧路径） | 写出协程没有「清空了」的通知 |
-| F3 | `forwardx-fxp/udp_direct.go` 各发送协程 | 每个包判断「是否过期且后面有更新的包」时先调 `queue.pending()` 拿队列锁、再看钟（`superseded(now, pending)` 参数求值顺序），一批里每个包都和读循环（入队方）抢一次锁、看一到两次钟；而绝大多数包根本没过期 | 中（UDP 高 PPS 热路径） | 判断顺序把廉价的时间比较放在了昂贵的加锁之后 |
+| F3 | `forwardx-fxp/udp_direct.go` 各发送协程 | 每个包判断「是否过期且后面有更新的包」时先调 `queue.pending()` 拿队列锁、再看钟（`superseded(now, pending)` 参数求值顺序），一批里每个包都和读循环（入队方）抢一次锁、看一到两次钟；而绝大多数包根本没过期 | 低（本机 A/B 未测出差别，见 §5.4） | 判断顺序把廉价的时间比较放在了昂贵的加锁之后 |
 | F4 | `forwardx-fxp/udp_direct.go` 入口 / 出口 / 中转的 `sweep` | 清扫协程持会话表锁的同时逐条给每条会话的分片重组器过期（每条再拿一把锁）：几千条会话时读循环每 5 秒被挡一次 O(n) | 低（尾延迟，大会话数） | 把两类工作放在同一把锁里 |
 | F5 | `agent/actions.go:activeSharedRuntimeForwardType` | 判断端口被 nginx 还是 gost 占着的循环在第一轮就 `return`，只看了列表里第一条路径 | 中（功能 bug：共享运行时端口归属误判，可能把 nginx 的端口当 gost 处理） | 循环体写错（staticcheck SA4004 报出，CI 未拦） |
 | F6 | `agent/ext_relay.go:relayCopyWithIdle` | 每条中转连接每个方向 `make([]byte, 32K)`，不走进程缓冲池 | 低 | 遗漏 |
@@ -83,6 +84,8 @@
   - `TestSealPipelineReusesHandoffBuffers`：第二次交接拿到的就是第一次交出去、写出协程已用完的那块缓冲；结束后 spare 清空；字节顺序不变。
   - `TestPlainPipelineDrainsBeforeOversizedFrame`：几帧交给写出协程后来一帧装不进交接缓冲的大帧，就地写之前等清空，顺序不乱。
   - `TestSupersededInOnlyAsksQueueWhenExpired`：过期判断的四种组合。
+- `agent/failover_guard_upload_test.go`
+  - `TestFailoverGuardUploadIntegrityWithSilentUpstream`：上游只收不回、3 MiB 不规则分块上传全程在保护期内，逐字节核对（保护期缓冲复用不能错位、不能耽搁数据）。
 - `forwardx-fxp/bench_dataplane_many_test.go`
   - `BenchmarkDataplaneTCPBulkMany`：32 条流同时灌（Gbps、cpu-ms/GB、allocs/GB）。
   - `BenchmarkDataplaneTCPConnRate`：32 个客户端连 → 1 字节往返 → 关（conns/s）。
@@ -97,7 +100,8 @@
 | --- | --- |
 | `gofmt` / `go vet` / `staticcheck -checks SA*`（agent、forwardx-fxp、lbcore） | 通过，0 条 |
 | `go test ./...` forwardx-fxp（修复后） | 通过，238 s |
-| `go test ./...` agent（修复后） | 通过，108 s |
+| `go test ./...` agent（修复后，含保护期改动） | 通过，107 s |
+| `go test -race` agent 子集（Failover / Guard / Relay / EarlyClose / Reroute） | 通过，43 s |
 | `go test -race` forwardx-fxp 子集（UDP / 流水线 / 复位 / 会话 / 中转，共 225 s） | 通过。链式运行里第一次报了 FAIL 但日志只留了尾部、复跑通过，原因没抓到；建议把 race 子集放进 PR 必跑而不是每夜，攒到可复现 |
 | 新增测试在**旧代码**上的表现 | `TestClientResetTearsDownSessionImmediately` 3.4 s 超时失败、`TestTargetResetTearsDownSessionImmediately` 5 s 超时失败（证明测的是真问题）；修复后两者 < 0.1 s |
 
@@ -133,20 +137,22 @@
 
 64 字节一问一答（TCPRTT/aes）p50 15.6 → 15.8 µs、p99 44 → 47 µs：在噪声内，没有变差。
 
-### 5.4 UDP 直连
+### 5.4 UDP 直连（F3 / F4）：**没有测出收益，也没有测出退化**
 
-256 个会话、100k pps（`BenchmarkDataplaneUDPSessions/udp`，修复前用的是修过源地址之后的同一版基准）：
+两次独立的全量运行之间 UDP 数字差得很多（256 会话单核 pps 61k → 75k、丢包 39% → 25%；50k pps 丢包 0.03% → 0.33%），一开始看像是改进 / 退化。于是把 `udp_direct.go` / `udp_tuning.go` 换回旧版、和新版交替各跑 3 遍（A/B，同一台机器、同一时段）：
 
-| 核数 | 指标 | 修改前 | 修改后 | 变化 |
+| 基准 | 指标 | 旧代码 | 新代码 | 变化 |
 | --- | --- | --- | --- | --- |
-| 1 | pps | 61294 | 75187 | +22.7% |
-| 1 | 丢包 % | 38.6 | 24.8 | -35.7% |
-| 1 | cpu-ns/pkt | 17367 | 13064 | -24.8% |
-| 4 | pps | 99997 | 99992 | 持平（已到发送上限） |
-| 4 | 丢包 % | 0 | 0 | — |
-| 4 | cpu-ns/pkt | 30464 | 30578 | 持平 |
+| UDPSessions/udp/sessions=256（1 核） | pps | 75363 | 71381 | -5.3% |
+| UDPSessions/udp/sessions=256（1 核） | 丢包 % | 24.5 | 28.5 | +4 个百分点 |
+| UDPSessions/udp/sessions=256（4 核） | pps / 丢包 | 99990 / 0 | 99995 / 0 | 持平 |
+| UDPRate/udp/rate=200k（1 核） | pps | 144024 | 139249 | -3.3% |
+| UDPRate/udp/rate=200k（4 核） | pps / 丢包 % | 194443 / 2.76 | 194617 / 2.67 | 持平 |
+| UDPRate/udp/rate=50k（1 / 4 核） | 丢包 % | 0.28 / 0.41 | 0.41 / 0.57 | 都在 1% 以内 |
+| UDPRate/udp-nogro/rate=200k（1 核） | pps | 129815 | 145750 | +12.3% |
+| UDPRate/udp-perpacket/rate=200k（1 核） | pps | 110201 | 97271 | -11.7% |
 
-单会话定速（`UDPRate/udp`，两次独立的全量运行，不是交替 A/B）：200k pps 单核 149.7k → 167.3k pps、丢包 25.2% → 16.3%、cpu-ns/pkt −13%；50k pps 两种核数都是满速，丢包 0.03% → 0.33%（单核）/ 0.48% → 0.72%（4 核）—— 绝对值都在 1% 以内、两次运行相隔半小时，归为噪声但在 §6 列为待复核。往返时延 p99 58.7 → 55.0 µs（单核）、245.6 → 212.8 µs（4 核）。
+同一份改动在三条路径上一个 +12%、一个 −12%、一个 −3%，而这三条路径里 F3 / F4 改的代码是一样的：这台 4 核机器上 UDP 单核压测的运行间抖动就有 ±10%，改动的效果淹没在噪声里。**结论：F3（每包少一次队列锁）和 F4（清扫不持表锁）在本机回环上测不出差别**；它们省的是锁和 O(n) 持锁时间，要在真机、更多会话、读循环和清扫真正抢锁时才可能看见。改动本身很小、语义不变、有测试，保留；但本报告不把它们算作已证实的性能提升。全量运行里 UDP 那些看起来变好或变坏的数字同样按噪声处理。
 
 ### 5.5 Agent 转发组保护期（F9）
 
@@ -170,7 +176,7 @@
 
 ## 6. 未解决的问题与风险
 
-- **UDPRate 50k 的丢包从 0.03% 到 0.33%**：两次全量运行之间的差异，绝对值 < 1%，大概率是机器噪声；但 UDP 改动确实碰了发送协程，建议用 A/B 交替再跑一遍确认（本次时间内未做）。
+- **UDP 热路径改动（F3 / F4）未测出收益**：见 §5.4 的 A/B。要验证得在真机上压更多会话、并用 `perf` / pprof 看锁等待时间。
 - **race 子集一次未复现的失败**：见 §5.1。
 - **F7 半关闭后无限等**：建议加一个可配置的「半关闭后空闲超时」（默认关闭或给一个很长的值，如 1 小时），对齐 Agent 侧 `relayTCPBidirectional` 的做法；因为有测试明确钉住现状、且会改变长响应场景的语义，本次不改，留给产品决策。
 - **UDP 会话上限**（1024 / 规则）对中大型集群偏小，是防护值而不是容量值；提高时要同步看每会话 128 KiB 目标套接字缓冲带来的内核内存。
