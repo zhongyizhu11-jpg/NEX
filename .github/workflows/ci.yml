@@ -154,6 +154,16 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # 数据竞争在普通测试里不一定红。全量 -race 太慢（每夜 go-race.yml 跑），这里只跑搬字节的那几块：
+      # 转发 / 会话 / 中转 / 流水线 / 线路组；lbcore 很小，全量跑。
+      - name: go test -race (data path)
+        run: |
+          case "${{ matrix.module }}" in
+            agent) go test -race -count=1 -timeout 15m -run 'Failover|Guard|Relay|EarlyClose|Reroute|UDP|Splice|Protocol' . ;;
+            forwardx-fxp) go test -race -count=1 -timeout 15m -run 'UDP|Pipeline|Superseded|Reset|Bidirectional|Vanish|PeerGone|HalfClose|Sweep|Reclaim|Session|Entry|Exit|Relay' . ;;
+            lbcore) go test -race -count=1 ./... ;;
+          esac
+
       - name: Cross-compile linux/arm64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null .
 
