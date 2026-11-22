@@ -280,6 +280,19 @@ function finiteOrNull(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+/**
+ * 链路换了拓扑（server/tunnelTopologyChange.ts）：这条链路上各规则的出口快速探测状态、「每台都连不上」的记账、摘除记忆和
+ * 记下的出口顺序都是旧路线的，整段忘掉。不忘的话换完出口的头 90 秒里规则卡的「经 xxx」、诊断从哪台测还按旧出口算。
+ */
+export function forgetExitTargetTunnel(tunnelId: number, ruleIds: readonly number[] = []) {
+  for (const ruleId of ruleIds) {
+    statesByRule.delete(Number(ruleId));
+    allDownByRule.delete(Number(ruleId));
+    excludedMemoByRule.delete(Number(ruleId));
+  }
+  if (Number(tunnelId) > 0) tunnelMetaById.delete(Number(tunnelId));
+}
+
 /** 只给测试用 */
 export function resetExitTargetStates() {
   statesByRule.clear();

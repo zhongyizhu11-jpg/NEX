@@ -48,6 +48,7 @@ import { z } from "zod";
 import { planProxyNodeBinding } from "@shared/proxyNodeAutoBind";
 import { assertNoDirectSelfForwardLoop } from "../selfForwardLoop";
 import * as db from "../db";
+import { noteRuleRouteChanged } from "../tunnelTopologyChange";
 import { afterDatabaseCommit, isDatabaseTransactionActive } from "../dbRuntime";
 import { handleTrafficBillingShortfall } from "../trafficBillingRuleBlock";
 import { pushAgentRefresh } from "../agentEvents";
@@ -4321,6 +4322,15 @@ export const crudRulesRouter = router({
       }
       // 线路组的中转：缺的建、多的收、dial 写回，再推一次入口（见 server/routeGroups.ts）。
       await syncRouteGroupAfterSave(id, "forward-rule-updated");
+      /*
+        规则换了隧道 / 入口 / 目标：面板内存里它的旧路线探测整段忘掉，Agent 拉到新配置后自动重测一次
+        （server/tunnelTopologyChange.ts；诊断弹窗按 shared/diagnosisRoute.ts 认出旧路线的快照）。
+      */
+      const routeData = data as Record<string, unknown>;
+      const routeRule = rule as Record<string, unknown>;
+      const targetChangedForRoute = (routeData.targetIp !== undefined && String(routeData.targetIp) !== String(routeRule.targetIp))
+        || (routeData.targetPort !== undefined && Number(routeData.targetPort) !== Number(routeRule.targetPort));
+      if (directRouteChanged || targetChangedForRoute) noteRuleRouteChanged(id, { reason: "forward-rule-updated" });
       return {
         success: true,
         reset: keyFieldChanged && !failoverHotUpdate,

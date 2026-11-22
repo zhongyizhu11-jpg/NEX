@@ -184,6 +184,22 @@ export function tunnelInUseExitLatency(input: {
   };
 }
 
+/**
+ * 链路换了拓扑（出口 / 入口 / 中转 / 出口组 / 负载均衡开关，server/tunnelTopologyChange.ts）：这条链路的「入口到出口」
+ * 和它上面各条规则的「出口到目标」都是旧路线测的，整段忘掉，等新路线的探测报上来再画（卡片这段时间退回定时探测 / 诊断）。
+ */
+export function forgetTunnelLatencyView(tunnelId: unknown, ruleIds: readonly unknown[] = []) {
+  const tid = positive(tunnelId);
+  if (tid) exitLegByTunnel.delete(tid);
+  for (const ruleId of ruleIds) {
+    const rid = positive(ruleId);
+    if (rid) targetLegByRule.delete(rid);
+  }
+  if (tid) {
+    for (const [rid, entry] of targetLegByRule) if (entry.tunnelId === tid) targetLegByRule.delete(rid);
+  }
+}
+
 /** 只给测试用 */
 export function resetRuleLatencyViewForTest() {
   exitLegByTunnel.clear();

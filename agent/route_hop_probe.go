@@ -82,6 +82,8 @@ type routeHopProbeState struct {
 	passiveMinMs float64
 	// 重传比例最近一次有新样本（两次扫描之间发了够多的包）的时刻。
 	passiveLossAt time.Time
+	// 最近一次看到到这个目标的活跃连接（真实流量）的时刻：healthy 又 60 秒没流量时主动探测放慢（routeHopProbeInterval）。
+	passiveSeenAt time.Time
 	// 连着几轮不通都是目标主动拒绝（RST）：只有这种才放慢到 60 秒（routeHopProbeInterval）。
 	rejectStreak int
 }
@@ -274,6 +276,7 @@ func (r *routeHopProbeRunner) usePassive(state *routeHopProbeState) bool {
 	}
 	state.passiveConns = stats.conns
 	state.passiveMinMs = stats.minMs
+	state.passiveSeenAt = r.now()
 	r.mu.Unlock()
 	r.recordSample(state, routeHopSample{ms: stats.srttMs, ok: true, passive: true, varMs: stats.varMs})
 	return true
@@ -415,10 +418,33 @@ func routeHopDialRejected(err error) bool {
 	return strings.Contains(text, "connection refused") || strings.Contains(text, "connection reset")
 }
 
+/*
+出口到规则目标（Passive 规格）在这台出口上没有真实流量时的主动探测节拍（2.2.267）：目标通着、又 60 秒没看到
+到它的活跃连接，就至少 30 秒探一次。面板按「多久探一次目标」下发 5 / 10 秒，闲着的出口每 5 / 10 秒就对高防目标
+新建一条空连接，高防把这台出口的 IP 拉黑（用户面板：被封的几台全是负载均衡组成员，从没进过组的出口一次没被封）。
+有真实连接时照旧读内核 RTT、不新建连接；目标连不上（fails > 0 / down）时照旧按节拍和退避探，判坏、恢复不变慢。
+*/
+const (
+	routeHopIdleAfter          = 60 * time.Second
+	routeHopIdleActiveInterval = 30 * time.Second
+)
+
+var routeHopIntervalNow = time.Now
+
+func routeHopIdleStretch(state *routeHopProbeState, interval time.Duration, now time.Time) time.Duration {
+	if !state.spec.Passive || !state.known || state.down || state.fails > 0 || interval >= routeHopIdleActiveInterval {
+		return interval
+	}
+	if !state.passiveSeenAt.IsZero() && now.Sub(state.passiveSeenAt) < routeHopIdleAfter {
+		return interval
+	}
+	return routeHopIdleActiveInterval
+}
+
 func routeHopProbeInterval(state *routeHopProbeState) time.Duration {
 	interval := time.Duration(state.spec.IntervalMs) * time.Millisecond
 	if !state.spec.Passive || !state.down || state.oks > 0 {
-		return interval
+		return routeHopIdleStretch(state, interval, routeHopIntervalNow())
 	}
 	// 退避的上限：60 秒，节拍本身就比 60 秒长时（「多久探一次目标」设到 60–300 秒）就是节拍 —— 判坏以后不能反而探得更勤
 	backoffMax := routeHopProbeBackoffMax

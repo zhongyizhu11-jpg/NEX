@@ -1346,6 +1346,8 @@ export const tunnels = table("tunnels", {
   lastTestStatus: text("lastTestStatus"),
   lastTestMessage: text("lastTestMessage"),
   lastTestAt: epoch("lastTestAt"),
+  /** 最近一次换拓扑（入口 / 出口 / 中转 / 出口组 / 负载均衡开关）的时间：比它早的规则诊断是旧路线测的（2.3.547） */
+  topologyChangedAt: epoch("topologyChangedAt"),
   sortOrder: int("sortOrder").notNull().default(0),
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),

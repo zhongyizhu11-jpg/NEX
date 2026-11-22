@@ -147,3 +147,15 @@ export function describeRuleCurrentLatency(view: RuleCurrentLatencyView, formatT
   if (view.source === "exit-target") return `延迟为 ${when} 在用出口探目标的结果，和规则卡一致`;
   return `延迟为 ${when} 的定时探测，和规则卡一致`;
 }
+
+/**
+ * 上次诊断是旧路线测的（服务端 latestTest 的 routeOutdated，见 shared/diagnosisRoute.ts）：状态行写明原因。
+ * routeChangedAt：链路最近一次换拓扑的时间（规则自己换了隧道 / 目标时没有）。
+ */
+export function describeOutdatedDiagnosisRoute(input: { routeChangedAt: unknown; diagnosedAt: unknown }, formatTime: (at: number) => string) {
+  const changed = epochMs(input.routeChangedAt);
+  const diagnosed = epochMs(input.diagnosedAt);
+  const when = diagnosed > 0 ? `上次诊断（${formatTime(diagnosed)}）` : "上次诊断";
+  if (changed > 0) return `链路 ${formatTime(changed)} 换过出口 / 入口，${when}测的是旧路线，正在按现在的路线重测`;
+  return `规则的隧道或目标改过，${when}测的是旧路线，正在按现在的路线重测`;
+}
