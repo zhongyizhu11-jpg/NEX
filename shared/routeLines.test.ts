@@ -209,6 +209,18 @@ test("落地选了落地池的池节点：一台成员一条路径，路径带 d
   assert.deepEqual(routeLinesFromPaths(roundTrip)[0].dests, [{ dest: null, destNodeId: 88 }], "还原成线路：几台成员是同一个落地候选");
 });
 
+test("落地池的成员就是调度这台机器（隧道出口 = 落地机）：直连它走本机回环，不再跳过；经中转绕回它的照旧不要", () => {
+  // 用户面板 2026-11-22：深圳CT → 隧道 → heperpods hk，池「hk落地」= heperpods hk + jinx(39.9y)，以前只剩一条路径、存不了
+  const { paths, issues } = expandRouteLines([line("main", { dests: [{ dest: null, destNodeId: 88 }] })], ctx({ landingPool: LANDING, entryHostId: 6 }));
+  assert.equal(issues.size, 0);
+  assert.deepEqual(paths.map((path) => [path.destHostId, path.dest?.ip, path.dest?.port]), [[6, "127.0.0.1", 443], [3, "198.18.0.3", 443], [2, "198.18.0.2", 20001]]);
+  const viaRelay = expandRouteLines([line("main", { layers: [newRouteLayer({ hostIds: [2] })] })], ctx({ landingPool: LANDING, ruleTargetNodeId: 88, entryHostId: 6 }));
+  assert.deepEqual(viaRelay.paths.map((path) => [path.hops.join("."), path.destHostId]), [["2", 3]], "经 2 中转：不落回入口机 6，也不落回中转 2");
+  // 回环那条的 key 和按公网地址算的一样：成员换地址、换成本机都不丢历史
+  const remote = expandRouteLines([line("main", { dests: [{ dest: null, destNodeId: 88 }] })], ctx({ landingPool: LANDING, entryHostId: 1 }));
+  assert.equal(paths[0].key, remote.paths.find((path) => path.destHostId === 6)?.key);
+});
+
 test("规则目标绑着池节点：「规则目标」那个落地展开成池里几台；成员是入口或这条路上的中转就跳过", () => {
   const { paths } = expandRouteLines([line("main", { layers: [newRouteLayer({ hostIds: [2] })] })], ctx({ landingPool: LANDING, ruleTargetNodeId: 88 }));
   assert.deepEqual(paths.map((path) => [path.hops.join("."), path.destHostId]), [["2", 6], ["2", 3]], "经 2 中转时不落回 2");

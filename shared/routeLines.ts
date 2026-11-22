@@ -414,8 +414,19 @@ function lineCombos(line: RouteLine, ctx: RouteExpandContext, cap: number): { co
     dests.forEach((dest, destIndex) => {
       const last = combo.hops.length > 0 ? combo.hops[combo.hops.length - 1] : 0;
       if (dest.destHostId) {
-        // 落地池的成员：不落回入口机、不落回这条路上已经经过的机器（自己连自己的公网地址常常不通）
-        if (dest.destHostId === ctx.entryHostId || combo.hops.includes(dest.destHostId)) return;
+        /*
+          落地池的成员正好是调度这台机器（隧道出口就是落地机，用户面板 2026-11-22：深圳CT → 隧道 → heperpods hk，
+          池「hk落地」= heperpods hk + jinx(39.9y)）：以前直接跳过，池里两台只剩一条路径，保存被「至少两条」拦住。
+          现在直连它时走本机回环（127.0.0.1:端口，自己拨自己的公网地址常常不通）；经过中转再绕回它的照旧不要。
+          不落回这条路上已经经过的机器。
+        */
+        if (dest.destHostId === ctx.entryHostId) {
+          if (combo.hops.length > 0) return;
+          const local = dest.dest ? { ...dest.dest, ip: "127.0.0.1" } : dest.dest;
+          combos.push({ ...combo, dest: { ...dest, dest: local }, estimate: combo.estimate + 1, order: [...combo.order, destIndex] });
+          return;
+        }
+        if (combo.hops.includes(dest.destHostId)) return;
         const segment = ctx.estimateMs?.(last, dest.destHostId) ?? null;
         combos.push({ ...combo, dest, estimate: combo.estimate + (segment ?? DEFAULT_SEGMENT_MS), order: [...combo.order, destIndex] });
         return;
