@@ -1,5 +1,5 @@
 import { systemRouter } from "./_core/systemRouter";
-import { paymentRouter } from "./payment";
+import { paymentRouter } from "./payment/payment";
 import { router } from "./_core/trpc";
 import { agentTokensRouter } from "./routers/agentTokens";
 import { announcementsRouter } from "./routers/announcements";

@@ -1,9 +1,9 @@
 import { describeRouteReason, type RouteEventKind } from "../shared/routeGroup";
-import { sendTelegramMessage } from "./telegramBot";
+import { sendTelegramMessage } from "./telegram/telegramBot";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
-import { isTelegramBotReady } from "./telegramReady";
-import { filterTelegramRecipients } from "./telegramNotifyPrefs";
-import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
+import { isTelegramBotReady } from "./telegram/telegramReady";
+import { filterTelegramRecipients } from "./telegram/telegramNotifyPrefs";
+import { isDiscordBotReady, notifyDiscordAdmins } from "./discord/discordNotify";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 /*

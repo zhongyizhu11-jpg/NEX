@@ -1,6 +1,6 @@
 import { resolveSiteTitle } from "../../shared/brand";
 import { AUTH_CAPTCHA_MODES, normalizeAuthCaptchaMode } from "../../shared/authCaptchaMode";
-import { TELEGRAM_LOGIN_ENABLED_SETTING, telegramLoginSwitchOn } from "../telegramLoginSwitch";
+import { TELEGRAM_LOGIN_ENABLED_SETTING, telegramLoginSwitchOn } from "../telegram/telegramLoginSwitch";
 import { undecryptableSecretSettingLabels } from "../settingsEncryption";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "./trpc";
 import { githubRepoParts } from "../../shared/githubAccelerator";
@@ -47,15 +47,15 @@ import {
 } from "../migration";
 import { sendMail } from "../email";
 import { SMTP_SECURITY_MODES, effectiveSmtpSecurityMode, resolveSmtpSecurityMode } from "../smtpTransport";
-import { refreshTelegramBotProfile, resetTelegramBotPolling, startTelegramBot } from "../telegramBot";
+import { refreshTelegramBotProfile, resetTelegramBotPolling, startTelegramBot } from "../telegram/telegramBot";
 import { pushAgentRefresh, pushAgentSupportBundle, pushAgentUpgrade, requestHostTcping } from "../agentEvents";
 import { createSupportBundleTask, failSupportBundleHost, getSupportBundleTask } from "../supportBundle";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { DEFAULT_DDNS_TTL, maskSecret } from "../ddns";
-import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSettings";
-import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discordSettings";
-import { isOidcLoginUsable, readOidcLoginSettings } from "../oidcLoginSettings";
+import { isGoogleLoginUsable, readGoogleLoginSettings } from "../oauth/googleLoginSettings";
+import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discord/discordSettings";
+import { isOidcLoginUsable, readOidcLoginSettings } from "../oauth/oidcLoginSettings";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import { panelBackgroundLeaseView } from "../panelLeaseView";
 import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile } from "../ruleEntryDomain";

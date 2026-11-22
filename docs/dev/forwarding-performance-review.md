@@ -188,4 +188,5 @@
 1. TCP 隧道方向的 `splice`：入口客户端 ↔ 出口目标之间有加密层，做不了；但中转的「解一层再封一层」可以研究 AEAD 密钥协商后的透传模式，省掉中转的两次加解密。
 2. UDP 返程在入口对多个会话合并 `sendmmsg`（目前按会话各自的发送协程），高会话数、低每会话 PPS 场景能省系统调用。
 3. 把 `fxpBytePoolSlots` 与 UDP 会话上限做成配置项，并在面板的「主机规格」里给出建议值。
-4. 给 FXP 加 Prometheus 指标：每规则在途会话、队列丢包、过期丢包、池借用失败次数、交接次数 —— 这次改动的效果在线上才能持续看见。
+4. ~~给 FXP 加 Prometheus 指标~~ 已做（第二批）：`nex_fxp_events_5m` / `nex_fxp_udp_sessions` / `nex_fxp_tcp_sessions`，见 `docs/guide/metrics.md`。
+5. F7 半关闭无限等待已改为默认 1 小时上限（`FXP_HALF_CLOSE_MAX_WAIT`）；中转和隧道读侧的复位也已改为立刻收掉（`peerGoneError`）。

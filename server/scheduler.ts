@@ -13,9 +13,9 @@ import {
   proxyTrafficReminderTitle,
 } from "./proxyTrafficReminders";
 import { dispatchReminders, type PendingReminder } from "./reminderDispatch";
-import { runDiscordDigests, runTelegramDigests, sendTelegramMessage } from "./telegramBot";
-import { discordNotifier } from "./discordNotify";
-import { isDiscordBotReadyFromSettings, readDiscordBotSettings } from "./discordSettings";
+import { runDiscordDigests, runTelegramDigests, sendTelegramMessage } from "./telegram/telegramBot";
+import { discordNotifier } from "./discord/discordNotify";
+import { isDiscordBotReadyFromSettings, readDiscordBotSettings } from "./discord/discordSettings";
 import { recoverManualTunnelProbeBatches, settleManualTunnelProbeBatch } from "./tunnelManualProbe";
 import { recoverManualForwardChainBatches, settleManualForwardChainBatch } from "./forwardChainManualProbe";
 import { forwardTestRequestMessage, isDurableForwardTestBatchId, TUNNEL_PROBE_BATCH_PREFIX } from "./repositories/forwardTestRepository";
@@ -47,7 +47,7 @@ import {
 } from "./selfTestTiming";
 import { billingMonthlyBoundary, billingStartOfCalendarDay, MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { normalizeProxyNodeResetDay } from "@shared/proxyNodeQuota";
-import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders, reconcilePendingPaymentOrders } from "./payment";
+import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders, reconcilePendingPaymentOrders } from "./payment/payment";
 import { runPanelEventsDailyMaintenance } from "./ops/eventHooks";
 import { startStatusAvailabilityJob } from "./ops/statusAvailabilityJob";
 import { startOffsiteBackupJob } from "./ops/offsiteBackupJob";

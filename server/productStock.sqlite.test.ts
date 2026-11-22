@@ -174,7 +174,7 @@ test("未付款订单关闭后退回库存，只退一次；已付款的订单�
     }
 
     // 过期扫描走的是支付模块那条关单路径，也要退。
-    const payment = await import(url("server/payment.ts"));
+    const payment = await import(url("server/payment/payment.ts"));
     await order("O-sweep", planId, 2, { expiresAt: new Date(Date.now() - 1000) });
     assert.equal((await planStock(planId)).used, 1);
     await payment.expireStalePendingOrders();
@@ -244,7 +244,7 @@ test("管理员分配、兑换码都占库存；售罄时兑换失败、码不�
 
 test("老订单（下单时没占库存）付款后补占；售罄时实付转入余额、不开通", () => {
   runInDatabase(String.raw`
-    const payment = await import(url("server/payment.ts"));
+    const payment = await import(url("server/payment/payment.ts"));
     const planId = await makePlan(1);
     const paidOrder = (outTradeNo, userId) => exec(
       "INSERT INTO payment_orders (outTradeNo, userId, provider, paymentType, status, subject, amountCents, currency, orderType, planId, stockReserved) VALUES (?, ?, 'stripe', 'stripe', 'paid', 'legacy', 500, 'CNY', 'plan', ?, 0)",

@@ -320,8 +320,8 @@ async function notifyAdmins(text: string) {
     const botConfigured = !!String(settings.telegramBotToken || envToken).trim();
     const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     if (settings.telegramHostStatusNotify === "true" && botEnabled && botConfigured) {
-      const { filterTelegramRecipients } = await import("../telegramNotifyPrefs");
-      const { sendTelegramMessage } = await import("../telegramBot");
+      const { filterTelegramRecipients } = await import("../telegram/telegramNotifyPrefs");
+      const { sendTelegramMessage } = await import("../telegram/telegramBot");
       const recipients = await filterTelegramRecipients(await db.getTelegramAdminRecipients() as any[], "host");
       for (const user of recipients as any[]) {
         if (!user.telegramId) continue;
@@ -329,7 +329,7 @@ async function notifyAdmins(text: string) {
       }
     }
     // Discord：同一类事件，开关是 Discord 卡片里的「主机上下线通知」
-    const { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } = await import("../discordNotify");
+    const { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } = await import("../discord/discordNotify");
     if (await isDiscordHostStatusNotifyEnabled()) await notifyDiscordAdmins(escaped, { category: "host", label: "agent-relay" });
   } catch (error) {
     console.warn(`[AgentRelay] notify failed: ${error instanceof Error ? error.message : String(error)}`);

@@ -14,12 +14,12 @@ import {
   planDiscordSettingsUpdate,
   readDiscordBotSettings,
   readDiscordLoginSettings,
-} from "../discordSettings";
+} from "../discord/discordSettings";
 import { setDiscordDmBlockedAt, unlinkDiscordAccount } from "../repositories/discordAccountRepository";
 import { setInitialPasswordForPasswordlessUser } from "../repositories/googleAccountRepository";
-import { consumeDiscordStartQuota, discordAppFlows, discordSessionErrorCode, issueDiscordSessionOrChallenge } from "../discordAuthRoute";
-import { DiscordApiError, DiscordRestClient } from "../discordBot";
-import { DISCORD_DM_BLOCKED_RETRY_MS, discordNotifier } from "../discordNotify";
+import { consumeDiscordStartQuota, discordAppFlows, discordSessionErrorCode, issueDiscordSessionOrChallenge } from "../discord/discordAuthRoute";
+import { DiscordApiError, DiscordRestClient } from "../discord/discordBot";
+import { DISCORD_DM_BLOCKED_RETRY_MS, discordNotifier } from "../discord/discordNotify";
 import {
   readTelegramNotifyPrefs,
   setNotifyCategoryMuted,
@@ -28,7 +28,7 @@ import {
   TELEGRAM_NOTIFY_CATEGORIES,
   updateTelegramNotifyPref,
   type TelegramNotifyCategory,
-} from "../telegramNotifyPrefs";
+} from "../telegram/telegramNotifyPrefs";
 import { clientIp } from "../clientIp";
 
 /*

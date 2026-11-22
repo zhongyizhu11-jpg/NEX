@@ -1,5 +1,5 @@
 import { startScheduler } from "./scheduler";
-import { startTelegramBot } from "./telegramBot";
+import { startTelegramBot } from "./telegram/telegramBot";
 import { isDevPanelMode } from "./devPanel";
 import { onPanelBackgroundLeaseChange, startPanelBackgroundLease, stopPanelBackgroundLease } from "./panelLease";
 import { startPanelWorkPoller } from "./panelWorkRequests";

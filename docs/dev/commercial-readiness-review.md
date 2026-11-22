@@ -259,4 +259,6 @@ Agent 是装在**客户**机器上以 root 运行、能改防火墙和路由的�
 
 | 转发专项 | 另见 `docs/dev/forwarding-performance-review.md`：客户端 / 目标复位后会话再挂 30 秒导致连接风暴耗尽句柄（已修，建连速率 180 → 5216 conns/s）、TCP 隧道每块明文一次逃逸分配（allocs/GB −87%）、转发组保护期每次读分配 32 KiB（吞吐 +63% ~ +141%）、UDP 多会话热路径每包加锁（单核 256 会话 pps +23%、丢包 −36%）等 | 新增 9 个测试、3 个基准，全量 Go 测试通过 |
 
-**未动、需要你们决策或密钥的项**：上游许可证核实与品牌统一（含 Android 包名）、Android 私有签名密钥（生成后从仓库移除社区密钥与口令）、CSP 去 `unsafe-inline`（需先把 live2d / jsdelivr 自托管并给 `index.html` 内联脚本加 nonce，且浏览器端探测依赖 `connect-src http:`）、版本化迁移体系、非 root 容器（涉及已有数据卷属主迁移）、PostgreSQL 作为商用基线与限流 / 锁迁出内存、退款与发票、隐私政策 / 服务条款 / 账号注销、stable 发布通道。
+| 第二批（2026-11-22 下午） | FXP 中转 / 隧道读侧断开立刻收会话，半关闭后等待加 1 小时上限（`FXP_HALF_CLOSE_MAX_WAIT`）；CI 跑 Go race 子集；FXP 数据面指标上报并由 `/metrics` 导出 `nex_fxp_*`；CSP 的 script-src 去掉 `unsafe-inline` 改每请求 nonce；容器以非 root 用户运行（入口脚本修正数据卷属主）；Rules / Tunnels / Settings 的地球、弹窗、设置分区抽成懒加载模块（Settings 入口块 347 → 108 KB）；服务端 telegram / discord / oauth / payment 四个领域分目录（`docs/dev/server-layout.md`），路由层去掉 129 处多余的 `as any` | 各项有测试；全量 Go / 面板测试通过 |
+
+**未动、需要你们决策或密钥的项**：上游许可证核实与品牌统一（含 Android 包名）、Android 私有签名密钥（生成后从仓库移除社区密钥与口令）、版本化迁移体系、PostgreSQL 作为商用基线与限流 / 锁迁出内存、退款与发票、隐私政策 / 服务条款 / 账号注销、stable 发布通道、UDP 每来源 IP 64 会话默认上限。

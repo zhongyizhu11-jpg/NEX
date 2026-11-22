@@ -1,9 +1,9 @@
 import { ENV } from "./env";
-import { sendTelegramMessage } from "./telegramBot";
+import { sendTelegramMessage } from "./telegram/telegramBot";
 import { getAllSettings } from "./repositories/settingsRepository";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
-import { filterTelegramRecipients } from "./telegramNotifyPrefs";
-import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
+import { filterTelegramRecipients } from "./telegram/telegramNotifyPrefs";
+import { isDiscordBotReady, notifyDiscordAdmins } from "./discord/discordNotify";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 type ForwardGroupSwitchNotifyPayload = {

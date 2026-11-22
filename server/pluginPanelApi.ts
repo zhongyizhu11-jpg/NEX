@@ -7,7 +7,7 @@ import { hostsRouter } from "./routers/hosts";
 import { rulesRouter } from "./routers/rules";
 import { tunnelsRouter } from "./routers/tunnels";
 import { usersRouter } from "./routers/users";
-import { sendTelegramMessage } from "./telegramBot";
+import { sendTelegramMessage } from "./telegram/telegramBot";
 import { getForwardGroupById } from "./repositories/forwardGroupRepository";
 import { getTunnelById } from "./repositories/tunnelRepository";
 import { getUserById } from "./repositories/userRepository";

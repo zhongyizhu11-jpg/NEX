@@ -3,9 +3,9 @@ import * as db from "../../db";
 import { adminProcedure, router } from "../../_core/trpc";
 import { DIGEST_BLOCK_KEYS } from "../../../shared/opsDigest";
 import { getDigestSettings, saveDigestSettings } from "../../ops/digestContent";
-import { buildTelegramDigestText, sendTelegramMessage } from "../../telegramBot";
-import { isTelegramBotReady } from "../../telegramReady";
-import { isTelegramDigestEnabled, readTelegramNotifyPrefs } from "../../telegramNotifyPrefs";
+import { buildTelegramDigestText, sendTelegramMessage } from "../../telegram/telegramBot";
+import { isTelegramBotReady } from "../../telegram/telegramReady";
+import { isTelegramDigestEnabled, readTelegramNotifyPrefs } from "../../telegram/telegramNotifyPrefs";
 
 /*
   trpc.ops.digest.* —— 设置 › Telegram 底部「每日简报」：几点发、管理员简报里多带哪几块。
