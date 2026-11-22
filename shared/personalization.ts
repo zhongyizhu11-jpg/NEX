@@ -703,6 +703,7 @@ export function resolveEffectiveLayout(
     wash         浅色下罩在照片上的那层页面底色，0～80%：数字越大照片越淡、压在照片上的字越清楚
     darkOpacity  深色下照片的不透明度，10～100%（预览站是 40）
     blur         玻璃卡的模糊半径，0～40px（预览站是 28；手机上卡多时调小更顺）
+    cardOpacity  玻璃卡的底色浓度，20～100%（出厂 65；2.3.546 以前固定 45，用户嫌太透）：浅色是白、深色是墨，越大越不透、字越清楚
     sheen        鼠标移上去卡里跟着亮一团光（只在有鼠标的设备上）
     layout       照片怎么铺：
       auto   只有一张图（用的是自定义背景）或者屏幕窄（手机）就铺满全屏一张；两张不同的照片、宽屏时才左右错落（出厂值）
@@ -732,12 +733,13 @@ export type LiquidGlassConfig = {
   wash: number;
   darkOpacity: number;
   blur: number;
+  cardOpacity: number;
   sheen: boolean;
   layout: LiquidGlassLayout;
 };
 
-export const DEFAULT_LIQUID_GLASS: LiquidGlassConfig = { photoSource: "auto", wash: 30, darkOpacity: 40, blur: 28, sheen: true, layout: "auto" };
-export const LIQUID_GLASS_LIMITS = { wash: [0, 80], darkOpacity: [10, 100], blur: [0, 40] } as const;
+export const DEFAULT_LIQUID_GLASS: LiquidGlassConfig = { photoSource: "auto", wash: 30, darkOpacity: 40, blur: 28, cardOpacity: 65, sheen: true, layout: "auto" };
+export const LIQUID_GLASS_LIMITS = { wash: [0, 80], darkOpacity: [10, 100], blur: [0, 40], cardOpacity: [20, 100] } as const;
 
 function clampInt(value: unknown, [min, max]: readonly [number, number], fallback: number) {
   const n = typeof value === "string" ? Number(value) : value;
@@ -758,6 +760,7 @@ export function normalizeLiquidGlassConfig(value: unknown): LiquidGlassConfig {
     wash: clampInt(raw.wash, LIQUID_GLASS_LIMITS.wash, DEFAULT_LIQUID_GLASS.wash),
     darkOpacity: clampInt(raw.darkOpacity, LIQUID_GLASS_LIMITS.darkOpacity, DEFAULT_LIQUID_GLASS.darkOpacity),
     blur: clampInt(raw.blur, LIQUID_GLASS_LIMITS.blur, DEFAULT_LIQUID_GLASS.blur),
+    cardOpacity: clampInt(raw.cardOpacity, LIQUID_GLASS_LIMITS.cardOpacity, DEFAULT_LIQUID_GLASS.cardOpacity),
     sheen: raw.sheen === undefined ? DEFAULT_LIQUID_GLASS.sheen : raw.sheen === true || raw.sheen === "true",
     layout: LIQUID_GLASS_LAYOUTS.some((item) => item.id === layout) ? layout as LiquidGlassLayout : DEFAULT_LIQUID_GLASS.layout,
   };
