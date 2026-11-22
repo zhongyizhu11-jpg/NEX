@@ -496,6 +496,8 @@ type udpEntrySessions struct {
 	byClient map[netip.AddrPort]*udpDirectEntrySession
 	byID     map[uint64]*udpDirectEntrySession
 	perIP    map[netip.Addr]int
+	// sweepBuf：清扫时在锁外过期分片用的会话快照，复用免得每 5 秒分配一次。
+	sweepBuf []*udpDirectEntrySession
 }
 
 func (t *udpEntrySessions) detachLocked(session *udpDirectEntrySession) bool {
@@ -530,11 +532,23 @@ func (t *udpEntrySessions) remove(session *udpDirectEntrySession) {
 func (t *udpEntrySessions) sweep(now time.Time) {
 	var expired []*udpDirectEntrySession
 	var reclaimed []*udpDirectEntrySession
+	// 先在会话表的锁外把每条会话攒着的分片过期掉：这一步要逐条拿会话自己的锁，几千条会话时
+	// 不能让读循环（每个包都要拿会话表的锁）等它扫完。会话在这期间被关掉也没关系，expire 自己会跳过。
+	t.mu.Lock()
+	live := t.sweepBuf[:0]
+	for _, session := range t.byClient {
+		if session != nil {
+			live = append(live, session)
+		}
+	}
+	t.mu.Unlock()
+	for _, session := range live {
+		session.returnFragments.expire(now)
+	}
+	clear(live)
+	t.sweepBuf = live[:0]
 	t.mu.Lock()
 	for key, session := range t.byClient {
-		if session != nil {
-			session.returnFragments.expire(now)
-		}
 		state := udpDirectEntrySessionSnapshot(session)
 		if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
 			if t.byClient[key] == session && t.detachLocked(session) {
@@ -954,20 +968,26 @@ func (s *udpDirectEntrySession) sendBatch(batch []fxpUDPQueuedPacket, ws *fxpUDP
 		}
 		return nil
 	}
+	// 一批包一起看一次钟、记一次活动：以前每个包看两次钟、再向队列要两次锁。
+	now := time.Now()
+	s.lastActivity.Store(now.UnixNano())
 	for i := range batch {
 		queued := &batch[i]
-		if queued.superseded(time.Now(), s.send.pending()) {
+		if queued.supersededIn(now, s.send) {
 			fxpUDPDropLog.Printf("entry udp direct queued packet expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
 			continue
 		}
 		payload := queued.payload
-		s.touch()
 		if !s.inLimiter.waitDone(s.done, len(payload)) {
 			return false
 		}
-		if queued.superseded(time.Now(), s.send.pending()) {
-			fxpUDPDropLog.Printf("entry udp direct queued packet expired after wait tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-			continue
+		if !s.inLimiter.unlimited() {
+			// 真等过限速才可能在等的时候过期；不限速时 waitDone 当场返回，刚看过的钟还作数。
+			now = time.Now()
+			if queued.supersededIn(now, s.send) {
+				fxpUDPDropLog.Printf("entry udp direct queued packet expired after wait tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
+				continue
+			}
 		}
 		if wires != nil && !wires.prepare(ws) {
 			if writeErr = flush(); writeErr != nil {
@@ -1037,7 +1057,7 @@ func (s *udpDirectEntrySession) clientWriteLoop() {
 			return
 		}
 		if limit == 1 || len(batch) == 1 {
-			if batch[0].superseded(time.Now(), s.recv.pending()) {
+			if batch[0].supersededIn(time.Now(), s.recv) {
 				fxpUDPDropLog.Printf("entry udp direct response expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
 			} else {
 				s.writeResponse(batch[0].payload)
@@ -1053,8 +1073,9 @@ func (s *udpDirectEntrySession) clientWriteLoop() {
 // writeResponses 把一批回包一次写回客户端（调用方已确认不限速、不整形）。
 func (s *udpDirectEntrySession) writeResponses(batch []fxpUDPQueuedPacket, sender *fxpUDPBatchSender) {
 	total := 0
+	now := time.Now()
 	for i := range batch {
-		if batch[i].superseded(time.Now(), s.recv.pending()) {
+		if batch[i].supersededIn(now, s.recv) {
 			fxpUDPDropLog.Printf("entry udp direct response expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
 			continue
 		}
@@ -1167,14 +1188,26 @@ func serveExitUDPDirect(conn *net.UDPConn, cfg config) error {
 		detachSessionLocked(session)
 		sessionsMu.Unlock()
 	}
+	var sweepBuf []*udpDirectExitSession
 	stopSweeper, wakeSweeper := startFXPUDPSessionSweeper(func(now time.Time) {
 		var expired []*udpDirectExitSession
 		var reclaimed []*udpDirectExitSession
+		// 分片过期在会话表的锁外做（同 udpEntrySessions.sweep）。
+		sessionsMu.Lock()
+		live := sweepBuf[:0]
+		for _, session := range sessions {
+			if session != nil {
+				live = append(live, session)
+			}
+		}
+		sessionsMu.Unlock()
+		for _, session := range live {
+			session.dataFragments.expire(now)
+		}
+		clear(live)
+		sweepBuf = live[:0]
 		sessionsMu.Lock()
 		for key, session := range sessions {
-			if session != nil {
-				session.dataFragments.expire(now)
-			}
 			state := udpDirectExitSessionSnapshot(session)
 			if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
 				if sessions[key] == session && detachSessionLocked(session) {
@@ -1535,7 +1568,7 @@ func (s *udpDirectExitSession) writeTargetLoop() {
 			return
 		}
 		if limit == 1 || len(batch) == 1 {
-			if batch[0].superseded(time.Now(), s.send.pending()) {
+			if batch[0].supersededIn(time.Now(), s.send) {
 				fxpUDPDropLog.Printf("exit udp direct target packet expired tunnel=%d rule=%d peer=%s target=%s:%d; dropping stale packet", s.cfg.TunnelID, s.ruleID, s.peer(), s.targetIP, s.targetPort)
 			} else {
 				s.writeTarget(batch[0].payload)
@@ -1551,8 +1584,9 @@ func (s *udpDirectExitSession) writeTargetLoop() {
 // writeTargets 把一批包一次写给目标（调用方已确认不整形）。
 func (s *udpDirectExitSession) writeTargets(batch []fxpUDPQueuedPacket, sender *fxpUDPBatchSender) {
 	total := 0
+	now := time.Now()
 	for i := range batch {
-		if batch[i].superseded(time.Now(), s.send.pending()) {
+		if batch[i].supersededIn(now, s.send) {
 			fxpUDPDropLog.Printf("exit udp direct target packet expired tunnel=%d rule=%d peer=%s target=%s:%d; dropping stale packet", s.cfg.TunnelID, s.ruleID, s.peer(), s.targetIP, s.targetPort)
 			continue
 		}
@@ -1733,6 +1767,8 @@ type udpRelaySessions struct {
 	mu         sync.Mutex
 	byUpstream map[udpRuleSessionKey]*udpDirectRelaySession
 	byID       map[uint64]*udpDirectRelaySession
+	// sweepBuf：清扫时在锁外过期分片用的会话快照（同 udpEntrySessions）。
+	sweepBuf []*udpDirectRelaySession
 }
 
 func (t *udpRelaySessions) detachLocked(session *udpDirectRelaySession) bool {
@@ -1757,12 +1793,23 @@ func (t *udpRelaySessions) sweep(now time.Time) {
 	var expired []*udpDirectRelaySession
 	var reclaimed []*udpDirectRelaySession
 	t.clientHints.expire(now)
+	// 分片过期在会话表的锁外做（同 udpEntrySessions.sweep）。
+	t.mu.Lock()
+	live := t.sweepBuf[:0]
+	for _, session := range t.byUpstream {
+		if session != nil {
+			live = append(live, session)
+		}
+	}
+	t.mu.Unlock()
+	for _, session := range live {
+		session.dataFragments.expire(now)
+		session.returnFragments.expire(now)
+	}
+	clear(live)
+	t.sweepBuf = live[:0]
 	t.mu.Lock()
 	for key, session := range t.byUpstream {
-		if session != nil {
-			session.dataFragments.expire(now)
-			session.returnFragments.expire(now)
-		}
 		state := udpDirectRelaySessionSnapshot(session)
 		if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
 			if t.byUpstream[key] == session && t.detachLocked(session) {
@@ -2211,7 +2258,7 @@ func (s *udpDirectRelaySession) downstreamWriteLoop() {
 		if !ok {
 			return
 		}
-		if packet.superseded(time.Now(), s.downstreamSend.pending()) {
+		if packet.supersededIn(time.Now(), s.downstreamSend) {
 			fxpUDPDropLog.Printf("relay udp direct downstream packet expired tunnel=%d rule=%d upstream=%s downstream=%s; dropping stale packet", s.cfg.TunnelID, s.ruleID, s.upstream(), s.downstreamAddr)
 			packet.done()
 			continue
@@ -2276,7 +2323,7 @@ func (s *udpDirectRelaySession) upstreamWriteLoop() {
 		if !ok {
 			return
 		}
-		if packet.superseded(time.Now(), s.upstreamSend.pending()) {
+		if packet.supersededIn(time.Now(), s.upstreamSend) {
 			fxpUDPDropLog.Printf("relay udp direct upstream packet expired tunnel=%d rule=%d upstream=%s; dropping stale packet", s.cfg.TunnelID, s.ruleID, s.upstream())
 			packet.done()
 			continue

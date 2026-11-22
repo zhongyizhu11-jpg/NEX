@@ -26,8 +26,10 @@ import (
     读协程马上返回这个错误（和以前写失败当场返回一样，代理随即关掉两头）。
   - 读到 EOF：等手里的活都写完，再写结束帧。读出错（不是 EOF）直接返回，不等写出协程：
     它要是正卡在写隧道上，等它就会把代理关连接的那一步也卡住。
-  - 内存：写出协程用完就把缓冲还回池里；空闲的连接只占读协程手里那一块，和以前一样。
-    同一时刻最多 fxpSealPipelineDepth 块在排队。
+  - 内存：写出协程用完的缓冲先留在这条连接自己的 spare 里（最多 fxpSealPipelineDepth+1 块），
+    读协程下一次交接直接拿，不经过进程级的池；连接结束时一并还回池里。进程池每档只有几十个槽位，
+    几十条连接同时灌数据时根本不够周转，以前每次交接都是一块 128 KiB 的新分配、整条流 1:1 地喂 GC。
+    空闲的连接只占读协程手里那一块，和以前一样。同一时刻最多 fxpSealPipelineDepth 块在排队。
 */
 
 const (
@@ -62,6 +64,8 @@ type fxpSealPipeline struct {
 	jobs     chan fxpSealJob
 	exited   chan struct{}
 	inFlight atomic.Int32
+	// spare：写出协程用完、留给读协程下一次交接的缓冲（见文件开头「内存」一条）。
+	spare chan []byte
 
 	failOnce sync.Once
 	failed   chan struct{}
@@ -128,7 +132,42 @@ func (p *fxpSealPipeline) write(buf []byte, n int) ([]byte, error) {
 		p.inFlight.Add(-1)
 		return buf, p.err
 	}
-	return getFXPByteBuffer(fxpCopyReadSize), nil
+	return p.takeSpare(), nil
+}
+
+// takeSpare 给读协程一块新的读缓冲：写出协程还回来的优先，没有再向进程池借。
+func (p *fxpSealPipeline) takeSpare() []byte {
+	select {
+	case buf := <-p.spare:
+		return buf[:fxpCopyReadSize]
+	default:
+		return getFXPByteBuffer(fxpCopyReadSize)
+	}
+}
+
+// keepSpare 是写出协程用完一块缓冲：留给这条连接下一次交接；留不下（spare 满了）才还回进程池。
+func (p *fxpSealPipeline) keepSpare(buf []byte) {
+	if cap(buf) < fxpCopyReadSize {
+		putFXPByteBuffer(buf)
+		return
+	}
+	select {
+	case p.spare <- buf[:cap(buf)]:
+	default:
+		putFXPByteBuffer(buf)
+	}
+}
+
+// releaseSpare 在写出协程退出时把留着的缓冲都还回进程池。
+func (p *fxpSealPipeline) releaseSpare() {
+	for {
+		select {
+		case buf := <-p.spare:
+			putFXPByteBuffer(buf)
+		default:
+			return
+		}
+	}
 }
 
 func (p *fxpSealPipeline) start() {
@@ -138,11 +177,13 @@ func (p *fxpSealPipeline) start() {
 	p.started = true
 	p.jobs = make(chan fxpSealJob, fxpSealPipelineDepth)
 	p.exited = make(chan struct{})
+	p.spare = make(chan []byte, fxpSealPipelineDepth+1)
 	go p.run()
 }
 
 func (p *fxpSealPipeline) run() {
 	defer close(p.exited)
+	defer p.releaseSpare()
 	for job := range p.jobs {
 		var err error
 		if p.failure() == nil {
@@ -156,7 +197,7 @@ func (p *fxpSealPipeline) run() {
 			}
 		}
 		if job.buf != nil {
-			putFXPByteBuffer(job.buf)
+			p.keepSpare(job.buf)
 		}
 		p.inFlight.Add(-1)
 		if err != nil {
@@ -218,6 +259,10 @@ type fxpPlainPipeline struct {
 	exited   chan struct{}
 	inFlight atomic.Int32
 	buffers  net.Buffers
+	// spare：写出协程写完、留给下一次交接的缓冲（和 fxpSealPipeline 的一样，见文件开头）。
+	spare chan []byte
+	// idle：写出协程手里的活清空时点一下，drain 靠它醒来，不再每毫秒起一个定时器去看。
+	idle chan struct{}
 
 	failOnce sync.Once
 	failed   chan struct{}
@@ -267,20 +312,63 @@ func (p *fxpPlainPipeline) write(frames [][]byte, total int) error {
 		}
 		return nil
 	}
-	buf := getFXPByteBuffer(total)
+	p.start()
+	buf := p.takeSpare(total)
 	offset := 0
 	for _, frame := range frames {
 		offset += copy(buf[offset:], frame)
 	}
-	p.start()
 	p.inFlight.Add(1)
 	select {
 	case p.jobs <- buf[:offset]:
 		return nil
 	case <-p.failed:
 		p.inFlight.Add(-1)
-		putFXPByteBuffer(buf)
+		p.keepSpare(buf)
 		return p.err
+	}
+}
+
+// takeSpare 给一次交接拿一块能装下 total 字节的缓冲：写出协程还回来的优先，没有再向进程池借
+// 两帧那一档（交接的批最大就是这么大，见 write 里的判断）。
+func (p *fxpPlainPipeline) takeSpare(total int) []byte {
+	select {
+	case buf := <-p.spare:
+		if cap(buf) >= total {
+			return buf[:total]
+		}
+		putFXPByteBuffer(buf)
+	default:
+	}
+	return getFXPByteBuffer(fxpFrameReadBufferSize)[:total]
+}
+
+// keepSpare 是一块交接缓冲用完了：留给下一次交接，留不下才还回进程池。
+func (p *fxpPlainPipeline) keepSpare(buf []byte) {
+	select {
+	case p.spare <- buf[:cap(buf)]:
+	default:
+		putFXPByteBuffer(buf)
+	}
+}
+
+// releaseSpare 在写出协程退出时把留着的缓冲都还回进程池。
+func (p *fxpPlainPipeline) releaseSpare() {
+	for {
+		select {
+		case buf := <-p.spare:
+			putFXPByteBuffer(buf)
+		default:
+			return
+		}
+	}
+}
+
+// signalIdle：写出协程手里的活清空了，叫醒可能在 drain 里等的读协程。
+func (p *fxpPlainPipeline) signalIdle() {
+	select {
+	case p.idle <- struct{}{}:
+	default:
 	}
 }
 
@@ -296,14 +384,23 @@ func (p *fxpPlainPipeline) writeFrames(frames [][]byte) error {
 	return err
 }
 
-// drain 等写出协程手里的活都写完（大帧要就地写之前用）。
+// drain 等写出协程手里的活都写完（大帧要就地写之前用）。写出协程清空时会点 idle；
+// 定时器只是兜底，正常不会靠它醒。
 func (p *fxpPlainPipeline) drain() error {
 	for p.inFlight.Load() != 0 {
+		if p.idle == nil {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
 		select {
 		case <-p.failed:
+			timer.Stop()
 			return p.err
-		case <-time.After(time.Millisecond):
+		case <-p.idle:
+		case <-timer.C:
 		}
+		timer.Stop()
 	}
 	return p.failure()
 }
@@ -315,11 +412,14 @@ func (p *fxpPlainPipeline) start() {
 	p.started = true
 	p.jobs = make(chan []byte, fxpSealPipelineDepth)
 	p.exited = make(chan struct{})
+	p.spare = make(chan []byte, fxpSealPipelineDepth+1)
+	p.idle = make(chan struct{}, 1)
 	go p.run()
 }
 
 func (p *fxpPlainPipeline) run() {
 	defer close(p.exited)
+	defer p.releaseSpare()
 	for buf := range p.jobs {
 		var err error
 		if p.failure() == nil {
@@ -328,8 +428,10 @@ func (p *fxpPlainPipeline) run() {
 				p.counter.Add(uint64(len(buf)))
 			}
 		}
-		putFXPByteBuffer(buf)
-		p.inFlight.Add(-1)
+		p.keepSpare(buf)
+		if p.inFlight.Add(-1) == 0 {
+			p.signalIdle()
+		}
 		if err != nil {
 			p.fail(err)
 		}

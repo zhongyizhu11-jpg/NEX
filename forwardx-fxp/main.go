@@ -2172,6 +2172,28 @@ func waitBidirectional(errCh <-chan error, closeAll func()) error {
 	return waitBidirectionalWithLinger(errCh, closeAll, fxpHalfCloseLinger)
 }
 
+/*
+plainSideGoneError：明文侧（入口的客户端、出口的目标）自己断了 —— 读到复位（RST）、或者写进去被拒。
+这一侧已经没有人能再收数据，另一个方向不用再等它（见 waitBidirectionalWithLinger）。isClosedErr 照样认它
+（Unwrap 到原来的错误）。
+*/
+type plainSideGoneError struct{ err error }
+
+func (e *plainSideGoneError) Error() string { return e.err.Error() }
+func (e *plainSideGoneError) Unwrap() error { return e.err }
+
+func plainSideGone(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &plainSideGoneError{err: err}
+}
+
+func isPlainSideGone(err error) bool {
+	var gone *plainSideGoneError
+	return errors.As(err, &gone)
+}
+
 func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseLinger time.Duration) error {
 	first := <-errCh
 	if first == nil {
@@ -2185,6 +2207,17 @@ func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseL
 	if !isClosedErr(first) {
 		closeAll()
 		return first
+	}
+	if isPlainSideGone(first) {
+		/*
+			明文侧断了（客户端复位、目标复位、往它写被拒）：另一个方向再收到的帧也没有人能收了，马上收掉两头。
+			以前这里和下面一样等 30 秒 linger：出口没有新数据时另一个方向一直卡在读帧上，这条会话在入口的两头、
+			出口的两头一共四个套接字白占 30 秒。连接风暴（客户端大批中断重连、端口扫描）下句柄按
+			「每秒连接数 × 30」积累 —— 本机基准 32 个客户端连 → 1 字节往返 → 复位，1 秒内就把 20000 个 fd 占满，
+			之后入口拨不出去、出口接不进来，所有新连接失败。
+		*/
+		closeAll()
+		return nil
 	}
 	timer := time.NewTimer(halfCloseLinger)
 	defer timer.Stop()
@@ -2268,6 +2301,10 @@ func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, 
 				return sealer.finish()
 			}
 			sealer.abandon()
+			if isClosedErr(err) {
+				// 明文侧复位 / 被关：这一侧没有人能再收数据，让 waitBidirectional 立刻收掉两头。
+				return plainSideGone(err)
+			}
 			return err
 		}
 	}
@@ -2280,9 +2317,9 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 	for {
 		frames, err := src.readFrames(scratch[:0], fxpFrameBatchMax)
 		if failure := writer.failure(); failure != nil {
-			// 写明文侧失败了（写出协程关掉了隧道，readFrames 才回来）。
+			// 写明文侧失败了（写出协程关掉了隧道，readFrames 才回来）。明文侧已经收不了东西，标成 plainSideGone。
 			writer.abandon()
-			return failure
+			return plainSideGone(failure)
 		}
 		if err != nil {
 			writer.abandon()
@@ -2309,12 +2346,12 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 			linkShaperEgress().wait(total)
 			if err := writer.write(frames, total); err != nil {
 				writer.abandon()
-				return err
+				return plainSideGone(err)
 			}
 		}
 		if ended {
 			if err := writer.finish(); err != nil {
-				return err
+				return plainSideGone(err)
 			}
 			closeWriteConn(dst)
 			return nil
