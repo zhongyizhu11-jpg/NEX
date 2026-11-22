@@ -101,6 +101,9 @@ export const ENV = {
   // Keep loopback-only as the secure default; Docker/reverse-proxy deployments
   // can explicitly set FORWARDX_TRUST_PROXY to their proxy subnet or hop count.
   trustProxy: process.env.FORWARDX_TRUST_PROXY ?? "loopback",
+  // 额外放行的浏览器来源（CSRF 防护，见 server/_core/csrf.ts）：面板自己的域名和手机 App 源默认就放行，
+  // 只有把面板 API 嵌进别的站点时才需要填，逗号分隔，如 https://ops.example.com,https://status.example.com。
+  trustedOrigins: process.env.FORWARDX_TRUSTED_ORIGINS ?? "",
   // 管理后台一键升级命令。为空时只允许检查更新，不执行升级。
   // 执行时会注入 FORWARDX_TARGET_VERSION / FORWARDX_CURRENT_VERSION / FORWARDX_REPO_URL。
   upgradeCommand: process.env.FORWARDX_UPGRADE_COMMAND ?? "",

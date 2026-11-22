@@ -326,6 +326,7 @@ func isRetryableHeartbeatError(err error) bool {
 		return true
 	}
 	var networkErr net.Error
+	//lint:ignore SA1019 Temporary 虽已弃用，但这里沿用它对 ECONNRESET / EAGAIN 一类错误的「可重试」判定，换掉会改变重试行为。
 	if errors.As(err, &networkErr) && (networkErr.Timeout() || networkErr.Temporary()) {
 		return true
 	}

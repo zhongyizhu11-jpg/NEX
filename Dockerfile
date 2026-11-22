@@ -57,5 +57,9 @@ COPY --from=builder /app/scripts/install-mimic.sh ./scripts/install-mimic.sh
 COPY --from=builder /app/package.json ./
 
 EXPOSE 3000
+# 存活探测：进程还在并且能回 HTTP 就算活。/api/database-health 不建登录上下文、不查库，
+# 数据库故障时也返回 200（故障信息在 JSON 里），所以库挂了不会把容器标成 unhealthy 触发误重启。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT:-3000}/api/database-health" >/dev/null || exit 1
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]

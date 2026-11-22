@@ -16,6 +16,8 @@ import { apiRateLimitMessage, checkApiRateLimit } from "../apiRateLimit";
 import { currentApiRateLimitConfig, noteApiRateLimited } from "../apiRateLimitConfig";
 import { clientIp } from "../clientIp";
 import { auditMutationCall } from "../operationAudit";
+import { CROSS_SITE_MUTATION_ERR_MSG, crossSiteRequestReason, parseTrustedOrigins } from "./csrf";
+import { ENV } from "../env";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -126,14 +128,33 @@ const recordOperationAudit = t.middleware(opts => auditMutationCall({
 }));
 
 /**
- * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → 令牌权限 → 代入限制。
- * 限流在审计前（被限流的不写库），审计在令牌权限 / 代入限制前（被策略拒掉的写操作记成「被拒绝」）。
+ * 跨站写操作防护（CSRF），见 server/_core/csrf.ts。只管用 Cookie（或还没登录）发来的 mutation：
+ * Bearer 令牌不会被浏览器自动附带，不受 CSRF 影响。排在操作审计后面：拿着受害者 Cookie 的跨站
+ * 请求也记成一行「被拒绝」，方便事后看到有人在试。
+ */
+const trustedOrigins = parseTrustedOrigins(ENV.trustedOrigins);
+const rejectCrossSiteMutations = t.middleware(opts => {
+  if (opts.type !== "mutation") return opts.next();
+  const { ctx } = opts;
+  if (ctx.authSession?.source === "bearer" || ctx.apiToken) return opts.next();
+  const reason = crossSiteRequestReason(ctx.req, { trustedOrigins, isProduction: ENV.isProduction });
+  if (reason) {
+    console.warn(`[Security] cross-site mutation rejected path=${opts.path} user=${ctx.user ? Number(ctx.user.id) : "-"} ip=${clientIp(ctx.req, "unknown")} ${reason}`);
+    throw new TRPCError({ code: "FORBIDDEN", message: CROSS_SITE_MUTATION_ERR_MSG });
+  }
+  return opts.next();
+});
+
+/**
+ * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → CSRF → 令牌权限 → 代入限制。
+ * 限流在审计前（被限流的不写库），审计在 CSRF / 令牌权限 / 代入限制前（被策略拒掉的写操作记成「被拒绝」）。
  */
 const baseProcedure = t.procedure
   .use(rejectWhileDatabaseUnavailable)
   .use(rejectMutationsDuringDatabaseMaintenance)
   .use(enforceApiRateLimit)
   .use(recordOperationAudit)
+  .use(rejectCrossSiteMutations)
   .use(enforceApiTokenPolicy)
   .use(enforceImpersonationPolicy);
 

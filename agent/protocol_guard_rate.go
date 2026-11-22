@@ -218,7 +218,6 @@ func (l *protocolGuardSharedRateLimiter) wait(ctx context.Context, guardChanged 
 			timer := time.NewTimer(delay)
 			select {
 			case <-timer.C:
-				break
 			case <-ctx.Done():
 				stopProtocolGuardRateTimer(timer)
 				reservation.CancelAt(time.Now())

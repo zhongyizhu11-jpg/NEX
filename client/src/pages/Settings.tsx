@@ -6870,6 +6870,15 @@ function SystemInfoSection() {
               <SettingRow label="当前面板版本" control={<span className="font-mono text-secondary-type">v{upgradeStatus?.currentVersion || settings?.version}</span>} />
               <SettingRow label="当前 Agent 目标版本" control={<span className="font-mono text-secondary-type">v{upgradeStatus?.currentAgentVersion || settings?.agentVersion || "-"}</span>} />
               <SettingRow
+                label="开源许可"
+                description="NEX 按 AGPL-3.0 发布。对外提供服务时，需要让使用者能拿到对应版本的源代码。"
+                control={
+                  <a href="https://github.com/zhongyizhu11-jpg/NEX" target="_blank" rel="noreferrer" className="text-secondary-type text-primary underline-offset-4 hover:underline">
+                    源代码与许可证
+                  </a>
+                }
+              />
+              <SettingRow
                 asLabel
                 label="自动检查更新"
                 description="开启后定期检查面板和 Agent 更新。"

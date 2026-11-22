@@ -1,5 +1,6 @@
 # NEX 商用上线前整改方向（2026-11-22 审计）
 
+> 整改进度见文末「已落地的整改」。
 > 审计对象：`main` 分支 ddd7380（面板 2.3.547 / Agent 2.2.267 / FXP 2.2.149）。
 > 方法：实际跑了类型检查、全量测试、依赖漏洞审计、Go 漏洞扫描、staticcheck、前端构建，并按安全 / 主机安全 / 数据与运维 / 计费 / 法务合规 / 工程质量 / 前端移动端七个维度读代码取证。文中标注「需核实」的是没能在仓库内确认、要你们去查的事项。
 
@@ -9,7 +10,7 @@
 
 这是一个**工程基础扎实、但以「单人维护的开源自部署面板」形态长成的系统**。要变成对外收费的商用产品，差的不是功能，而是下面四类东西：
 
-1. **信任边界要收紧**：Agent 以 root 跑在客户机器上、面板默认明文 HTTP、CSP 放开了内联脚本和外部 CDN、审计日志只有 3 处落点。
+1. **信任边界要收紧**：Agent 以 root 跑在客户机器上、面板默认明文 HTTP、CSP 放开了内联脚本和外部 CDN。
 2. **运行形态要从「一台机器一个 SQLite」升级到「可横向扩、可回滚、可恢复」**：没有版本化迁移、多实例只在 MySQL/PG 下部分支持、容器以 root 运行、没有 HEALTHCHECK。
 3. **法务与合规是空白**：AGPL 义务没在 UI 里履行、第三方组件声明不全、品牌仍叫 ForwardX、没有隐私政策/服务条款/账号注销、Android 签名密钥在仓库里。
 4. **工程可持续性**：52 次提交 50 次来自一个人；`server/` 1250 个文件平铺；单个前端页面 1.1 万行；7589 条 lint 基线债务；每个 PR 一个 patch 版本号、没有稳定通道。
@@ -40,7 +41,7 @@
 | --- | --- | --- | --- |
 | S1 | **CSP 允许 `'unsafe-inline'` 脚本并信任 jsdelivr / live2d CDN**，一处 XSS 即可执行任意脚本；`connect-src https: http:` 等于不限 | `server/index.ts:158-161` | 改为 nonce 或 hash 方式；把 live2d / jsdelivr 的脚本改成面板自托管（规则集镜像 `proxySubRulesetMirror.ts` 已有同类做法）；`connect-src` 只留 `'self'` 与明确的第三方域 |
 | S2 | **CSRF 只依赖 `SameSite=Lax`**，没有显式 Origin / `Sec-Fetch-Site` 校验；移动端 CORS 又带 `Allow-Credentials` | `server/_core/cookies.ts:9-12`；`server/index.ts:125-140`；全仓无 csrf 相关逻辑 | 在 tRPC 中间件对所有 mutation 校验 `Origin` 必须等于面板自身或白名单 App 源；给状态变更的 express POST 路由（主题上传、Logo、插件包）同样加 |
-| S3 | **操作审计只有 3 处落点**，商用后台无法回答「谁在何时改了哪条规则 / 给谁加了余额」 | `recordOperationAudit` 全仓仅 3 次调用 | 在 tRPC 层做统一审计中间件：所有 `adminProcedure` mutation 自动记录操作者、对象、前后值摘要、IP、UA；余额 / 套餐 / 权限 / 删除类操作强制留痕 |
+| S3 | ~~操作审计只有 3 处落点~~ **更正：审计已是 tRPC 中间件级全覆盖**（`server/_core/trpc.ts:120` 的 `auditMutationCall` 对所有登录用户的 mutation 记一行，另有 `config_audit_events` 记前后值）。首稿按函数名 grep 误判，此条撤销 | `server/operationAudit.ts` | 无需整改；建议补：审计表的导出 / 只读归档与保留期在商用 SLA 里写明 |
 | S4 | **面板默认明文 HTTP，Agent 安装命令把 Token 放在 `http://IP:9810/...` 里** | README 快速部署、`shared/agentInstallCommand.ts:85` | 默认开启面板 TLS（已有 `panelSsl.ts` 和自动热加载），安装脚本默认走 HTTPS 并校验证书；明文 HTTP 只允许回环 / 内网并在 UI 持续警告 |
 | S5 | 登录会话 10 天、无绝对过期与并发会话上限的产品化策略 | `server/_core/cookies.ts:12` | 商用默认：管理员 2FA 强制、会话 24h 滑动 + 7 天绝对、可配置；敏感操作（改密、改支付配置、导出备份）二次验证 |
 
@@ -241,3 +242,19 @@ Agent 是装在**客户**机器上以 root 运行、能改防火墙和路由的�
 - **威胁建模会**：每新增一类「面板替客户执行」的能力（换主机、自升级、远程诊断、插件任务），先写一页：谁能触发、Agent 如何验证、失败如何回滚、留什么痕。
 - **许可证与隐私门禁**：新增依赖或新外呼域名的 PR 必须更新 NOTICES / 第三方清单，CI 用 SBOM diff 拦截。
 - **指标驱动的质量债**：每月输出 lint 基线、`any` 数、最大文件行数、覆盖率四个数字的趋势图，只许降不许升。
+
+---
+
+## 10. 已落地的整改（2026-11-22，分支 claude/nice-goldberg-inty9l）
+
+| 条目 | 改动 | 验证 |
+| --- | --- | --- |
+| S2 CSRF | 新增 `server/_core/csrf.ts`：对所有用 Cookie（或未登录）发来的 tRPC mutation 校验 `Origin` 必须是面板主机 / 手机 App 源 / `FORWARDX_TRUSTED_ORIGINS`；无 Origin 时拒绝 `Sec-Fetch-Site: cross-site`。Bearer 令牌请求不受影响。中间件挂在操作审计之后，被拒的请求也留痕 | `server/_core/csrf.test.ts` 7 个用例；全量测试 |
+| S3 | 撤销（见上表更正） | — |
+| A1 Agent 沙箱 | systemd 单元新增 `NoNewPrivileges / RestrictSUIDSGID / RestrictRealtime / LockPersonality / ProtectHostname / ProtectClock / ProtectKernelLogs`；刻意不加 `ProtectSystem / ProtectKernelTunables / ProtectKernelModules`（会挡 sysctl、mimic、运行时目录） | `server/agentInstallScripts.test.ts` 断言正反两组指令 |
+| D3 健康检查 | `Dockerfile` 加 `HEALTHCHECK`，`docker-compose.yml` 加 `healthcheck` 与 `stop_grace_period: 30s`（给写缓冲刷库留时间）。探测 `/api/database-health`，库故障时仍 200，不会误触发重启 | 构建通过 |
+| A-P1 staticcheck | 清掉 agent 10 条、fxp 5 条 SA 级问题：其中 `agent/actions.go` 的 `activeSharedRuntimeForwardType` 循环首轮即 return 是真 bug（只看第一条路径），已修；无法改的写法用 `//lint:ignore` 注明原因。CI 去掉 `continue-on-error`，开始拦截 | `go vet` / `staticcheck` 三模块 0 条 |
+| CI 依赖审计 | typecheck 任务新增 `pnpm audit --prod --audit-level=moderate` | 当前 0 漏洞 |
+| AGPL 入口 | 登录页底部加「基于 NEX（AGPL-3.0 开源）」源码链接（未登录用户可见，满足 §13）；系统设置「版本升级」卡加「开源许可」行 | `tsc` |
+
+**未动、需要你们决策或密钥的项**：上游许可证核实与品牌统一（含 Android 包名）、Android 私有签名密钥（生成后从仓库移除社区密钥与口令）、CSP 去 `unsafe-inline`（需先把 live2d / jsdelivr 自托管并给 `index.html` 内联脚本加 nonce，且浏览器端探测依赖 `connect-src http:`）、版本化迁移体系、非 root 容器（涉及已有数据卷属主迁移）、PostgreSQL 作为商用基线与限流 / 锁迁出内存、退款与发票、隐私政策 / 服务条款 / 账号注销、stable 发布通道。
