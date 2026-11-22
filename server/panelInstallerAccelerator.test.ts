@@ -324,7 +324,8 @@ test("both installers expose a password reset action without accepting password 
     assert.doesNotMatch(installer.source, /--password/);
   }
   assert.match(dockerSource, /Password reset CLI is missing from the running container/);
-  assert.match(dockerSource, /docker exec -it "\$CONTAINER_NAME" node dist\/reset-admin-password\.js/);
+  // 新镜像以 forwardx 用户跑面板，reset-admin 用同一个用户执行（"${exec_user[@]}" 在老镜像上是空的）。
+  assert.match(dockerSource, /docker exec -it "\$\{exec_user\[@\]\}" "\$CONTAINER_NAME" node dist\/reset-admin-password\.js/);
   assert.match(localSource, /Password reset CLI is missing from \$APP_DIR/);
 });
 

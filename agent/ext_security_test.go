@@ -172,7 +172,8 @@ func TestSecurityProcessClassifiers(t *testing.T) {
 	if pct := cpuPercent(1000, 31000, 300, 100); pct < 99 || pct > 101 {
 		t.Fatalf("cpu = %v", pct)
 	}
-	if securityFingerprint("a", "b") != securityFingerprint("a", "b") || securityFingerprint("a", "b") == securityFingerprint("ab") {
+	first, second := securityFingerprint("a", "b"), securityFingerprint("a", "b")
+	if first != second || first == securityFingerprint("ab") {
 		t.Fatal("fingerprint unstable or ambiguous")
 	}
 }

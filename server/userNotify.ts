@@ -9,7 +9,7 @@
 */
 import * as db from "./db";
 import { sendMail } from "./email";
-import { sendTelegramMessage } from "./telegramBot";
+import { sendTelegramMessage } from "./telegram/telegramBot";
 import { ENV } from "./env";
 
 export async function telegramBotReady(): Promise<boolean> {

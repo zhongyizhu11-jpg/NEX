@@ -455,6 +455,12 @@ func (packet fxpUDPQueuedPacket) superseded(now time.Time, pendingNewer int) boo
 	return pendingNewer > 0 && packet.expired(now)
 }
 
+// supersededIn 和 superseded 一样，但先看这个包过没过期、过期了才去问队列里还有没有更新的包：
+// 问队列要拿它的锁，发送协程每个包都问一次就是和入队方（读循环）每包抢一次锁；绝大多数包根本没过期。
+func (packet fxpUDPQueuedPacket) supersededIn(now time.Time, newer *fxpUDPQueue) bool {
+	return packet.expired(now) && newer.pending() > 0
+}
+
 type rateLimitedLog struct {
 	interval   time.Duration
 	last       atomic.Int64

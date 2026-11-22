@@ -11,7 +11,7 @@ import * as db from "../db";
 import { ENV } from "../env";
 import { getSettingsByPrefix, setSettings } from "../repositories/settingsRepository";
 import { assertSafeOutboundUrl } from "../ssrf";
-import { sendTelegramMessage } from "../telegramBot";
+import { sendTelegramMessage } from "../telegram/telegramBot";
 import type { RemoteBackupFile } from "./offsiteBackupLogic";
 import { buildSignedS3Request, normalizeS3Prefix, parseListObjectsV2, parseS3Error, type S3Config } from "./offsiteBackupS3";
 import { basicAuthHeader, parseWebdavPropfind, WEBDAV_PROPFIND_BODY, webdavFileUrl, webdavFolderUrl } from "./offsiteBackupWebdav";

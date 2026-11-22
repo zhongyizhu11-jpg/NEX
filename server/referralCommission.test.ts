@@ -35,7 +35,7 @@ function runInDatabase(body: string) {
       const billing = await import(url("server/repositories/billingRepository.ts"));
       const referral = await import(url("server/repositories/referralRepository.ts"));
       const settings = await import(url("server/repositories/settingsRepository.ts"));
-      const payment = await import(url("server/payment.ts"));
+      const payment = await import(url("server/payment/payment.ts"));
 
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();

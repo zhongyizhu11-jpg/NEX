@@ -86,7 +86,23 @@ export type MetricsSnapshot = {
   routes: MetricsRouteSample[] | null;
   /** 全站转发流量，面板启动以来只增不减（见 MonotonicTotal）。 */
   traffic: { in: number; out: number } | null;
+  /** FXP 隧道进程报的数据面指标（server/ops/fxpRuntimeMetrics.ts）；null = 没读到。 */
+  fxp: MetricsFxpSample[] | null;
   collectSeconds: number;
+};
+
+export type MetricsFxpSample = {
+  hostId: number;
+  hostName: string;
+  /** 0 = 进程级事件（没有隧道标签）。 */
+  tunnelId: number;
+  ruleId: number;
+  /** entry / relay / exit / process */
+  role: string;
+  name: string;
+  kind: "counter" | "gauge";
+  /** counter：最近 5 分钟的次数；gauge：最新上报的值。 */
+  value: number;
 };
 
 /**
@@ -245,6 +261,23 @@ export function buildMetricFamilies(snapshot: MetricsSnapshot): MetricFamily[] {
         add(availability, labels, ratio(path.availabilityPct));
         add(active, labels, flag(path.active));
         add(down, labels, flag(path.down));
+      }
+    }
+  }
+
+  // ── FXP 隧道进程 ──
+  if (snapshot.fxp) {
+    const events = push(family("nex_fxp_events_5m", "gauge", "FXP 隧道进程最近 5 分钟的事件数：udp_queue_drop 队列挤掉、udp_expired_drop 等太久丢掉、udp_session_rejected 新会话被拒、udp_session_reclaimed 会话被回收、pool_hit / pool_miss 下一跳连接池命中与否、peer_gone 一侧断开立刻收掉、half_close_reaped 半关闭等满上限收掉、linger_expired 等满 linger 收掉"));
+    const udpSessions = push(family("nex_fxp_udp_sessions", "gauge", "FXP 这个监听上此刻活着的 UDP 会话数"));
+    const tcpSessions = push(family("nex_fxp_tcp_sessions", "gauge", "FXP 这个角色上此刻正在转发的 TCP 会话数"));
+    for (const sample of snapshot.fxp) {
+      const labels: MetricLabels = { host_id: sample.hostId, host: sample.hostName, tunnel_id: sample.tunnelId, rule_id: sample.ruleId, role: sample.role };
+      if (sample.kind === "counter") {
+        add(events, { ...labels, event: sample.name }, sample.value);
+      } else if (sample.name === "udp_sessions") {
+        add(udpSessions, labels, sample.value);
+      } else if (sample.name === "tcp_sessions") {
+        add(tcpSessions, labels, sample.value);
       }
     }
   }

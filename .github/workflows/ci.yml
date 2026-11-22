@@ -44,6 +44,10 @@ jobs:
       - name: Check versions
         run: pnpm check:versions
 
+      # 运行时依赖的已知漏洞（dev 依赖不进镜像，另由 Dependabot 跟）。
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=moderate
+
       - name: Type check
         run: pnpm exec tsc --noEmit
 
@@ -150,6 +154,16 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # 数据竞争在普通测试里不一定红。全量 -race 太慢（每夜 go-race.yml 跑），这里只跑搬字节的那几块：
+      # 转发 / 会话 / 中转 / 流水线 / 线路组；lbcore 很小，全量跑。
+      - name: go test -race (data path)
+        run: |
+          case "${{ matrix.module }}" in
+            agent) go test -race -count=1 -timeout 15m -run 'Failover|Guard|Relay|EarlyClose|Reroute|UDP|Splice|Protocol' . ;;
+            forwardx-fxp) go test -race -count=1 -timeout 15m -run 'UDP|Pipeline|Superseded|Reset|Bidirectional|Vanish|PeerGone|HalfClose|Sweep|Reclaim|Session|Entry|Exit|Relay' . ;;
+            lbcore) go test -race -count=1 ./... ;;
+          esac
+
       - name: Cross-compile linux/arm64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null .
 
@@ -158,10 +172,8 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-      # staticcheck 先只看正确性类检查（SA），而且只报告不拦：第一次在 CI 上跑出来的问题清掉以后，
-      # 去掉 continue-on-error 让它开始拦。
+      # staticcheck 只看正确性类检查（SA）。2026-11 清掉存量后开始拦；需要保留的写法用 //lint:ignore 并写明原因。
       - name: staticcheck
-        continue-on-error: true
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           "$(go env GOPATH)/bin/staticcheck" -checks "SA*" ./...

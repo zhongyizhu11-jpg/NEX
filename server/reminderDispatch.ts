@@ -25,8 +25,8 @@
  */
 
 import * as db from "./db";
-import { isPermanentTelegramRecipientError, TelegramApiError } from "./telegramApiError";
-import { DiscordApiError, isDiscordRecipientError } from "./discordBot";
+import { isPermanentTelegramRecipientError, TelegramApiError } from "./telegram/telegramApiError";
+import { DiscordApiError, isDiscordRecipientError } from "./discord/discordBot";
 
 export type ReminderFailureKind = "recipient" | "item" | "transport";
 

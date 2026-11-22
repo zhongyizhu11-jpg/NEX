@@ -258,7 +258,9 @@ func (l *panelRelayListener) handle(client net.Conn) {
 
 // relayCopyWithIdle 是带空闲超时的 io.Copy：每读到一次数据就把截止时间往后推。
 func relayCopyWithIdle(dst, src net.Conn, idle time.Duration) {
-	buf := make([]byte, 32*1024)
+	// 缓冲从进程池借：中转连接来一条分一块 32 KiB 再丢给 GC，连接一多就是持续的分配压力。
+	buf := getAgentByteBuffer(32 * 1024)
+	defer putAgentByteBuffer(buf)
 	for {
 		_ = src.SetReadDeadline(time.Now().Add(idle))
 		n, err := src.Read(buf)

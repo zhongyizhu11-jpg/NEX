@@ -12,11 +12,11 @@ import { appendPanelLog } from "./_core/panelLogger";
 import * as db from "./db";
 import { sendMail } from "./email";
 import { recordPanelEvent } from "./ops/panelEvents";
-import { buildPanelUrl } from "./paymentUrls";
-import { sendTelegramMessage } from "./telegramBot";
-import { filterTelegramRecipients } from "./telegramNotifyPrefs";
-import { notifyDiscordAdmins, notifyDiscordUser } from "./discordNotify";
-import { isTelegramBotReady } from "./telegramReady";
+import { buildPanelUrl } from "./payment/paymentUrls";
+import { sendTelegramMessage } from "./telegram/telegramBot";
+import { filterTelegramRecipients } from "./telegram/telegramNotifyPrefs";
+import { notifyDiscordAdmins, notifyDiscordUser } from "./discord/discordNotify";
+import { isTelegramBotReady } from "./telegram/telegramReady";
 import { DELETED_USER_LABEL, TICKET_PRIORITY_LABELS, type TicketPriority } from "../shared/tickets";
 
 type NotifyTicket = { id: number; userId: number; title: string; priority: TicketPriority };

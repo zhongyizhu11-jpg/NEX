@@ -2,6 +2,8 @@
 
 NEX 通过轻量 Agent 统一管理多台 Linux 服务器上的端口转发、加密隧道、转发链、故障转移、用户权限、套餐和流量统计。面板不保存主机 SSH 密钥。
 
+NEX 基于 [ForwardX](https://github.com/poouo/Forwardx)（AGPL-3.0）继续开发，按同一许可证发布；致谢原作者，版权与许可声明见 [NOTICE](NOTICE)。
+
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/zhongyizhu11-jpg/NEX?display_name=tag&sort=semver)](https://github.com/zhongyizhu11-jpg/NEX/releases/latest)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)

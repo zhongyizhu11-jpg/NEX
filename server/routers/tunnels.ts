@@ -1443,7 +1443,7 @@ export const tunnelsRouter = router({
         const existingExtraExitNodes = await hopRepo.getTunnelExitNodes(input.id);
         const existingHopHostIds = (existingHops || []).map((hop: any) => Number(hop.hostId)).filter((id: number) => Number.isFinite(id) && id > 0);
         const existingHopConnectHosts = normalizeHopConnectHostsForCompare(existingHops || []);
-        const nextModeForRuntime = normalizeTunnelMode(input.mode ?? (tunnel as any).mode);
+        const nextModeForRuntime = normalizeTunnelMode(input.mode ?? tunnel.mode);
         const nextForwardXVersion = nextModeForRuntime === "forwardx"
           ? normalizeForwardXVersion((input as any).forwardxVersion ?? (tunnel as any).forwardxVersion)
           : "v1";
@@ -1561,7 +1561,7 @@ export const tunnelsRouter = router({
           assertLinkShapingOptions(nextRuntimeOptions);
           Object.assign(data as any, nextRuntimeOptions);
         }
-        const modeChanged = (data as any).mode !== undefined && nextModeForRuntime !== normalizeTunnelMode((tunnel as any).mode);
+        const modeChanged = (data as any).mode !== undefined && nextModeForRuntime !== normalizeTunnelMode(tunnel.mode);
         const forwardXVersionChanged = nextForwardXVersion !== normalizeForwardXVersion((tunnel as any).forwardxVersion);
         const nextUdpOverTcp = (data as any).udpOverTcp !== undefined
           ? dbBool((data as any).udpOverTcp)
@@ -1587,15 +1587,15 @@ export const tunnelsRouter = router({
           (data as any).certPem = nginxCert.certPem;
           (data as any).certKeyPem = nginxCert.certKeyPem;
         }
-        const nextPortRangeStart = (data as any).portRangeStart !== undefined ? (data as any).portRangeStart : (tunnel as any).portRangeStart;
-        const nextPortRangeEnd = (data as any).portRangeEnd !== undefined ? (data as any).portRangeEnd : (tunnel as any).portRangeEnd;
+        const nextPortRangeStart = (data as any).portRangeStart !== undefined ? (data as any).portRangeStart : tunnel.portRangeStart;
+        const nextPortRangeEnd = (data as any).portRangeEnd !== undefined ? (data as any).portRangeEnd : tunnel.portRangeEnd;
         if (nextPortRangeStart != null && nextPortRangeEnd != null && nextPortRangeStart > nextPortRangeEnd) {
           throw new Error("隧道可用端口范围起始值不能大于结束值");
         }
-        const exitHostChanged = Number(exitHostId) !== Number((tunnel as any).exitHostId || 0);
+        const exitHostChanged = Number(exitHostId) !== Number(tunnel.exitHostId || 0);
         let listenerPortChanged = false;
         const listenPortInputProvided = (data as any).listenPort !== undefined;
-        const currentTunnelListenPort = Number((tunnel as any).listenPort || 0);
+        const currentTunnelListenPort = Number(tunnel.listenPort || 0);
         const requestedListenPort = Number((data as any).listenPort) || 0;
         // The edit form sends the persisted listenPort even when the user did
         // not touch the field. Treat an unchanged value as an automatic
@@ -1683,7 +1683,7 @@ export const tunnelsRouter = router({
               port: (data as any).mimicPort,
               exitHostId,
               exitHost: exit,
-              listenPort: Number((data as any).listenPort || (tunnel as any).listenPort || 0),
+              listenPort: Number((data as any).listenPort || tunnel.listenPort || 0),
               tunnelId: id,
               actor: ctx.user,
             });
@@ -1732,7 +1732,7 @@ export const tunnelsRouter = router({
         (data as any).loadBalanceStrategy = (data as any).loadBalanceEnabled ? nextLoadBalanceStrategy : "round_robin";
         const nextTunnelEnabled = (data as any).isEnabled !== undefined
           ? dbBool((data as any).isEnabled)
-          : dbBool((tunnel as any).isEnabled);
+          : dbBool(tunnel.isEnabled);
         const nextEntryGroupId = (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId;
         const nextExitGroupId = (data as any).exitGroupId !== undefined ? (data as any).exitGroupId : (tunnel as any).exitGroupId;
         const nextExitGroup = await requireExitGroupAccess(ctx, nextExitGroupId, nextTunnelEnabled);
@@ -1786,9 +1786,9 @@ export const tunnelsRouter = router({
           || balanceDetectChanged
           || existingExtraSignature !== nextExtraSignature;
         const mimicActivationChanged = nextMimicEnabled && nextTunnelEnabled && (
-          !isTunnelForwardXMode((tunnel as any).mode)
+          !isTunnelForwardXMode(tunnel.mode)
           || !dbBool((tunnel as any).udpOverTcp)
-          || !dbBool((tunnel as any).isEnabled)
+          || !dbBool(tunnel.isEnabled)
           || hopChanged
           || loadBalanceChanged
           || (data as any).entryGroupId !== undefined
@@ -1893,7 +1893,7 @@ export const tunnelsRouter = router({
           })
           || hopChanged || loadBalanceChanged;
         const enabledChanged = (data as any).isEnabled !== undefined
-          && dbBool((data as any).isEnabled) !== dbBool((tunnel as any).isEnabled);
+          && dbBool((data as any).isEnabled) !== dbBool(tunnel.isEnabled);
         if (keyChanged) (data as any).isRunning = false;
         await db.updateTunnel(id, data as any);
         // 整形关掉了（档位改成关，或者隧道换成 GOST / Nginx 这类不跑 FXP 的协议）：FXP 从此
@@ -1930,7 +1930,7 @@ export const tunnelsRouter = router({
           for (let i = 0; i < hopIdsToWrite.length; i++) {
             let port = 0;
             if (i === hopIdsToWrite.length - 1) {
-              port = Number((data as any).listenPort) || Number((tunnel as any).listenPort) || 0;
+              port = Number((data as any).listenPort) || Number(tunnel.listenPort) || 0;
             } else {
               const hopHost = await db.getHostById(hopIdsToWrite[i]) as any;
               const existingHop = existingHopByHostId.get(hopIdsToWrite[i]);
@@ -1989,12 +1989,12 @@ export const tunnelsRouter = router({
               id,
               entryHostId,
               exitHostId,
-              listenPort: Number((data as any).listenPort || (tunnel as any).listenPort || 0),
+              listenPort: Number((data as any).listenPort || tunnel.listenPort || 0),
               mode: nextModeForRuntime,
             },
             {
               hostId: exitHostId,
-              listenPort: Number((data as any).listenPort || (tunnel as any).listenPort || 0),
+              listenPort: Number((data as any).listenPort || tunnel.listenPort || 0),
               reservations: heldReservations,
             },
           );
@@ -2048,8 +2048,8 @@ export const tunnelsRouter = router({
           const affectedHostIds = [
             ...previousEntryHostIds,
             ...nextEntryHostIds,
-            (tunnel as any).entryHostId,
-            (tunnel as any).exitHostId,
+            tunnel.entryHostId,
+            tunnel.exitHostId,
             entryHostId,
             exitHostId,
             ...existingHopHostIds,
@@ -2159,8 +2159,8 @@ export const tunnelsRouter = router({
         ]);
         const affectedHostIds = [
           ...entryHostIds,
-          Number((tunnel as any).entryHostId),
-          Number((tunnel as any).exitHostId),
+          Number(tunnel.entryHostId),
+          Number(tunnel.exitHostId),
           ...(hops as any[]).map((hop) => Number(hop.hostId)),
           ...(extraExits as any[]).map((exit) => Number(exit.hostId)),
         ];

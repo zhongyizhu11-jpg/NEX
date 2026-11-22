@@ -129,7 +129,7 @@ function runInDatabase(body: string) {
 test("收件人永久不可达：记标记、接着发后面的；单条坏消息：不记标记、接着发", () => {
   runInDatabase(String.raw`
     const { dispatchReminders } = await import(url("server/reminderDispatch.ts"));
-    const { sendTelegramMessage } = await import(url("server/telegramBot.ts"));
+    const { sendTelegramMessage } = await import(url("server/telegram/telegramBot.ts"));
     const delivered = await dispatchReminders([
       { key: "telegramReminder:t:1:blocked", send: () => sendTelegramMessage("blocked", "x") },
       { key: "telegramReminder:t:2:nochat", send: () => sendTelegramMessage("nochat", "x") },
@@ -148,7 +148,7 @@ test("收件人永久不可达：记标记、接着发后面的；单条坏消�
 test("通道故障（Telegram 5xx）仍然整轮停下，后面的不再挨个去撞", () => {
   runInDatabase(String.raw`
     const { dispatchReminders } = await import(url("server/reminderDispatch.ts"));
-    const { sendTelegramMessage } = await import(url("server/telegramBot.ts"));
+    const { sendTelegramMessage } = await import(url("server/telegram/telegramBot.ts"));
     await assert.rejects(dispatchReminders([
       { key: "telegramReminder:t:1:down", send: () => sendTelegramMessage("down", "x") },
       { key: "telegramReminder:t:2:ok", send: () => sendTelegramMessage("ok", "x") },

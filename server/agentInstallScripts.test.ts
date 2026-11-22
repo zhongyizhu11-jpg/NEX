@@ -138,6 +138,13 @@ test("Agent restarts leave FXP tunnel processes running and raise fd limits", ()
 
   assert.match(script, /KillMode=process/);
   assert.match(script, /LimitNOFILE=1048576/);
+  // Agent 单元的进程沙箱（商用加固）：收掉用不到的能力，但不能挡 sysctl / modprobe / 运行时目录写入。
+  for (const directive of ["NoNewPrivileges=yes", "RestrictSUIDSGID=yes", "RestrictRealtime=yes", "LockPersonality=yes", "ProtectHostname=yes", "ProtectClock=yes", "ProtectKernelLogs=yes"]) {
+    assert.ok(script.includes(directive), `agent unit should set ${directive}`);
+  }
+  for (const forbidden of ["ProtectSystem=", "ProtectKernelTunables=", "ProtectKernelModules=", "PrivateNetwork="]) {
+    assert.ok(!script.includes(forbidden), `agent unit must not set ${forbidden}: it breaks sysctl / mimic / forwarding`);
+  }
   assert.match(script, /TasksMax=infinity/);
 });
 

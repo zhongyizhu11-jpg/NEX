@@ -42,6 +42,7 @@ func putAgentByteBuffer(buffer []byte) {
 	capacity := cap(buffer)
 	for i := range agentBytePools {
 		if capacity == agentBytePools[i].size {
+			//lint:ignore SA6002 按容量分档的 []byte 池：Put 时切片头的那次小分配远小于它省下的缓冲区分配。
 			agentBytePools[i].pool.Put(buffer[:capacity])
 			return
 		}

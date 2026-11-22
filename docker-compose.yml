@@ -28,6 +28,14 @@ services:
       FORWARDX_TRUST_PROXY: ${FORWARDX_TRUST_PROXY:-loopback}
     volumes:
       - forwardx-data:/data
+    # 停容器时给面板时间把攒着的探测样本刷进库（server/dbWriteBatcher.ts）再退出。
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/api/database-health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     logging:
       driver: local
       options:

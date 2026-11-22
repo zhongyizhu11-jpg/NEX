@@ -48,6 +48,14 @@ docker logs -n 300 forwardx-panel
 
 如需卸载 Docker 面板，请先阅读 [卸载 NEX](./uninstall.md)，确认是否保留数据卷和数据库。
 
+## 容器里的运行用户
+
+面板镜像以非 root 用户 `forwardx`（uid / gid 10001）运行。容器启动时入口脚本先以 root 把数据卷里属主不对的文件（老部署、或用 `docker exec` 以 root 写进去的）改给 `forwardx`，再降权启动面板，所以从旧版本升级不需要手动处理数据卷。
+
+两种情况容器会保持 root 运行：设置了 `FORWARDX_RUN_AS_ROOT=1`，或者挂载了 `/var/run/docker.sock`（面板内「一键升级」要靠它重建容器）。既要降权又要容器内升级时，把 socket 的属组改成 gid 10001 并去掉 `FORWARDX_RUN_AS_ROOT`。
+
+进容器执行命令时建议带上同一个用户：`docker exec -it -u forwardx forwardx-panel sh`。安装脚本的 `reset-admin` 已经这么做。
+
 ## 重置管理员密码
 
 忘记管理员密码时，可直接在 Docker 容器内或通过 SSH 终端执行重置命令。CLI 会隐藏读取新密码，不会把密码放在命令行参数或进程列表中。

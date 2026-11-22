@@ -68,7 +68,7 @@ func TestAcceptWithRetryReturnsWhenListenerClosed(t *testing.T) {
 func TestCatchPanicTurnsPanicIntoError(t *testing.T) {
 	err := catchPanic("unit", func() error {
 		var m map[string]int
-		m["boom"] = 1
+		m["boom"] = 1 //lint:ignore SA5000 故意写 nil map 触发 panic，验证 catchPanic 能把它变成错误
 		return nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "panic in unit") {

@@ -16,6 +16,7 @@ import { topologyManualTables, topologyManualMigrationTables } from "./topologyM
 import { userTrafficDailyTables, userTrafficDailyMigrationTables } from "./userTrafficDailyTables";
 import { unlockTables, unlockMigrationTables } from "./unlockTables";
 import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
+import { fxpRuntimeMetricsTables, fxpRuntimeMetricsMigrationTables } from "./fxpRuntimeMetricsTables";
 import { nodeCheckTables, nodeCheckMigrationTables } from "./nodeCheckTables";
 import { nodePoolTables, nodePoolMigrationTables } from "./nodePoolTables";
 import { ruleGroupsTables, ruleGroupsMigrationTables } from "./ruleGroupsTables";
@@ -43,6 +44,7 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...ipIntelTables,
   ...unlockTables,
   ...connStatsTables,
+  ...fxpRuntimeMetricsTables,
   ...nodeCheckTables,
   ...nodePoolTables,
   ...ruleGroupsTables,
@@ -72,6 +74,7 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...netProfileMigrationTables,
   ...unlockMigrationTables,
   ...connStatsMigrationTables,
+  ...fxpRuntimeMetricsMigrationTables,
   ...nodeCheckMigrationTables,
   ...nodePoolMigrationTables,
   ...ruleGroupsMigrationTables,

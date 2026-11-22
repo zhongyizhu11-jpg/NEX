@@ -8,16 +8,16 @@ import { adminProcedure, protectedProcedure, publicProcedure, router } from "../
 import { ENV } from "../env";
 import { TRPCError } from "@trpc/server";
 import * as db from "../db";
-import { sendTelegramMessage } from "../telegramBot";
-import { consumeMobileTelegramLoginIssue, createMobileTelegramLoginChallenge, takeMobileTelegramLoginChallenge } from "../telegramMobileLogin";
-import { createTelegramMobilePollToken, verifyTelegramMobilePollToken } from "../telegramMobilePollToken";
-import { consumeTelegramWidgetLoginOnce } from "../telegramWidgetSecurity";
-import { consumeTelegramWebAppLoginChallenge } from "../telegramWebAppLogin";
+import { sendTelegramMessage } from "../telegram/telegramBot";
+import { consumeMobileTelegramLoginIssue, createMobileTelegramLoginChallenge, takeMobileTelegramLoginChallenge } from "../telegram/telegramMobileLogin";
+import { createTelegramMobilePollToken, verifyTelegramMobilePollToken } from "../telegram/telegramMobilePollToken";
+import { consumeTelegramWidgetLoginOnce } from "../telegram/telegramWidgetSecurity";
+import { consumeTelegramWebAppLoginChallenge } from "../telegram/telegramWebAppLogin";
 import { SESSION_TOKEN_TTL_MS, SESSION_TOKEN_TTL_SECONDS, stripSessionSensitiveFields, type SessionKind } from "../session";
 import { createLoginAuthSession } from "../loginSessionService";
 import { authRateLimitState, clearAuthAccountFailures, recordPasswordFailure, recordTwoFactorChallengeIssue, recordTwoFactorFailure, twoFactorChallengeIssueState } from "../authRateLimit";
 import { createTwoFactorChallenge } from "../twoFactorChallenges";
-import { isTelegramLoginEnabled } from "../telegramLoginSwitch";
+import { isTelegramLoginEnabled } from "../telegram/telegramLoginSwitch";
 
 const BIND_CODE_TTL_MS = 5 * 60 * 1000;
 const MOBILE_LOGIN_TTL_MS = 5 * 60 * 1000;

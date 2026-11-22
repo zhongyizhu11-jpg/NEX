@@ -1272,6 +1272,10 @@ export default function Login() {
           </m.div>
           </AnimatePresence>
             </CardContent>
+            {/* AGPL-3.0 第 13 条：通过网络使用的人也要能拿到源代码，这条链接对未登录用户可见。 */}
+            <p className="mt-6 text-center text-xs text-muted-foreground">
+              基于 <a href="https://github.com/zhongyizhu11-jpg/NEX" target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">NEX</a>（AGPL-3.0 开源，源自 <a href="https://github.com/poouo/Forwardx" target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">ForwardX</a>）
+            </p>
           </Card>
         </main>
       </div>

@@ -1232,8 +1232,10 @@ func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, er
 		return conn, sec, err
 	}
 	if conn, sec, ok := state.take(cfg); ok {
+		fxpMetricAdd(cfg, "pool_hit", 1)
 		return conn, sec, nil
 	}
+	fxpMetricAdd(cfg, "pool_miss", 1)
 	return dialSecureTCPFresh(host, port, cfg)
 }
 
@@ -1284,6 +1286,8 @@ func runEntryGroup(done <-chan struct{}, cfg config) error {
 
 func handleEntryTCP(client net.Conn, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter) error {
 	defer client.Close()
+	fxpMetricGaugeDelta(cfg, "tcp_sessions", 1)
+	defer fxpMetricGaugeDelta(cfg, "tcp_sessions", -1)
 	selectionKey := endpointSelectionSource(client.RemoteAddr().String())
 	// 单路径：一接受就开始连下一跳（池里有就是现成的），不再先等客户端首包。
 	// 以前先读首包、最多等 150ms 才拨号：SSH、SMTP、MySQL 这类服务端先说话的
@@ -1864,6 +1868,8 @@ func handleExitTCP(sec *secureConn, hello helloFrame, cfg config) error {
 // the given transport, which is a single secure connection for an ordinary
 // session and a multipath session when the entry striped it over several legs.
 func relayExitTCPToTarget(sec frameConn, hello helloFrame, cfg config) error {
+	fxpMetricGaugeDelta(cfg, "tcp_sessions", 1)
+	defer fxpMetricGaugeDelta(cfg, "tcp_sessions", -1)
 	dialStarted := time.Now()
 	target, err := dialExitTargetFor(cfg, hello, exitTargetDialTimeout(hello))
 	dialElapsed := time.Since(dialStarted)
@@ -2033,6 +2039,8 @@ func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEn
 
 // handleRelayBusiness 处理上一跳的一条已经认证过的业务连接：读 hello，连下一跳，双向转发。
 func handleRelayBusiness(upSec *secureConn, cfg config, selector *exitEndpointSelector, in *fxpInbound) error {
+	fxpMetricGaugeDelta(cfg, "tcp_sessions", 1)
+	defer fxpMetricGaugeDelta(cfg, "tcp_sessions", -1)
 	upConn := upSec.conn
 	frame, err := awaitSecureHello(upSec, in.stop())
 	if err != nil {
@@ -2120,7 +2128,9 @@ func relayCopy(src, dst frameConn) error {
 	for {
 		frames, err := src.readFrames(scratch[:0], fxpFrameBatchMax)
 		if err != nil {
-			return err
+			// 读的这一侧没说再见就断了（复位、崩溃）：另一个方向发给它的帧没有人收，立刻收掉两头。
+			// 以前中转在这里也等 30 秒 linger，上一跳崩了下一跳（和它后面的目标连接）要白挂 30 秒。
+			return readSideGone(err)
 		}
 		for i, frame := range frames {
 			if len(frame) == 0 {
@@ -2172,19 +2182,99 @@ func waitBidirectional(errCh <-chan error, closeAll func()) error {
 	return waitBidirectionalWithLinger(errCh, closeAll, fxpHalfCloseLinger)
 }
 
+/*
+peerGoneError：一个方向的「源头」没了 —— 从它读到复位 / 没发结束帧就关了（入口的客户端、出口的目标、
+中转和入口 / 出口的任一侧隧道），或者往明文侧写被拒。这一侧已经没有人能再收数据，另一个方向不用再等它
+（见 waitBidirectionalWithLinger）。isClosedErr 照样认它（Unwrap 到原来的错误）。
+
+为什么按「读侧 / 写侧」分：对端先发结束帧、紧接着关 TCP 时，往它写的那个方向会先报 closed（EPIPE），
+而读它的那个方向可能还没把缓冲里最后几帧交出去 —— 这时要等（linger），不然截断最后几帧。读侧报 closed
+则不同：结束帧要是来过，读的一侧早就按正常结束处理了；读到 closed 一定是对端没说再见就走了，缓冲里
+不会再有要交的东西，等也白等。
+*/
+type peerGoneError struct{ err error }
+
+func (e *peerGoneError) Error() string { return e.err.Error() }
+func (e *peerGoneError) Unwrap() error { return e.err }
+
+func peerGone(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &peerGoneError{err: err}
+}
+
+// readSideGone：读侧的错误。closed 类（复位、没结束帧就 EOF）标成 peerGone；别的错误原样返回。
+func readSideGone(err error) error {
+	if err != nil && isClosedErr(err) {
+		return peerGone(err)
+	}
+	return err
+}
+
+func isPeerGone(err error) bool {
+	var gone *peerGoneError
+	return errors.As(err, &gone)
+}
+
+/*
+fxpHalfCloseMaxWait：一个方向干净地结束（读到 EOF / 结束帧、半关闭传过去了）以后，另一个方向最多再等多久。
+以前无限等：客户端 shutdown(WR) 后目标一直不关，这条会话和两个协程永远挂着。默认 1 小时 —— 远长于任何
+正常的「半关闭后的长响应」，只兜住真的被遗忘的连接。FXP_HALF_CLOSE_MAX_WAIT 可改（Go 时长写法，如 30m；0 关掉上限）。
+*/
+var fxpHalfCloseMaxWait = halfCloseMaxWaitFromEnv(os.Getenv("FXP_HALF_CLOSE_MAX_WAIT"))
+
+func halfCloseMaxWaitFromEnv(raw string) time.Duration {
+	const fallback = time.Hour
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
 func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseLinger time.Duration) error {
 	first := <-errCh
 	if first == nil {
-		second := <-errCh
-		if second != nil && !isClosedErr(second) {
-			closeAll()
-			return second
+		// 干净的半关闭：另一个方向照常跑，但不再无限等（fxpHalfCloseMaxWait）。
+		var maxWait <-chan time.Time
+		if fxpHalfCloseMaxWait > 0 {
+			timer := time.NewTimer(fxpHalfCloseMaxWait)
+			defer timer.Stop()
+			maxWait = timer.C
 		}
-		return nil
+		select {
+		case second := <-errCh:
+			if second != nil && !isClosedErr(second) {
+				closeAll()
+				return second
+			}
+			return nil
+		case <-maxWait:
+			fxpMetricAddProcess("half_close_reaped")
+			closeAll()
+			return nil
+		}
 	}
 	if !isClosedErr(first) {
 		closeAll()
 		return first
+	}
+	if isPeerGone(first) {
+		/*
+			明文侧断了（客户端复位、目标复位、往它写被拒）：另一个方向再收到的帧也没有人能收了，马上收掉两头。
+			以前这里和下面一样等 30 秒 linger：出口没有新数据时另一个方向一直卡在读帧上，这条会话在入口的两头、
+			出口的两头一共四个套接字白占 30 秒。连接风暴（客户端大批中断重连、端口扫描）下句柄按
+			「每秒连接数 × 30」积累 —— 本机基准 32 个客户端连 → 1 字节往返 → 复位，1 秒内就把 20000 个 fd 占满，
+			之后入口拨不出去、出口接不进来，所有新连接失败。
+		*/
+		fxpMetricAddProcess("peer_gone")
+		closeAll()
+		return nil
 	}
 	timer := time.NewTimer(halfCloseLinger)
 	defer timer.Stop()
@@ -2196,6 +2286,7 @@ func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseL
 		}
 		return nil
 	case <-timer.C:
+		fxpMetricAddProcess("linger_expired")
 		closeAll()
 		if first != nil && !isClosedErr(first) {
 			return first
@@ -2268,7 +2359,8 @@ func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, 
 				return sealer.finish()
 			}
 			sealer.abandon()
-			return err
+			// 明文侧复位 / 被关：这一侧没有人能再收数据，让 waitBidirectional 立刻收掉两头。
+			return readSideGone(err)
 		}
 	}
 }
@@ -2280,9 +2372,9 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 	for {
 		frames, err := src.readFrames(scratch[:0], fxpFrameBatchMax)
 		if failure := writer.failure(); failure != nil {
-			// 写明文侧失败了（写出协程关掉了隧道，readFrames 才回来）。
+			// 写明文侧失败了（写出协程关掉了隧道，readFrames 才回来）。明文侧已经收不了东西，标成 peerGone。
 			writer.abandon()
-			return failure
+			return peerGone(failure)
 		}
 		if err != nil {
 			writer.abandon()
@@ -2292,7 +2384,8 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 				// 另一个方向就一直挂在目标连接上，直到目标自己关。
 				return errSecurePeerVanished
 			}
-			return err
+			// 隧道那头复位：同样没有人能再收另一个方向的数据，立刻收掉（以前按 closed 等 30 秒 linger）。
+			return readSideGone(err)
 		}
 		// 一批里最后那帧可能是结束的空帧：前面的照常写出，然后半关明文侧。
 		total, ended := 0, false
@@ -2309,12 +2402,12 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 			linkShaperEgress().wait(total)
 			if err := writer.write(frames, total); err != nil {
 				writer.abandon()
-				return err
+				return peerGone(err)
 			}
 		}
 		if ended {
 			if err := writer.finish(); err != nil {
-				return err
+				return peerGone(err)
 			}
 			closeWriteConn(dst)
 			return nil

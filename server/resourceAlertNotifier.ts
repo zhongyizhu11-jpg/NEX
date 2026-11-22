@@ -142,8 +142,8 @@ export async function sendAdminAlert(message: AdminAlertMessage, options: { emai
     if (telegramBotReady(settings)) {
       const [{ getTelegramAdminRecipients }, { filterTelegramRecipients }, { sendTelegramMessage }] = await Promise.all([
         import("./repositories/userRepository"),
-        import("./telegramNotifyPrefs"),
-        import("./telegramBot"),
+        import("./telegram/telegramNotifyPrefs"),
+        import("./telegram/telegramBot"),
       ]);
       const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "resource");
       for (const user of recipients as any[]) {
@@ -157,7 +157,7 @@ export async function sendAdminAlert(message: AdminAlertMessage, options: { emai
     appendPanelLog("warn", `[ResourceAlert] Telegram ${message.logLabel} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    const { notifyDiscordAdmins } = await import("./discordNotify");
+    const { notifyDiscordAdmins } = await import("./discord/discordNotify");
     await notifyDiscordAdmins(html, { category: "resource", label: `resource-alert ${message.logLabel}` });
   } catch (error) {
     appendPanelLog("warn", `[ResourceAlert] Discord ${message.logLabel} failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -202,8 +202,8 @@ export async function sendHostOwnerAlert(hostId: number, message: AdminAlertMess
       const settings = await getAllSettings();
       if (telegramBotReady(settings)) {
         const [{ filterTelegramRecipients }, { sendTelegramMessage }] = await Promise.all([
-          import("./telegramNotifyPrefs"),
-          import("./telegramBot"),
+          import("./telegram/telegramNotifyPrefs"),
+          import("./telegram/telegramBot"),
         ]);
         const recipients = await filterTelegramRecipients([{ id: owner.id, telegramId: owner.telegramId }], "resource");
         for (const user of recipients) {

@@ -168,7 +168,7 @@ test("状态流转、关闭后不能回复、通知和面板事件", () => {
       assert.equal((await asAlice.setStatus({ ticketId: created.id, status: "open" })).status, "waiting_user");
 
       // 用户在 Telegram 里关掉「工单消息」后，管理员回复不再推给他
-      const prefs = await import(moduleUrl("server/telegramNotifyPrefs.ts"));
+      const prefs = await import(moduleUrl("server/telegram/telegramNotifyPrefs.ts"));
       await prefs.updateTelegramNotifyPref(2, { toggleCategory: "ticket" });
       sent.length = 0;
       await asAdmin.adminReply({ ticketId: created.id, content: "还有一件事" });
