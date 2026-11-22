@@ -38,6 +38,8 @@ export const AGENT_TUNNEL_PATHS = new Set([
   // 负载均衡的真实状态：入口的 FXP（2.2.145 起）/ Agent（2.2.262 起）报（server/balanceLive.ts）
   "/api/agent/fxp-balance",
   "/api/agent/fxp-conn-stats",
+  // FXP 数据面运行时指标（FXP 2.2.150 起，server/ops/fxpRuntimeMetrics.ts）
+  "/api/agent/fxp-runtime-metrics",
   "/api/agent/tcping",
   // 线路组「下一跳」的快速探测结论（Agent 2.2.258 起，agent/route_hop_probe.go）
   "/api/agent/route-hop-probes",

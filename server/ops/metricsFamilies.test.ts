@@ -44,6 +44,13 @@ function snapshot(patch: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
       ],
     }],
     traffic: { in: 300, out: 500 },
+    fxp: [
+      { hostId: 1, hostName: 'HK "入口" 01', tunnelId: 7, ruleId: 3, role: "entry", name: "udp_queue_drop", kind: "counter", value: 12 },
+      { hostId: 1, hostName: 'HK "入口" 01', tunnelId: 7, ruleId: 3, role: "entry", name: "pool_miss", kind: "counter", value: 4 },
+      { hostId: 1, hostName: 'HK "入口" 01', tunnelId: 7, ruleId: 3, role: "entry", name: "udp_sessions", kind: "gauge", value: 57 },
+      { hostId: 2, hostName: "JP\\出口\n02", tunnelId: 7, ruleId: 0, role: "exit", name: "tcp_sessions", kind: "gauge", value: 0 },
+      { hostId: 1, hostName: 'HK "入口" 01', tunnelId: 0, ruleId: 0, role: "process", name: "peer_gone", kind: "counter", value: 9 },
+    ],
     collectSeconds: 0.012,
     ...patch,
   };
@@ -210,7 +217,7 @@ test("上限保护：规则超过上限（快照里 rules 为空）时一条 nex
 test("数据库不可用：只剩面板自己知道的几项，nex_database_up 为 0，主机和规则的序列是没有而不是 0", () => {
   const parsed = parse(render(snapshot({
     panel: { version: "2.3.999", databaseKind: "mysql", databaseUp: false },
-    hosts: null, ruleCounts: null, rules: null, routes: null, traffic: null,
+    hosts: null, ruleCounts: null, rules: null, routes: null, traffic: null, fxp: null,
   })));
   assert.equal(find(parsed, "nex_database_up")[0].value, 0);
   assert.deepEqual(
@@ -247,4 +254,28 @@ test("Grafana 仪表盘（deploy/grafana/nex-overview.json）里用到的每个�
   assert.ok(used.length >= 15, `仪表盘里只找到 ${used.length} 个指标`);
   const exported = new Set(buildMetricFamilies(snapshot()).filter((item) => item.samples.length > 0).map((item) => item.name));
   for (const name of used) assert.ok(exported.has(name), `仪表盘用了不存在的指标 ${name}`);
+});
+
+test("FXP 隧道进程：counter 带 event 标签汇成一族，会话数 gauge 各一族，gauge 为 0 也导出；没读到时一条都没有", () => {
+  const parsed = parse(render(snapshot())).samples;
+  const events = parsed.filter((row) => row.name === "nex_fxp_events_5m");
+  assert.equal(events.length, 3);
+  const drop = events.find((row) => row.labels.event === "udp_queue_drop");
+  assert.ok(drop);
+  assert.equal(drop.value, 12);
+  assert.equal(drop.labels.tunnel_id, "7");
+  assert.equal(drop.labels.role, "entry");
+  assert.equal(drop.labels.host, 'HK "入口" 01');
+  const processRow = events.find((row) => row.labels.event === "peer_gone");
+  assert.ok(processRow);
+  assert.equal(processRow.labels.role, "process");
+  assert.equal(processRow.labels.tunnel_id, "0");
+  const udp = parsed.filter((row) => row.name === "nex_fxp_udp_sessions");
+  assert.equal(udp.length, 1);
+  assert.equal(udp[0].value, 57);
+  const tcp = parsed.filter((row) => row.name === "nex_fxp_tcp_sessions");
+  assert.equal(tcp.length, 1);
+  assert.equal(tcp[0].value, 0);
+  const none = parse(render(snapshot({ fxp: null }))).samples;
+  assert.equal(none.filter((row) => row.name.startsWith("nex_fxp_")).length, 0);
 });

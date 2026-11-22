@@ -38,6 +38,7 @@ import { completeDiagnosticsAgentTask } from "./diagnosticsAgentTasks";
 import { completeRuleConnectionsTask } from "./ruleConnectionsAgentTasks";
 import { observeTunnelProbeLoss } from "./resourceAlertNotifier";
 import { recordConnStatsReport } from "./ops/connStats";
+import { recordFxpRuntimeMetricsReport } from "./ops/fxpRuntimeMetrics";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
@@ -949,6 +950,29 @@ agentRouter.post("/api/agent/fxp-conn-stats", async (req: Request, res: Response
   } catch (error) {
     appendPanelLog("error", `[ConnStats] report failed: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: "failed to record connection stats" });
+  }
+});
+
+// FXP 报数据面运行时指标（forwardx-fxp/runtime_metrics.go）：每分钟一次，counter 是这一分钟的次数、gauge 是此刻的值。
+agentRouter.post("/api/agent/fxp-runtime-metrics", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (rows.length === 0 || rows.length > 2000) {
+      res.status(400).json({ error: "rows must have 1-2000 entries" });
+      return;
+    }
+    const saved = await recordFxpRuntimeMetricsReport(Number((host as any).id), rows, {
+      tunnelExists: async (tunnelId) => !!(await db.getTunnelById(tunnelId)),
+    });
+    res.json({ ok: true, saved });
+  } catch (error) {
+    appendPanelLog("error", `[FxpMetrics] report failed: ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: "failed to record runtime metrics" });
   }
 });
 

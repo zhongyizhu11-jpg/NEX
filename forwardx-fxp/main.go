@@ -1232,8 +1232,10 @@ func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, er
 		return conn, sec, err
 	}
 	if conn, sec, ok := state.take(cfg); ok {
+		fxpMetricAdd(cfg, "pool_hit", 1)
 		return conn, sec, nil
 	}
+	fxpMetricAdd(cfg, "pool_miss", 1)
 	return dialSecureTCPFresh(host, port, cfg)
 }
 
@@ -1284,6 +1286,8 @@ func runEntryGroup(done <-chan struct{}, cfg config) error {
 
 func handleEntryTCP(client net.Conn, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter) error {
 	defer client.Close()
+	fxpMetricGaugeDelta(cfg, "tcp_sessions", 1)
+	defer fxpMetricGaugeDelta(cfg, "tcp_sessions", -1)
 	selectionKey := endpointSelectionSource(client.RemoteAddr().String())
 	// 单路径：一接受就开始连下一跳（池里有就是现成的），不再先等客户端首包。
 	// 以前先读首包、最多等 150ms 才拨号：SSH、SMTP、MySQL 这类服务端先说话的
@@ -1864,6 +1868,8 @@ func handleExitTCP(sec *secureConn, hello helloFrame, cfg config) error {
 // the given transport, which is a single secure connection for an ordinary
 // session and a multipath session when the entry striped it over several legs.
 func relayExitTCPToTarget(sec frameConn, hello helloFrame, cfg config) error {
+	fxpMetricGaugeDelta(cfg, "tcp_sessions", 1)
+	defer fxpMetricGaugeDelta(cfg, "tcp_sessions", -1)
 	dialStarted := time.Now()
 	target, err := dialExitTargetFor(cfg, hello, exitTargetDialTimeout(hello))
 	dialElapsed := time.Since(dialStarted)
@@ -2033,6 +2039,8 @@ func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEn
 
 // handleRelayBusiness 处理上一跳的一条已经认证过的业务连接：读 hello，连下一跳，双向转发。
 func handleRelayBusiness(upSec *secureConn, cfg config, selector *exitEndpointSelector, in *fxpInbound) error {
+	fxpMetricGaugeDelta(cfg, "tcp_sessions", 1)
+	defer fxpMetricGaugeDelta(cfg, "tcp_sessions", -1)
 	upConn := upSec.conn
 	frame, err := awaitSecureHello(upSec, in.stop())
 	if err != nil {
@@ -2247,6 +2255,7 @@ func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseL
 			}
 			return nil
 		case <-maxWait:
+			fxpMetricAddProcess("half_close_reaped")
 			closeAll()
 			return nil
 		}
@@ -2263,6 +2272,7 @@ func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseL
 			「每秒连接数 × 30」积累 —— 本机基准 32 个客户端连 → 1 字节往返 → 复位，1 秒内就把 20000 个 fd 占满，
 			之后入口拨不出去、出口接不进来，所有新连接失败。
 		*/
+		fxpMetricAddProcess("peer_gone")
 		closeAll()
 		return nil
 	}
@@ -2276,6 +2286,7 @@ func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseL
 		}
 		return nil
 	case <-timer.C:
+		fxpMetricAddProcess("linger_expired")
 		closeAll()
 		if first != nil && !isClosedErr(first) {
 			return first

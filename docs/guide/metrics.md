@@ -130,6 +130,18 @@ scrape_configs:
 
 评分、延迟这些和线路详情里看到的是同一份数据（入口 Agent 随心跳报上来的），10 分钟没有新上报就不再导出。
 
+### FXP 隧道进程（数据面）
+
+NEX 隧道的入口 / 中转 / 出口进程每分钟把数据面的几类事件和此刻的会话数报给面板（需要 FXP 2.2.150 及以上），面板留 7 天。标签：`host` / `host_id`（报数的主机）、`tunnel_id`、`rule_id`（0 = 这台机器上该隧道的所有规则或进程级）、`role`（entry / relay / exit / process）。
+
+| 指标 | 类型 | 含义 |
+| --- | --- | --- |
+| `nex_fxp_events_5m` | gauge | 最近 5 分钟的事件数，`event` 标签：`udp_queue_drop` 发送 / 回程队列满了挤掉最老的包；`udp_expired_drop` 包在队列里等了超过 75 ms 还有更新的包、丢掉；`udp_session_rejected` 新会话被拒（连接闸、会话数 / 每 IP 上限、会话号或目标冲突）；`udp_session_reclaimed` 会话太多时按压力回收；`pool_hit` / `pool_miss` 取下一跳连接时池里有没有现成的（miss 多说明预热跟不上建连速率）；`peer_gone` 一侧没说再见就断、立刻收掉的会话；`half_close_reaped` 干净半关闭后等满上限（默认 1 小时）才收掉的会话；`linger_expired` 写侧 closed 后等满 30 秒才收掉的会话 |
+| `nex_fxp_udp_sessions` | gauge | 这个 UDP 监听上此刻活着的会话数（接近 1024 / 规则 的硬上限就要调） |
+| `nex_fxp_tcp_sessions` | gauge | 这个角色上此刻正在转发的 TCP 会话数 |
+
+告警建议：`udp_queue_drop` / `udp_expired_drop` 持续非零说明出口或目标处理不过来；`udp_session_rejected` 非零说明撞上限额（可能是运营商 NAT 后面的真实用户）；`pool_miss` 占比高说明连接风暴或预热池太小；`half_close_reaped` / `linger_expired` 多说明有客户端或目标不正常关闭。
+
 ### 累计值要注意的
 
 - `_total` 结尾的是 counter，画图用 `rate()` / `increase()`，不要直接画原值。

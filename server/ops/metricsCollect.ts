@@ -38,6 +38,7 @@ import { dbBool } from "../repositories/repositoryUtils";
 import { getRouteStatus, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "../routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "../routeNodeHealth";
 import { getRuleLiveRate } from "../ruleLiveRates";
+import { collectFxpRuntimeMetrics } from "./fxpRuntimeMetrics";
 import {
   MonotonicTotal,
   type MetricsHostSample,
@@ -364,6 +365,7 @@ export async function collectMetricsSnapshot(options: MetricsCollectOptions): Pr
     rules: null,
     routes: null,
     traffic: null,
+    fxp: null,
     collectSeconds: 0,
   };
   const finish = () => {
@@ -390,6 +392,10 @@ export async function collectMetricsSnapshot(options: MetricsCollectOptions): Pr
   if (totalIn !== null && totalOut !== null) snapshot.traffic = { in: totalIn, out: totalOut };
 
   const hostNames = new Map((hosts || []).map((host) => [host.id, host.name]));
+  const fxp = await section("FXP 运行时", () => collectFxpRuntimeMetrics(nowMs));
+  snapshot.fxp = fxp
+    ? fxp.map((sample) => ({ ...sample, hostName: hostNames.get(sample.hostId) ?? String(sample.hostId) }))
+    : null;
   const maxRules = Math.max(0, Math.floor(options.maxRules));
   const ruleDetail = !!ruleCounts && ruleCounts.total <= maxRules;
   /*
