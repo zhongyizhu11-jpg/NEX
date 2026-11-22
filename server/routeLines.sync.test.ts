@@ -142,7 +142,9 @@ function run(): Outcome {
       };
     };
     const loadFirst = await beatFull("2.2.251");
-    hostLoad.recordHostLoadSample(2, { at: Date.now(), cpuUsage: 85, networkIn: null, networkOut: null }, 0);
+    // 下发的负载按一分钟平滑（2.3.548）：紧接着报 85 当拍只会抬几个点；隔 6 分钟再报，上一份已过期，按这一次的算
+    const later = Date.now() + 6 * 60_000;
+    hostLoad.recordHostLoadSample(2, { at: later, cpuUsage: 85, networkIn: null, networkOut: null }, 0, later);
     const loadSecond = await beatFull("2.2.251");
     server.close();
     console.log("LINES " + JSON.stringify({
