@@ -119,7 +119,7 @@ export type FxpRuntimeMetricSample = {
 export async function collectFxpRuntimeMetrics(nowMs = Date.now()): Promise<FxpRuntimeMetricSample[]> {
   const q = quoteDbIdentifier;
   const since = Math.floor(nowMs / 1000) - WINDOW_SECONDS;
-  const rows = await queryRaw<any>(
+  const rows = await queryRaw<Record<string, unknown>>(
     `SELECT ${q("hostId")}, ${q("tunnelId")}, ${q("ruleId")}, ${q("role")}, ${q("name")}, ${q("kind")}, ${q("minuteAt")}, ${q("value")}
        FROM ${q("fxp_runtime_metrics")}
       WHERE ${q("minuteAt")} >= ?
@@ -130,7 +130,7 @@ export async function collectFxpRuntimeMetrics(nowMs = Date.now()): Promise<FxpR
   const samples = new Map<string, FxpRuntimeMetricSample>();
   for (const row of rows) {
     const kind = String(row.kind) as "counter" | "gauge";
-    const key = [row.hostId, row.tunnelId, row.ruleId, row.role, row.name, kind].join("|");
+    const key = [row.hostId, row.tunnelId, row.ruleId, row.role, row.name, kind].map(String).join("|");
     const value = Number(row.value) || 0;
     const existing = samples.get(key);
     if (!existing) {

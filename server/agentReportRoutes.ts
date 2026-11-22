@@ -966,7 +966,7 @@ agentRouter.post("/api/agent/fxp-runtime-metrics", async (req: Request, res: Res
       res.status(400).json({ error: "rows must have 1-2000 entries" });
       return;
     }
-    const saved = await recordFxpRuntimeMetricsReport(Number((host as any).id), rows, {
+    const saved = await recordFxpRuntimeMetricsReport(Number((host as { id?: unknown }).id), rows, {
       tunnelExists: async (tunnelId) => !!(await db.getTunnelById(tunnelId)),
     });
     res.json({ ok: true, saved });
