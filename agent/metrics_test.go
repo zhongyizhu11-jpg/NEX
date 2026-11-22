@@ -105,6 +105,30 @@ func TestCPUUsageFromTimes(t *testing.T) {
 	}
 }
 
+func TestCPUUsageIgnoresTooShortSamplingWindow(t *testing.T) {
+	// 两次读得太近（心跳被唤醒连着发、实时指标每秒一读）：那几十毫秒里正是 Agent 自己在忙，一核小机读出 80–90%，
+	// 可机器平均负载只有 0.01（用户面板 Jinx(29.9y)）。窗口不到 2 秒的那一次报上一次的数，基准也不动。
+	base := time.Unix(1_800_000_000, 0)
+	cpuUsageMu.Lock()
+	previousCPUTimes = cpuTimes{Idle: 1000, Total: 2000}
+	previousCPUAt = base
+	previousCPUReady = true
+	lastCPUUsage = 0
+	cpuUsageMu.Unlock()
+	// 30 秒后：正常量，busy 2%
+	if got := cpuUsageFromTimesAt(cpuTimes{Idle: 1980, Total: 3000}, base.Add(30*time.Second), cpuUsageMinWindow); got != 2 {
+		t.Fatalf("normal window: got %d want 2", got)
+	}
+	// 50 毫秒后又读一次：这 50 毫秒里 Agent 自己占满了一核，按窗口算是 100% —— 不算，报上一次的 2
+	if got := cpuUsageFromTimesAt(cpuTimes{Idle: 1980, Total: 3050}, base.Add(30*time.Second+50*time.Millisecond), cpuUsageMinWindow); got != 2 {
+		t.Fatalf("short window must repeat the last reading: got %d", got)
+	}
+	// 再过 30 秒：基准还是 30 秒那一次的（total 3000→4000、idle 1980→2920 → 6%）；要是被 50 毫秒那次挪了基准会算成 1%
+	if got := cpuUsageFromTimesAt(cpuTimes{Idle: 2920, Total: 4000}, base.Add(60*time.Second), cpuUsageMinWindow); got != 6 {
+		t.Fatalf("baseline must stay at the last full window: got %d want 6", got)
+	}
+}
+
 func TestTrafficBaselinesCommitOnlyAfterSuccessfulReport(t *testing.T) {
 	previousDir := trafficStateDir
 	trafficPrevMu.Lock()

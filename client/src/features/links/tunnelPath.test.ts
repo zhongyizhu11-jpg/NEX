@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildTunnelPath } from "./tunnelPath";
+import { buildTunnelPath, tunnelHopLatenciesFromDetails } from "./tunnelPath";
 import { tunnelHealthFromAvailability } from "./tunnelHealth";
 
 const hosts = [
@@ -144,4 +144,32 @@ test("手动停用是 standby，协议没启用是 down —— 两者不能混",
   // 停用是按设计没在跑；协议没启用是这条链路根本跑不起来。
   assert.equal(tunnelHealthFromAvailability("available", { enabled: false }), "standby");
   assert.equal(tunnelHealthFromAvailability("available", { supported: false }), "down");
+});
+
+test("多级隧道逐跳测过：每一段标自己的延迟，via 仍在中间那段；总延迟进 title（用户 2026-11-22：「这里做成显示各段的延迟吧」）", () => {
+  // 用户面板：深圳前置-po0[300]，深圳CT → po0(300M) 11 ms、po0(300M) → hep ix 5 ms，总 16 ms；卡上原来只在第二段写 16
+  const details = [
+    { hopLabel: "1/2 14->6", routeLabel: "第 1 跳 深圳CT -> po0(300M)", latencyMs: 11, success: true },
+    { hopLabel: "2/2 6->12", routeLabel: "第 2 跳 po0(300M) -> hep ix", latencyMs: 5, success: true },
+  ];
+  assert.deepEqual(tunnelHopLatenciesFromDetails(details, 2), [11, 5]);
+  const path = buildTunnelPath(tunnel({ hopHostIds: [1, 2, 3] }), { hosts, health: "healthy", latencyMs: 16, via: "NEX V1", hopLatenciesMs: [11, 5] });
+  assert.deepEqual(path.edges.map((e) => e.latencyMs), [11, 5]);
+  assert.deepEqual(path.edges.map((e) => e.via), [undefined, "NEX V1"], "via 仍只写在中间那段");
+  assert.match(path.title, /Po0 → Relay-HK 11 ms，Relay-HK → Jinx 5 ms；总延迟 16 ms/);
+  // 一跳没通：那一段不标，别的照标
+  const partial = buildTunnelPath(tunnel({ hopHostIds: [1, 2, 3] }), { hosts, latencyMs: null, hopLatenciesMs: [11, null] });
+  assert.deepEqual(partial.edges.map((e) => e.latencyMs), [11, undefined]);
+  assert.deepEqual(tunnelHopLatenciesFromDetails([{ hopLabel: "1/2 14->6", latencyMs: 11, success: true }, { hopLabel: "2/2 6->12", latencyMs: 0, success: false }], 2), [11, null]);
+});
+
+test("逐跳数和跳数对不上、直连、入口组、负载均衡出口：照旧只在中间那段标总延迟", () => {
+  assert.equal(tunnelHopLatenciesFromDetails([{ hopLabel: "出口 -> 目标", latencyMs: 3, success: true }], 2), null, "不是逐跳的明细");
+  assert.equal(tunnelHopLatenciesFromDetails([{ hopLabel: "1/3 1->2", latencyMs: 3, success: true }], 2), null, "跳数对不上");
+  const direct = buildTunnelPath(tunnel({ hopHostIds: [1, 3] }), { hosts, latencyMs: 8, hopLatenciesMs: [8] });
+  assert.deepEqual(direct.edges.map((e) => e.latencyMs), [8]);
+  const mismatch = buildTunnelPath(tunnel({ hopHostIds: [1, 2, 3] }), { hosts, latencyMs: 16, hopLatenciesMs: [11] });
+  assert.deepEqual(mismatch.edges.map((e) => e.latencyMs), [undefined, 16]);
+  const balanced = buildTunnelPath(tunnel({ hopHostIds: [1, 2, 3], loadBalanceExits: [{ hostId: 4 }] }), { hosts, latencyMs: 16, hopLatenciesMs: [11, 5] });
+  assert.ok(balanced.edges.every((e) => e.latencyMs === undefined || e.latencyMs === 16), "负载均衡出口的路径不逐段标");
 });

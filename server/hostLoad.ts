@@ -34,7 +34,22 @@ export function nextHostLoadHint(previous: HostLoadHint | null, current: number 
   return previous;
 }
 
-type HostLoadState = { previous: HostLoadSample | null; latest: HostLoadSample; bandwidthMbps: number; loadPct: number | null; hint: HostLoadHint | null };
+type HostLoadState = { previous: HostLoadSample | null; latest: HostLoadSample; bandwidthMbps: number; loadPct: number | null; smoothedPct: number | null; hint: HostLoadHint | null };
+
+/*
+  一次心跳的负载先按时间加权平均一遍再用（时间常数 60 秒）：一核小机上单次心跳的 CPU 读数会蹦（Agent 自己拼心跳
+  那一下、宿主机抢占），用户面板 2026-11-22：Jinx(29.9y) 平均负载 0.01、存下来的样本 1–2%，线路组上却一直
+  「负载 84%」—— 正好拿到一次尖峰、再被回差（10 个点以内 5 分钟不换）留住。平滑过的数才进回差和下发。
+*/
+const LOAD_SMOOTH_TAU_MS = 60_000;
+
+export function smoothHostLoad(previous: { pct: number; at: number } | null, current: number | null, now: number): number | null {
+  // 这一次什么都没报：不知道就是不知道（不拿旧的平滑值顶）
+  if (current === null || !Number.isFinite(current)) return null;
+  if (!previous || now - previous.at > LOAD_STALE_MS || now <= previous.at) return current;
+  const alpha = 1 - Math.exp(-(now - previous.at) / LOAD_SMOOTH_TAU_MS);
+  return Math.round((previous.pct + (current - previous.pct) * alpha) * 10) / 10;
+}
 
 const states = new Map<number, HostLoadState>();
 
@@ -51,9 +66,11 @@ export function recordHostLoadSample(hostId: number, sample: HostLoadSample, ban
   const previous = current && now - current.latest.at <= LOAD_STALE_MS ? current.latest : null;
   const bandwidth = Math.max(0, Math.floor(Number(bandwidthMbps) || 0));
   const loadPct = hostLoadFromSamples(previous, sample, bandwidth);
+  // 此刻的负载照实记（hostLoadPctOf，指标导出用）；给线路调度的那份先平滑再过回差（smoothHostLoad）
+  const smoothedPct = smoothHostLoad(current && current.smoothedPct !== null ? { pct: current.smoothedPct, at: current.latest.at } : null, loadPct, now);
   // 离线了一阵再回来时上次给出去的那个数也早过了 5 分钟，和这一次不一样就按这一次的重新给。
-  const hint = nextHostLoadHint(current?.hint ?? null, loadPct, now);
-  states.set(id, { previous, latest: sample, bandwidthMbps: bandwidth, loadPct, hint });
+  const hint = nextHostLoadHint(current?.hint ?? null, smoothedPct, now);
+  states.set(id, { previous, latest: sample, bandwidthMbps: bandwidth, loadPct, smoothedPct, hint });
 }
 
 /** 这台主机此刻的负载（0–100）；不知道（没心跳、太旧、什么都没报）是 null。 */

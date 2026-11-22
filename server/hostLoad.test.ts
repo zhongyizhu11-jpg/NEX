@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { clearHostLoadForTest, ensureLandingNodeHosts, hostLoadPctOf, landingNodeHostId, nextHostLoadHint, recordHostLoadSample, routePathLoadHint } from "./hostLoad";
+import { smoothHostLoad, clearHostLoadForTest, ensureLandingNodeHosts, hostLoadPctOf, landingNodeHostId, nextHostLoadHint, recordHostLoadSample, routePathLoadHint } from "./hostLoad";
 
 /**
  * 心跳记进来的主机负载：第一次只有 CPU，第二次起带宽占用也算；太久没心跳就不算知道；
@@ -58,28 +58,41 @@ test("落地是「我的节点」：节点在哪台 NEX 主机上一次查齐、
   assert.deepEqual(asked.at(-1), [31], "查失败没缓存，下一次心跳接着查");
 });
 
-test("下发的负载带回差：差不到 10 个点、5 分钟内不换；差得多立刻换；慢慢漂过去的 5 分钟内跟上", () => {
+test("下发的负载先按一分钟平滑再过回差：单次尖峰不下发，持续高才算高；差不到 10 个点、5 分钟内不换", () => {
   clearHostLoadForTest();
   const t0 = 1_700_000_000_000;
-  const beat = (offsetMs: number, cpuUsage: number | null) => recordHostLoadSample(8, { at: t0 + offsetMs, cpuUsage, networkIn: null, networkOut: null }, 0, t0 + offsetMs);
-  const hint = (offsetMs: number) => routePathLoadHint({ hops: [8] }, t0 + offsetMs);
-  beat(0, 40.4);
-  assert.equal(hint(0), 40);
-  beat(10_000, 47);
+  const beat = (hostId: number, offsetMs: number, cpuUsage: number | null) => recordHostLoadSample(hostId, { at: t0 + offsetMs, cpuUsage, networkIn: null, networkOut: null }, 0, t0 + offsetMs);
+  const hint = (hostId: number, offsetMs: number) => routePathLoadHint({ hops: [hostId] }, t0 + offsetMs);
+  beat(8, 0, 40.4);
+  assert.equal(hint(8, 0), 40);
+  beat(8, 10_000, 47);
   assert.equal(hostLoadPctOf(8, t0 + 10_000), 47, "实际负载照实记");
-  assert.equal(hint(10_000), 40, "差 7 个点：还给上次那个数，规格不跟着抖");
-  beat(20_000, 52);
-  assert.equal(hint(20_000), 52, "差 12 个点：立刻换");
-  beat(60_000, 45);
-  assert.equal(hint(60_000), 52);
-  beat(20_000 + 5 * 60_000, 45);
-  assert.equal(hint(20_000 + 5 * 60_000), 45, "离上次换满 5 分钟：跟上实际的");
-  beat(20_000 + 5 * 60_000 + 10_000, null);
-  assert.equal(hint(20_000 + 5 * 60_000 + 10_000), 0, "什么都没报：不知道，不带");
+  assert.equal(hint(8, 10_000), 40, "平滑后 41：差不到 10 个点，还给上次那个数");
+  /*
+    用户面板 2026-11-22：Jinx(29.9y) 一核、平均负载 0.01，一次心跳 CPU 读出 89 → 线路组上「负载 84%」挂了很久。
+    一次尖峰平滑后只抬几个点，不下发；下一次回到 2 又落回去。
+  */
+  beat(8, 20_000, 89);
+  assert.equal(hostLoadPctOf(8, t0 + 20_000), 89);
+  assert.equal(hint(8, 20_000), 40, "单次尖峰：平滑后 49，差不到 10 个点，不下发");
+  beat(8, 30_000, 2);
+  assert.equal(hint(8, 30_000), 40);
+  // 真的一直高：每 30 秒一次 90，三分钟后平滑值过 80，下发的跟上
+  for (let i = 0; i <= 6; i += 1) beat(9, i * 30_000, 90);
+  assert.ok(hint(9, 180_000) >= 80, `持续高才算高：${hint(9, 180_000)}`);
+  // 离线了一阵再回来：不拿旧的平滑值，按这一次的重新算；隔了 5 分钟回差也放行
+  beat(8, 30_000 + 6 * 60_000, 2);
+  assert.equal(hint(8, 30_000 + 6 * 60_000), 2);
+  beat(8, 30_000 + 6 * 60_000 + 10_000, null);
+  assert.equal(hint(8, 30_000 + 6 * 60_000 + 10_000), 0, "什么都没报：不知道，不带");
 
   // 纯函数：一样的数原样返回（不刷新时间），越界的夹到 0–100
   const previous = { pct: 60, at: t0 };
   assert.equal(nextHostLoadHint(previous, 60.3, t0 + 10 * 60_000), previous);
   assert.deepEqual(nextHostLoadHint(null, 130, t0), { pct: 100, at: t0 });
   assert.equal(nextHostLoadHint(previous, null, t0), null);
+  // 平滑本身：30 秒的间隔吃掉 39%；这一次没报就是不知道
+  assert.equal(smoothHostLoad({ pct: 10, at: t0 }, 90, t0 + 30_000), 41.5);
+  assert.equal(smoothHostLoad({ pct: 10, at: t0 }, null, t0 + 30_000), null);
+  assert.equal(smoothHostLoad(null, 90, t0), 90);
 });

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.267"
+var Version = "2.2.268"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -233,6 +233,10 @@ var trafficCollectRunning bool
 var cpuUsageMu sync.Mutex
 var previousCPUTimes cpuTimes
 var previousCPUReady bool
+
+// 上一次量 CPU 的时刻和结果（host_info.go 的 cpuUsage：窗口太短的那一次不算，报上一次的）。
+var previousCPUAt time.Time
+var lastCPUUsage int
 var countingChainMu sync.Mutex
 var countingChainSignatures = map[string]string{}
 var countingChainCheckedAt = map[string]time.Time{}
