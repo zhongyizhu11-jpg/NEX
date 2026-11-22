@@ -57,6 +57,8 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=agent-assets /app/dist/agent ./dist/agent
 COPY --from=builder /app/THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
+# 许可证和致谢随镜像一起发（AGPL 要求随分发附带）。
+COPY --from=builder /app/LICENSE /app/NOTICE ./
 COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/scripts/install-mimic.sh ./scripts/install-mimic.sh
