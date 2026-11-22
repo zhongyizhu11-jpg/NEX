@@ -1162,7 +1162,12 @@ reset_admin_password() {
   echo "[INFO] Starting the password reset CLI inside the Docker container."
   cli_args=()
   if [ "$ENABLE_ADMIN_ACCOUNT" = "true" ]; then cli_args+=(--enable-account); fi
-  docker exec -it "$CONTAINER_NAME" node dist/reset-admin-password.js "${cli_args[@]}" < /dev/tty
+  # 新镜像里面板以 forwardx 用户跑：用同一个用户执行，免得 SQLite 的 -wal / -shm 文件被 root 建出来、面板打不开。
+  exec_user=()
+  if docker exec "$CONTAINER_NAME" id -u forwardx >/dev/null 2>&1; then
+    exec_user=(-u forwardx)
+  fi
+  docker exec -it "${exec_user[@]}" "$CONTAINER_NAME" node dist/reset-admin-password.js "${cli_args[@]}" < /dev/tty
 }
 
 # ── 从原版 ForwardX 迁移（migrate-forwardx / rollback-forwardx） ──

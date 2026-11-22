@@ -44,8 +44,14 @@ ENV NODE_ENV=production \
 LABEL org.opencontainers.image.version=$FORWARDX_VERSION \
       org.forwardx.version=$FORWARDX_VERSION
 
-RUN apk add --no-cache tini git curl openssl docker-cli docker-cli-compose && mkdir -p /data
+# 面板以非 root 用户 forwardx（uid/gid 10001，固定，方便宿主机 chown / 给 docker.sock 配属组）运行；
+# 入口脚本以 root 起来修正老数据卷的属主后用 su-exec 降权，见 docker/panel/entrypoint.sh。
+RUN apk add --no-cache tini su-exec git curl openssl docker-cli docker-cli-compose \
+  && addgroup -S -g 10001 forwardx && adduser -S -D -H -u 10001 -G forwardx -h /app -s /sbin/nologin forwardx \
+  && mkdir -p /data && chown forwardx:forwardx /data
 VOLUME ["/data"]
+# 日志、证书、jwt.secret 都放数据卷里（面板默认就按 /data 找，这里只是写明）。
+ENV FORWARDX_LOG_DIR=/data/logs
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
@@ -55,11 +61,12 @@ COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/scripts/install-mimic.sh ./scripts/install-mimic.sh
 COPY --from=builder /app/package.json ./
+COPY docker/panel/entrypoint.sh /usr/local/bin/panel-entrypoint.sh
 
 EXPOSE 3000
 # 存活探测：进程还在并且能回 HTTP 就算活。/api/database-health 不建登录上下文、不查库，
 # 数据库故障时也返回 200（故障信息在 JSON 里），所以库挂了不会把容器标成 unhealthy 触发误重启。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT:-3000}/api/database-health" >/dev/null || exit 1
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/panel-entrypoint.sh"]
 CMD ["node", "dist/index.js"]
