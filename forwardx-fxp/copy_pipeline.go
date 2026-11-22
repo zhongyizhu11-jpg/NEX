@@ -66,6 +66,10 @@ type fxpSealPipeline struct {
 	inFlight atomic.Int32
 	// spare：写出协程用完、留给读协程下一次交接的缓冲（见文件开头「内存」一条）。
 	spare chan []byte
+	// chunkFrames 是 writeChunk 切帧用的切片头数组。放在结构体上而不是栈上：传给 writeFrames（接口方法）
+	// 的变参切片会逃逸到堆，以前每块明文（128 KiB）都要为这两个切片头分配一次 —— 本机基准每 GB 八千多次
+	// 分配里的大头。读协程就地写和写出协程不会同时在 writeChunk 里（inFlight 为 0 时才就地写）。
+	chunkFrames [fxpCopyBatchFrames][]byte
 
 	failOnce sync.Once
 	failed   chan struct{}
@@ -99,8 +103,7 @@ func (p *fxpSealPipeline) fail(err error) {
 
 // writeChunk 把一块明文切成帧、合成一次写。
 func (p *fxpSealPipeline) writeChunk(chunk []byte) error {
-	var frames [fxpCopyBatchFrames][]byte
-	batch := frames[:0]
+	batch := p.chunkFrames[:0]
 	for len(chunk) > fxpCopyChunkSize {
 		batch = append(batch, chunk[:fxpCopyChunkSize])
 		chunk = chunk[fxpCopyChunkSize:]
