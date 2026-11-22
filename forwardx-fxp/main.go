@@ -265,7 +265,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.149"
+	fxpRuntimeVersion             = "2.2.150"
 	fxpFallbackDial               = 3 * time.Second
 	fxpShutdownDrain              = 5 * time.Second
 
