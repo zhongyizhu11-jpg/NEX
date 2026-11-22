@@ -8856,5 +8856,14 @@
  "组里只剩 {0} 台，不够两台不生成组": "Only {0} left in the group; fewer than two means no group",
  "· 落地直连": "· direct to landing",
  "· 暂时不通，通了自动回来": "· unreachable for now, back automatically once it works",
- "· 另 {0} 条入口只做裸节点，客户端里还能手动选": "· {0} other entries stay plain nodes, still selectable in the client"
+ "· 另 {0} 条入口只做裸节点，客户端里还能手动选": "· {0} other entries stay plain nodes, still selectable in the client",
+ "站点": "Site",
+ "名字、Logo、菜单和公开首页，和主题无关。": "Name, logo, menu and public home page; independent of the theme.",
+ "主题": "Theme",
+ "先选一套整体风格；选的那套有自己的参数时，参数跟在下面。": "Pick an overall style first; if the chosen theme has its own parameters, they follow below.",
+ "外观微调（所有主题通用）": "Appearance tweaks (all themes)",
+ "在主题之上再调：配色、页面底色、卡片风格、布局密度、背景。": "Fine-tune on top of the theme: accent colors, page tint, card style, layout density, background.",
+ "卡片不透明度": "Card opacity",
+ "玻璃卡和分类条的底色浓度：浅色是白、深色是墨，越大越不透、字越清楚": "How solid the glass cards and the tab bar are: white in light mode, ink in dark mode; higher is more opaque and easier to read",
+ "「液态玻璃」主题自己的参数：照片从哪来、铺满全屏还是左右错落、浅色下照片上罩多厚的白雾、深色下照片多亮、玻璃卡模糊多少、卡片多不透、鼠标移上去要不要跟着亮。": "The Liquid Glass theme's own parameters: photo source, full-screen or staggered, light-mode wash, dark-mode photo brightness, glass blur, card opacity, and the cursor-following sheen."
 }

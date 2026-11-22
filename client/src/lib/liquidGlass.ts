@@ -23,7 +23,7 @@ export function setLiquidGlassPreview(value: LiquidGlassConfig | null) {
   }
 }
 
-const VARS = ["--fx-lg-wash", "--fx-lg-dark-opacity", "--fx-lg-blur-px"] as const;
+const VARS = ["--fx-lg-wash", "--fx-lg-dark-opacity", "--fx-lg-blur-px", "--fx-lg-card-alpha"] as const;
 
 export function applyLiquidGlassVars(config: LiquidGlassConfig, root?: HTMLElement) {
   const target = root || (typeof document !== "undefined" ? document.documentElement : null);
@@ -31,6 +31,8 @@ export function applyLiquidGlassVars(config: LiquidGlassConfig, root?: HTMLEleme
   target.style.setProperty("--fx-lg-wash", `${config.wash}%`);
   target.style.setProperty("--fx-lg-dark-opacity", String(config.darkOpacity / 100));
   target.style.setProperty("--fx-lg-blur-px", `${config.blur}px`);
+  // 玻璃卡的底色浓度：浅色是白、深色是墨（theme-liquid-glass.css 的 --fx-lg-card 读它）
+  target.style.setProperty("--fx-lg-card-alpha", `${config.cardOpacity}%`);
 }
 
 export function clearLiquidGlassVars(root?: HTMLElement) {

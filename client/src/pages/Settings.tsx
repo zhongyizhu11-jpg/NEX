@@ -3857,6 +3857,10 @@ function PersonalizationSettingsSection() {
           </span>
         </div>
       ) : null}
+      <div className="pt-2 first:pt-0">
+        <p className="text-sm font-semibold text-foreground">站点</p>
+        <p className="text-xs leading-5 text-muted-foreground">名字、Logo、菜单和公开首页，和主题无关。</p>
+      </div>
       <div className="grid gap-4 @[58rem]:grid-cols-2">
         <Card className="border-border bg-card">
           <CardHeader>
@@ -4024,6 +4028,79 @@ function PersonalizationSettingsSection() {
         </CardContent>
       </Card>
 
+      <Card className="border-border bg-card">
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1.5">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Globe className="h-4 w-4 text-primary" />
+              公开首页
+            </CardTitle>
+            <CardDescription>
+              设置未登录时展示的首页。
+            </CardDescription>
+          </div>
+          <Button type="button" data-dock-save onClick={handleSaveHomepage} disabled={isSavingPersonalization("homepage")} className="w-full gap-2 sm:w-auto">
+            {isSavingPersonalization("homepage") && <Loader2 className="h-4 w-4 animate-spin" />}
+            保存首页
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="启用公开首页"
+              description="关闭后直接进入登录页。"
+              control={<Checkbox aria-label="启用公开首页" checked={homepageEnabled} onCheckedChange={setHomepageEnabled} />}
+            />
+            <SettingRow
+              asLabel
+              label="使用自定义 H5"
+              description="优先展示自定义页面。"
+              control={<Checkbox aria-label="使用自定义 H5" checked={homepageCustomEnabled} onCheckedChange={setHomepageCustomEnabled} />}
+            />
+          </SettingList>
+          {homepageCustomEnabled && (
+            <div className="space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <Label className="text-sm font-medium">首页 H5/HTML 代码</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    支持完整 HTML 或 body 内容。
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={handleUseHomepageTemplate}>
+                    使用示例
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handlePreviewHomepage} className="gap-2">
+                    <Eye className="h-4 w-4" />
+                    预览
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <a href="/homepage-preview" target="_blank" rel="noopener noreferrer">
+                      查看已保存
+                    </a>
+                  </Button>
+                </div>
+              </div>
+              <Textarea
+                value={homepageHtml}
+                onChange={(e) => setHomepageHtml(e.target.value)}
+                placeholder="粘贴你的首页 H5/HTML 代码"
+                className="min-h-72 font-mono text-xs leading-5"
+              />
+              <p className="text-xs text-muted-foreground">
+                {homepageHtml.length.toLocaleString()} / 60,000 字符
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="pt-2 first:pt-0">
+        <p className="text-sm font-semibold text-foreground">主题</p>
+        <p className="text-xs leading-5 text-muted-foreground">先选一套整体风格；选的那套有自己的参数时，参数跟在下面。</p>
+      </div>
       {/*
         界面主题：整套界面的气质（底、卡、外壳、控件形状一起换），是配色 / 底色 / 卡片风格底下那一层。
         三枚预览是 CSS 画的小手机屏（.fx-uitheme-swatch，见 styles/ui-theme-shared.css：主题样式按需加载，预览得跟主样式表走），经典是灰底白卡，
@@ -4097,130 +4174,134 @@ function PersonalizationSettingsSection() {
       {/* 主题管理：装 / 更新 / 卸载主题包（官方主题库、上传、链接）。装好的出现在上面那张卡片里。 */}
       <UiThemeManagerCard />
 
-      {/* 布局密度：站点默认（standard / compact），每个账号可以在个人资料里覆盖。点了就存，不走上面的保存条。 */}
-      <LayoutDefaultCard />
-
       {/*
-        液态玻璃的旋钮：只有界面主题是液态玻璃时才看得出效果，但一直露着 —— 先调好再切主题也行。
-        拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
+        液态玻璃的旋钮只在界面主题选的是液态玻璃（或者刚拨过还没存）时露出来：别的主题下它们一个都不生效，
+        摆在这里只会让人分不清哪些设置在管现在这套（2.3.546，用户：「各主题的配置有点乱」）。
       */}
-      <Card className="border-border bg-card">
-        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1.5">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Palette className="h-4 w-4 text-primary" />
-              液态玻璃
-            </CardTitle>
-            <CardDescription>
-              「液态玻璃」主题的几个旋钮：照片从哪来、铺满全屏还是左右错落、浅色下照片上罩多厚的白雾、深色下照片多亮、玻璃卡模糊多少、鼠标移上去要不要跟着亮。
-              {uiTheme !== "liquid-glass" ? "现在选的不是液态玻璃，调了要切到那套才看得见。" : "拨一下就在这一页试看，保存后才对所有人生效。"}
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            data-dock-save
-            onClick={handleSaveLiquidGlass}
-            disabled={isSavingPersonalization("liquidGlass") || !liquidGlassDirty}
-            className="w-full gap-2 sm:w-auto"
-          >
-            {isSavingPersonalization("liquidGlass") && <Loader2 className="h-4 w-4 animate-spin" />}
-            保存参数
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          <div className="space-y-2">
-            <Label>照片来源</Label>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {LIQUID_GLASS_PHOTO_SOURCES.map((item) => {
-                const active = liquidGlass.photoSource === item.id;
+      {uiTheme === "liquid-glass" || liquidGlassDirty ? (
+        <Card className="border-border bg-card">
+          <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1.5">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Palette className="h-4 w-4 text-primary" />
+                液态玻璃
+              </CardTitle>
+              <CardDescription>
+                「液态玻璃」主题自己的参数：照片从哪来、铺满全屏还是左右错落、浅色下照片上罩多厚的白雾、深色下照片多亮、玻璃卡模糊多少、卡片多不透、鼠标移上去要不要跟着亮。
+                {uiTheme !== "liquid-glass" ? "现在选的不是液态玻璃，调了要切到那套才看得见。" : "拨一下就在这一页试看，保存后才对所有人生效。"}
+              </CardDescription>
+            </div>
+            <Button
+              type="button"
+              data-dock-save
+              onClick={handleSaveLiquidGlass}
+              disabled={isSavingPersonalization("liquidGlass") || !liquidGlassDirty}
+              className="w-full gap-2 sm:w-auto"
+            >
+              {isSavingPersonalization("liquidGlass") && <Loader2 className="h-4 w-4 animate-spin" />}
+              保存参数
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="space-y-2">
+              <Label>照片来源</Label>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {LIQUID_GLASS_PHOTO_SOURCES.map((item) => {
+                  const active = liquidGlass.photoSource === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => updateLiquidGlass({ photoSource: item.id })}
+                      disabled={isSavingPersonalization("liquidGlass")}
+                      aria-pressed={active}
+                      className={cn(
+                        "flex flex-col gap-1 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
+                        active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
+                      )}
+                    >
+                      <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{item.name}</span>
+                      <span className="text-xs leading-5 text-muted-foreground">{item.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>照片布局</Label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {LIQUID_GLASS_LAYOUTS.map((item) => {
+                  const active = liquidGlass.layout === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => updateLiquidGlass({ layout: item.id })}
+                      disabled={isSavingPersonalization("liquidGlass")}
+                      aria-pressed={active}
+                      className={cn(
+                        "flex flex-col gap-1 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
+                        active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
+                      )}
+                    >
+                      <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{item.name}</span>
+                      <span className="text-xs leading-5 text-muted-foreground">{item.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid gap-4 @[42rem]:grid-cols-2 @[58rem]:grid-cols-4 [&>*]:min-w-0">
+              {([
+                { key: "cardOpacity", label: "卡片不透明度", unit: "%", hint: "玻璃卡和分类条的底色浓度：浅色是白、深色是墨，越大越不透、字越清楚" },
+                { key: "wash", label: "浅色白雾", unit: "%", hint: "罩在照片上的页面底色，越大照片越淡、字越清楚" },
+                { key: "darkOpacity", label: "深色照片亮度", unit: "%", hint: "深色模式下照片的不透明度" },
+                { key: "blur", label: "玻璃模糊", unit: "px", hint: "卡片背后的模糊半径，手机上卡多时调小更顺" },
+              ] as const).map((item) => {
+                const [min, max] = LIQUID_GLASS_LIMITS[item.key];
+                const value = liquidGlass[item.key];
                 return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => updateLiquidGlass({ photoSource: item.id })}
-                    disabled={isSavingPersonalization("liquidGlass")}
-                    aria-pressed={active}
-                    className={cn(
-                      "flex flex-col gap-1 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
-                      active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
-                    )}
-                  >
-                    <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{item.name}</span>
-                    <span className="text-xs leading-5 text-muted-foreground">{item.description}</span>
-                  </button>
+                  <FormField key={item.key} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_5rem] sm:items-center">
+                    <div className="space-y-2">
+                      <Label>{item.label}</Label>
+                      <input
+                        type="range"
+                        aria-label={item.label}
+                        min={min}
+                        max={max}
+                        step={1}
+                        value={value}
+                        onChange={(event) => updateLiquidGlass({ [item.key]: Number(event.target.value) })}
+                        className="w-full accent-primary"
+                      />
+                      <p className="text-xs leading-5 text-muted-foreground">{item.hint}</p>
+                    </div>
+                    <div className="flex items-center gap-1 sm:mt-6 sm:self-start">
+                      <Input
+                        aria-label={`${item.label}（${item.unit}）`}
+                        value={String(value)}
+                        onChange={(event) => updateLiquidGlass({ [item.key]: Number(event.target.value.replace(/\D/g, "") || 0) })}
+                        inputMode="numeric"
+                      />
+                      <span className="text-xs text-muted-foreground">{item.unit}</span>
+                    </div>
+                  </FormField>
                 );
               })}
             </div>
-          </div>
-          <div className="space-y-2">
-            <Label>照片布局</Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {LIQUID_GLASS_LAYOUTS.map((item) => {
-                const active = liquidGlass.layout === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => updateLiquidGlass({ layout: item.id })}
-                    disabled={isSavingPersonalization("liquidGlass")}
-                    aria-pressed={active}
-                    className={cn(
-                      "flex flex-col gap-1 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
-                      active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
-                    )}
-                  >
-                    <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{item.name}</span>
-                    <span className="text-xs leading-5 text-muted-foreground">{item.description}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="grid gap-4 @[42rem]:grid-cols-3 [&>*]:min-w-0">
-            {([
-              { key: "wash", label: "浅色白雾", unit: "%", hint: "罩在照片上的页面底色，越大照片越淡、字越清楚" },
-              { key: "darkOpacity", label: "深色照片亮度", unit: "%", hint: "深色模式下照片的不透明度" },
-              { key: "blur", label: "玻璃模糊", unit: "px", hint: "卡片背后的模糊半径，手机上卡多时调小更顺" },
-            ] as const).map((item) => {
-              const [min, max] = LIQUID_GLASS_LIMITS[item.key];
-              const value = liquidGlass[item.key];
-              return (
-                <FormField key={item.key} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_5rem] sm:items-center">
-                  <div className="space-y-2">
-                    <Label>{item.label}</Label>
-                    <input
-                      type="range"
-                      aria-label={item.label}
-                      min={min}
-                      max={max}
-                      step={1}
-                      value={value}
-                      onChange={(event) => updateLiquidGlass({ [item.key]: Number(event.target.value) })}
-                      className="w-full accent-primary"
-                    />
-                    <p className="text-xs leading-5 text-muted-foreground">{item.hint}</p>
-                  </div>
-                  <div className="flex items-center gap-1 sm:mt-6 sm:self-start">
-                    <Input
-                      aria-label={`${item.label}（${item.unit}）`}
-                      value={String(value)}
-                      onChange={(event) => updateLiquidGlass({ [item.key]: Number(event.target.value.replace(/\D/g, "") || 0) })}
-                      inputMode="numeric"
-                    />
-                    <span className="text-xs text-muted-foreground">{item.unit}</span>
-                  </div>
-                </FormField>
-              );
-            })}
-          </div>
-          <SettingRow
-            label="光标跟随的光斑"
-            description="鼠标在玻璃卡上移动时，卡里跟着亮一团光。只在有鼠标的设备上有，触屏不跑。"
-            control={<Checkbox aria-label="光标跟随的光斑" checked={liquidGlass.sheen} onCheckedChange={(checked) => updateLiquidGlass({ sheen: checked === true })} disabled={isSavingPersonalization("liquidGlass")} />}
-          />
-        </CardContent>
-      </Card>
+            <SettingRow
+              label="光标跟随的光斑"
+              description="鼠标在玻璃卡上移动时，卡里跟着亮一团光。只在有鼠标的设备上有，触屏不跑。"
+              control={<Checkbox aria-label="光标跟随的光斑" checked={liquidGlass.sheen} onCheckedChange={(checked) => updateLiquidGlass({ sheen: checked === true })} disabled={isSavingPersonalization("liquidGlass")} />}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
+      <div className="pt-2 first:pt-0">
+        <p className="text-sm font-semibold text-foreground">外观微调（所有主题通用）</p>
+        <p className="text-xs leading-5 text-muted-foreground">在主题之上再调：配色、页面底色、卡片风格、布局密度、背景。</p>
+      </div>
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1.5">
@@ -4429,6 +4510,9 @@ function PersonalizationSettingsSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 布局密度：站点默认（standard / compact），每个账号可以在个人资料里覆盖。点了就存，不走上面的保存条。 */}
+      <LayoutDefaultCard />
 
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -4725,75 +4809,6 @@ function PersonalizationSettingsSection() {
               )}
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border bg-card">
-        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1.5">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Globe className="h-4 w-4 text-primary" />
-              公开首页
-            </CardTitle>
-            <CardDescription>
-              设置未登录时展示的首页。
-            </CardDescription>
-          </div>
-          <Button type="button" data-dock-save onClick={handleSaveHomepage} disabled={isSavingPersonalization("homepage")} className="w-full gap-2 sm:w-auto">
-            {isSavingPersonalization("homepage") && <Loader2 className="h-4 w-4 animate-spin" />}
-            保存首页
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <SettingList>
-            <SettingRow
-              asLabel
-              label="启用公开首页"
-              description="关闭后直接进入登录页。"
-              control={<Checkbox aria-label="启用公开首页" checked={homepageEnabled} onCheckedChange={setHomepageEnabled} />}
-            />
-            <SettingRow
-              asLabel
-              label="使用自定义 H5"
-              description="优先展示自定义页面。"
-              control={<Checkbox aria-label="使用自定义 H5" checked={homepageCustomEnabled} onCheckedChange={setHomepageCustomEnabled} />}
-            />
-          </SettingList>
-          {homepageCustomEnabled && (
-            <div className="space-y-2">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <Label className="text-sm font-medium">首页 H5/HTML 代码</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    支持完整 HTML 或 body 内容。
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={handleUseHomepageTemplate}>
-                    使用示例
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handlePreviewHomepage} className="gap-2">
-                    <Eye className="h-4 w-4" />
-                    预览
-                  </Button>
-                  <Button variant="outline" size="sm" asChild>
-                    <a href="/homepage-preview" target="_blank" rel="noopener noreferrer">
-                      查看已保存
-                    </a>
-                  </Button>
-                </div>
-              </div>
-              <Textarea
-                value={homepageHtml}
-                onChange={(e) => setHomepageHtml(e.target.value)}
-                placeholder="粘贴你的首页 H5/HTML 代码"
-                className="min-h-72 font-mono text-xs leading-5"
-              />
-              <p className="text-xs text-muted-foreground">
-                {homepageHtml.length.toLocaleString()} / 60,000 字符
-              </p>
-            </div>
-          )}
         </CardContent>
       </Card>
 

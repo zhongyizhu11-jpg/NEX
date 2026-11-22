@@ -68,8 +68,8 @@ html[data-ui-theme="liquid-glass"] {
   --fx-primary-text: #ffffff;
   --fx-primary-stroke: rgb(59 130 246 / 70%);
   --fx-primary-shadow: 0 4px 14px rgb(37 99 235 / 35%), inset 0 1px 1px rgb(255 255 255 / 30%);
-  /* 玻璃 */
-  --fx-lg-card: rgb(255 255 255 / 45%);
+  /* 玻璃：卡身的浓度跟着设置里的「卡片不透明度」（--fx-lg-card-alpha，出厂 65%；2.3.546 以前固定 45%） */
+  --fx-lg-card: rgb(255 255 255 / var(--fx-lg-card-alpha, 65%));
   --fx-lg-card-stroke: rgb(255 255 255 / 65%);
   --fx-lg-card-stroke-hover: rgb(255 255 255 / 90%);
   --fx-lg-divider: rgb(20 30 50 / 9%);
@@ -134,7 +134,8 @@ html.dark[data-ui-theme="liquid-glass"] {
   --fx-primary-text: #ffffff;
   --fx-primary-stroke: rgb(96 165 250 / 70%);
   --fx-primary-shadow: 0 4px 16px rgb(59 130 246 / 45%), inset 0 1px 1px rgb(255 255 255 / 35%);
-  --fx-lg-card: rgb(255 255 255 / 5%);
+  /* 深色下卡身是墨色，浓度同一个旋钮；上面再压一层 5% 的白保留玻璃感 */
+  --fx-lg-card: linear-gradient(rgb(255 255 255 / 5%), rgb(255 255 255 / 5%)), rgb(24 28 38 / var(--fx-lg-card-alpha, 65%));
   --fx-lg-card-stroke: rgb(255 255 255 / 10%);
   --fx-lg-card-stroke-hover: rgb(255 255 255 / 20%);
   --fx-lg-divider: rgb(255 255 255 / 10%);
@@ -593,16 +594,30 @@ html[data-ui-theme="liquid-glass"] .auth-divider-label { background: transparent
 }
 
 /* ── 4. 胶囊玻璃控件 ─────────────────────────────────────────── */
-/* 分段控件：玻璃槽 + 白边，整条和每一格都是胶囊；选中格 Apple 蓝实心加光晕 */
+/*
+  分段控件（分类条）：一条真正的玻璃槽 —— 卡身同一种白（跟「卡片不透明度」走，比卡淡两成）、后面模糊饱和、
+  一圈细白边加顶部一道高光、底下一点软影，让它从照片上浮起来；以前是页面底色兑出来的一层灰（--fx-l3-control-fill），
+  压在照片上发闷（2.3.546，用户：「分类条的底色和透明度不高级」）。整条和每一格都是胶囊；选中格 Apple 蓝实心加光晕，
+  没选中的格字是正文色，不再发灰。
+*/
 html[data-ui-theme="liquid-glass"] .workspace-tabs {
   border-radius: var(--fx-radius-pill);
-  border: 1px solid rgb(255 255 255 / 60%);
-  background: var(--fx-l3-control-fill);
-  box-shadow: inset 0 1px 1px rgb(255 255 255 / 70%);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  border: 1px solid rgb(255 255 255 / 70%);
+  background: rgb(255 255 255 / calc(var(--fx-lg-card-alpha, 65%) * 0.8));
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 85%), 0 2px 10px rgb(15 23 42 / 6%);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
 }
-html.dark[data-ui-theme="liquid-glass"] .workspace-tabs { border-color: rgb(255 255 255 / 8%); box-shadow: inset 0 1px 1px rgb(255 255 255 / 6%); }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab { color: var(--fx-text); }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab > svg,
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab .workspace-tab-count { color: var(--fx-text-muted); }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab:not([data-state="active"]):hover { background: rgb(255 255 255 / 45%); }
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs {
+  border-color: rgb(255 255 255 / 10%);
+  background: rgb(24 28 38 / calc(var(--fx-lg-card-alpha, 65%) * 0.8));
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 8%), 0 2px 10px rgb(0 0 0 / 25%);
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab:not([data-state="active"]):hover { background: rgb(255 255 255 / 8%); }
 html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab,
 html[data-ui-theme="liquid-glass"] .workspace-tab-scroll { border-radius: var(--fx-radius-pill); }
 html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] { box-shadow: var(--fx-primary-shadow); }
