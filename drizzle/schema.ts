@@ -564,6 +564,8 @@ export const forwardRules = table("forward_rules", {
   proxyNodeId: int("proxyNodeId"),
   // 单个节点的显示开关，绑定了模板也可以临时不出现在订阅里
   proxyNodeVisible: boolean("proxyNodeVisible").notNull().default(true),
+  // 进不进落地节点的自动选路组（Clash / sing-box 的 url-test / fallback / load-balance）：关了照样进订阅，只是不进组
+  proxyAutoGroupMember: boolean("proxyAutoGroupMember").notNull().default(true),
   // 覆盖自动生成的节点名，为空时按「入口主机 → 模板名」生成
   proxyNodeName: text("proxyNodeName"),
   /*

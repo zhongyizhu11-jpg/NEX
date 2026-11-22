@@ -477,6 +477,11 @@ export default function ClientSubscriptionsPage() {
     onSuccess: () => refresh(),
     onError: (error) => toast.error(error.message),
   });
+  // 自动选路组里每条入口的「进组」开关（2.3.545，用户：4 台 HKT 只想用两台）
+  const setRuleAutoGroupMember = trpc.proxySubscriptions.setRuleAutoGroupMember.useMutation({
+    onSuccess: () => refresh(),
+    onError: (error) => toast.error(error.message),
+  });
   const setRuleNodeName = trpc.proxySubscriptions.setRuleNodeName.useMutation({
     onSuccess: () => {
       toast.success("节点名已更新");
@@ -930,6 +935,69 @@ export default function ClientSubscriptionsPage() {
       .map(([id, count]) => ({ owner: ownNodeById.get(id), count }));
   }, [previewNodes, ownNodeById]);
 
+  /**
+   * 选路方式不是「不生成」、入口也够两条，组却没生成：是「进组」开关关得只剩一台了。
+   * 组没了卡片也没了的话开关就再也找不回来，所以这种落地留一张卡，开关照常。
+   */
+  const trimmedGroupOwners = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const node of previewNodes) {
+      const id = Number(node?.templateId || 0);
+      if (id > 0 && node?.kind !== "direct") counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    const generated = new Set((preview?.groups ?? []).map((group) => Number(group.templateId || 0)));
+    return Array.from(counts.entries())
+      .filter(([id, count]) => count >= 2 && !generated.has(id) && !!ownNodeById.get(id) && normalizeProxyNodeAutoGroup(ownNodeById.get(id)?.autoGroup) !== "off")
+      .map(([id]) => ownNodeById.get(id)!);
+  }, [preview, previewNodes, ownNodeById]);
+  /** 一个落地的自动选路组卡片里的入口清单：每条一个「进组」开关；直连那条没有开关；暂时不通的灰着。 */
+  const renderGroupMembers = (templateId: number, mode: ProxyNodeAutoGroup, weighted: boolean) => {
+    const entries = previewNodes.filter((node) => Number(node?.templateId) === templateId);
+    const relays = entries.filter((node) => node?.kind !== "direct");
+    const unreachable = (preview?.skipped ?? []).filter((item) => item.reason === "unreachable" && Number((item as { templateId?: number }).templateId) === templateId);
+    const inGroup = entries.filter((node) => node?.autoGroupMember !== false && (mode !== "load-balance" || node?.kind !== "direct"));
+    const left = relays.length - relays.filter((node) => node?.autoGroupMember !== false).length;
+    return (
+      <>
+        <ul className="mt-1.5 divide-y divide-border/60 border-t border-border/60">
+          {entries.map((node) => (
+            <li key={`${node.kind}-${node.ruleId}`} className="flex items-center gap-2 py-1.5">
+              <span className="min-w-0 flex-1 truncate text-foreground">
+                {node.name}
+                {node.kind === "direct"
+                  ? <span className="text-muted-foreground"> · 落地直连{mode === "load-balance" ? "，负载均衡不带它" : ""}</span>
+                  : node.hostName ? <span className="text-muted-foreground"> · {node.hostName}</span> : null}
+              </span>
+              {node.kind !== "direct" ? (
+                <Switch
+                  aria-label={`${node.name} 进组`}
+                  className="shrink-0 scale-90"
+                  checked={node.autoGroupMember !== false}
+                  disabled={setRuleAutoGroupMember.isPending}
+                  onCheckedChange={(checked) => setRuleAutoGroupMember.mutate({ ruleId: Number(node.ruleId), member: checked })}
+                />
+              ) : null}
+            </li>
+          ))}
+          {unreachable.map((item) => (
+            <li key={`unreachable-${item.ruleId}`} className="flex items-center gap-2 py-1.5 opacity-70">
+              <span className="min-w-0 flex-1 truncate">
+                {item.nodeName || item.ruleName}
+                <span className="text-[var(--fx-warn-text)]"> · 暂时不通，通了自动回来</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1">
+          {inGroup.length >= 2
+            ? `组里 ${inGroup.length} 台：${inGroup.map((node) => node.name).join(" / ")}`
+            : `组里只剩 ${inGroup.length} 台，不够两台不生成组`}
+          {left > 0 ? ` · 另 ${left} 条入口只做裸节点，客户端里还能手动选` : ""}
+          {weighted ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
+        </p>
+      </>
+    );
+  };
   // 只有「已隐藏」需要一键恢复，其他原因要用户自己去改转发或模板。
   const hiddenRules = useMemo(
     () => (preview?.skipped ?? []).filter((item) => item.reason === "hidden"),
@@ -2001,7 +2069,7 @@ export default function ClientSubscriptionsPage() {
                   </div>
                 )}
 
-                {((preview?.groups.length ?? 0) > 0 || offGroupOwners.length > 0) && (
+                {((preview?.groups.length ?? 0) > 0 || offGroupOwners.length > 0 || trimmedGroupOwners.length > 0) && (
                   <div className="space-y-1.5">
                     <SectionLabel>
                       <Zap className="mr-1 inline h-3 w-3" />
@@ -2012,7 +2080,7 @@ export default function ClientSubscriptionsPage() {
                       「选路方式」自动生成（新节点默认「自动选最快」）。不写清楚的话，看着像是面板自己改了设置。
                     */}
                     <p className="text-xs text-muted-foreground">
-                      一个落地有两条以上入口时，按这个节点的「选路方式」自动生成，新节点默认「自动选最快」。右边可以直接改成主备、负载均衡或不生成。
+                      一个落地有两条以上入口时，按这个节点的「选路方式」自动生成，新节点默认「自动选最快」。右边可以直接改成主备、负载均衡或不生成。每条入口后面的开关决定进不进组：关掉的照样进订阅，只是不进这个组。
                     </p>
                     {preview!.groups.map((group) => {
                       const owner = group.templateId ? nodes.find((node) => Number(node.id) === Number(group.templateId)) : null;
@@ -2047,13 +2115,37 @@ export default function ClientSubscriptionsPage() {
                               <span className="shrink-0">{modeLabel}</span>
                             )}
                           </div>
-                          <p className="mt-0.5 truncate">
-                            {members}
-                            {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
-                          </p>
+                          {editable ? renderGroupMembers(Number(owner.id), group.type as ProxyNodeAutoGroup, group.type === "load-balance" && Array.isArray(group.weights)) : (
+                            <p className="mt-0.5 truncate">
+                              {members}
+                              {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
+                            </p>
+                          )}
                         </div>
                       );
                     })}
+                    {trimmedGroupOwners.map((owner) => (
+                      <div key={`trimmed-${owner.id}`} className="rounded-md border border-dashed px-2.5 py-1.5 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{String(owner.name || "")}</span>
+                          <Select
+                            value={normalizeProxyNodeAutoGroup(owner.autoGroup)}
+                            onValueChange={(value) => updateNode.mutate({ id: Number(owner.id), autoGroup: value as ProxyNodeAutoGroup })}
+                            disabled={updateNode.isPending}
+                          >
+                            <SelectTrigger aria-label={`「${String(owner.name || "")}」的选路方式`} className="h-7 w-32 shrink-0 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {PROXY_NODE_AUTO_GROUPS.map((mode) => (
+                                <SelectItem key={mode} value={mode}>{PROXY_NODE_AUTO_GROUP_LABELS[mode]}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {renderGroupMembers(Number(owner.id), normalizeProxyNodeAutoGroup(owner.autoGroup), false)}
+                      </div>
+                    ))}
                     {/*
                       选了「不生成」，组就从上面消失了 —— 下拉也跟着没了，想改回来只能去节点里找。
                       所以有两条以上入口、却设成不生成的自己的节点，在这里留一行，照样能改回去。

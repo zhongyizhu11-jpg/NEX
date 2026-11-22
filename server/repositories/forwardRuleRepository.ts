@@ -1639,7 +1639,7 @@ export async function updateForwardRule(id: number, data: Partial<InsertForwardR
 }
 
 const PROXY_SUB_RULE_FIELDS = [
-  "proxyNodeId", "proxyNodeVisible", "proxyNodeName", "isEnabled", "pendingDelete", "sourcePort", "hostId", "name",
+  "proxyNodeId", "proxyNodeVisible", "proxyNodeName", "proxyAutoGroupMember", "isEnabled", "pendingDelete", "sourcePort", "hostId", "name",
   "targetIp", "targetPort", "protocol", "sortOrder", "entryDomainEnabled", "entryDomain", "entryDomainValue", "userId",
 ] as const;
 

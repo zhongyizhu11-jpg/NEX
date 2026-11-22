@@ -108,6 +108,8 @@ export type ProxySubscriptionRuleRow = {
   proxyNodeId?: unknown;
   proxyNodeVisible?: unknown;
   proxyNodeName?: unknown;
+  /** 进不进落地节点的自动选路组；没查这一列 / 没设 = 进。关了照样进订阅，只是不进组（2.3.545）。 */
+  proxyAutoGroupMember?: unknown;
   isEnabled?: unknown;
   pendingDelete?: unknown;
   /**
@@ -193,6 +195,8 @@ export type ProxySubscriptionEntry = {
   meta?: ProxySubEntryMeta;
   /** 这条转发开了线路组：一个入口，面板在几条线路之间切。只给界面标注用。 */
   lineGroup?: boolean;
+  /** false = 这条入口不进落地的自动选路组（照样是订阅里的裸节点）。缺省 = 进。 */
+  autoGroupMember?: boolean;
   /**
    * 入口真实的 IPv4 / IPv6 字面量（没有的是空串）。只有地址上带了 ipVersion 时才用来换掉
    * node.address，平时不影响输出。老调用方可能不填 = 两种都没有。
@@ -220,6 +224,8 @@ export type ProxySubscriptionSkip = {
   ruleId: number;
   ruleName: string;
   reason: ProxySubscriptionSkipReason;
+  /** 绑的落地节点（有的话）：订阅内容弹窗按落地把「暂时不通」的入口列在组里 */
+  templateId?: number;
   /** 进了订阅会叫什么（「入口机 → 落地」），和上面节点列表同一种叫法；算不出来时没有。 */
   nodeName?: string;
   /** 这条转发开了线路组。 */
@@ -648,7 +654,8 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       continue;
     }
     if (input.unreachableRuleIds?.has(ruleId)) {
-      skip("unreachable");
+      // 带上落地：订阅内容弹窗把它列在那个落地的组里（灰着），通了自动回来
+      skipped.push({ ruleId, ruleName, reason: "unreachable", templateId });
       continue;
     }
 
@@ -731,6 +738,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       ...(targetMismatch ? { targetMismatch: true } : {}),
       ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}),
       ...(bool(rule.failoverEnabled) ? { lineGroup: true } : {}),
+      ...(rule.proxyAutoGroupMember !== undefined && rule.proxyAutoGroupMember !== null && !bool(rule.proxyAutoGroupMember) ? { autoGroupMember: false } : {}),
       addresses: familyAddressesOf(host),
       meta: {
         hostName: text(host?.name),
@@ -1124,6 +1132,8 @@ export function buildProxySubscriptionDocument(
   plan.entries.forEach((entry, index) => {
     const name = nodes[index]?.name;
     if (!name) return;
+    // 关了「进组」的入口：还是订阅里的裸节点，只是不进这个落地的自动选路组（用户：4 台 HKT 只想用两台）
+    if (entry.autoGroupMember === false) return;
     const list = namesByTemplate.get(entry.templateId) || [];
     list.push(name);
     namesByTemplate.set(entry.templateId, list);
