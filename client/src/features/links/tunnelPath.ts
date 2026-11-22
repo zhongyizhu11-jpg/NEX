@@ -3,6 +3,26 @@ import { getTunnelHopIds, getTunnelExitNames, getTunnelLoadBalanceExitNames, tun
 import type { NetworkHealth } from "@shared/networkHealth";
 
 /**
+ * 从链路最近一次「多级隧道逐跳测试」的明细里取每一跳的延迟：hopLabel 是「1/2 14->6」这种，第 k 跳放在第 k-1 项。
+ * 不是逐跳测的（直连、负载均衡汇总）返回 null。
+ */
+export function tunnelHopLatenciesFromDetails(details: ReadonlyArray<{ hopLabel?: string | null; latencyMs?: number | null; success?: boolean | null; pending?: boolean | null }> | null | undefined, hopCount: number): Array<number | null> | null {
+  if (!Array.isArray(details) || details.length === 0 || hopCount < 2) return null;
+  const out: Array<number | null> = Array.from({ length: hopCount }, () => null);
+  let matched = 0;
+  for (const detail of details) {
+    const match = String(detail?.hopLabel || "").match(/^(\d+)\/(\d+)\b/);
+    if (!match) continue;
+    const index = Number(match[1]) - 1;
+    if (Number(match[2]) !== hopCount || index < 0 || index >= hopCount) continue;
+    matched += 1;
+    const ms = detail?.latencyMs;
+    out[index] = detail?.success !== false && detail?.pending !== true && typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? ms : null;
+  }
+  return matched > 0 ? out : null;
+}
+
+/**
  * 把一条隧道翻译成路径。
  *
  * 这是 Path 语言第一次用在生产页面上，也是整套 V2 想解决的那个问题的正面：
@@ -38,6 +58,11 @@ export type TunnelPathContext = {
   health?: NetworkHealth;
   /** 链路延迟，标在中间那一段上 */
   latencyMs?: number | null;
+  /**
+   * 多级隧道每一跳的延迟（第 i 项 = 第 i+1 跳，没测到 / 没通是 null；2.3.548，用户：「这里做成显示各段的延迟吧」）。
+   * 和跳数对得上时每一段标自己的数，不再只在中间那一段标端到端的总数。入口组、负载均衡出口的路径节点和跳不一一对应，不用。
+   */
+  hopLatenciesMs?: Array<number | null> | null;
   /** 经过什么转发实现（NEX V1/V2、GOST…） */
   via?: string;
   /**
@@ -129,8 +154,24 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
     会出现三个 8ms —— 看的人会以为那是三段各自的延迟，而实际测的是端到端。
   */
   const middle = nodes.length >= 2 ? Math.max(0, Math.floor((nodes.length - 1) / 2)) : 0;
+  // 多级隧道逐跳测的：每一段标自己的（节点正好是一跳一个时才对得上）
+  const perHop = Array.isArray(context.hopLatenciesMs)
+    && !entryGroup
+    && extraExitNames.length === 0
+    && nodes.length >= 3
+    && context.hopLatenciesMs.length === nodes.length - 1
+    ? context.hopLatenciesMs
+    : null;
   const edges: NetworkEdgeSpec[] = nodes.slice(1).map((_, index) => {
     const base: NetworkEdgeSpec = { health };
+    if (perHop) {
+      const hop = perHop[index];
+      return {
+        ...base,
+        via: index === middle ? context.via || undefined : undefined,
+        latencyMs: typeof hop === "number" && Number.isFinite(hop) ? Math.round(hop) : undefined,
+      };
+    }
     if (index !== middle) return base;
     return {
       ...base,
@@ -142,7 +183,10 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
   const title = [
     entryGroup ? `入口组：${entryGroupLabel(entryGroup)}` : "",
     nodes.map((node) => node.name).join(" → "),
-    typeof context.latencyMs === "number" ? `延迟 ${context.latencyMs} ms` : "",
+    perHop
+      ? perHop.map((hop, index) => `${nodes[index].name} → ${nodes[index + 1].name} ${typeof hop === "number" ? `${Math.round(hop)} ms` : "未测到"}`).join("，")
+        + (typeof context.latencyMs === "number" ? `；总延迟 ${context.latencyMs} ms` : "")
+      : typeof context.latencyMs === "number" ? `延迟 ${context.latencyMs} ms` : "",
   ]
     .filter(Boolean)
     .join("；");

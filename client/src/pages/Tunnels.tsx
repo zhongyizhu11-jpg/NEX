@@ -18,7 +18,7 @@ import { describeNetworkHealth } from "@shared/networkHealth";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { StatusDot } from "@/components/network/StatusDot";
 import { MimicHostsStatus } from "@/components/hosts/MimicInstallPanel";
-import { buildTunnelPath } from "@/features/links/tunnelPath";
+import { buildTunnelPath, tunnelHopLatenciesFromDetails } from "@/features/links/tunnelPath";
 import { tunnelHealthFromAvailability } from "@/features/links/tunnelHealth";
 import { TunnelFxpIssueNotice } from "@/features/links/TunnelFxpIssueNotice";
 import { TunnelLinkShapingNotice } from "@/features/links/TunnelLinkShapingNotice";
@@ -2637,6 +2637,8 @@ function TunnelsContent() {
       health,
       // 精简手机行右端已经有延迟标签，线底下不再写一遍（用户 2026-10-23 定的），省下的宽度给名字
       latencyMs: showLatency && typeof tunnel?.lastLatencyMs === "number" ? tunnel.lastLatencyMs : null,
+      // 多级隧道：最近一次逐跳测试里每一跳各自的数，线下各标各的（2.3.548）
+      hopLatenciesMs: showLatency ? tunnelHopLatenciesFromDetails(parseLinkTestMessage(tunnel?.lastTestMessage)?.details, Math.max(0, getTunnelHopIds(tunnel).length - 1)) : null,
       // 链路卡的副标题已经写了模式（「GOST TLS · 直连」），线旁边不再重复一遍，路径就是一行
       via: showVia ? getTunnelModeDisplay(tunnel?.mode, true, tunnel?.forwardxVersion) : undefined,
       onLoadBalanceClick: exitDialog ? () => setExitGroupDialogTunnel(tunnel) : undefined,
