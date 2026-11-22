@@ -392,6 +392,35 @@ test("同一落地节点被两台中转指向时生成自动选路组", () => {
   assert.deepEqual(auto.members, ["广州1 → HKT", "广州2 → HKT"]);
 });
 
+test("关了「进组」的入口照样进订阅，只是不进自动选路组；组里不够两台就不生成（2.3.545）", () => {
+  const templates = [HKT_TEMPLATE];
+  const plan = planFor(
+    [
+      rule({ id: 1, hostId: 1, sourcePort: 20001 }),
+      rule({ id: 2, hostId: 2, sourcePort: 20002 }),
+      rule({ id: 3, hostId: 2, sourcePort: 20003, proxyAutoGroupMember: false }),
+    ],
+    templates,
+  );
+  assert.deepEqual(plan.entries.map((entry) => [entry.ruleId, entry.autoGroupMember === false]), [[1, false], [2, false], [3, true]]);
+
+  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX" });
+  const auto = doc.groups.find((group) => group.type === "url-test");
+  assert.ok(auto, "两台进组照样生成");
+  assert.deepEqual(auto!.members, ["广州1 → HKT", "广州2 → HKT"]);
+  // 不进组的那条还是裸节点，主选择器里能手动选
+  assert.ok(doc.groups[0].members.includes("广州2 → HKT #2"), doc.groups[0].members.join(","));
+  assert.ok(doc.nodes.some((node) => node.name === "广州2 → HKT #2"));
+
+  const trimmed = buildProxySubscriptionDocument(
+    planFor([rule({ id: 1, hostId: 1, sourcePort: 20001 }), rule({ id: 2, hostId: 2, sourcePort: 20002, proxyAutoGroupMember: false })], templates),
+    templates,
+    { mainGroupName: "NEX" },
+  );
+  assert.equal(trimmed.groups.length, 1, "只剩一台进组：不生成组，两条都是裸节点");
+  assert.deepEqual(trimmed.groups[0].members, ["广州1 → HKT", "广州2 → HKT"]);
+});
+
 test("只有一台中转时不生成自动选路组", () => {
   const templates = [HKT_TEMPLATE];
   const plan = planFor([rule({ id: 1, hostId: 1 })], templates);

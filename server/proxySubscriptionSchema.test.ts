@@ -32,6 +32,7 @@ test("转发规则的订阅绑定字段在表定义里", () => {
   assert.ok(columns.has("proxyNodeId"));
   assert.ok(columns.has("proxyNodeVisible"));
   assert.ok(columns.has("proxyNodeName"));
+  assert.ok(columns.has("proxyAutoGroupMember"), "2.3.545：进不进自动选路组");
 });
 
 test("订阅权限的列在 users 与套餐表上", () => {

@@ -686,6 +686,19 @@ export const proxySubscriptionsRouter = router({
       return { success: true };
     }),
 
+  /**
+   * 这条入口进不进落地的自动选路组（url-test / fallback / load-balance）。关了照样进订阅、客户端里还能手动选，
+   * 只是不进组 —— 4 台 HKT 只想拿两台做负载均衡就关掉另外两条。
+   */
+  setRuleAutoGroupMember: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive(), member: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertOwnedRule(input.ruleId, ctx);
+      await db.updateForwardRule(input.ruleId, { proxyAutoGroupMember: input.member });
+      return { success: true };
+    }),
+
   /** 单独控制某个节点是否出现在订阅里，不解除绑定。 */
   setRuleVisible: protectedProcedure
     .input(z.object({ ruleId: z.number().int().positive(), visible: z.boolean() }))
@@ -734,6 +747,9 @@ export const proxySubscriptionsRouter = router({
         targetMismatch: entry.targetMismatch === true,
         // 开了线路组：一个入口，面板在几条线路之间切。
         lineGroup: entry.lineGroup === true,
+        // 进不进落地的自动选路组（订阅内容弹窗里每条入口一个开关）
+        autoGroupMember: entry.autoGroupMember !== false,
+        hostName: entry.meta?.hostName || "",
       })),
       skipped: plan.skipped.map((item) => ({
         ...item,

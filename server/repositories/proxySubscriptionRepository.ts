@@ -1233,6 +1233,7 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
       proxyNodeId: forwardRules.proxyNodeId,
       proxyNodeVisible: forwardRules.proxyNodeVisible,
       proxyNodeName: forwardRules.proxyNodeName,
+      proxyAutoGroupMember: forwardRules.proxyAutoGroupMember,
       isEnabled: forwardRules.isEnabled,
       pendingDelete: forwardRules.pendingDelete,
       sortOrder: forwardRules.sortOrder,
