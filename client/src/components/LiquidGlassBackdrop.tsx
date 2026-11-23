@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { normalizeLiquidGlassConfig, type LiquidGlassConfig } from "@shared/personalization";
 import { trpc } from "@/lib/trpc";
 import { mobileAuth } from "@/lib/mobileAuth";
-import { useUiTheme } from "@/hooks/useUiTheme";
+import { useUiTheme, useUiThemeStyleLoaded } from "@/hooks/useUiTheme";
 import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT, readLiquidGlassPreview } from "@/lib/liquidGlass";
 import { liquidGlassPhotoSet } from "@/lib/liquidGlassPhotos";
 
@@ -160,7 +160,9 @@ function useLiquidGlassPreview() {
 
 export default function LiquidGlassBackdrop() {
   const uiTheme = useUiTheme();
-  const active = uiTheme === "liquid-glass";
+  /* 样式包没到（手机上网一抖没下下来，后台在重试）就先不画：这层不挂在 data-ui-theme 下，没样式时会当成普通内容排在页面顶上 */
+  const styled = useUiThemeStyleLoaded("liquid-glass");
+  const active = uiTheme === "liquid-glass" && styled;
   const { data } = trpc.system.publicInfo.useQuery(undefined, {
     enabled: active && (!mobileAuth.isNative || mobileAuth.hasPanelUrl()),
     refetchOnWindowFocus: false,
