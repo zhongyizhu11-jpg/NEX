@@ -1047,7 +1047,8 @@ async function requireForwardAccessForEnabledRule(userId: number, isTrafficBilli
  *
  * 只在这次要**多开**中继时才拦：已经超额的老规则改个名字不该被卡住。
  */
-async function assertRouteRelayPortQuota(
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function assertRouteRelayPortQuota(
   actor: { id: number; role: string },
   routePaths: unknown,
   ruleId: number | null,

@@ -134,3 +134,9 @@ export function ingestIpChangeProbeReports(hostId: number, reports: ProbeReport[
 export async function runIpChangeTick() {
   return getIpChangeService().tick();
 }
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function invalidateAutoIpChangePluginStatus() {
+  statusCache = null;
+  serviceInstance?.invalidateProbeCache();
+}

@@ -35,7 +35,8 @@ import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 const DEST_NAME_TTL_MS = 60_000;
 const destNameCache = new Map<string, { name: string | null; at: number }>();
 
-async function routeDestNames(rule: any, paths: readonly RoutePath[]): Promise<Map<string, string>> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function routeDestNames(rule: any, paths: readonly RoutePath[]): Promise<Map<string, string>> {
   const names = new Map<string, string>();
   const now = Date.now();
   const userId = Number(rule.userId || 0);

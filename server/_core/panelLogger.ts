@@ -46,7 +46,8 @@ export function appendPanelLog(level: PanelLogLevel, ...args: unknown[]) {
   });
 }
 
-async function getPanelLogs() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function getPanelLogs() {
   return await readRecentJsonLogsAsync(PANEL_LOG_FILE) as PanelLogEntry[];
 }
 

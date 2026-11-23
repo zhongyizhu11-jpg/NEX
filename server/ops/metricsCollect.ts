@@ -420,3 +420,9 @@ export async function collectMetricsSnapshot(options: MetricsCollectOptions): Pr
   snapshot.routes = routes;
   return finish();
 }
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetMetricsCollectStateForTest() {
+  trafficIn = new MonotonicTotal();
+  trafficOut = new MonotonicTotal();
+}

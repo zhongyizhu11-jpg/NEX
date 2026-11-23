@@ -49,6 +49,7 @@ export async function saveProxySubSettings(partial: Partial<ProxySubSettings>): 
   return loadProxySubSettings();
 }
 
-function invalidateProxySubSettingsCache() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function invalidateProxySubSettingsCache() {
   cached = null;
 }

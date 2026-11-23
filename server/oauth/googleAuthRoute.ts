@@ -74,7 +74,8 @@ const googleJwks = new GoogleJwksCache();
 export const googleAppFlows = new GoogleAppFlowStore();
 
 /** 每个来源一分钟最多发起 20 次（网页 + App 一起算）。 */
-const googleStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const googleStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
 
 export function consumeGoogleStartQuota(ip: string) {
   return googleStartLimiter.consume(`google-start:${ipRateLimitScope(ip)}`).allowed;

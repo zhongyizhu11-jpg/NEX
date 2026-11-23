@@ -79,7 +79,8 @@ function hostLedgerExpiryMs(host: Record<string, unknown>, nowMs: number): numbe
   return next.getTime();
 }
 
-async function loadHostLedger(nowMs = Date.now()) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function loadHostLedger(nowMs = Date.now()) {
   const hosts = await getHosts() as Array<Record<string, unknown> & { id: number; name: string }>;
   const ids = hosts.map((host) => Number(host.id));
   const counters = await getHostTrafficSummary(ids);

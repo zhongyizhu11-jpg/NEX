@@ -110,3 +110,9 @@ export async function withAnomalyThrottles<T>(value: T, nowMs = Date.now()): Pro
   if (Array.isArray(items)) return { ...(value as object), items: items.map(decorate) } as T;
   return value;
 }
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetAnomalyThrottlesForTest() {
+  throttles.clear();
+  loadPromise = null;
+}

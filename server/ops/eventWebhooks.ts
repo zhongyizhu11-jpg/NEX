@@ -377,3 +377,8 @@ export async function sendEventWebhookTest(id: string): Promise<EventWebhookAtte
   });
   return result;
 }
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function eventWebhookQueueIdleForTests() {
+  return queue.idle();
+}

@@ -974,7 +974,8 @@ async function creditPaidOrderToBalance(
 }
 
 /** 导出给测试用：同一笔订单结算两次只能发一次货、返一次利。 */
-async function finalizePaidOrder(outTradeNo: string) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function finalizePaidOrder(outTradeNo: string) {
   let order = await db.claimPaidPaymentOrder(outTradeNo);
   if (!order) {
     const existing = await db.getPaymentOrderByOutTradeNo(outTradeNo);
@@ -1359,7 +1360,8 @@ async function creditDeletedPaymentOrder(outTradeNo: string, notification: PaidN
 }
 
 /** 导出给测试用：模拟一次验签通过的付款通知。 */
-async function processPaidNotification(outTradeNo: string, notification: PaidNotification) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function processPaidNotification(outTradeNo: string, notification: PaidNotification) {
   const order = await db.getPaymentOrderByOutTradeNo(outTradeNo);
   if (!order) {
     const deleted = await creditDeletedPaymentOrder(outTradeNo, notification);

@@ -279,7 +279,8 @@ async function getHostResourceAlertOverride(hostId: number): Promise<HostResourc
 }
 
 /** 这台主机实际用的设置（范围、覆盖都算进去）。 */
-async function readHostResourceAlertConfig(hostId: number): Promise<ResourceAlertConfig> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function readHostResourceAlertConfig(hostId: number): Promise<ResourceAlertConfig> {
   const config = await readResourceAlertConfig();
   if (!config.enabled) return config;
   return resolveHostResourceAlertConfig(config, hostId, await getHostResourceAlertOverride(hostId));

@@ -56,12 +56,14 @@ import {
 /** 系统设置里的开关：默认开，只有明确存成 "false" 才关（和 authCaptchaEnabled 一个写法）。 */
 const PASSWORD_RESET_ENABLED_SETTING = "passwordResetEnabled";
 
-async function isPasswordResetEnabled(): Promise<boolean> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function isPasswordResetEnabled(): Promise<boolean> {
   return (await getSetting(PASSWORD_RESET_ENABLED_SETTING)) !== "false";
 }
 
 // 申请：同一个来源半小时 6 次；同一个账号一分钟 1 次、一小时 3 次。重置：同一个来源 15 分钟 20 次。
-const PASSWORD_RESET_REQUEST_IP_MAX = 6;
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const PASSWORD_RESET_REQUEST_IP_MAX = 6;
 const PASSWORD_RESET_REQUEST_IP_WINDOW_MS = 30 * 60 * 1000;
 const PASSWORD_RESET_ACCOUNT_COOLDOWN_MS = 60 * 1000;
 const PASSWORD_RESET_ACCOUNT_MAX = 3;
@@ -104,7 +106,8 @@ function generatePasswordResetToken(): { token: string; hash: string } {
   return { token, hash: hashPasswordResetToken(token) };
 }
 
-function hashPasswordResetToken(token: string) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function hashPasswordResetToken(token: string) {
   return crypto.createHash("sha256").update(String(token), "utf8").digest("hex");
 }
 
@@ -142,7 +145,8 @@ function passwordResetLink(panelUrl: string, token: string) {
 // ---------- 库操作 ----------
 
 /** 给这个用户签一枚新令牌；他之前没用掉的全部作废。返回明文（只此一次）。 */
-async function issuePasswordResetToken(
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function issuePasswordResetToken(
   user: Pick<PasswordResetAccount, "id" | "password">,
   options: { ip?: string | null; channels?: readonly PasswordResetChannel[]; now?: number } = {},
 ): Promise<string> {
@@ -263,7 +267,8 @@ function ipKey(prefix: string, ip: string) {
   return `${prefix}:${ipRateLimitScope(ip)}`;
 }
 
-function createPasswordResetService(deps: PasswordResetDeps) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function createPasswordResetService(deps: PasswordResetDeps) {
   /** 登录页据此决定「忘记密码」里显示什么：开没开、面板这边有没有配好至少一个能发的渠道。不带任何账号的信息。 */
   async function options() {
     if (!(await deps.enabled())) return { enabled: false, available: false };

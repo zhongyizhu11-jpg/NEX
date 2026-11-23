@@ -38,7 +38,8 @@ function testAllowsPrivateSource() {
   return process.env.FORWARDX_TEST_ALLOW_PRIVATE_SUB_SOURCE === "1" && process.env.NODE_ENV !== "production";
 }
 
-async function assertPublicHost(hostname: string): Promise<void> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function assertPublicHost(hostname: string): Promise<void> {
   const host = String(hostname || "").replace(/^\[|\]$/g, "");
   if (!host) throw new ProxySubSourceFetchError("地址缺少主机名");
   if (testAllowsPrivateSource()) return;

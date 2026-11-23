@@ -100,3 +100,8 @@ export const openApiRouter = express.Router();
 openApiRouter.get(OPENAPI_ROUTE_PATH, (req, res) => {
   void handleGet(req, res);
 });
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function openApiBuildCountForTests() {
+  return buildCount;
+}

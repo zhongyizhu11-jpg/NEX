@@ -620,7 +620,8 @@ const PANEL_DATA_EXTRA_BUSINESS_TABLES = MIGRATION_TABLES.filter(
 
 let panelDataSummaryCache: { kind: string | null; expiresAt: number; data: any } | null = null;
 
-function invalidatePanelDataSummaryCache() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function invalidatePanelDataSummaryCache() {
   panelDataSummaryCache = null;
 }
 
@@ -2132,7 +2133,8 @@ async function resetImportedRuntimeState(maps: ImportMaps) {
   });
 }
 
-async function importDirectSqliteBackup(
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function importDirectSqliteBackup(
   transfer: Extract<FetchedMigrationPayload, { kind: "sqlite-direct" }>,
   targetPanelUrl: string,
 ) {

@@ -41,7 +41,8 @@ function generateImpersonationToken(): { token: string; hash: string } {
   return { token, hash: hashImpersonationToken(token) };
 }
 
-function hashImpersonationToken(token: string) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function hashImpersonationToken(token: string) {
   return crypto.createHash("sha256").update(String(token), "utf8").digest("hex");
 }
 

@@ -152,7 +152,8 @@ function upsertSql() {
 }
 
 /** 累加进库（同一个桶写两次是加，不是覆盖：面板重启前后各记了半个桶）。 */
-async function upsertHostRateBuckets(hostId: number, buckets: readonly HostRateBucket[]) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function upsertHostRateBuckets(hostId: number, buckets: readonly HostRateBucket[]) {
   const sql = upsertSql();
   for (const bucket of buckets) {
     await executeRaw(sql, [

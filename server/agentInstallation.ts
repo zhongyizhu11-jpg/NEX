@@ -106,7 +106,8 @@ export type AgentInstallationOutcome =
  * 判定并落库一次。认领撞上并发（别的请求刚改过）就按最新状态再判一次；还撞上就放行这一次
  * （下一次上报再判），不在这里死循环。
  */
-async function applyAgentInstallation(hostId: number, presented: unknown): Promise<AgentInstallationOutcome> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function applyAgentInstallation(hostId: number, presented: unknown): Promise<AgentInstallationOutcome> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const state = await getAgentInstallationState(hostId, { force: attempt > 0 });
     if (!state) return { kind: "accept" };

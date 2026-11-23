@@ -350,7 +350,8 @@ export function recordUserAccessPausedEvent(userId: number, reason: string | nul
  * 每天一次：三天内到期的用户各记一条「快到期」。同一个人 20 小时内记过就不再记
  * （面板重启后这一轮会再跑一次，不能重复）。
  */
-async function recordExpiringUsersEvents(now = Date.now()) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function recordExpiringUsersEvents(now = Date.now()) {
   const q = quoteDbIdentifier;
   const nowSec = Math.floor(now / 1000);
   const horizon = nowSec + 3 * 86400;

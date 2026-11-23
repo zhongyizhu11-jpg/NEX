@@ -439,7 +439,8 @@ async function refreshLandingDependents(pool: NodePool, nodeIds: number[], moved
   健康检查每分钟跑一遍，所以第一次失败后下一分钟就会再试。
 */
 const dnsFailures = new Map<number, { values: string; at: number; attempts: number; message: string }>();
-const LANDING_DNS_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000] as const;
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const LANDING_DNS_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000] as const;
 
 /** 第 attempts 次失败之后要等多久才再试。 */
 function landingDnsRetryDelayMs(attempts: number): number {
@@ -647,7 +648,8 @@ async function syncLandingPoolLocked(poolId: number, options: { reason: string; 
  * 不改成员入站，只看健康：首选换没换（换了池节点地址跟着换、普通转发跟着走）、DNS 该不该改。
  * scheduler 每分钟跑一遍；成员机换了地址时也走它。
  */
-async function refreshLandingPoolHealth(poolId: number, reason: string): Promise<void> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function refreshLandingPoolHealth(poolId: number, reason: string): Promise<void> {
   await withKeyedTaskLock(`landing-pool:${Number(poolId)}`, async () => {
     const pool = await getNodePool(poolId);
     const config = pool && pool.role === "landing" ? parseLandingConfig(pool.landingJson) : null;

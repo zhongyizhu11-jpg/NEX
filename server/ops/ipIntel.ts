@@ -188,7 +188,8 @@ function rowToResult(row: Record<string, unknown>): IpIntelProviderResult | null
   };
 }
 
-async function listHostIpIntel(hostId: number): Promise<IpIntelProviderResult[]> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function listHostIpIntel(hostId: number): Promise<IpIntelProviderResult[]> {
   const rows = await queryRaw<Record<string, unknown>>(`SELECT * FROM ${q(TABLE)} WHERE ${q("hostId")} = ?`, [hostId]).catch(() => []);
   return rows.map(rowToResult).filter((item): item is IpIntelProviderResult => !!item);
 }
@@ -253,7 +254,8 @@ function ipIntelRefreshing(hostId: number) {
  * 面板这头查一遍（只查过期的，force 时全查）。同一台主机同时只跑一份；各家各协议族并发，
  * 一家失败不影响别家。调用方不等它：用 scheduleHostIpIntelRefresh。
  */
-async function refreshHostIpIntelFromPanel(host: IntelHost, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function refreshHostIpIntelFromPanel(host: IntelHost, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
   const hostId = Number(host?.id);
   if (!(hostId > 0)) return;
   const existing = refreshing.get(hostId);
@@ -365,4 +367,11 @@ export async function hostIpIntelView(host: IntelHost, profile: Pick<NetProfileR
     agentSupported: agentSupportsIntel(host),
     refreshing: ipIntelRefreshing(hostId),
   };
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetIpIntelStateForTest() {
+  refreshing.clear();
+  agentIntelCheckedAt.clear();
+  fetcher = defaultFetcher;
 }

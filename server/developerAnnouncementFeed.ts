@@ -147,3 +147,9 @@ export function syncDeveloperAnnouncementFeed(fetchText: () => Promise<string>, 
     .finally(() => { inflight = null; });
   return inflight;
 }
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetDeveloperAnnouncementFeedForTests() {
+  lastSyncAt = 0;
+  inflight = null;
+}

@@ -264,3 +264,13 @@ export function panelProfilingDownload(id: string): { file: string; filename: st
   if (!record || record.status !== "ready" || !fs.existsSync(record.file)) return null;
   return { file: record.file, filename: record.filename, bytes: record.bytes, kind: record.kind };
 }
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetPanelProfilingForTests() {
+  for (const record of [...captures.values()]) fs.rmSync(record.file, { force: true });
+  captures.clear();
+  busy = null;
+  if (cleanupTimer) clearInterval(cleanupTimer);
+  cleanupTimer = null;
+  directoryReady = false;
+}

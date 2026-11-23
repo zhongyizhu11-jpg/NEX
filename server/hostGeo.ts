@@ -332,7 +332,8 @@ async function fetchFromGeoProvider(provider: GeoProvider, address: string): Pro
  * 要的是点，光有国家画不出来。全部失败时把每家的原因串起来抛出去，日志里
  * 一眼能看出是哪家在闹。
  */
-async function fetchHostGeo(address: string): Promise<ProviderGeo> {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function fetchHostGeo(address: string): Promise<ProviderGeo> {
   const errors: string[] = [];
   const now = Date.now();
   /*
@@ -630,4 +631,23 @@ export function scheduleHostGeoRefresh(hostRows: any[]) {
   for (const host of dueHosts) {
     void refreshHostGeo(host);
   }
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetHostGeoStateForTests() {
+  for (const provider of GEO_PROVIDERS) provider.rateLimitedUntil = 0;
+  addressGeoCache.clear();
+  addressGeoInflight.clear();
+  hostGeoRetryState.clear();
+  refreshingHostIds.clear();
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function getHostGeoRetryState(hostId: number) {
+  return hostGeoRetryState.get(hostId) || null;
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function getGeoProviderStates() {
+  return GEO_PROVIDERS.map((provider) => ({ name: provider.name, rateLimitedUntil: provider.rateLimitedUntil }));
 }

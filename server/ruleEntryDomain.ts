@@ -379,3 +379,28 @@ registerRuleEntryDomainListener({
   sync: (ruleId, reason) => scheduleRuleEntryDomainSync(ruleId, reason),
   cleanup: (reason) => scheduleRuleEntryDomainCleanupSweep(reason),
 });
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function configureRuleEntryDomainForTests(options: {
+  dnsClient?: RuleEntryDomainDnsClient | null;
+  retryBaseMs?: number;
+  retryMaxMs?: number;
+} = {}) {
+  if (options.dnsClient !== undefined) dnsClient = options.dnsClient || defaultDnsClient;
+  if (options.retryBaseMs !== undefined || options.retryMaxMs !== undefined) {
+    retryBaseMs = options.retryBaseMs ?? RULE_ENTRY_DOMAIN_RETRY_BASE_MS;
+    retryMaxMs = options.retryMaxMs ?? RULE_ENTRY_DOMAIN_RETRY_MAX_MS;
+    coordinatorInstance = null;
+    retrySchedulerInstance = null;
+  }
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function waitForRuleEntryDomainIdle(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (debounceTimers.size > 0 || cleanupSweepTimer || inFlightRuns.size > 0) {
+    if (Date.now() > deadline) throw new Error("rule entry domain sync did not settle");
+    if (inFlightRuns.size > 0) await Promise.allSettled(Array.from(inFlightRuns));
+    else await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}

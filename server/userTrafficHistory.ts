@@ -72,7 +72,8 @@ export function aggregateBucketsByDay(rows: ReadonlyArray<{ userId: unknown; rul
 }
 
 /** 重算最近 3 天（幂等）。返回写了几行。 */
-async function rollupUserTrafficDaily(now = new Date()) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function rollupUserTrafficDaily(now = new Date()) {
   const firstDay = billingDayStarts(RECOMPUTE_DAYS, now)[0];
   // 转发组成员的子规则记到模板规则上（和仪表盘按用户算流量是同一个口径）
   const buckets = await queryRaw<{ userId: unknown; ruleId: unknown; bucketStart: unknown; bytesIn: unknown; bytesOut: unknown }>(

@@ -357,7 +357,8 @@ async function applyThrottle(meta: RuleMeta, threshold: number, baseline: number
  * 启动时收回：面板重启前加上的临时限速，功能还开着就接着管（按正在告警恢复状态），到点照样撤；
  * 已经过期、或者检测 / 自动限速已经关了，当场撤掉。由 startTrafficAnomalyJob 调用；开发面板不跑。
  */
-async function recoverAnomalyThrottlesOnStartup(nowMs = Date.now()) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function recoverAnomalyThrottlesOnStartup(nowMs = Date.now()) {
   await loadAnomalyThrottles(true);
   const pending = listAnomalyThrottles();
   if (pending.length === 0) return { kept: 0, revoked: 0 };
@@ -488,7 +489,8 @@ function addRate(map: Map<number, Rate>, id: number, rate: Rate) {
 }
 
 /** 由定时任务每分钟调一次；测试直接调。 */
-async function runTrafficAnomalyTick(nowMs = Date.now()) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function runTrafficAnomalyTick(nowMs = Date.now()) {
   const config = await readTrafficAnomalyConfig();
   if (!config.enabled) {
     states.clear();
@@ -760,4 +762,21 @@ export function startTrafficAnomalyJob() {
     timer.unref?.();
   }, 2 * 60_000);
   startTimer.unref?.();
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function setTrafficAnomalyDepsForTest(override: Partial<TrafficAnomalyDeps> | null) {
+  deps = override ? { ...defaultDeps, ...override } : defaultDeps;
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetTrafficAnomalyStateForTest() {
+  states.clear();
+  baselineCache.clear();
+  globalFirstBucket = null;
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function getTrafficAnomalyStateForTest(key: string) {
+  return states.get(key) ?? null;
 }

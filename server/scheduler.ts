@@ -130,7 +130,8 @@ async function refreshUserRuleAgents(userId: number, reason: string) {
  * 该有事情发生」—— 而落地端口那一路上个版本就是漏接了调度，开关存得下设置却
  * 永远不触发。只测「算不算到期」测不出这种漏接，必须真的把这个函数跑起来。
  */
-async function runMonthlyTrafficReset() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function runMonthlyTrafficReset() {
   try {
     const now = new Date();
     const usersToReset = await db.getUsersForAutoReset(now);
@@ -303,7 +304,8 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
   }
 }
 
-async function runSelfTestTimeoutSweep() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function runSelfTestTimeoutSweep() {
   if (!selfTestSweepActivity.shouldSweep()) return;
   try {
     const timedOutTests = await db.timeoutStaleForwardTests(
@@ -344,7 +346,8 @@ async function runSelfTestTimeoutSweep() {
   }
 }
 
-async function recoverPendingSelfTestSweep() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function recoverPendingSelfTestSweep() {
   try {
     // Batches whose last report arrived just before the panel exited.
     await recoverManualTunnelProbeBatches();
@@ -478,7 +481,8 @@ function planUserEmailReminders(
   return pending;
 }
 
-async function runEmailReminders() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function runEmailReminders() {
   try {
     const config = await getEmailConfig();
     if (!config.enabled) return;
@@ -611,7 +615,8 @@ async function planProxyTrafficEmailReminders(users: any[]): Promise<PendingRemi
   return pending;
 }
 
-async function runTelegramReminders() {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function runTelegramReminders() {
   try {
     const settings = await db.getAllSettings();
     const envToken = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();

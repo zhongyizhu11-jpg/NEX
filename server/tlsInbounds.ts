@@ -64,7 +64,8 @@ function normalizeServerSniAllowlist(raw: unknown) {
 }
 
 /** 规则在本机回环上听的端口从这段里挑：避开常用服务端口，也离守卫内部端口的起点远一些。 */
-const SNI_BACKEND_PORT_RANGE = { start: 45000, end: 59999 } as const;
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const SNI_BACKEND_PORT_RANGE = { start: 45000, end: 59999 } as const;
 
 /** 共享入站规则能用哪些转发工具：都走「守卫在回环上接 → 工具 / 直拨」这条路，六种都行。 */
 export const SNI_RULE_FORWARD_TYPES = ["iptables", "nftables", "realm", "socat", "gost", "nginx"] as const;

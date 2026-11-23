@@ -57,7 +57,8 @@ export function currentOperationAuditRequestId(): string | undefined {
     · 预览 / 解析 / 盯着看（watchMetrics、onlineIps.watch 每几秒续一次）、已读、用量上报。
   过程改名或删掉时 operationAudit.sqlite.test.ts 会报出这里的旧名字。
 */
-const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
   // 登录流程
   "auth.createCaptcha", "auth.sendEmailCode", "auth.login", "auth.verifyTwoFactorLogin", "auth.register",
   // 找回密码：没登录时用的，成功的申请 / 重置由 server/ops/passwordReset.ts 自己补记一行
@@ -419,4 +420,9 @@ export async function getOperationAuditFacets(): Promise<OperationAuditFacets> {
     modules: modules.map((row) => ({ module: String(row.m || ""), count: Number(row.n) || 0 })).filter((row) => row.module),
     actors: actors.map((row) => ({ userId: Number(row.u) || 0, name: String(row.name || `#${row.u}`), count: Number(row.n) || 0 })).filter((row) => row.userId > 0),
   };
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function drainOperationAuditWrites() {
+  while (pendingWrites.size > 0) await Promise.allSettled([...pendingWrites]);
 }

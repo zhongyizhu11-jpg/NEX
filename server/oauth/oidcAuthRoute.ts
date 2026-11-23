@@ -59,7 +59,8 @@ const oidcAuthStates = new OAuthStateStore<OidcLoginMode>();
 export const oidcProviders = new OidcProviderCache();
 
 /** 每个来源一分钟最多发起 20 次。 */
-const oidcStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const oidcStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
 
 const requestIp = (req: Request) => oauthRequestIp(req);
 

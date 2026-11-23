@@ -4843,7 +4843,8 @@ function formatRuleTrafficSummaryLines(summary: AiRuleTrafficSummary | undefined
     connections > 0 ? `连接：<b>${connections}</b>` : "",
   ].filter(Boolean);
 }
-async function aiRuleTrafficSummaryMap(user: any, ruleIds: number[], options: { includeLatency?: boolean } = {}) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function aiRuleTrafficSummaryMap(user: any, ruleIds: number[], options: { includeLatency?: boolean } = {}) {
   const ids = Array.from(new Set(ruleIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
   const map = new Map<number, AiRuleTrafficSummary>();
   if (ids.length === 0) return map;
@@ -6376,7 +6377,8 @@ function telegramUpdateQueueKey(update: TelegramUpdate) {
   return chatId ? `telegram-chat:${chatId}` : `telegram-update:${update.update_id}`;
 }
 
-async function processTelegramUpdate(update: TelegramUpdate) {
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function processTelegramUpdate(update: TelegramUpdate) {
   try {
     if (update.message) await handleMessage(update.message);
     if (update.callback_query) await handleCallback(update.callback_query);
