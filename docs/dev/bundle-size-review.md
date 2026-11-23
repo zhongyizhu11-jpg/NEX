@@ -59,7 +59,7 @@
 ## 五、还能做、要拍板的
 
 1. gost 运行时（69 MB）和 mita（24 MB）不进面板包，首次需要时按钉死的 SHA-256 从 Release 下载并缓存：包约 75 MB → 35 MB；离线部署要另发完整包。
-2. 继续拆大文件：Rules.tsx 10089 行、telegramBot.ts 6483 行、agentHeartbeatRoute.ts 5791 行。
+2. 继续拆大文件：telegramBot.ts 已按层拆成 7 个文件（见 `server-layout.md`）；Rules.tsx 10089 行（一个 8019 行的组件）和 agentHeartbeatRoute.ts 5791 行（一个 5458 行的函数）要按「每次抽一小块、带测试、单独提交」推进，另开一轮。
 3. 多主机 / 多规则下的后端压测（心跳、列表），仓库里有 `scripts/bench/heartbeat-load.mjs`，这一轮没有带数据的环境。
 
 量法都在本文件对应的脚本里：`scripts/bench/` 之外的临时脚本（Playwright 量首屏 / 预取 / 切页）没有入库，需要时按本文的指标重写即可。

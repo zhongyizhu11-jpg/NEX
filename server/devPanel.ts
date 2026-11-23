@@ -17,7 +17,8 @@ import { AGENT_VERSION } from "../shared/versions";
 
 import { DEV_ADMIN_PASSWORD, DEV_ADMIN_USERNAME, isDevPanelMode } from "./devPanelMode";
 
-;
+/** @public 开关和固定账号搬到了 devPanelMode.ts；测试经 import(url("server/devPanel.ts")) 还从这里拿，knip 看不见 */
+export { DEV_ADMIN_PASSWORD, DEV_ADMIN_USERNAME, DEV_PANEL_FLAG, isDevPanelMode } from "./devPanelMode";
 
 type DevUsers = {
   adminId: number;
