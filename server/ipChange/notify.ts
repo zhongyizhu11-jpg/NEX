@@ -83,8 +83,8 @@ export async function deliverIpChangeNotice(notice: IpChangeNotice) {
     const [{ getAllSettings }, { getTelegramAdminRecipients }, { filterTelegramRecipients }, { sendTelegramMessage }, { ENV }] = await Promise.all([
       import("../repositories/settingsRepository"),
       import("../repositories/userRepository"),
-      import("../telegramNotifyPrefs"),
-      import("../telegramBot"),
+      import("../telegram/telegramNotifyPrefs"),
+      import("../telegram/telegramBot"),
       import("../env"),
     ]);
     const settings = await getAllSettings();
@@ -102,7 +102,7 @@ export async function deliverIpChangeNotice(notice: IpChangeNotice) {
       }
     }
     // Discord 那一路：和 Telegram 同一批管理员事件，各自独立（Discord 没开时什么也不做）
-    const { notifyDiscordAdmins } = await import("../discordNotify");
+    const { notifyDiscordAdmins } = await import("../discord/discordNotify");
     await notifyDiscordAdmins(text, { category: "host", label: `ip-change host=${notice.host?.id ?? "-"}` });
   } catch (error) {
     console.warn(`[IpChange] Telegram notify failed: ${error instanceof Error ? error.message : String(error)}`);

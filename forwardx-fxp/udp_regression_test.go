@@ -227,7 +227,9 @@ func TestFXPUDPSessionWorkerDrainPreservesFinalTrafficDelta(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("stopping the reporter did not wake the traffic batch worker")
 	}
+	// 空临界区当屏障用：等正在刷批的 worker 放开锁，确认它已经退出刷批。
 	trafficBatchFlushMu.Lock()
+	//lint:ignore SA2001 见上一行
 	trafficBatchFlushMu.Unlock()
 }
 

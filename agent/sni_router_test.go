@@ -301,7 +301,12 @@ func TestSNIAllowlistEmptyAllowsAll(t *testing.T) {
 func TestSNIHandshakeLimiter(t *testing.T) {
 	limiter := newSNIHandshakeLimiter()
 	limiter.setLimits(2, 1)
-	if !limiter.acquireTotal() || !limiter.acquireTotal() || limiter.acquireTotal() {
+	for i := 0; i < 2; i++ {
+		if !limiter.acquireTotal() {
+			t.Fatalf("acquire %d under the total limit should succeed", i+1)
+		}
+	}
+	if limiter.acquireTotal() {
 		t.Fatalf("total limit not enforced")
 	}
 	limiter.releaseTotal()

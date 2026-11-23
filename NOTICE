@@ -1,0 +1,12 @@
+NEX
+Copyright (C) 2026 NEX contributors
+
+本软件基于 ForwardX（https://github.com/poouo/Forwardx，Copyright (C) ForwardX 作者，
+GNU Affero General Public License v3.0）继续开发，并按同一许可证 AGPL-3.0-only 发布。
+完整许可证文本见 LICENSE；随附第三方组件的许可声明见 THIRD_PARTY_NOTICES.md。
+
+按 AGPL-3.0 第 13 条，通过网络使用本软件的用户有权获得与其所用版本对应的完整源代码；
+面板登录页和系统设置页提供了源代码链接。发布修改版本时请保留本文件和上游的版权声明。
+
+This program is a derivative work of ForwardX (https://github.com/poouo/Forwardx) and is
+distributed under the GNU Affero General Public License v3.0 only. See LICENSE.

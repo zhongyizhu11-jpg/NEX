@@ -1394,10 +1394,10 @@ func collectTraffic(cfg Config) time.Duration {
 			}
 			curConns := connCounts[state.Port]
 			previous := readPrevState(state.Port)
-			prevConns := previous.conns
 			initialBaseline := previous.ruleID <= 0 || previous.ruleID != state.RuleID
 			prevIn, prevOut := trafficBytesBaseline(previous, counters, byteSource, initialBaseline)
 			connectionTotal, connectionSource := connectionCounterForTrafficState(state, counters, connTotals[state.Port], diagnostics)
+			var prevConns uint64
 			connectionTotal, connectionSource, prevConns = prepareConnectionCounterBaseline(
 				state, previous, connectionTotal, connectionSource,
 			)
@@ -2621,7 +2621,6 @@ func normalizeNetworkTargetHost(host string) string {
 	for _, prefix := range []string{"tcp://", "udp://"} {
 		if strings.HasPrefix(lower, prefix) {
 			target = strings.TrimSpace(target[len(prefix):])
-			lower = strings.ToLower(target)
 			break
 		}
 	}

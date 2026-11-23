@@ -83,7 +83,8 @@ func TestReplayCacheEvictsOldestAtCapacity(t *testing.T) {
 func TestReplayCacheWithZeroCapacityDoesNotRetainEntries(t *testing.T) {
 	cache := newReplayCache(time.Minute, 0)
 	now := time.Unix(1000, 0)
-	if !cache.addAt("key", now) || !cache.addAt("key", now) {
+	first, second := cache.addAt("key", now), cache.addAt("key", now)
+	if !first || !second {
 		t.Fatal("zero-capacity cache should accept keys without retaining them")
 	}
 	if len(cache.seen) != 0 || len(cache.expiry) != 0 {

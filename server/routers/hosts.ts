@@ -533,7 +533,7 @@ export function canReadHostInstallCommand(
 ): boolean {
   if (!host) return false;
   if (user.role === "admin") return true;
-  return Number((host as any).userId) === Number(user.id);
+  return Number(host.userId) === Number(user.id);
 }
 
 /**
@@ -1535,7 +1535,7 @@ export const hostsRouter = router({
         const host = await db.getHostById(input.hostId);
         if (!host) throw new Error("主机不存在");
         if (!canReadHostInstallCommand(ctx.user, host)) throw new Error("无权查看此主机的安装命令");
-        const token = String((host as any).agentToken || "");
+        const token = String(host.agentToken || "");
         if (!token) throw new Error("这台主机还没有 Agent 令牌");
         const settings = await db.getAllSettings();
         const panelUrl = await getConfiguredPanelUrl();
@@ -2034,11 +2034,11 @@ export const hostsRouter = router({
       .mutation(async ({ input }) => {
         const host = await db.getHostById(input.hostId);
         if (!host) throw new Error("主机不存在");
-        if (!(host as any).isOnline) {
+        if (!host.isOnline) {
           return { success: true, pushed: false, alreadyLatest: false, skippedOffline: true };
         }
         const targetVersion = normalizeVersion(input.targetVersion || AGENT_VERSION);
-        const currentVersion = normalizeVersion((host as any).agentVersion);
+        const currentVersion = normalizeVersion(host.agentVersion);
         if (isHostAgentUpgradeUnnecessary({ agentVersion: currentVersion, fxpVersion: (host as any).fxpVersion, agentDistribution: host.agentDistribution }, targetVersion, AGENT_VERSION)) {
           return { success: true, pushed: false, alreadyLatest: true };
         }
@@ -2070,7 +2070,7 @@ export const hostsRouter = router({
             missing.push(hostId);
             continue;
           }
-          if (!(host as any).isOnline) {
+          if (!host.isOnline) {
             skippedOffline += 1;
             continue;
           }
@@ -2080,7 +2080,7 @@ export const hostsRouter = router({
           await assertAgentReleaseAssetsReady(targetVersion);
         }
         const upgradeHosts = onlineHosts.filter((host) => {
-          const currentVersion = normalizeVersion((host as any).agentVersion);
+          const currentVersion = normalizeVersion(host.agentVersion);
           if (isHostAgentUpgradeUnnecessary({ agentVersion: currentVersion, fxpVersion: (host as any).fxpVersion, agentDistribution: host.agentDistribution }, targetVersion, AGENT_VERSION)) {
             skippedLatest += 1;
             return false;
@@ -2089,7 +2089,7 @@ export const hostsRouter = router({
         });
         for (const rollout of planAgentUpgradeWaves(upgradeHosts)) {
           const { host, wave, delayMs, requestedAt } = rollout;
-          const currentVersion = normalizeVersion((host as any).agentVersion);
+          const currentVersion = normalizeVersion(host.agentVersion);
           appendPanelLog("info", `[AgentUpgrade] request host=${host.id} name=${host.name} current=${currentVersion || "-"} target=${targetVersion} batch=true wave=${wave + 1} delayMs=${delayMs}`);
           await db.requestHostAgentUpgrade(host.id, targetVersion, null, requestedAt, agentUpgradeTargetDistributionFor(host));
           requested += 1;

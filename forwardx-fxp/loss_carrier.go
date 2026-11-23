@@ -280,6 +280,7 @@ func newLossCarrierConn(link lcLink, dialer bool) *lossCarrierConn {
 
 func lcTuneSession(sess *kcp.UDPSession) {
 	// 流模式：小的写合进同一个包；不等下一个时钟，写了就发。
+	//lint:ignore SA1019 kcp-go 把 SetStreamMode 标成弃用但没有替代接口；流模式是这里合并小包的前提。
 	sess.SetStreamMode(true)
 	sess.SetWriteDelay(false)
 	// nodelay=1（最小重传超时 30 ms，超时每次只加一半）、快速重传（被跳过 2 次就重发）、

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
-import { sendTelegramMessage } from "../telegramBot";
+import { sendTelegramMessage } from "../telegram/telegramBot";
 import { sanitizeHtml } from "../../shared/htmlSanitizer";
 import { APP_VERSION } from "../../shared/versions";
 

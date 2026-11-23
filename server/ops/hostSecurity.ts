@@ -271,8 +271,8 @@ async function notifyAdminsTelegram(hostName: string, finding: IncomingFinding, 
     const [{ getAllSettings, getTelegramAdminRecipients }, { ENV }, { filterTelegramRecipients }, { sendTelegramMessage }] = await Promise.all([
       import("../db"),
       import("../env"),
-      import("../telegramNotifyPrefs"),
-      import("../telegramBot"),
+      import("../telegram/telegramNotifyPrefs"),
+      import("../telegram/telegramBot"),
     ]);
     const settings = await getAllSettings();
     const envToken = ENV.telegramBotToken.trim();
@@ -296,7 +296,7 @@ async function notifyAdminsTelegram(hostName: string, finding: IncomingFinding, 
       }
     }
     // Discord 那一路（同一批管理员事件，按各自的「主机」类开关过滤；Discord 没开时什么也不做）
-    const { notifyDiscordAdmins } = await import("../discordNotify");
+    const { notifyDiscordAdmins } = await import("../discord/discordNotify");
     await notifyDiscordAdmins(text, { category: "host", label: "host-security" });
   } catch (error) {
     console.warn(`[HostSecurity] telegram notify failed: ${error instanceof Error ? error.message : String(error)}`);

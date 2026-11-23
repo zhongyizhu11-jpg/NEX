@@ -1,10 +1,10 @@
 import crypto from "crypto";
-import { sendTelegramMessage } from "./telegramBot";
+import { sendTelegramMessage } from "./telegram/telegramBot";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { formatForwardRuleProtocol, FORWARD_TYPE_LABELS, type ForwardType } from "../shared/forwardTypes";
-import { isTelegramBotReady } from "./telegramReady";
-import { filterTelegramRecipients } from "./telegramNotifyPrefs";
-import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
+import { isTelegramBotReady } from "./telegram/telegramReady";
+import { filterTelegramRecipients } from "./telegram/telegramNotifyPrefs";
+import { isDiscordBotReady, notifyDiscordAdmins } from "./discord/discordNotify";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 import { ruleRuntimeFailureReason } from "./ruleRuntimeFailureText";
 

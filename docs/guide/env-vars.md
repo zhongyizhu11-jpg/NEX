@@ -72,6 +72,8 @@ Docker 场景下数据库地址可以按下面判断：
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `FORWARDX_TRUST_PROXY` | `loopback` | 信任哪些反向代理传来的 `X-Forwarded-For` / `X-Forwarded-Proto` 等头：`loopback`（只信本机）、网段或地址（逗号分隔，如 `172.16.0.0/12`）、跳数（数字），或 `false` 一律不信。`true` / `*` 这类「全信」的写法按 `false` 处理。Docker 部署前面有宿主机上的 Nginx / Caddy 时要改，见[反向代理](./reverse-proxy.md)。安装脚本升级时会保留这一项 |
+| `FORWARDX_RUN_AS_ROOT` | 空 | Docker 镜像默认以 `forwardx`（uid 10001）运行；设为 `1` 让容器保持 root（挂了 `/var/run/docker.sock` 时自动保持 root，见[部署面板](./deploy-panel.md)） |
+| `FORWARDX_TRUSTED_ORIGINS` | 空 | 跨站写操作防护（CSRF）额外放行的浏览器来源，逗号分隔，可写完整来源（`https://ops.example.com`）或裸主机名。面板自己的域名（按请求 Host / 反代传来的 `X-Forwarded-Host` 比主机名）和手机 App 的固定源默认就放行；只有把面板 API 嵌进别的站点时才需要填。用 API 令牌（Bearer）认证的请求不受此限制 |
 
 ## 数据库连接池
 

@@ -1,6 +1,6 @@
 import * as db from "./db";
 import { ENV } from "./env";
-import { sendTelegramMessage } from "./telegramBot";
+import { sendTelegramMessage } from "./telegram/telegramBot";
 import { clearTunnelRuntimeStatusForHost } from "./tunnelRuntimeStatus";
 import { isHostConsideredOnline } from "./hostHeartbeatPolicy";
 import { partitionHostsByRecentAgentActivity } from "./agentActivity";
@@ -11,8 +11,8 @@ import {
 } from "./agentFastLiveness";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { refreshTunnelsPinnedToHost } from "./tunnelExitPin";
-import { filterTelegramRecipients } from "./telegramNotifyPrefs";
-import { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } from "./discordNotify";
+import { filterTelegramRecipients } from "./telegram/telegramNotifyPrefs";
+import { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } from "./discord/discordNotify";
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
 import { recordHostStatusEvent } from "./ops/eventHooks";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";

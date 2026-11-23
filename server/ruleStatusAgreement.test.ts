@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { LINK_PROBE_FRESH_MS } from "../shared/linkProbePolicy";
-import { effectiveRuleStatusInfo } from "./telegramBot";
+import { effectiveRuleStatusInfo } from "./telegram/telegramBot";
 import { resolveForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
 
 /**

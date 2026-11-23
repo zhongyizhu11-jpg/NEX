@@ -14,6 +14,8 @@ import { formatBytes } from "../shared/formatBytes";
 import { escapeHtmlAttr as escapeHtml } from "../shared/htmlEscape";
 
 export type ProxySubPageInput = {
+  /** 这次响应的 CSP nonce（server/securityHeaders.ts）：页面里的内联脚本要带着它才能跑。 */
+  cspNonce?: string;
   appName: string;
   username: string;
   tokenName: string;
@@ -148,7 +150,7 @@ export function renderProxySubPage(input: ProxySubPageInput): string {
   <footer>${escapeHtml(input.appName)}</footer>
 </main>
 <div class="toast" id="toast">已复制</div>
-<script>
+<script${input.cspNonce ? ` nonce="${escapeHtml(input.cspNonce)}"` : ""}>
 (function(){
   var toast=document.getElementById('toast');var timer;
   function show(text){toast.textContent=text;toast.classList.add('show');clearTimeout(timer);timer=setTimeout(function(){toast.classList.remove('show')},1500);}

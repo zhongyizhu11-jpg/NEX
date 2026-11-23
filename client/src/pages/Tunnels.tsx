@@ -33,10 +33,10 @@ import { LineWorkspace, NodePoolsSection } from "@/features/links/LineWorkspace"
 import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
 import { ExitBalanceDialog } from "@/features/links/ExitBalanceDialog";
 import type { LinkWizardAction } from "@shared/linkWizard";
-import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
-import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
+import { prefetchReactGlobe } from "@/lib/reactGlobeLoader";
+
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
+import { DiagnoseSubjectActions } from "@/components/DiagnoseDialog";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
@@ -50,7 +50,7 @@ import {
   LatencyTimeRangeSelect,
   type LatencyTimeRangeHours,
 } from "@/components/LatencyTimeRangeSelect";
-import { getLinkTestDetailEndpointIds, LinkTestProbeView, getLinkTestTotalLatency, hasPendingLinkTestDetails, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
+import { getLinkTestTotalLatency, parseLinkTestMessage } from "@/components/LinkTestLatencySummary";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -95,45 +95,21 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
-import { countryFeatureHasCode, normalizeCountryCode, type CountryFeatureLike } from "@/lib/countryFeatures";
+
 import { applyLatencyPeakCut, clipLatencyForChart, formatStatPercent, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks, isLatencySeriesCacheFresh, normalizeLatencyProbeCounts } from "@/lib/latencyChart";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { addHostNodeMeta, hostAddressCandidates, hostDisplayName } from "@/lib/linkTestNodeMeta";
+
 import { buildLinkAvailabilityIndex, type LinkAvailabilityResult } from "@shared/linkAvailability";
 import { MAX_NGINX_PEM_FILES, MAX_NGINX_PEM_UPLOAD_BYTES, parseNginxPemFiles } from "@/lib/nginxPemFiles";
 import { pollingInterval } from "@/lib/polling";
-import { hasQuerySnapshotAfter } from "@/lib/manualTestCache";
-import { getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
+
+import { getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { cn } from "@/lib/utils";
-import {
-  Copy,
-  ArrowRightLeft,
-  ChevronRight,
-  Globe,
-  Layers,
-  LayoutGrid,
-  List,
-  Loader2,
-  LogIn,
-  LogOut,
-  Waypoints,
-  Network,
-  Server,
-  Pencil,
-  Plus,
-  Route,
-  Search,
-  ShieldCheck,
-  Stethoscope,
-  Trash2,
-  Upload,
-  XCircle,
-  Wand2,
-} from "lucide-react";
-import type { GlobeMethods } from "react-globe.gl";
+import { Copy, ArrowRightLeft, ChevronRight, Globe, Layers, LayoutGrid, List, LogIn, LogOut, Waypoints, Network, Server, Pencil, Plus, Route, Search, ShieldCheck, Stethoscope, Trash2, Upload, XCircle, Wand2 } from "lucide-react";
+
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
@@ -173,8 +149,28 @@ import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
+const TunnelSelfTestDialog = lazy(() => import("@/features/tunnels/TunnelSelfTestDialog"));
+const TunnelWorldGlobe = lazy(() => import("@/features/tunnels/TunnelWorldGlobe"));
 
-const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
+export function hasLatestTunnelLatency(tunnel: any) {
+  return tunnel?.latestLatencyAt != null
+    || tunnel?.latestLatencyMs != null
+    || tunnel?.latestLatencyIsTimeout === true;
+}
+
+export function tunnelManualTestLatencyMs(tunnel: any) {
+  const value = tunnel?.lastLatencyMs;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value) : null;
+}
+
+export function tunnelLatestStatLatencyMs(tunnel: any) {
+  const value = tunnel?.latestLatencyMs;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value) : null;
+}
+
+export function hasStructuredTunnelTestMessage(parsed: ReturnType<typeof parseLinkTestMessage>) {
+  return !!parsed?.details?.length || typeof parsed?.totalLatencyMs === "number";
+}
 // 延迟曲线按需加载：recharts 不跟着隧道页一起下，点开延迟弹窗才取。
 const TunnelLatencyLineChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.TunnelLatencyLineChart })));
 
@@ -275,51 +271,6 @@ type TunnelLatencySeriesMeta = {
   color: string;
 };
 
-type TunnelGlobeHostPoint = {
-  pointKind?: "host";
-  host: any;
-  id: number;
-  name: string;
-  lat: number;
-  lng: number;
-  regionText: string;
-};
-
-type TunnelGlobeLink = {
-  id: string;
-  kind: "tunnel" | "chain";
-  item: any;
-  name: string;
-  routeText: string;
-  routeHosts: TunnelGlobeHostPoint[];
-  statusText: string;
-  latencyText: string;
-  color: string;
-  trackColor: string;
-  glowColor: string;
-};
-
-type TunnelGlobePath = {
-  link: TunnelGlobeLink;
-  segmentIndex: number;
-  layerIndex: number;
-  layerCount: number;
-  startLat: number;
-  startLng: number;
-  endLat: number;
-  endLng: number;
-  altitude: number;
-  coords: Array<{ lat: number; lng: number; alt: number }>;
-};
-
-type TunnelGlobeCountryFeature = CountryFeatureLike & {
-  type: "Feature";
-  geometry: {
-    type: string;
-    coordinates: unknown;
-  };
-};
-
 const tunnelLatencyColors = [
   "var(--color-chart-2)",
   "var(--color-chart-1)",
@@ -339,13 +290,6 @@ function tunnelLatencySeriesDisplayName(key: string, label?: string | null) {
 }
 const tunnelLatencySeriesCache = new Map<number, TunnelLatencySeriesDatum[]>();
 const tunnelLatencyAnimatedKeys = new Set<number>();
-const TUNNEL_GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
-const TUNNEL_GLOBE_COUNTRIES_URL = "/globe/ne_110m_admin_0_countries.geojson";
-const TUNNEL_GLOBE_PATH_SURFACE_ALTITUDE = 0.026;
-const TUNNEL_GLOBE_PATH_MIN_ALTITUDE = 0.038;
-const TUNNEL_GLOBE_PATH_MAX_ALTITUDE = 0.082;
-const TUNNEL_GLOBE_PATH_LAYER_ALTITUDE_STEP = 0.005;
-const TUNNEL_GLOBE_PATH_LAYER_ALTITUDE_MAX = 0.014;
 
 const defaultForm: TunnelForm = {
   name: "",
@@ -515,53 +459,6 @@ function normalizeHopConnectHostsForHosts(
   });
 }
 
-function hostRegionText(host: any) {
-  return [host?.geoCountryName || host?.geoCountryCode, host?.geoRegion]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .join(" / ");
-}
-
-function hostCountryCode(host: any) {
-  return normalizeCountryCode(host?.geoCountryCode);
-}
-
-function createTunnelGlobeHostPoint(host: any): TunnelGlobeHostPoint | null {
-  const coord = hostGeoCoordinate(host);
-  if (!coord) return null;
-  const name = String(host?.name || host?.ip || `主机 #${host?.id || "-"}`).trim();
-  return {
-    host,
-    id: Number(host.id),
-    name,
-    lat: coord.lat,
-    lng: coord.lng,
-    regionText: hostRegionText(host),
-  };
-}
-
-function formatGlobeLatency(value: unknown, timeout?: unknown) {
-  if (timeout) return "超时";
-  const latency = Number(value);
-  return Number.isFinite(latency) && latency >= 0 ? `${Math.round(latency)} ms` : "未测试";
-}
-
-function hasLatestTunnelLatency(tunnel: any) {
-  return tunnel?.latestLatencyAt != null
-    || tunnel?.latestLatencyMs != null
-    || tunnel?.latestLatencyIsTimeout === true;
-}
-
-function tunnelManualTestLatencyMs(tunnel: any) {
-  const value = tunnel?.lastLatencyMs;
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value) : null;
-}
-
-function tunnelLatestStatLatencyMs(tunnel: any) {
-  const value = tunnel?.latestLatencyMs;
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value) : null;
-}
-
 function tunnelSeriesLatencyEntries(tunnel: any) {
   if (!Array.isArray(tunnel?.latestLatencySeries)) return [];
   return tunnel.latestLatencySeries
@@ -574,11 +471,7 @@ function tunnelSeriesLatencyEntries(tunnel: any) {
     .filter((item: any) => item.key !== "total");
 }
 
-function hasStructuredTunnelTestMessage(parsed: ReturnType<typeof parseLinkTestMessage>) {
-  return !!parsed?.details?.length || typeof parsed?.totalLatencyMs === "number";
-}
-
-function tunnelDisplayLatencyMs(tunnel: any) {
+export function tunnelDisplayLatencyMs(tunnel: any) {
   const parsed = parseLinkTestMessage(tunnel?.lastTestMessage);
   const structuredMessage = hasStructuredTunnelTestMessage(parsed);
   const manualFallback = tunnelManualTestLatencyMs(tunnel);
@@ -613,7 +506,7 @@ function tunnelDisplayLatencyList(tunnel: any) {
   return [...totalEntry, ...entries];
 }
 
-function tunnelLatencyIsTimeout(tunnel: any) {
+export function tunnelLatencyIsTimeout(tunnel: any) {
   const value = tunnelDisplayLatencyMs(tunnel);
   const hasLatency = typeof value === "number" && Number.isFinite(value) && value >= 0;
   if (hasLatency) return false;
@@ -623,139 +516,6 @@ function tunnelLatencyIsTimeout(tunnel: any) {
     details: parsed.details,
     latestLatencyIsTimeout: hasLatestTunnelLatency(tunnel) ? tunnel?.latestLatencyIsTimeout : false,
   });
-}
-function normalizeLongitude(lng: number) {
-  if (lng < -180) return lng + 360;
-  if (lng > 180) return lng - 360;
-  return lng;
-}
-
-function longitudeDeltaDegrees(from: number, to: number) {
-  let delta = to - from;
-  if (delta > 180) delta -= 360;
-  if (delta < -180) delta += 360;
-  return delta;
-}
-
-function globeDistanceDegrees(start: Pick<TunnelGlobePath, "startLat" | "startLng" | "endLat" | "endLng">) {
-  const toRad = (value: number) => (value * Math.PI) / 180;
-  const lat1 = toRad(start.startLat);
-  const lat2 = toRad(start.endLat);
-  const lng1 = toRad(start.startLng);
-  const lng2 = toRad(start.endLng);
-  const angle = Math.acos(Math.min(1, Math.max(-1, Math.sin(lat1) * Math.sin(lat2) + Math.cos(lat1) * Math.cos(lat2) * Math.cos(lng2 - lng1))));
-  return (angle * 180) / Math.PI;
-}
-
-function tunnelGlobeArcLayerKey(start: TunnelGlobeHostPoint, end: TunnelGlobeHostPoint) {
-  const a = `${start.id}:${start.lat.toFixed(3)}:${start.lng.toFixed(3)}`;
-  const b = `${end.id}:${end.lat.toFixed(3)}:${end.lng.toFixed(3)}`;
-  return a < b ? `${a}|${b}` : `${b}|${a}`;
-}
-
-function createTunnelGlobePathCoords(path: Pick<TunnelGlobePath, "startLat" | "startLng" | "endLat" | "endLng" | "altitude" | "layerIndex" | "layerCount">) {
-  const dLat = path.endLat - path.startLat;
-  const dLng = longitudeDeltaDegrees(path.startLng, path.endLng);
-  const midLat = (path.startLat + path.endLat) / 2;
-  const midLng = normalizeLongitude(path.startLng + dLng / 2);
-  const lngScale = Math.max(0.35, Math.cos((midLat * Math.PI) / 180));
-  const projectedLng = dLng * lngScale;
-  const distance = Math.sqrt(dLat * dLat + projectedLng * projectedLng);
-  const layerOffset = path.layerIndex - (path.layerCount - 1) / 2;
-  const sideSpacing = path.layerCount > 1 ? Math.min(7.5, Math.max(1.8, globeDistanceDegrees(path) / 24)) : 0;
-  const offset = layerOffset * sideSpacing;
-  const offsetLat = distance > 0 ? (projectedLng / distance) * offset : 0;
-  const offsetLng = distance > 0 ? (-dLat / (distance * lngScale)) * offset : 0;
-
-  return [
-    { lat: path.startLat, lng: path.startLng, alt: TUNNEL_GLOBE_PATH_SURFACE_ALTITUDE },
-    { lat: Math.max(-85, Math.min(85, midLat + offsetLat)), lng: normalizeLongitude(midLng + offsetLng), alt: path.altitude },
-    { lat: path.endLat, lng: path.endLng, alt: TUNNEL_GLOBE_PATH_SURFACE_ALTITUDE },
-  ];
-}
-
-function renderTunnelGlobeLinkTooltip(link: TunnelGlobeLink) {
-  const routeNodes = link.routeHosts.map((host, index) => `${index + 1}. ${host.name}`).join(" -> ");
-  const rows = [
-    { label: "类型", value: link.kind === "tunnel" ? "隧道链路" : "转发链" },
-    { label: "状态", value: link.statusText },
-    { label: "延迟", value: link.latencyText },
-    { label: "链路", value: link.routeText },
-    { label: "节点", value: routeNodes },
-  ];
-  return `
-    <div style="min-width:280px;max-width:360px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(8,13,24,.94);box-shadow:0 18px 44px rgba(0,0,0,.42);backdrop-filter:blur(10px);color:#f8fafc;padding:12px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
-        <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:700;">${escapeTooltipHtml(link.name)}</div>
-        <div style="display:flex;align-items:center;gap:6px;color:#cbd5e1;font-size:12px;">
-          <span style="width:8px;height:8px;border-radius:999px;background:${link.color};box-shadow:0 0 14px ${link.glowColor};"></span>
-          ${escapeTooltipHtml(link.kind === "tunnel" ? "隧道" : "转发链")}
-        </div>
-      </div>
-      ${rows.map((row) => `
-        <div style="display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:start;margin-top:6px;font-size:12px;line-height:1.45;">
-          <span style="color:#94a3b8;">${escapeTooltipHtml(row.label)}</span>
-          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;color:#e2e8f0;">${escapeTooltipHtml(row.value)}</span>
-        </div>
-      `).join("")}
-      <div style="margin-top:10px;color:#93c5fd;font-size:12px;">点击编辑</div>
-    </div>
-  `;
-}
-
-function renderTunnelGlobeHostTooltip(point: TunnelGlobeHostPoint) {
-  return `
-    <div style="min-width:220px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(8,13,24,.94);box-shadow:0 18px 44px rgba(0,0,0,.42);color:#f8fafc;padding:10px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-      <div style="font-size:13px;font-weight:700;">${escapeTooltipHtml(point.name)}</div>
-      <div style="margin-top:6px;color:#cbd5e1;font-size:12px;">${escapeTooltipHtml(point.regionText || "地区获取中")}</div>
-    </div>
-  `;
-}
-
-function buildTunnelGlobeDataKey(
-  tunnels: any[],
-  chainGroups: any[],
-  hosts: any[],
-  isTunnelSupported: (tunnel: any) => boolean,
-  tunnelAvailabilityById: Map<number, LinkAvailabilityResult>,
-  groupAvailabilityById: Map<number, LinkAvailabilityResult>,
-) {
-  const hostParts = (hosts || [])
-    .map((host: any) => [
-      Number(host?.id || 0),
-      host?.name || "",
-      host?.ip || "",
-      host?.geoLatitudeMicro ?? "",
-      host?.geoLongitudeMicro ?? "",
-      host?.geoCountryCode || "",
-      host?.geoCountryName || "",
-      host?.geoRegion || "",
-    ].join(":"))
-    .sort();
-  const tunnelParts = (tunnels || [])
-    .map((tunnel: any) => [
-      Number(tunnel?.id || 0),
-      tunnel?.name || "",
-      tunnel?.mode || "",
-      Number(!!isTunnelSupported(tunnel)),
-      tunnelAvailabilityById.get(Number(tunnel?.id || 0))?.status || "",
-      Number(!!tunnel?.isEnabled),
-      getTunnelHopIds(tunnel).join(">"),
-    ].join(":"))
-    .sort();
-  const chainParts = (chainGroups || [])
-    .map((group: any) => [
-      Number(group?.id || 0),
-      group?.name || "",
-      groupAvailabilityById.get(Number(group?.id || 0))?.status || "",
-      Number(!!group?.isEnabled),
-      [...(group?.members || [])]
-        .sort((a: any, b: any) => Number(a?.priority || 0) - Number(b?.priority || 0))
-        .map((member: any) => `${Number(member?.hostId || 0)}:${Number(member?.priority || 0)}`)
-        .join(">"),
-    ].join(":"))
-    .sort();
-  return [hostParts.join("|"), tunnelParts.join("|"), chainParts.join("|")].join("\n");
 }
 
 const tunnelModeLabels: Record<TunnelForm["mode"], string> = {
@@ -880,397 +640,6 @@ function getStoredChainViewMode(): TunnelViewMode {
 
 function storeChainViewMode(viewMode: TunnelViewMode) {
   writeStoredViewMode(CHAIN_VIEW_MODE_STORAGE_KEY, viewMode);
-}
-
-
-function TunnelWorldGlobe({
-  tunnels,
-  chainGroups,
-  hosts,
-  isTunnelSupported,
-  tunnelAvailabilityById,
-  groupAvailabilityById,
-  onEditTunnel,
-  onEditChain,
-}: {
-  tunnels: any[];
-  chainGroups: any[];
-  hosts: any[];
-  isTunnelSupported: (tunnel: any) => boolean;
-  tunnelAvailabilityById: Map<number, LinkAvailabilityResult>;
-  groupAvailabilityById: Map<number, LinkAvailabilityResult>;
-  onEditTunnel: (tunnel: any) => void;
-  onEditChain: (group: any) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const globeRef = useRef<GlobeMethods | undefined>(undefined);
-  const [globeReady, setGlobeReady] = useState(false);
-  const [size, setSize] = useState({ width: 1400, height: 780 });
-  const [hoveredLink, setHoveredLink] = useState<TunnelGlobeLink | null>(null);
-  const [hoveredPoint, setHoveredPoint] = useState<TunnelGlobeHostPoint | null>(null);
-  const [countries, setCountries] = useState<TunnelGlobeCountryFeature[]>([]);
-  const globeDataKey = useMemo(
-    () => buildTunnelGlobeDataKey(tunnels, chainGroups, hosts, isTunnelSupported, tunnelAvailabilityById, groupAvailabilityById),
-    [chainGroups, groupAvailabilityById, hosts, isTunnelSupported, tunnelAvailabilityById, tunnels]
-  );
-
-  const globeAvailabilityStyle = (state: LinkAvailabilityResult | undefined, enabled: boolean) => {
-    if (!enabled || state?.status === "disabled") {
-      return { statusText: "已停用", color: "#94a3b8", trackColor: "#475569", glowColor: "rgba(148,163,184,.6)" };
-    }
-    if (state?.status === "available") {
-      return { statusText: "可用", color: "#4ade80", trackColor: "#15803d", glowColor: "rgba(74,222,128,.85)" };
-    }
-    if (state?.status === "degraded" || state?.status === "pending") {
-      return { statusText: state.status === "degraded" ? "部分可用" : "检测中", color: "#fbbf24", trackColor: "#92400e", glowColor: "rgba(251,191,36,.78)" };
-    }
-    return { statusText: "不可用", color: "#fb7185", trackColor: "#9f1239", glowColor: "rgba(251,113,133,.76)" };
-  };
-
-  const globeData = useMemo(() => {
-    const hostById = new Map<number, any>((hosts || []).map((host: any) => [Number(host.id), host]));
-    const hostPointById = new Map<number, TunnelGlobeHostPoint>();
-    const pointForHostId = (hostId: number) => {
-      if (hostPointById.has(hostId)) return hostPointById.get(hostId) || null;
-      const point = createTunnelGlobeHostPoint(hostById.get(hostId));
-      if (point) hostPointById.set(hostId, point);
-      return point;
-    };
-
-    const links: TunnelGlobeLink[] = [];
-    let skipped = 0;
-
-    (tunnels || []).forEach((tunnel: any) => {
-      const routeHosts = getTunnelHopIds(tunnel)
-        .map((hostId: number) => pointForHostId(Number(hostId)))
-        .filter(Boolean) as TunnelGlobeHostPoint[];
-      if (routeHosts.length < 2) {
-        skipped += 1;
-        return;
-      }
-      const supported = isTunnelSupported(tunnel);
-      const enabled = supported && !!tunnel.isEnabled;
-      const style = globeAvailabilityStyle(tunnelAvailabilityById.get(Number(tunnel.id)), enabled);
-      links.push({
-        id: `tunnel:${tunnel.id}`,
-        kind: "tunnel",
-        item: tunnel,
-        name: String(tunnel.name || `隧道 #${tunnel.id}`),
-        routeText: getTunnelRouteText(tunnel, hosts),
-        routeHosts,
-        statusText: !supported ? "协议未启用" : style.statusText,
-        latencyText: formatGlobeLatency(tunnelDisplayLatencyMs(tunnel), tunnelLatencyIsTimeout(tunnel)),
-        color: style.color,
-        trackColor: style.trackColor,
-        glowColor: style.glowColor,
-      });
-    });
-
-    (chainGroups || []).forEach((group: any) => {
-      const members = [...(group.members || [])].sort((a: any, b: any) => Number(a.priority) - Number(b.priority));
-      const routeHosts = members
-        .map((member: any) => pointForHostId(Number(member.hostId || 0)))
-        .filter(Boolean) as TunnelGlobeHostPoint[];
-      if (routeHosts.length < 2) {
-        skipped += 1;
-        return;
-      }
-      const enabled = !!group.isEnabled;
-      const style = globeAvailabilityStyle(groupAvailabilityById.get(Number(group.id)), enabled);
-      links.push({
-        id: `chain:${group.id}`,
-        kind: "chain",
-        item: group,
-        name: String(group.name || `转发链 #${group.id}`),
-        routeText: routeHosts.map((host) => host.name).join(" -> "),
-        routeHosts,
-        statusText: style.statusText,
-        latencyText: formatGlobeLatency(group.latestLatencyMs, group.latestLatencyIsTimeout),
-        color: style.color,
-        trackColor: style.trackColor,
-        glowColor: style.glowColor,
-      });
-    });
-
-    const rawSegments = links.flatMap((link) => link.routeHosts.slice(0, -1).map((start, index) => ({
-      link,
-      segmentIndex: index,
-      start,
-      end: link.routeHosts[index + 1],
-      layerKey: tunnelGlobeArcLayerKey(start, link.routeHosts[index + 1]),
-    })));
-    const totalLayersByKey = rawSegments.reduce((acc, segment) => {
-      acc.set(segment.layerKey, (acc.get(segment.layerKey) || 0) + 1);
-      return acc;
-    }, new Map<string, number>());
-    const usedLayersByKey = new Map<string, number>();
-    const routePaths = rawSegments.map((segment) => {
-      const { link, start, end, segmentIndex, layerKey } = segment;
-      const layerIndex = usedLayersByKey.get(layerKey) || 0;
-      usedLayersByKey.set(layerKey, layerIndex + 1);
-      const layerCount = totalLayersByKey.get(layerKey) || 1;
-      const path: TunnelGlobePath = {
-        link,
-        segmentIndex,
-        layerIndex,
-        layerCount,
-        startLat: start.lat,
-        startLng: start.lng,
-        endLat: end.lat,
-        endLng: end.lng,
-        altitude: TUNNEL_GLOBE_PATH_MIN_ALTITUDE,
-        coords: [],
-      };
-      const distance = globeDistanceDegrees(path);
-      const baseAltitude = Math.max(TUNNEL_GLOBE_PATH_MIN_ALTITUDE, Math.min(TUNNEL_GLOBE_PATH_MAX_ALTITUDE, 0.032 + distance / 2300));
-      path.altitude = baseAltitude + Math.min(TUNNEL_GLOBE_PATH_LAYER_ALTITUDE_MAX, Math.abs(layerIndex - (layerCount - 1) / 2) * TUNNEL_GLOBE_PATH_LAYER_ALTITUDE_STEP);
-      path.coords = createTunnelGlobePathCoords(path);
-      return path;
-    });
-
-    return {
-      links,
-      paths: routePaths,
-      hostPoints: Array.from(hostPointById.values()),
-      skipped,
-    };
-  }, [globeDataKey]);
-
-  const hostCountryCodes = useMemo(() => {
-    const codes = new Set<string>();
-    globeData.hostPoints.forEach((point) => {
-      const code = hostCountryCode(point.host);
-      if (code) codes.add(code);
-    });
-    return codes;
-  }, [globeData.hostPoints]);
-  const latestLinkById = useMemo(() => {
-    const tunnelById = new Map<number, any>((tunnels || []).map((tunnel: any) => [Number(tunnel.id), tunnel]));
-    const chainById = new Map<number, any>((chainGroups || []).map((group: any) => [Number(group.id), group]));
-    const map = new Map<string, TunnelGlobeLink>();
-    globeData.links.forEach((link) => {
-      if (link.kind === "tunnel") {
-        const id = Number(link.item?.id || String(link.id).split(":")[1] || 0);
-        const tunnel = tunnelById.get(id);
-        if (!tunnel) {
-          map.set(link.id, link);
-          return;
-        }
-        const supported = isTunnelSupported(tunnel);
-        const enabled = supported && !!tunnel.isEnabled;
-        const style = globeAvailabilityStyle(tunnelAvailabilityById.get(Number(tunnel.id)), enabled);
-        map.set(link.id, {
-          ...link,
-          item: tunnel,
-          name: String(tunnel.name || `隧道 #${tunnel.id}`),
-          routeText: getTunnelRouteText(tunnel, hosts),
-          statusText: !supported ? "协议未启用" : style.statusText,
-          latencyText: formatGlobeLatency(tunnelDisplayLatencyMs(tunnel), tunnelLatencyIsTimeout(tunnel)),
-          color: style.color,
-          trackColor: style.trackColor,
-          glowColor: style.glowColor,
-        });
-        return;
-      }
-      const id = Number(link.item?.id || String(link.id).split(":")[1] || 0);
-      const group = chainById.get(id);
-      if (!group) {
-        map.set(link.id, link);
-        return;
-      }
-      const enabled = !!group.isEnabled;
-      const style = globeAvailabilityStyle(groupAvailabilityById.get(Number(group.id)), enabled);
-      map.set(link.id, {
-        ...link,
-        item: group,
-        name: String(group.name || `转发链 #${group.id}`),
-        statusText: style.statusText,
-        latencyText: formatGlobeLatency(group.latestLatencyMs, group.latestLatencyIsTimeout),
-        color: style.color,
-        trackColor: style.trackColor,
-        glowColor: style.glowColor,
-      });
-    });
-    return map;
-  }, [chainGroups, globeData.links, groupAvailabilityById, isTunnelSupported, tunnelAvailabilityById, tunnels]);
-  const latestGlobeLink = (link: TunnelGlobeLink) => latestLinkById.get(link.id) || link;
-
-  useEffect(() => {
-    if (!globeReady) return;
-    let cancelled = false;
-    fetch(TUNNEL_GLOBE_COUNTRIES_URL)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        if (cancelled || !Array.isArray(data?.features)) return;
-        setCountries(data.features as TunnelGlobeCountryFeature[]);
-      })
-      .catch(() => {
-        if (!cancelled) setCountries([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [globeReady]);
-
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const updateSize = () => {
-      const rect = element.getBoundingClientRect();
-      const viewportHeight = typeof window === "undefined" ? 900 : window.innerHeight;
-      const width = Math.max(900, Math.round(rect.width));
-      setSize({
-        width,
-        height: Math.max(720, Math.min(980, Math.round(Math.max(viewportHeight - 240, width * 0.52)))),
-      });
-    };
-    updateSize();
-    const observer = new ResizeObserver(updateSize);
-    observer.observe(element);
-    window.addEventListener("resize", updateSize);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", updateSize);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!globeReady || !globeRef.current) return;
-    const globe = globeRef.current;
-    const controls = globe.controls();
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.36;
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.enablePan = false;
-    controls.rotateSpeed = 0.58;
-    controls.zoomSpeed = 0.85;
-    controls.minDistance = 105;
-    controls.maxDistance = 500;
-    globe.pointOfView({ lat: 18, lng: 108, altitude: 1.24 }, 0);
-  }, [globeReady]);
-
-  useEffect(() => {
-    const controls = globeRef.current?.controls();
-    if (!controls) return;
-    controls.autoRotate = !(hoveredLink || hoveredPoint);
-  }, [hoveredLink, hoveredPoint]);
-
-  const handleLinkEdit = (link: TunnelGlobeLink) => {
-    if (link.kind === "tunnel") onEditTunnel(link.item);
-    else onEditChain(link.item);
-  };
-
-  return (
-    <>
-      <div className="hidden overflow-hidden rounded-md border border-border/40 bg-[#030712] shadow-sm md:block">
-        <div
-          ref={containerRef}
-          className="relative min-h-[720px] w-full overflow-hidden"
-          style={{ height: size.height }}
-        >
-          <Suspense
-            fallback={
-              <div className="absolute inset-0 flex items-center justify-center bg-[#030712] text-sm text-white/70">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                正在加载链路地球
-              </div>
-            }
-          >
-            <ReactGlobe
-              ref={globeRef}
-              width={size.width}
-              height={size.height}
-              backgroundColor="rgba(3,7,18,1)"
-              globeImageUrl={TUNNEL_GLOBE_EARTH_IMAGE_URL}
-              showAtmosphere
-              atmosphereColor="#64748b"
-              atmosphereAltitude={0.22}
-              showGraticules={false}
-              globeCurvatureResolution={4}
-              polygonsData={countries}
-              polygonGeoJsonGeometry="geometry"
-              polygonAltitude={(country) => countryFeatureHasCode(country as TunnelGlobeCountryFeature, hostCountryCodes) ? 0.014 : 0.004}
-              polygonCapColor={(country) => countryFeatureHasCode(country as TunnelGlobeCountryFeature, hostCountryCodes) ? "rgba(20,184,166,.36)" : "rgba(15,23,42,.05)"}
-              polygonSideColor={(country) => countryFeatureHasCode(country as TunnelGlobeCountryFeature, hostCountryCodes) ? "rgba(20,184,166,.22)" : "rgba(2,6,23,.14)"}
-              polygonStrokeColor={(country) => countryFeatureHasCode(country as TunnelGlobeCountryFeature, hostCountryCodes) ? "rgba(94,234,212,.86)" : "rgba(148,163,184,.22)"}
-              polygonCapCurvatureResolution={4}
-              polygonsTransitionDuration={0}
-              pointsData={globeData.hostPoints}
-              pointLat="lat"
-              pointLng="lng"
-              pointAltitude={0.035}
-              pointRadius={0.28}
-              pointResolution={24}
-              pointColor={() => "#e0f2fe"}
-              pointLabel={(point) => renderTunnelGlobeHostTooltip(point as TunnelGlobeHostPoint)}
-              onPointHover={(point) => {
-                setHoveredPoint(point as TunnelGlobeHostPoint | null);
-                if (!point) setHoveredLink(null);
-              }}
-              pathsData={globeData.paths}
-              pathPoints="coords"
-              pathPointLat="lat"
-              pathPointLng="lng"
-              pathPointAlt="alt"
-              pathResolution={4}
-              pathColor={(path: object) => {
-                const item = path as TunnelGlobePath;
-                const link = latestGlobeLink(item.link);
-                return hoveredLink?.id === link.id ? link.color : link.trackColor;
-              }}
-              pathStroke={(path: object) => {
-                const item = path as TunnelGlobePath;
-                const hovered = hoveredLink?.id === item.link.id;
-                return hovered ? 3.05 : 2.1;
-              }}
-              pathTransitionDuration={0}
-              pathLabel={(path) => renderTunnelGlobeLinkTooltip(latestGlobeLink((path as TunnelGlobePath).link))}
-              onPathHover={(path) => setHoveredLink(path ? latestGlobeLink((path as TunnelGlobePath).link) : null)}
-              onPathClick={(path) => {
-                const link = path ? latestGlobeLink((path as TunnelGlobePath).link) : null;
-                if (link) handleLinkEdit(link);
-              }}
-              showPointerCursor={(objectType) => objectType === "path" || objectType === "point"}
-              enablePointerInteraction
-              onGlobeReady={() => setGlobeReady(true)}
-            />
-          </Suspense>
-          <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-white/10 bg-black/35 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-md">
-            <div className="font-medium">全球链路地球</div>
-            <div className="mt-1 text-white/70">
-              隧道 {tunnels.length} 条 · 转发链 {chainGroups.length} 条 · 已定位 {globeData.links.length} 条
-            </div>
-            {globeData.skipped > 0 && (
-              <div className="mt-1 text-[color-mix(in_srgb,var(--fx-warn)_85%,transparent)]">待定位 {globeData.skipped} 条</div>
-            )}
-          </div>
-          <div className="pointer-events-none absolute right-4 top-4 flex flex-col gap-2 text-xs text-white">
-            <div className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-black/35 px-3 py-2 shadow-lg backdrop-blur-md">
-              <span className="h-2 w-6 rounded-full bg-[#4ade80]" />
-              运行中隧道
-            </div>
-            <div className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-black/35 px-3 py-2 shadow-lg backdrop-blur-md">
-              <span className="h-2 w-6 rounded-full bg-[#14b8a6]" />
-              转发链
-            </div>
-          </div>
-          {globeData.links.length === 0 && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center">
-              <div className="rounded-md border border-white/10 bg-black/35 px-4 py-3 text-sm text-white/80 shadow-lg backdrop-blur-md">
-                暂无可定位链路
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      <Card className="border-border/40 bg-card/60 md:hidden">
-        <CardContent className="p-6 text-center text-sm text-muted-foreground">
-          3D 地球视图仅支持桌面端。
-        </CardContent>
-      </Card>
-    </>
-  );
 }
 
 /*
@@ -1438,522 +807,13 @@ function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boo
     </div>
   );
 }
-function TunnelSelfTestDialog({
-  tunnelId,
-  tunnelName,
-  hosts,
-  entryGroups,
-  open,
-  onOpenChange,
-  extraTabs,
-  actions,
-}: {
-  tunnelId: number;
-  tunnelName: string;
-  hosts?: any[];
-  entryGroups?: any[];
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  /** 并进来的页（延迟记录、连接监控）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
-  extraTabs?: DiagnoseExtraTab[];
-  actions?: ReactNode;
-}) {
-  const utils = trpc.useUtils();
-  const tunnelQuery = trpc.tunnels.getById.useQuery({ id: tunnelId }, {
-    enabled: open,
-    refetchInterval: pollingInterval("interactive", open),
-    refetchOnWindowFocus: false,
-  });
-  const { data: tunnel } = tunnelQuery;
-  const [optimisticTesting, setOptimisticTesting] = useState(false);
-  const [startedLastTestAt, setStartedLastTestAt] = useState<string | null>(null);
-  const [sawServerTesting, setSawServerTesting] = useState(false);
-  const [postMutationQueryBaseline, setPostMutationQueryBaseline] = useState<number | null>(null);
-  const manualTestRef = useRef(false);
-  const manualTestBaselineAtRef = useRef("");
-  const manualTestResultObservedRef = useRef(false);
-  const tunnelQueryUpdatedAtRef = useRef(tunnelQuery.dataUpdatedAt);
-  useEffect(() => {
-    tunnelQueryUpdatedAtRef.current = tunnelQuery.dataUpdatedAt;
-  }, [tunnelQuery.dataUpdatedAt]);
-  const testMutation = trpc.tunnels.test.useMutation({
-    onSuccess: async () => {
-      setPostMutationQueryBaseline(tunnelQueryUpdatedAtRef.current);
-      await utils.tunnels.getById.invalidate({ id: tunnelId });
-      void Promise.all([
-        utils.tunnels.list.invalidate(),
-        utils.tunnels.options.invalidate(),
-        utils.tunnels.listPage.invalidate(),
-        utils.tunnels.mapItems.invalidate(),
-      ]).catch(() => undefined);
-    },
-    onError: (e) => {
-      setOptimisticTesting(false);
-      setStartedLastTestAt(null);
-      setSawServerTesting(false);
-      setPostMutationQueryBaseline(null);
-      manualTestRef.current = false;
-      manualTestBaselineAtRef.current = "";
-      manualTestResultObservedRef.current = false;
-      toast.error(e.message || "诊断没发出去");
-    },
-  });
-
-  const status = tunnel?.lastTestStatus as string | undefined;
-  const lastTestAt = tunnel?.lastTestAt ? String(tunnel.lastTestAt) : "";
-  const isServerTesting = status === "pending" || status === "running";
-  const isTesting = testMutation.isPending || optimisticTesting || (manualTestRef.current && isServerTesting);
-  const isSuccess = status === "success";
-  const isFailed = status === "failed";
-  const latencyMs = tunnel?.lastLatencyMs;
-  const displayingPreviousResult = isServerTesting && !manualTestRef.current;
-  const waitingForManualResult = manualTestRef.current && !manualTestResultObservedRef.current;
-  const displaySuccess = displayingPreviousResult
-    ? typeof latencyMs === "number" && Number.isFinite(latencyMs)
-    : isSuccess;
-  const lastFailureToastKey = useRef("");
-  const parsedMessage = useMemo(
-    () => parseLinkTestMessage(displayingPreviousResult || waitingForManualResult ? null : tunnel?.lastTestMessage),
-    [displayingPreviousResult, tunnel?.lastTestMessage, waitingForManualResult],
-  );
-  const hasPendingDetails = hasPendingLinkTestDetails(parsedMessage);
-  const displayTesting = isTesting || hasPendingDetails;
-  const linkTestNodeData = useMemo(() => {
-    const meta: Record<string, any> = {};
-    const nodeTooltips: Record<string, ReactNode> = {};
-    const fullHostById = new Map<number, any>((hosts || []).map((host: any) => [Number(host.id), host]));
-    const tunnelHostById = new Map<number, any>();
-    [
-      ...(tunnel?.hopHosts || []),
-      tunnel?.entryHost,
-      tunnel?.exitHost,
-      ...(tunnel?.loadBalanceExitHosts || []),
-      ...(Array.isArray(tunnel?.loadBalanceExits) ? tunnel.loadBalanceExits.map((exit: any) => exit?.host) : []),
-    ].forEach((host: any) => {
-      const id = Number(host?.id || 0);
-      if (id > 0) tunnelHostById.set(id, host);
-    });
-    const hopIds = getTunnelHopIds(tunnel);
-    const hostForId = (hostId: number) => fullHostById.get(Number(hostId)) || tunnelHostById.get(Number(hostId));
-    const entryGroup = (entryGroups || []).find((group: any) => Number(group?.id || 0) === Number(tunnel?.entryGroupId || 0));
-    const entryGroupMembers = enabledHostGroupMembers(entryGroup);
-    const entryGroupMemberByHostId = new Map<number, any>();
-    entryGroupMembers.forEach((member: any) => {
-      const hostId = Number(member?.hostId || 0);
-      if (hostId > 0) entryGroupMemberByHostId.set(hostId, member);
-    });
-    const labelForHostId = (hostId: number) => {
-      const host = hostForId(hostId);
-      const member = entryGroupMemberByHostId.get(Number(hostId));
-      return hostDisplayName(host)
-        || String(member?.name || member?.remark || "").trim()
-        || tunnelHopHostName(tunnel, hostId, hosts)
-        || `主机 #${hostId}`;
-    };
-    const exitDisplayAddressFor = (hostId: number, connectHost?: string | null) => {
-      const configured = String(connectHost || "").trim();
-      if (configured) return configured;
-      return hostAddressCandidates(hostForId(hostId)).join(" / ");
-    };
-    const putNodeMetaAlias = (key: unknown, nodeMeta: any) => {
-      const text = String(key || "").trim();
-      if (!text) return;
-      meta[text] = nodeMeta;
-      meta[text.toLowerCase()] = nodeMeta;
-    };
-    const addExitNodeMetaForHostId = (hostId: number, connectHost?: string | null, aliases: Array<unknown> = []) => {
-      const host = hostForId(hostId);
-      const label = labelForHostId(hostId);
-      const configuredAddress = String(connectHost || "").trim();
-      addHostNodeMeta(meta, host, [label, configuredAddress, ...aliases]);
-      const baseMeta = meta[hostDisplayName(host)] || meta[String(hostId)] || undefined;
-      if (!baseMeta) return;
-      const addressParts = [
-        configuredAddress,
-        ...String(baseMeta.address || "").split(" / "),
-        ...hostAddressCandidates(host),
-      ].map((value) => String(value || "").trim()).filter(Boolean);
-      const nextMeta = {
-        ...baseMeta,
-        label: label || baseMeta.label,
-        address: Array.from(new Set(addressParts)).join(" / ") || baseMeta.address || null,
-      };
-      [
-        label,
-        hostDisplayName(host),
-        hostId,
-        `主机${hostId}`,
-        `主机 #${hostId}`,
-        configuredAddress,
-        ...hostAddressCandidates(host),
-        ...aliases,
-      ].forEach((alias) => putNodeMetaAlias(alias, nextMeta));
-    };
-    const addNodeMetaForHostId = (hostId: number) => {
-      const host = hostForId(hostId);
-      addHostNodeMeta(meta, host, [
-        labelForHostId(hostId),
-        String(entryGroupMemberByHostId.get(Number(hostId))?.entryAddress || "").trim(),
-        `主机${hostId}`,
-        `主机 #${hostId}`,
-        tunnelHopHostName(tunnel, hostId, hosts),
-        hostDisplayName(host),
-        `主机${hostId}`,
-        `主机 #${hostId}`,
-      ]);
-    };
-    hopIds.forEach((hostId: number) => addNodeMetaForHostId(hostId));
-    entryGroupMembers.forEach((member: any) => {
-      const hostId = Number(member?.hostId || 0);
-      if (hostId > 0) addNodeMetaForHostId(hostId);
-    });
-    const firstHostId = Number(hopIds[0] || 0);
-    const lastHostId = Number(hopIds[hopIds.length - 1] || 0);
-    const hopCount = Math.max(0, hopIds.length - 1);
-    const nodeMetaFor = (host: any, hostId: number) => meta[hostDisplayName(host)] || meta[String(hostId)] || undefined;
-    let plannedSegments: LinkTestPlannedSegment[] = hopIds.slice(0, -1).map((hostId: number, index: number) => {
-      const nextHostId = Number(hopIds[index + 1] || 0);
-      const fromHost = hostForId(Number(hostId));
-      const toHost = hostForId(nextHostId);
-      return {
-        from: labelForHostId(Number(hostId)),
-        to: labelForHostId(nextHostId),
-        fromHostId: Number(hostId) || null,
-        toHostId: nextHostId || null,
-        hopIndex: index,
-        hopCount,
-        fromMeta: nodeMetaFor(fromHost, Number(hostId)),
-        toMeta: nodeMetaFor(toHost, nextHostId),
-      };
-    }).filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);
-    const entryHostIds = Array.from(new Set<number>((
-      entryGroupMembers.length > 0
-        ? entryGroupMembers.map((member: any) => Number(member?.hostId || 0))
-        : [firstHostId]
-    ).filter((hostId: number) => Number.isFinite(hostId) && hostId > 0)));
-    if (entryHostIds.length > 1) {
-      const restHopIds = hopIds.slice(1).filter((hostId: number) => Number.isFinite(Number(hostId)) && Number(hostId) > 0);
-      const nextHostId = Number(restHopIds[0] || lastHostId || tunnel?.exitHostId || 0);
-      const nextHost = hostForId(nextHostId);
-      const nextLabel = labelForHostId(nextHostId);
-      const entrySegments: LinkTestPlannedSegment[] = entryHostIds.map((entryHostId: number) => {
-        const entryHost = hostForId(entryHostId);
-        return {
-          from: labelForHostId(entryHostId),
-          to: nextLabel,
-          fromHostId: entryHostId || null,
-          toHostId: nextHostId || null,
-          hopIndex: 0,
-          hopCount,
-          fromMeta: nodeMetaFor(entryHost, entryHostId),
-          toMeta: nodeMetaFor(nextHost, nextHostId),
-        };
-      });
-      const restSegments: LinkTestPlannedSegment[] = restHopIds.slice(0, -1).map((hostId: number, index: number) => {
-        const nextRestHostId = Number(restHopIds[index + 1] || 0);
-        const fromHost = hostForId(Number(hostId));
-        const toHost = hostForId(nextRestHostId);
-        return {
-          from: labelForHostId(Number(hostId)),
-          to: labelForHostId(nextRestHostId),
-          fromHostId: Number(hostId) || null,
-          toHostId: nextRestHostId || null,
-          hopIndex: index + 1,
-          hopCount,
-          fromMeta: nodeMetaFor(fromHost, Number(hostId)),
-          toMeta: nodeMetaFor(toHost, nextRestHostId),
-        };
-      });
-      plannedSegments = [...entrySegments, ...restSegments].filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);
-    }
-    const extraExits = Array.isArray(tunnel?.loadBalanceExits)
-      ? tunnel.loadBalanceExits
-        .filter((exit: any) => Number(exit?.hostId || 0) > 0)
-        .sort((a: any, b: any) => Number(a?.seq || 0) - Number(b?.seq || 0))
-      : [];
-    const primaryExitLabel = lastHostId ? labelForHostId(lastHostId) : "";
-    if (primaryExitLabel && extraExits.length > 0) {
-      const entryReferenceLabel = entryHostIds.length > 1
-        ? "入口组"
-        : firstHostId
-          ? labelForHostId(firstHostId)
-          : "入口";
-      const exitRows = [
-        {
-          hostId: lastHostId,
-          label: primaryExitLabel,
-          role: "主出口",
-          connectHost: String(tunnel?.connectHost || "").trim(),
-          listenPort: Number(tunnel?.listenPort || 0) || null,
-        },
-        ...extraExits.map((exit: any, index: number) => {
-          const hostId = Number(exit?.hostId || 0);
-          return {
-            hostId,
-            label: labelForHostId(hostId),
-            role: `备用出口 ${index + 1}`,
-            connectHost: String(exit?.connectHost || "").trim(),
-            listenPort: Number(exit?.listenPort || 0) || null,
-          };
-        }),
-      ].filter((row) => row.hostId > 0);
-      exitRows.forEach((row) => addExitNodeMetaForHostId(row.hostId, row.connectHost, [row.label, row.role]));
-      const exitRowByLabel = new Map(exitRows.map((row) => [row.label, row]));
-      plannedSegments = plannedSegments.map((segment) => {
-        const fromRow = exitRowByLabel.get(segment.from);
-        const toRow = exitRowByLabel.get(segment.to);
-        if (!fromRow && !toRow) return segment;
-        return {
-          ...segment,
-          fromMeta: fromRow ? (meta[fromRow.label] || segment.fromMeta) : segment.fromMeta,
-          toMeta: toRow ? (meta[toRow.label] || segment.toMeta) : segment.toMeta,
-        };
-      });
-      const detailByTarget = new Map<string, any>();
-      const detailByHostId = new Map<number, any>();
-      (parsedMessage.details || []).forEach((detail: any, index: number) => {
-        const route = String(detail?.routeLabel || detail?.hopLabel || "").trim();
-        const match = route.match(/->\s*(.+)$/);
-        const target = String(match?.[1] || "").trim();
-        if (target) detailByTarget.set(target.toLowerCase(), { detail, index });
-        const targetHostId = Number(getLinkTestDetailEndpointIds(detail).toHostId || 0);
-        if (targetHostId > 0) detailByHostId.set(targetHostId, { detail, index });
-      });
-      const latestSeries = Array.isArray(tunnel?.latestLatencySeries) ? tunnel.latestLatencySeries : [];
-      const latestSeriesByKey = new Map<string, any>();
-      latestSeries.forEach((item: any) => {
-        const key = String(item?.seriesKey || "").trim().toLowerCase();
-        if (key) latestSeriesByKey.set(key, item);
-      });
-      const detailForExitRow = (row: { hostId: number; label: string }) => (
-        detailByHostId.get(row.hostId)
-        || detailByTarget.get(row.label.toLowerCase())
-        || null
-      );
-      const latestForExitRow = (index: number) => (
-        latestSeriesByKey.get(index === 0 ? "primary" : `exit-${index + 1}`)
-        || null
-      );
-      const tooltip = (
-        <div className="min-w-[240px] space-y-2">
-          <div>
-            <div className="text-sm font-semibold">出口组</div>
-            <div className="text-[11px] text-muted-foreground">主图仅展示主出口，备用出口在此查看。相对入口：{entryReferenceLabel}</div>
-          </div>
-          <div className="space-y-1.5">
-            {exitRows.map((row, index) => {
-              const detailRecord = detailForExitRow(row);
-              const detail = detailRecord?.detail;
-              const latest = latestForExitRow(index);
-              const latestLatency = typeof latest?.latencyMs === "number" && Number.isFinite(latest.latencyMs) ? Number(latest.latencyMs) : null;
-              const latestTimeout = latest?.isTimeout === true;
-              const pending = detail?.pending === true || displayTesting;
-              const failed = !pending && (detail ? detail.success === false : latestTimeout);
-              const success = pending || !failed;
-              const latency = typeof detail?.latencyMs === "number" && Number.isFinite(detail.latencyMs)
-                ? `${detail.latencyMs} ms`
-                : pending
-                  ? "诊断中"
-                  : detail
-                    ? "失败"
-                    : latestLatency !== null
-                      ? `${latestLatency}ms`
-                      : latestTimeout
-                        ? "失败"
-                        : "--";
-              const displayAddress = exitDisplayAddressFor(row.hostId, row.connectHost);
-              const addressText = [displayAddress, row.listenPort ? `:${row.listenPort}` : ""].filter(Boolean).join("") || "默认连接地址";
-              return (
-                <div key={`${row.role}-${row.hostId}`} className="rounded border border-border/60 bg-background/70 px-2 py-1.5">
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <span className="min-w-0 truncate font-medium">{row.label}</span>
-                    <span className={success ? "shrink-0 text-[var(--fx-healthy-text)]" : "shrink-0 text-destructive"}>{latency}</span>
-                  </div>
-                  <div className="mt-1 flex min-w-0 items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                    <span>{row.role}</span>
-                    <span className="min-w-0 truncate" title={addressText}>{addressText}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      );
-      [
-        primaryExitLabel,
-        primaryExitLabel.toLowerCase(),
-        meta[primaryExitLabel]?.label,
-        meta[primaryExitLabel]?.label?.toLowerCase(),
-      ].filter(Boolean).forEach((key: any) => {
-        nodeTooltips[String(key)] = tooltip;
-      });
-    }
-    if (entryHostIds.length <= 1 && hopIds.length === 2 && tunnel?.loadBalanceEnabled && extraExits.length > 0) {
-      const entryHost = hostForId(firstHostId);
-      const entryLabel = hostDisplayName(entryHost) || (firstHostId ? tunnelHopHostName(tunnel, firstHostId, hosts) : tunnelName);
-      const branchGroupKey = `tunnel-${tunnel?.id || tunnelName}-load-balance`;
-      const primaryExitHost = hostForId(lastHostId);
-      const branchSegments: LinkTestPlannedSegment[] = [{
-        from: entryLabel,
-        to: hostDisplayName(primaryExitHost) || (lastHostId ? tunnelHopHostName(tunnel, lastHostId, hosts) : tunnelName),
-        fromHostId: firstHostId || null,
-        toHostId: lastHostId || null,
-        hopIndex: 0,
-        hopCount: 1,
-        fromMeta: meta[hostDisplayName(entryHost)] || meta[String(firstHostId)] || undefined,
-        toMeta: meta[hostDisplayName(primaryExitHost)] || meta[String(lastHostId)] || undefined,
-        groupKey: branchGroupKey,
-        groupLabel: "多出口负载均衡",
-      }];
-      for (const exit of extraExits) {
-        const exitHostId = Number(exit?.hostId || 0);
-        const exitHost = hostForId(exitHostId);
-        addExitNodeMetaForHostId(exitHostId, String(exit?.connectHost || "").trim(), [hostDisplayName(exitHost), `主机${exitHostId}`, `主机 #${exitHostId}`]);
-        branchSegments.push({
-          from: entryLabel,
-          to: hostDisplayName(exitHost) || `主机${exitHostId}`,
-          fromHostId: firstHostId || null,
-          toHostId: exitHostId || null,
-          hopIndex: 0,
-          hopCount: 1,
-          fromMeta: meta[hostDisplayName(entryHost)] || meta[String(firstHostId)] || undefined,
-          toMeta: meta[hostDisplayName(exitHost)] || meta[String(exitHostId)] || undefined,
-          groupKey: branchGroupKey,
-          groupLabel: "多出口负载均衡",
-        });
-      }
-      plannedSegments = branchSegments.slice(0, 1).filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);
-    }
-    return {
-      nodeMeta: meta,
-      nodeTooltips,
-      sourceLabel: firstHostId ? labelForHostId(firstHostId) : tunnelName,
-      targetLabel: lastHostId ? labelForHostId(lastHostId) : tunnelName,
-      plannedSegments,
-    };
-  }, [displayTesting, entryGroups, hosts, parsedMessage.details, tunnel, tunnelName]);
-
-  useEffect(() => {
-    setOptimisticTesting(false);
-    setStartedLastTestAt(null);
-    setSawServerTesting(false);
-    setPostMutationQueryBaseline(null);
-    manualTestRef.current = false;
-    manualTestBaselineAtRef.current = "";
-    manualTestResultObservedRef.current = false;
-  }, [open, tunnelId]);
-
-  useEffect(() => {
-    if (isServerTesting && manualTestRef.current) {
-      manualTestResultObservedRef.current = true;
-      setSawServerTesting(true);
-    }
-  }, [isServerTesting]);
-
-  useEffect(() => {
-    const hasNewTestTimestamp = startedLastTestAt === "__none__"
-      ? !!lastTestAt
-      : !!lastTestAt && lastTestAt !== startedLastTestAt;
-    const hasPostMutationQuerySnapshot = hasQuerySnapshotAfter(
-      postMutationQueryBaseline,
-      tunnelQuery.dataUpdatedAt,
-    );
-    if (manualTestRef.current && (isServerTesting || hasNewTestTimestamp || hasPostMutationQuerySnapshot)) {
-      manualTestResultObservedRef.current = true;
-    }
-    if (!optimisticTesting || isServerTesting) return;
-    if (sawServerTesting || hasNewTestTimestamp || hasPostMutationQuerySnapshot) {
-      setOptimisticTesting(false);
-      setStartedLastTestAt(null);
-      setSawServerTesting(false);
-      setPostMutationQueryBaseline(null);
-    }
-  }, [
-    isServerTesting,
-    lastTestAt,
-    optimisticTesting,
-    postMutationQueryBaseline,
-    sawServerTesting,
-    startedLastTestAt,
-    tunnelQuery.dataUpdatedAt,
-  ]);
-
-  useEffect(() => {
-    if (!open) {
-      lastFailureToastKey.current = "";
-      return;
-    }
-    const message = parsedMessage.message.trim();
-    const messageLooksSuccessful = /测试成功|检测成功/.test(message) && !/失败|超时|不可达|异常/.test(message);
-    const baselineAt = manualTestBaselineAtRef.current;
-    const hasFreshResult = manualTestResultObservedRef.current
-      || !baselineAt
-      || (tunnel?.lastTestAt && String(tunnel.lastTestAt) !== baselineAt);
-    if (!displayTesting && isFailed && message && !messageLooksSuccessful && manualTestRef.current && hasFreshResult) {
-      const key = `${tunnelId}:${status}:${tunnel?.lastTestAt || ""}:${message}`;
-      if (lastFailureToastKey.current !== key) {
-        lastFailureToastKey.current = key;
-        manualTestRef.current = false;
-        toast.error("诊断没通过", {
-          description: message,
-        });
-      }
-    }
-    if (!displayTesting && isSuccess) {
-      manualTestRef.current = false;
-    }
-  }, [open, displayTesting, isFailed, isSuccess, status, tunnel?.lastTestAt, parsedMessage.message, tunnelId]);
-
-  const plannedSegmentCount = linkTestNodeData.plannedSegments?.length || 0;
-  const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
-
-  return (
-    <DiagnoseDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      subjectName={tunnelName}
-      scope="从入口测到出口"
-      sizeClassName={probeDialogSizeClass}
-      testing={displayTesting}
-      lastRunAt={lastTestAt || null}
-      outcome={displaySuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
-      failureReason={parsedMessage.message}
-      checklist={{ kind: "tunnel", id: tunnelId }}
-      extraTabs={extraTabs}
-      actions={actions}
-      onRun={() => {
-        lastFailureToastKey.current = "";
-        manualTestRef.current = true;
-        manualTestBaselineAtRef.current = lastTestAt || "";
-        manualTestResultObservedRef.current = false;
-        setStartedLastTestAt(lastTestAt || "__none__");
-        setSawServerTesting(false);
-        setPostMutationQueryBaseline(null);
-        setOptimisticTesting(true);
-        testMutation.mutate({ id: tunnelId });
-      }}
-    >
-      <LinkTestProbeView
-        parsed={parsedMessage}
-        fallbackLatencyMs={latencyMs}
-        isSuccess={displaySuccess}
-        isTesting={displayTesting}
-        sourceLabel={linkTestNodeData.sourceLabel}
-        targetLabel={linkTestNodeData.targetLabel}
-        nodeMeta={linkTestNodeData.nodeMeta}
-        nodeTooltips={linkTestNodeData.nodeTooltips}
-        plannedSegments={linkTestNodeData.plannedSegments}
-      />
-    </DiagnoseDialog>
-  );
-}
 
 function normalizeForwardGroupMode(mode: unknown) {
   const value = String(mode || "failover");
   return value === "port" || value === "chain" || value === "entry" || value === "exit" ? value : "failover";
 }
 
-function enabledHostGroupMembers(group: any) {
+export function enabledHostGroupMembers(group: any) {
   return (group?.members || [])
     .filter((member: any) => member?.memberType === "host" && Number(member?.hostId || 0) > 0 && member?.isEnabled !== false)
     .sort((a: any, b: any) => Number(a?.priority || 0) - Number(b?.priority || 0));
@@ -4661,8 +3521,6 @@ function TunnelsContent() {
       ) : null}
         </div>
 
-
-
         {/* 「隧道链路」和「叠加」是同一份列表按 kind 分开列，共用这一块。 */}
         <TabsContent value={activeSection === "aggregates" ? "aggregates" : "tunnels"} className="space-y-4">
           {/* 精简布局：上面分类条选中的那一格已经写着名字，这行小标题不再重复 */}
@@ -4674,7 +3532,7 @@ function TunnelsContent() {
         (isLoading || forwardGroupsLoading || !tunnels || !forwardGroups || !hosts) ? (
           <DataSectionLoading label="正在加载全球链路地图" />
         ) : (
-          <TunnelWorldGlobe
+          <Suspense fallback={<Skeleton className="h-full w-full" />}><TunnelWorldGlobe
             tunnels={tunnelItems}
             chainGroups={filteredChainGroups}
             hosts={hosts || []}
@@ -4683,7 +3541,7 @@ function TunnelsContent() {
             groupAvailabilityById={groupAvailabilityById}
             onEditTunnel={openMapTunnelEdit}
             onEditChain={handleGlobeChainEdit}
-          />
+          /></Suspense>
         )
       ) : isLoading ? (
         <DataSectionLoading label="正在加载隧道数据" />
@@ -4880,7 +3738,7 @@ function TunnelsContent() {
               {(isLoading || forwardGroupsLoading || !tunnels || !forwardGroups || !hosts) ? (
                 <DataSectionLoading label="正在加载全球链路地图" />
               ) : (
-                <TunnelWorldGlobe
+                <Suspense fallback={<Skeleton className="h-full w-full" />}><TunnelWorldGlobe
                   tunnels={tunnelItems}
                   chainGroups={filteredChainGroups}
                   hosts={hosts || []}
@@ -4889,7 +3747,7 @@ function TunnelsContent() {
                   groupAvailabilityById={groupAvailabilityById}
                   onEditTunnel={openMapTunnelEdit}
                   onEditChain={handleGlobeChainEdit}
-                />
+                /></Suspense>
               )}
               <div className="hidden" aria-hidden>
                 <ForwardGroupsContent
@@ -4992,6 +3850,7 @@ function TunnelsContent() {
       </Tabs>
 
       {testTunnel && (
+        <Suspense fallback={null}>
         <TunnelSelfTestDialog
           tunnelId={testTunnel.id}
           tunnelName={testTunnel.name}
@@ -5007,6 +3866,7 @@ function TunnelsContent() {
           ]}
           actions={<DiagnoseSubjectActions kind="tunnel" id={Number(testTunnel.id)} onLeave={() => setTestTunnel(null)} speedTest />}
         />
+        </Suspense>
       )}
 
       <AggregateLinkDialog

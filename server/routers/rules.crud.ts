@@ -63,7 +63,7 @@ import {
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "@shared/portPolicy";
 import { assertTenantListenPortAllowed, assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
-import { isTelegramBotReady } from "../telegramReady";
+import { isTelegramBotReady } from "../telegram/telegramReady";
 import { resolveForwardRuleName } from "@shared/forwardRuleName";
 import {
   combineHostPortReservations,
@@ -1485,7 +1485,7 @@ export async function deleteForwardRuleForActor(
       if (Number.isFinite(Number(billed.balanceAfterCents))) balanceAfterCents = Number(billed.balanceAfterCents);
     };
 
-    if ((rule as any).isForwardGroupTemplate) {
+    if (rule.isForwardGroupTemplate) {
       const childRules = await db.getForwardGroupChildRulesForTemplate(ruleId);
       for (const child of childRules as any[]) {
         collectBilling(await settleTrafficBillingForDeletedRule(child));
@@ -1498,7 +1498,7 @@ export async function deleteForwardRuleForActor(
         pushAgentRefresh(Number(child.hostId), `${reasonPrefix}-group-deleted`);
       }
       collectBilling(await settleTrafficBillingForDeletedRule(rule));
-      await db.runForwardGroupFailover(Number((rule as any).forwardGroupId || 0));
+      await db.runForwardGroupFailover(Number(rule.forwardGroupId || 0));
       // Templates never run on an Agent, so they cannot receive a runtime stop ACK.
       // Their managed children remain pending until each Agent confirms removal.
       await db.finalizeForwardRuleDelete(ruleId);
@@ -1510,9 +1510,9 @@ export async function deleteForwardRuleForActor(
     await retireRouteRelayRulesForRule(ruleId, { reason: `${reasonPrefix}-deleted` });
     // 换隧道后留在旧入口的桥接一起删，那几台机器随即撤掉监听。
     await refreshRuleEntryBridgeHosts(ruleId, `${reasonPrefix}-deleted`, { deleteBridges: true });
-    if ((rule as any).tunnelId) {
-      const tunnel = await db.getTunnelById((rule as any).tunnelId);
-      await db.updateTunnel((rule as any).tunnelId, { isRunning: false } as any);
+    if (rule.tunnelId) {
+      const tunnel = await db.getTunnelById(rule.tunnelId);
+      await db.updateTunnel(rule.tunnelId, { isRunning: false } as any);
       if (tunnel) await pushTunnelEndpointRefresh(tunnel, `${reasonPrefix}-deleted`);
     }
     pushAgentRefresh(rule.hostId, `${reasonPrefix}-deleted`);
@@ -1543,9 +1543,9 @@ export async function toggleForwardRuleForActor(
       if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接开关");
       if (Number((rule as any).routeParentRuleId || 0) > 0) throw new Error("线路组的中转规则由面板维护，不能直接开关");
       if (options.restartOnly && !dbBool((rule as { isEnabled?: unknown }).isEnabled)) return { success: true, rule, skipped: true };
-      if ((rule as any).isForwardGroupTemplate) {
+      if (rule.isForwardGroupTemplate) {
         if (actor.role !== "admin") {
-          const groupId = Number((rule as any).forwardGroupId || 0);
+          const groupId = Number(rule.forwardGroupId || 0);
           if (isEnabled) {
             if (!groupId) throw new Error("转发组不存在");
             const access = await requireForwardGroupUseAccess({ user: actor }, groupId);
@@ -1571,7 +1571,7 @@ export async function toggleForwardRuleForActor(
           }
         }
         if (isEnabled) {
-          const groupId = Number((rule as any).forwardGroupId || 0);
+          const groupId = Number(rule.forwardGroupId || 0);
           if (isSniRule(rule)) {
             const anchor = await db.getTlsInboundById(Number(rule.tlsInboundId));
             if (!anchor) throw new Error("这条规则挂的共享 TLS 入站已不存在，请删除后重新建规则");
@@ -1579,7 +1579,7 @@ export async function toggleForwardRuleForActor(
           }
           const group = await db.validateForwardGroupRuleConfig(groupId, {
             sourcePort: rule.sourcePort,
-            protocol: (rule as any).protocol,
+            protocol: rule.protocol,
             excludeTemplateRuleId: rule.id,
             sniBackendPort: isSniRule(rule),
           });
@@ -1589,8 +1589,8 @@ export async function toggleForwardRuleForActor(
           const groupTunnelSupportsFailover = groupIsTunnel ? await forwardGroupTunnelMembersSupportMainBackup(group) : true;
           requireMainBackupAllowed({
             enabled: isForwardChain || (groupIsTunnel && !groupTunnelSupportsFailover) ? false : (rule as any).failoverEnabled,
-            protocol: (rule as any).protocol,
-            forwardType: !isForwardChain && (group as any).groupType === "tunnel" ? "gost" : (rule as any).forwardType,
+            protocol: rule.protocol,
+            forwardType: !isForwardChain && (group as any).groupType === "tunnel" ? "gost" : rule.forwardType,
             isTunnelRoute: groupIsTunnel,
             isPortForwardGroup: isPortGroup,
             isAdmin: actor.role === "admin",
@@ -1599,8 +1599,8 @@ export async function toggleForwardRuleForActor(
         } else {
           await db.toggleForwardRule(ruleId, false);
         }
-        await db.syncForwardGroupRules(Number((rule as any).forwardGroupId));
-        await db.runForwardGroupFailover(Number((rule as any).forwardGroupId));
+        await db.syncForwardGroupRules(Number(rule.forwardGroupId));
+        await db.runForwardGroupFailover(Number(rule.forwardGroupId));
         if (options.restartOnly) {
           // 转发组模板自己不跑在 Agent 上：重启是把组里每条启用着的成员规则重新推给它们的入口机。
           const children = await db.getForwardGroupChildRulesForTemplate(ruleId);
@@ -1615,16 +1615,16 @@ export async function toggleForwardRuleForActor(
       await requireRuleProtocolEnabled(rule);
       let toggleTunnelForRule: any = null;
       const reasonPrefix = String(options.reasonPrefix || "forward-rule").trim() || "forward-rule";
-      if ((rule as any).tunnelId) {
-        toggleTunnelForRule = await db.getTunnelById((rule as any).tunnelId);
-        await db.updateTunnel((rule as any).tunnelId, { isRunning: false } as any);
+      if (rule.tunnelId) {
+        toggleTunnelForRule = await db.getTunnelById(rule.tunnelId);
+        await db.updateTunnel(rule.tunnelId, { isRunning: false } as any);
       }
       if (isEnabled) {
         requireMainBackupAllowed({
           enabled: (rule as any).failoverEnabled,
-          protocol: (rule as any).protocol,
-          forwardType: (rule as any).forwardType,
-          tunnelId: (rule as any).tunnelId,
+          protocol: rule.protocol,
+          forwardType: rule.forwardType,
+          tunnelId: rule.tunnelId,
           tunnelMode: toggleTunnelForRule?.mode,
           isAdmin: actor.role === "admin",
         });
@@ -1637,7 +1637,7 @@ export async function toggleForwardRuleForActor(
           await assertRulePortWithinEntryPolicy({
             hostId: Number(rule.hostId),
             sourcePort: Number(rule.sourcePort),
-            tunnelId: Number((rule as any).tunnelId || 0) || null,
+            tunnelId: Number(rule.tunnelId || 0) || null,
             actor,
           });
         }
@@ -1647,10 +1647,10 @@ export async function toggleForwardRuleForActor(
               userId: actor.id,
               hostId: Number(rule.hostId),
               sourcePort: Number(rule.sourcePort),
-              tunnelId: Number((rule as any).tunnelId || 0) || null,
+              tunnelId: Number(rule.tunnelId || 0) || null,
             });
           }
-          const activeTunnelId = Number((rule as any).tunnelId || 0);
+          const activeTunnelId = Number(rule.tunnelId || 0);
           const actorContext = { user: actor };
           const resourceAccess = activeTunnelId
             ? await requireTunnelUseOrTrafficBillingAccess(actorContext, activeTunnelId)
@@ -1692,15 +1692,15 @@ export async function toggleForwardRuleForActor(
         } else {
         // 隧道挂了入口组时，组里每台主机也在这个端口上监听，都要查、都要占住。
         sourcePortReservation = await reserveSpecificHostPortOnHosts({
-          hostIds: await db.forwardRuleListenHostIds(rule.hostId, (rule as any).tunnelId),
+          hostIds: await db.forwardRuleListenHostIds(rule.hostId, rule.tunnelId),
           port: Number(rule.sourcePort),
-          protocol: (rule as any).protocol,
-          isUsed: (hostId, port) => db.isPortUsedOnHost(hostId, port, Number(rule.id), (rule as any).protocol, undefined, false),
+          protocol: rule.protocol,
+          isUsed: (hostId, port) => db.isPortUsedOnHost(hostId, port, Number(rule.id), rule.protocol, undefined, false),
         });
         }
         if (!sourcePortReservation) {
           throw await entryBridgeAwarePortError(
-            await db.forwardRuleListenHostIds(rule.hostId, (rule as any).tunnelId),
+            await db.forwardRuleListenHostIds(rule.hostId, rule.tunnelId),
             Number(rule.sourcePort),
             [Number(rule.id)],
             `端口 ${rule.sourcePort} 已被占用，请更换端口后再启用`,
@@ -1731,7 +1731,7 @@ export async function toggleForwardRuleForActor(
               hostId: Number(toggleTunnelForRule.exitHostId),
               preferredStart: exit?.portRangeStart,
               preferredEnd: exit?.portRangeEnd,
-              currentPort: sharedListenPort ?? Number((rule as any).tunnelExitPort || 0),
+              currentPort: sharedListenPort ?? Number(rule.tunnelExitPort || 0),
               excludeRuleIds: [Number(rule.id)],
               allowSameTunnelListener: Number(sharedListenPort || 0) > 0,
               excludeTunnelId: Number(toggleTunnelForRule.id),
@@ -1748,14 +1748,14 @@ export async function toggleForwardRuleForActor(
           disabledByTunnel: false,
           disabledByGroup: false,
           protocolBlockReason: null,
-          ...(nextTunnelExitPort && nextTunnelExitPort !== Number((rule as any).tunnelExitPort || 0) ? { tunnelExitPort: nextTunnelExitPort } : {}),
+          ...(nextTunnelExitPort && nextTunnelExitPort !== Number(rule.tunnelExitPort || 0) ? { tunnelExitPort: nextTunnelExitPort } : {}),
         } as any);
-        if (toggleTunnelForRule && String((rule as any).forwardType || "") === "gost") {
+        if (toggleTunnelForRule && String(rule.forwardType || "") === "gost") {
           // 映射校正自己按出口逐个预留；主端口的预留先放掉，免得同端口的映射被当成别人在用。
           tunnelExitPortReservation?.release();
           tunnelExitPortReservation = null;
           await db.reconcileForwardRuleTunnelExits(
-            { ...rule, isEnabled: true, tunnelExitPort: nextTunnelExitPort ?? (rule as any).tunnelExitPort },
+            { ...rule, isEnabled: true, tunnelExitPort: nextTunnelExitPort ?? rule.tunnelExitPort },
             toggleTunnelForRule,
           );
         }
@@ -3209,8 +3209,8 @@ export const crudRulesRouter = router({
       }
 
       if (input.sourcePort === 0) {
-        const nextProtocol = input.protocol ?? (rule as any).protocol;
-        const childRules = (rule as any).isForwardGroupTemplate
+        const nextProtocol = input.protocol ?? rule.protocol;
+        const childRules = rule.isForwardGroupTemplate
           ? await db.getForwardGroupChildRulesForTemplate(Number(rule.id))
           : [];
         const excludeRuleIds = [
@@ -3219,8 +3219,8 @@ export const crudRulesRouter = router({
         ].filter((id) => Number.isInteger(id) && id > 0);
         const nextForwardGroupId = input.forwardGroupId !== undefined
           ? Number(input.forwardGroupId || 0)
-          : (rule as any).isForwardGroupTemplate
-            ? Number((rule as any).forwardGroupId || 0)
+          : rule.isForwardGroupTemplate
+            ? Number(rule.forwardGroupId || 0)
             : 0;
 
         if (nextForwardGroupId > 0) {
@@ -3273,11 +3273,11 @@ export const crudRulesRouter = router({
           if (!selectedPort) throw new Error("转发组入口端口区间内已无可用端口");
           input.sourcePort = selectedPort;
         } else {
-          const nextForwardType = input.forwardType ?? (rule as any).forwardType;
+          const nextForwardType = input.forwardType ?? rule.forwardType;
           const nextTunnelId = nextForwardType === "gost"
-            ? Number(input.tunnelId !== undefined ? input.tunnelId : (rule as any).tunnelId) || null
+            ? Number(input.tunnelId !== undefined ? input.tunnelId : rule.tunnelId) || null
             : null;
-          let nextHostId = Number(input.hostId ?? (rule as any).hostId);
+          let nextHostId = Number(input.hostId ?? rule.hostId);
           let rangeStart: number | null | undefined;
           let rangeEnd: number | null | undefined;
           let planRange: Awaited<ReturnType<typeof db.getUserPlanPortRange>> = null;
@@ -3316,8 +3316,8 @@ export const crudRulesRouter = router({
         }
       }
 
-      if ((rule as any).isForwardGroupTemplate) {
-        const groupId = Number((rule as any).forwardGroupId || 0);
+      if (rule.isForwardGroupTemplate) {
+        const groupId = Number(rule.forwardGroupId || 0);
         if (input.forwardGroupId === null) {
           if (!groupId) throw new Error("Forward group does not exist");
           const childRules = await db.getForwardGroupChildRulesForTemplate(input.id);
@@ -3325,9 +3325,9 @@ export const crudRulesRouter = router({
             Number(rule.id),
             ...(childRules as any[]).map((child: any) => Number(child.id)),
           ].filter((id) => Number.isInteger(id) && id > 0);
-          const nextForwardType = input.forwardType ?? (rule as any).forwardType;
+          const nextForwardType = input.forwardType ?? rule.forwardType;
           const requestedTunnelId = nextForwardType === "gost"
-            ? Number(input.tunnelId !== undefined ? input.tunnelId : (rule as any).tunnelId) || null
+            ? Number(input.tunnelId !== undefined ? input.tunnelId : rule.tunnelId) || null
             : null;
           const route = await prepareDirectRuleRouteForActor(
             {
@@ -3342,14 +3342,14 @@ export const crudRulesRouter = router({
                 ? Number(input.hostId)
                 : requestedTunnelId
                   ? null
-                  : Number((rule as any).hostId),
+                  : Number(rule.hostId),
             },
           );
           const nextTunnelId = route.tunnelId;
           const selectedTunnelForRule = route.selectedTunnelForRule;
           const nextHostId = route.hostId;
 
-          const nextProtocol = input.protocol ?? (rule as any).protocol;
+          const nextProtocol = input.protocol ?? rule.protocol;
           const nextSourcePort = Number(input.sourcePort ?? (rule as any).sourcePort);
           const nextMainBackupEnabled = false;
           requireMainBackupAllowed({
@@ -3381,8 +3381,8 @@ export const crudRulesRouter = router({
             assertNoDirectSelfForwardLoop({
               host,
               sourcePort: nextSourcePort,
-              targetIp: input.targetIp ?? (rule as any).targetIp,
-              targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+              targetIp: input.targetIp ?? rule.targetIp,
+              targetPort: Number(input.targetPort ?? rule.targetPort),
               tunnelId: nextTunnelId,
             });
           }
@@ -3391,7 +3391,7 @@ export const crudRulesRouter = router({
           if (nextTunnelId) {
             const tunnel = selectedTunnelForRule;
             const exit = await db.getHostById(tunnel.exitHostId);
-            const existingExitPort = Number((rule as any).tunnelExitPort || 0);
+            const existingExitPort = Number(rule.tunnelExitPort || 0);
             const listenerRepair = usesSharedTunnelPrimaryListener(tunnel)
               ? await ensureTunnelListenerPortPolicy(tunnel, {
                 hostId: Number(tunnel.exitHostId),
@@ -3404,7 +3404,7 @@ export const crudRulesRouter = router({
             const sharedListenPort = await preferredSharedTunnelListenPort(
               tunnel,
               Number(rule.id),
-              input.isEnabled !== undefined ? dbBool(input.isEnabled) : dbBool((rule as any).isEnabled),
+              input.isEnabled !== undefined ? dbBool(input.isEnabled) : dbBool(rule.isEnabled),
             );
             let exitReservation: HostPortReservation | null = null;
             if (listenerRepair?.reservation && Number(sharedListenPort || 0) === listenerRepair.port) {
@@ -3435,7 +3435,7 @@ export const crudRulesRouter = router({
             failoverTargets: [],
           }, nextProtocol);
           const data: any = {
-            name: input.name ?? (rule as any).name,
+            name: input.name ?? rule.name,
             hostId: nextHostId,
             forwardType: nextForwardType,
             protocol: nextProtocol,
@@ -3449,8 +3449,8 @@ export const crudRulesRouter = router({
             forwardGroupMemberId: null,
             isForwardGroupTemplate: false,
             sourcePort: nextSourcePort,
-            targetIp: normalizeRuleTargetIp(input.targetIp ?? (rule as any).targetIp, { tunnelId: nextTunnelId }),
-            targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+            targetIp: normalizeRuleTargetIp(input.targetIp ?? rule.targetIp, { tunnelId: nextTunnelId }),
+            targetPort: Number(input.targetPort ?? rule.targetPort),
             telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
             entryDomainEnabled: input.entryDomainEnabled ?? (rule as any).entryDomainEnabled ?? true,
             ...RULE_PROTOCOL_BLOCK_COLUMNS,
@@ -3461,7 +3461,7 @@ export const crudRulesRouter = router({
               forwardxTunnel: String(selectedTunnelForRule?.mode || "").toLowerCase() === "forwardx",
             }),
             ...failoverData,
-            isEnabled: input.isEnabled !== undefined ? dbBool(input.isEnabled) : dbBool((rule as any).isEnabled),
+            isEnabled: input.isEnabled !== undefined ? dbBool(input.isEnabled) : dbBool(rule.isEnabled),
             isRunning: false,
             pendingDelete: false,
           };
@@ -3514,7 +3514,7 @@ export const crudRulesRouter = router({
         let groupAccess = { isTrafficBillingResource: false };
         if (ctx.user.role !== "admin") {
           groupAccess = await requireForwardGroupUseAccess(ctx, activeGroupId);
-          if (input.isEnabled !== undefined ? input.isEnabled : dbBool((rule as any).isEnabled)) {
+          if (input.isEnabled !== undefined ? input.isEnabled : dbBool(rule.isEnabled)) {
             await requireForwardAccessForEnabledRule(ctx.user.id, groupAccess.isTrafficBillingResource);
           }
           const nextSourcePort = input.sourcePort ?? rule.sourcePort;
@@ -3526,21 +3526,21 @@ export const crudRulesRouter = router({
         }
         const group = await db.validateForwardGroupRuleConfig(activeGroupId, {
           sourcePort: input.sourcePort ?? rule.sourcePort,
-          protocol: input.protocol ?? (rule as any).protocol,
+          protocol: input.protocol ?? rule.protocol,
           excludeTemplateRuleId: rule.id,
         });
         const isForwardChain = (group as any).groupMode === "chain";
         const isPortGroup = (group as any).groupMode === "port";
-        if (ctx.user.role !== "admin" && (input.isEnabled === true || dbBool((rule as any).isEnabled))) {
+        if (ctx.user.role !== "admin" && (input.isEnabled === true || dbBool(rule.isEnabled))) {
           await requireTrafficBillingBalanceForRule(ctx.user.id, groupAccess.isTrafficBillingResource);
         }
-        const nextForwardType = lockedForwardTypeForGroup(group, input.forwardType ?? (rule as any).forwardType);
+        const nextForwardType = lockedForwardTypeForGroup(group, input.forwardType ?? rule.forwardType);
         const groupRouteChanged = groupChanged
-          || String(nextForwardType) !== String((rule as any).forwardType);
+          || String(nextForwardType) !== String(rule.forwardType);
         if (groupRouteChanged) {
           requireForwardTypeAllowedForActor(ctx.user, nextForwardType);
         }
-        const nextProtocol = input.protocol ?? (rule as any).protocol;
+        const nextProtocol = input.protocol ?? rule.protocol;
         const childRules = await db.getForwardGroupChildRulesForTemplate(input.id);
         const templateRuleIds = [Number(rule.id), ...(childRules as any[]).map((child: any) => Number(child.id))].filter(Boolean);
         await reserveForwardGroupEntryPorts(
@@ -3567,8 +3567,8 @@ export const crudRulesRouter = router({
         if (!isForwardChain && !groupIsTunnel) {
           await assertNoGroupSelfForwardLoop(activeGroupId, {
             sourcePort: Number(input.sourcePort ?? (rule as any).sourcePort),
-            targetIp: input.targetIp ?? (rule as any).targetIp,
-            targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+            targetIp: input.targetIp ?? rule.targetIp,
+            targetPort: Number(input.targetPort ?? rule.targetPort),
           });
         }
         const clearable = mergeFailoverClearableFields(input, rule);
@@ -3601,8 +3601,8 @@ export const crudRulesRouter = router({
                 allowHops: routeHopsAllowedForGroup(group),
                 memberHostIds: groupMemberHostIds(group),
                 hostIds: await routeHostIdsForActor(ctx.user),
-                targetIp: input.targetIp ?? (rule as any).targetIp,
-                targetPort: input.targetPort ?? (rule as any).targetPort,
+                targetIp: input.targetIp ?? rule.targetIp,
+                targetPort: input.targetPort ?? rule.targetPort,
               })
             : {}),
           ...(input.targetIp !== undefined ? { targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId: !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }) } : {}),
@@ -3674,7 +3674,7 @@ export const crudRulesRouter = router({
         let groupAccess = { isTrafficBillingResource: false };
         if (ctx.user.role !== "admin") {
           groupAccess = await requireForwardGroupUseAccess(ctx, groupId);
-          if (input.isEnabled !== undefined ? input.isEnabled : dbBool((rule as any).isEnabled)) {
+          if (input.isEnabled !== undefined ? input.isEnabled : dbBool(rule.isEnabled)) {
             await requireForwardAccessForEnabledRule(ctx.user.id, groupAccess.isTrafficBillingResource);
           }
           const planRange = await db.getUserForwardGroupPlanPortRange(ctx.user.id, groupId);
@@ -3691,16 +3691,16 @@ export const crudRulesRouter = router({
         }
         const group = await db.validateForwardGroupRuleConfig(groupId, {
           sourcePort,
-          protocol: input.protocol ?? (rule as any).protocol,
+          protocol: input.protocol ?? rule.protocol,
           excludeTemplateRuleId: rule.id,
         });
         const isForwardChain = (group as any).groupMode === "chain";
-        if (ctx.user.role !== "admin" && (input.isEnabled === true || dbBool((rule as any).isEnabled))) {
+        if (ctx.user.role !== "admin" && (input.isEnabled === true || dbBool(rule.isEnabled))) {
           await requireTrafficBillingBalanceForRule(ctx.user.id, groupAccess.isTrafficBillingResource);
         }
-        const nextForwardType = lockedForwardTypeForGroup(group, input.forwardType ?? (rule as any).forwardType);
+        const nextForwardType = lockedForwardTypeForGroup(group, input.forwardType ?? rule.forwardType);
         requireForwardTypeAllowedForActor(ctx.user, nextForwardType);
-        const nextProtocol = input.protocol ?? (rule as any).protocol;
+        const nextProtocol = input.protocol ?? rule.protocol;
         await reserveForwardGroupEntryPorts(groupId, sourcePort, nextProtocol, [Number(rule.id)]);
         await reserveGroupPortRangeForUpdate(groupId, nextForwardType, [Number(rule.id)]);
         const nextMainBackupEnabled = false;
@@ -3716,12 +3716,12 @@ export const crudRulesRouter = router({
         if (!isForwardChain && (group as any).groupType !== "tunnel") {
           await assertNoGroupSelfForwardLoop(groupId, {
             sourcePort,
-            targetIp: input.targetIp ?? (rule as any).targetIp,
-            targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+            targetIp: input.targetIp ?? rule.targetIp,
+            targetPort: Number(input.targetPort ?? rule.targetPort),
           });
         }
         const data: any = {
-          name: input.name ?? (rule as any).name,
+          name: input.name ?? rule.name,
           hostId,
           forwardType: nextForwardType,
           protocol: nextProtocol,
@@ -3736,8 +3736,8 @@ export const crudRulesRouter = router({
           isForwardGroupTemplate: true,
           sourcePort,
           sourcePortEnd: nextSourcePortEnd,
-          targetIp: normalizeRuleTargetIp(input.targetIp ?? (rule as any).targetIp, { tunnelId: !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
-          targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+          targetIp: normalizeRuleTargetIp(input.targetIp ?? rule.targetIp, { tunnelId: !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
+          targetPort: Number(input.targetPort ?? rule.targetPort),
           telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
           entryDomainEnabled: input.entryDomainEnabled ?? (rule as any).entryDomainEnabled ?? true,
           ...RULE_PROTOCOL_BLOCK_COLUMNS,
@@ -3759,7 +3759,7 @@ export const crudRulesRouter = router({
             failoverEnabled: false,
             failoverTargets: [],
           }, nextProtocol),
-          isEnabled: input.isEnabled !== undefined ? dbBool(input.isEnabled) : dbBool((rule as any).isEnabled),
+          isEnabled: input.isEnabled !== undefined ? dbBool(input.isEnabled) : dbBool(rule.isEnabled),
           isRunning: false,
           pendingDelete: false,
         };
@@ -3777,7 +3777,7 @@ export const crudRulesRouter = router({
           中继规则收回（要拿 route-relays 键锁）、通知旧入口 / 旧隧道、故障转移都在提交之后。
           同步子规则时，新入口端口是本请求自己占着的（见 runWithHeldHostPortReservations）。
         */
-        const oldTunnelId = Number((rule as any).tunnelId || 0);
+        const oldTunnelId = Number(rule.tunnelId || 0);
         const oldTunnel = await runWithHeldHostPortReservations(heldReservations, () => db.withForwardGroupSyncTransaction(groupId, async () => {
           await db.updateForwardRule(input.id, data);
           await db.clearForwardRuleTunnelExits(input.id);
@@ -3790,8 +3790,8 @@ export const crudRulesRouter = router({
         await syncRouteGroupAfterSave(input.id, "forward-rule-route-changed");
         if (oldTunnelId) {
           if (oldTunnel) await pushTunnelEndpointRefresh(oldTunnel, "forward-rule-route-changed");
-        } else if (Number((rule as any).hostId || 0) > 0) {
-          pushAgentRefresh(Number((rule as any).hostId), "forward-rule-route-changed");
+        } else if (Number(rule.hostId || 0) > 0) {
+          pushAgentRefresh(Number(rule.hostId), "forward-rule-route-changed");
         }
         await db.runForwardGroupFailover(groupId);
         return { success: true, reset: true };
@@ -3805,7 +3805,7 @@ export const crudRulesRouter = router({
         const nextForwardType = input.forwardType ?? rule.forwardType;
         nextForwardTypeForRule = nextForwardType;
         nextTunnelIdForRule = nextForwardType === "gost"
-          ? (input.tunnelId !== undefined ? input.tunnelId : (rule as any).tunnelId)
+          ? (input.tunnelId !== undefined ? input.tunnelId : rule.tunnelId)
           : null;
         if (nextTunnelIdForRule) {
           const access = await requireTunnelUseOrTrafficBillingAccess(ctx, nextTunnelIdForRule);
@@ -3821,14 +3821,14 @@ export const crudRulesRouter = router({
           }
         }
       }
-      const routeChanged = String(nextForwardTypeForRule) !== String((rule as any).forwardType) || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0);
-      const directRouteChanged = routeChanged || Number(nextHostIdForRule) !== Number((rule as any).hostId);
+      const routeChanged = String(nextForwardTypeForRule) !== String(rule.forwardType) || Number(nextTunnelIdForRule || 0) !== Number(rule.tunnelId || 0);
+      const directRouteChanged = routeChanged || Number(nextHostIdForRule) !== Number(rule.hostId);
       if (directRouteChanged) {
         requireForwardTypeAllowedForActor(ctx.user, nextForwardTypeForRule);
       }
       await requireRuleProtocolEnabled({ ...rule, forwardType: nextForwardTypeForRule, tunnelId: nextTunnelIdForRule }, selectedTunnelForRule);
       const requestedMainBackupEnabled = input.failoverEnabled ?? (rule as any).failoverEnabled;
-      const nextProtocolForRule = input.protocol ?? (rule as any).protocol;
+      const nextProtocolForRule = input.protocol ?? rule.protocol;
       // 线路组不卡协议（TCP / UDP / TCP+UDP 都能调度，UDP 按会话，Agent 2.2.199 起）：换了路由就清掉，
       // 否则——只在转发方式支持线路组（gost / realm / socat / nginx）时保留用户的开关，隧道形态是否允许
       // 再由下面的 requireMainBackupAllowed 判（和新建同一条）；内核转发（iptables / nftables）的老行里
@@ -3848,7 +3848,7 @@ export const crudRulesRouter = router({
       });
        const nextRuleEnabled = input.isEnabled !== undefined
          ? dbBool(input.isEnabled)
-         : dbBool((rule as any).isEnabled);
+         : dbBool(rule.isEnabled);
       if (!nextTunnelIdForRule) {
         const access = await requireHostUseAccess(ctx, nextHostIdForRule);
         // 和新建（prepareDirectRuleRouteForActor）同一条：普通用户不能直接在主机上开普通端口转发。
@@ -3882,8 +3882,8 @@ export const crudRulesRouter = router({
         assertNoDirectSelfForwardLoop({
           host,
           sourcePort: nextSourcePortForRule,
-          targetIp: input.targetIp ?? (rule as any).targetIp,
-          targetPort: Number(input.targetPort ?? (rule as any).targetPort),
+          targetIp: input.targetIp ?? rule.targetIp,
+          targetPort: Number(input.targetPort ?? rule.targetPort),
           tunnelId: nextTunnelIdForRule,
         });
       }
@@ -3915,7 +3915,7 @@ export const crudRulesRouter = router({
       const shouldCheckSourcePort = !nextSourcePortEnd && (input.sourcePort !== undefined
         || input.protocol !== undefined
         || Number(nextHostIdForRule) !== Number(rule.hostId)
-        || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0));
+        || Number(nextTunnelIdForRule || 0) !== Number(rule.tunnelId || 0));
       if (shouldCheckSourcePort) {
         const host = await db.getHostById(nextHostIdForRule);
         if (host) {
@@ -3982,8 +3982,8 @@ export const crudRulesRouter = router({
           rule: routeChanged ? null : rule,
           entryHostId: routeEntryHostId(Number(nextHostIdForRule), selectedTunnelForRule),
           hostIds: await routeHostIdsForActor(ctx.user),
-          targetIp: (data as any).targetIp ?? (rule as any).targetIp,
-          targetPort: input.targetPort ?? (rule as any).targetPort,
+          targetIp: (data as any).targetIp ?? rule.targetIp,
+          targetPort: input.targetPort ?? rule.targetPort,
         }));
         // 人工指定的变化在下面保存规则的事务里一起记：后面的校验没过就不该留一条「已指定」。
         pinChangeData = { ...data };
@@ -4023,7 +4023,7 @@ export const crudRulesRouter = router({
         Object.assign(data as any, normalizeProxyProtocolInput({
           ...proxySource,
           failoverEnabled: nextMainBackupEnabled,
-        }, input.protocol ?? (rule as any).protocol, nextForwardTypeForRule, false, { clearUnsupported: true, tunnelRoute: !!nextTunnelIdForRule }));
+        }, input.protocol ?? rule.protocol, nextForwardTypeForRule, false, { clearUnsupported: true, tunnelRoute: !!nextTunnelIdForRule }));
       }
       if (
         input.tcpFastOpen !== undefined ||
@@ -4044,7 +4044,7 @@ export const crudRulesRouter = router({
               udpOverTcp: input.udpOverTcp ?? (rule as any).udpOverTcp,
               udpOverTcpPort: input.udpOverTcpPort ?? (rule as any).udpOverTcpPort,
             };
-        const transportTuning = normalizeTransportTuningInput(transportSource, input.protocol ?? (rule as any).protocol, nextForwardTypeForRule, false, {
+        const transportTuning = normalizeTransportTuningInput(transportSource, input.protocol ?? rule.protocol, nextForwardTypeForRule, false, {
           clearUnsupported: true,
           tunnelRoute: !!nextTunnelIdForRule,
           forwardxTunnel: String(selectedTunnelForRule?.mode || "").toLowerCase() === "forwardx",
@@ -4070,15 +4070,15 @@ export const crudRulesRouter = router({
         (data as any).gostMode = "direct";
         (data as any).gostRelayHost = null;
         (data as any).gostRelayPort = null;
-        const nextTunnelId = data.tunnelId !== undefined ? data.tunnelId : (rule as any).tunnelId;
+        const nextTunnelId = data.tunnelId !== undefined ? data.tunnelId : rule.tunnelId;
         if (nextTunnelId) {
           const tunnel = selectedTunnelForRule ?? (await requireTunnelUseOrTrafficBillingAccess(ctx, nextTunnelId)).tunnel;
            if (!dbBool(tunnel.isEnabled)) throw new Error("所选隧道已停用");
           if (Number(tunnel.entryHostId) !== Number(nextHostIdForRule)) {
             throw new Error("所选隧道的入口 Agent 必须与规则所属主机一致");
           }
-          const sameTunnel = Number(nextTunnelId) === Number((rule as any).tunnelId || 0);
-          const existingExitPort = Number((rule as any).tunnelExitPort || 0);
+          const sameTunnel = Number(nextTunnelId) === Number(rule.tunnelId || 0);
+          const existingExitPort = Number(rule.tunnelExitPort || 0);
           // Disabling an existing rule is a state change, not a request to
           // move its data-plane listener. In particular, a primary managed
           // GOST rule intentionally shares tunnel.listenPort. Passing
@@ -4238,7 +4238,7 @@ export const crudRulesRouter = router({
       const affectedTunnelIds = new Set<number>();
       if (keyFieldChanged && !failoverHotUpdate) {
         (data as any).isRunning = false;
-        if ((rule as any).tunnelId) affectedTunnelIds.add((rule as any).tunnelId);
+        if (rule.tunnelId) affectedTunnelIds.add(rule.tunnelId);
         if ((data as any).tunnelId) affectedTunnelIds.add((data as any).tunnelId);
       }
       /*
@@ -4266,15 +4266,15 @@ export const crudRulesRouter = router({
       }
       const bindingChangeInTransaction = egressActiveAfterSave ? null : await autoBindProxyNodeForRule({
         ruleId: Number(id),
-        userId: Number((rule as any).userId || ctx.user.id),
-        targetIp: data.targetIp ?? (rule as any).targetIp,
-        targetPort: Number(data.targetPort ?? (rule as any).targetPort),
+        userId: Number(rule.userId || ctx.user.id),
+        targetIp: data.targetIp ?? rule.targetIp,
+        targetPort: Number(data.targetPort ?? rule.targetPort),
         boundNodeId: explicitNodeId > 0 ? explicitNodeId : Number((rule as any).proxyNodeId || 0),
         isCreate: false,
-        previousTargetIp: (rule as any).targetIp,
-        previousTargetPort: (rule as any).targetPort,
-        targetChanged: String(data.targetIp ?? (rule as any).targetIp) !== String((rule as any).targetIp)
-          || Number(data.targetPort ?? (rule as any).targetPort) !== Number((rule as any).targetPort),
+        previousTargetIp: rule.targetIp,
+        previousTargetPort: rule.targetPort,
+        targetChanged: String(data.targetIp ?? rule.targetIp) !== String(rule.targetIp)
+          || Number(data.targetPort ?? rule.targetPort) !== Number(rule.targetPort),
       });
       // The mapping reconciler performs its own per-endpoint reservation. Do
       // not leave the primary reservation held while it runs; release is
@@ -4287,7 +4287,7 @@ export const crudRulesRouter = router({
           const tunnel = selectedTunnelForRule ?? await db.getTunnelById(activeTunnelId);
           if (tunnel) {
             await db.reconcileForwardRuleTunnelExits(
-              { ...rule, ...data, id, tunnelId: activeTunnelId, tunnelExitPort: (data as any).tunnelExitPort ?? (rule as any).tunnelExitPort },
+              { ...rule, ...data, id, tunnelId: activeTunnelId, tunnelExitPort: (data as any).tunnelExitPort ?? rule.tunnelExitPort },
               tunnel,
             );
           }
@@ -4299,7 +4299,7 @@ export const crudRulesRouter = router({
       }
       return bindingChangeInTransaction;
       });
-      invalidateProxySubCacheForUser(Number((rule as any).userId || ctx.user.id));
+      invalidateProxySubCacheForUser(Number(rule.userId || ctx.user.id));
       // 桥接要在通知旧入口之前落库：旧入口下一次心跳就该拿到「撤规则 + 起桥接」，中间不留空档。
       await applyRuleEntryBridgeSwitch(entryBridgePlan, "forward-rule-entry-bridge");
       // 规则和出口映射都写完之后再通知隧道各端（推送会顺带作废出口机缓存的稳定心跳计划）：

@@ -10,7 +10,12 @@ import test from "node:test";
  *
  * 这条守在源码上：以后有人照别的页面的习惯写一个 lg:grid-cols-2，这里会报出来。
  */
-const source = fs.readFileSync(path.resolve(import.meta.dirname, "Settings.tsx"), "utf8");
+// 设置页的六个分区抽成了懒加载模块（client/src/components/settings/*Section.tsx 等），分栏写法在那里，一起看。
+const settingsSections = ["SystemInfoSection", "PersonalizationSettingsSection", "BackupRestoreSection", "DeepSeekSettingsCard", "TelegramBotSettingsCard", "PanelLogsSection"];
+const source = [
+  path.resolve(import.meta.dirname, "Settings.tsx"),
+  ...settingsSections.map((name) => path.resolve(import.meta.dirname, "../components/settings", `${name}.tsx`)),
+].map((file) => fs.readFileSync(file, "utf8")).join("\n");
 const emailSource = fs.readFileSync(path.resolve(import.meta.dirname, "EmailSettings.tsx"), "utf8");
 
 test("设置页里的分栏按容器宽度切，不按窗口宽度切", () => {

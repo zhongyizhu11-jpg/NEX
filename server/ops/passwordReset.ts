@@ -379,7 +379,7 @@ async function defaultAvailability(): Promise<PasswordResetAvailability> {
   const [{ getEmailConfig }, { telegramBotReady }, { isDiscordBotReady }, { getConfiguredPanelUrl }] = await Promise.all([
     import("../email"),
     import("../userNotify"),
-    import("../discordNotify"),
+    import("../discord/discordNotify"),
     import("../agentPanelUrl"),
   ]);
   const [email, telegram, discord, panelUrl] = await Promise.all([
@@ -401,11 +401,11 @@ async function defaultSend(user: PasswordResetAccount, channel: PasswordResetCha
   // Telegram 和 Discord 共用一份 Telegram HTML（Discord 那边自己转成纯文字）。
   const html = lines.map(escapeTelegramHtml).join("\n");
   if (channel === "telegram") {
-    const { sendTelegramMessage } = await import("../telegramBot");
+    const { sendTelegramMessage } = await import("../telegram/telegramBot");
     await sendTelegramMessage(String(user.telegramId), html);
     return true;
   }
-  const { notifyDiscordUser } = await import("../discordNotify");
+  const { notifyDiscordUser } = await import("../discord/discordNotify");
   const result = await notifyDiscordUser({ id: user.id, discordId: user.discordId, discordDmBlockedAt: user.discordDmBlockedAt }, html, { label: "password-reset" });
   return !!result && result.sent > 0;
 }

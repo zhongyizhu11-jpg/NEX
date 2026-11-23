@@ -37,10 +37,21 @@ test("时间写成「09-23 21:30」；坏值不编一个出来", () => {
   assert.equal(formatDiagnoseTime("not a date"), "");
 });
 
-test("规则、隧道、转发链三处诊断都走这个外壳，界面上不再出现「延迟探测」「链路测试」", () => {
+// 规则页 / 链路页的自测弹窗和地球抽成了懒加载模块（client/src/features/*），看页面时把它们一起看。
+const pageModules: Record<string, string[]> = {
+  "Rules.tsx": ["../features/rules/SelfTestDialog.tsx", "../features/rules/RuleTrafficGlobe.tsx"],
+  "Tunnels.tsx": ["../features/tunnels/TunnelSelfTestDialog.tsx", "../features/tunnels/TunnelWorldGlobe.tsx"],
+};
+function readPageWithModules(file: string): string {
   const pages = path.resolve(import.meta.dirname, "../pages");
+  return [path.join(pages, file), ...(pageModules[file] ?? []).map((rel) => path.resolve(import.meta.dirname, rel))]
+    .map((p) => fs.readFileSync(p, "utf8"))
+    .join("\n");
+}
+
+test("规则、隧道、转发链三处诊断都走这个外壳，界面上不再出现「延迟探测」「链路测试」", () => {
   for (const file of ["Rules.tsx", "Tunnels.tsx", "ForwardGroups.tsx"]) {
-    const source = fs.readFileSync(path.join(pages, file), "utf8");
+    const source = readPageWithModules(file);
     assert.match(source, /<DiagnoseDialog\b/, `${file} 用 DiagnoseDialog`);
     assert.doesNotMatch(source, /延迟探测|"链路测试"|"探测中/, `${file} 里没有旧叫法`);
   }
@@ -51,8 +62,8 @@ test("规则、隧道、转发链三处诊断都走这个外壳，界面上不�
 test("标准 / 精简布局用同一个诊断框：延迟记录、连接监控是页签，故障包、拓扑是底部按钮，菜单里不再单列", () => {
   // 2026-10-24 用户要求：标准布局也换成精简布局那种合并后的诊断框，独立的延迟记录 / 连接监控弹窗删掉。
   const read = (file: string) => fs.readFileSync(path.resolve(import.meta.dirname, file), "utf8");
-  const tunnels = read("../pages/Tunnels.tsx");
-  const rules = read("../pages/Rules.tsx");
+  const tunnels = readPageWithModules("Tunnels.tsx");
+  const rules = readPageWithModules("Rules.tsx");
   for (const [name, source] of [["Tunnels", tunnels], ["Rules", rules]] as const) {
     assert.doesNotMatch(source, /DIAGNOSE_MERGED_MENU_KEYS/, `${name}：菜单不再按布局藏几项`);
     assert.doesNotMatch(source, /extraTabs=\{compactLayout/, `${name}：页签不再只在精简布局下给`);

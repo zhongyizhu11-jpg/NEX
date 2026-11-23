@@ -85,9 +85,29 @@ func (p *failoverProxy) guardedStart(client net.Conn, upstream net.Conn, index i
 	upstreamFirst := p.readUpstreamFirst(upstream)
 
 	clientChunks := make(chan failoverEarlyChunk, 8)
+	/*
+		读客户端的缓冲在读协程和主循环之间来回用：主循环把一块写给上游（同步）、留副本进 replay 以后就不再碰它，
+		还进 freeBufs，读协程下一次先从这里拿。以前每次 Read 都 make 一块 32 KiB：上游迟迟不回第一个字节
+		（上传大请求体、服务端先等数据）时整个保护期（最长 8 秒）每 32 KiB 一次分配，本机基准每 GB 三万次。
+	*/
+	freeBufs := make(chan []byte, cap(clientChunks)+2)
+	recycleChunk := func(data []byte) {
+		if cap(data) < failoverEarlyReadChunkSize {
+			return
+		}
+		select {
+		case freeBufs <- data[:cap(data)]:
+		default:
+		}
+	}
 	go func() {
 		for {
-			buf := make([]byte, failoverEarlyReadChunkSize)
+			var buf []byte
+			select {
+			case buf = <-freeBufs:
+			default:
+				buf = make([]byte, failoverEarlyReadChunkSize)
+			}
 			n, err := client.Read(buf)
 			if n > 0 {
 				clientChunks <- failoverEarlyChunk{data: buf[:n]}
@@ -111,6 +131,7 @@ func (p *failoverProxy) guardedStart(client net.Conn, upstream net.Conn, index i
 			if len(chunk.data) > 0 && keep && sink != nil {
 				keep = sink(chunk.data)
 			}
+			recycleChunk(chunk.data)
 			if chunk.err != nil {
 				break
 			}
@@ -217,7 +238,10 @@ func (p *failoverProxy) guardedStart(client net.Conn, upstream net.Conn, index i
 						replay = append(replay, chunk.data...)
 					}
 				}
-				if _, err := upstream.Write(chunk.data); err != nil {
+				_, err := upstream.Write(chunk.data)
+				// 写完（不论成败）这块缓冲就用完了：replay 里留的是副本。
+				recycleChunk(chunk.data)
+				if err != nil {
 					// 写不进去：上游已经断了。先看它断之前回没回东西 —— 回了就交给客户端、收尾，绝不重发；
 					// 一个字节没回才按「回之前就关」换路。
 					if data := pendingReply(); len(data) > 0 {

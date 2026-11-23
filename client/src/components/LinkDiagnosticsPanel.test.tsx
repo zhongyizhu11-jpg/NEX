@@ -39,8 +39,11 @@ test("状态药丸：五种状态都有中文名", () => {
 
 test("规则、隧道、转发链三处诊断都带上一键诊断", () => {
   const pages = path.resolve(import.meta.dirname, "../pages");
+  // 规则 / 链路页的自测弹窗抽成了懒加载模块，checklist 传参在模块里。
+  const extra: Record<string, string> = { "Rules.tsx": "../features/rules/SelfTestDialog.tsx", "Tunnels.tsx": "../features/tunnels/TunnelSelfTestDialog.tsx" };
   for (const [file, kind] of [["Rules.tsx", "rule"], ["Tunnels.tsx", "tunnel"], ["ForwardGroups.tsx", "forwardGroup"]]) {
-    const source = fs.readFileSync(path.join(pages, file), "utf8");
+    const source = fs.readFileSync(path.join(pages, file), "utf8")
+      + (extra[file] ? "\n" + fs.readFileSync(path.resolve(import.meta.dirname, extra[file]), "utf8") : "");
     assert.match(source, new RegExp(`checklist=\\{\\{ kind: "${kind}"`), `${file} 传了 checklist`);
   }
 });

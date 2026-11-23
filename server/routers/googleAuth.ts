@@ -7,9 +7,9 @@ import { recordPanelEvent } from "../ops/panelEvents";
 import { listUserPasskeys } from "../ops/passkeys";
 import { hasUsablePassword } from "../password";
 import { GOOGLE_START_PATH, googleLoginErrorMessage, sanitizeGoogleInviteCode } from "../../shared/googleLogin";
-import { googleLoginAdminView, isGoogleLoginUsable, planGoogleSettingsUpdate, readGoogleLoginSettings } from "../googleLoginSettings";
+import { googleLoginAdminView, isGoogleLoginUsable, planGoogleSettingsUpdate, readGoogleLoginSettings } from "../oauth/googleLoginSettings";
 import { setInitialPasswordForPasswordlessUser, unlinkGoogleAccount } from "../repositories/googleAccountRepository";
-import { consumeGoogleStartQuota, googleAppFlows, issueGoogleSessionOrChallenge, sessionErrorCode } from "../googleAuthRoute";
+import { consumeGoogleStartQuota, googleAppFlows, issueGoogleSessionOrChallenge, sessionErrorCode } from "../oauth/googleAuthRoute";
 import { clientIp } from "../clientIp";
 
 /*

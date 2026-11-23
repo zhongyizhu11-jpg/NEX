@@ -4,9 +4,48 @@ NEX 面板每个版本的主要变化，新的在上面。括号里是同一版�
 
 完整的发布文件见 [GitHub Releases](https://github.com/zhongyizhu11-jpg/NEX/releases)，升级方法见[升级和备份](https://zhongyizhu11-jpg.github.io/NEX/guide/upgrade-backup)。
 
-## 2.3.549（Agent 2.2.268、FXP 2.2.149 不变）
+## 2.3.550（Agent 2.2.269、FXP 2.2.150 不变）
 
 - **订阅链接的地区策略组可以每个地区单独选怎么选节点**（用户：「我想每个地区可以单独选择模式」）。编辑订阅链接 › 外观 › 「地区组怎么选」下面多了「某个地区单独选」：加上「🇭🇰 香港」选手动选择，日本、新加坡等没单独选的地区照旧跟上面的总选法（自动选最快 / 手动选择 / 主备切换）；点「跟上面」撤掉单独选。单独选的地区存在令牌上（`regionGroupTypes`），客户端下次拉订阅就生效。
+## 2.3.549（Agent 2.2.269、FXP 2.2.150）
+
+对外商用前的第一批加固，加上转发数据面的性能与稳定性专项。两份报告在仓库里：`docs/dev/commercial-readiness-review.md`（七个维度的问题、分阶段路线、已落地项和待决策项）和 `docs/dev/forwarding-performance-review.md`（架构与数据流、根因、改动、前后对比、遗留风险）。所有数字都是本机 4 核回环实测，方法和原始数据见报告。
+
+**升级须知**
+
+- Docker 镜像改为以 `forwardx`（uid 10001）用户运行，不再是 root。第一次用新镜像启动时入口脚本会把数据卷里不属于它的文件改一遍属主，数据多的实例启动多花几秒；挂了 `/var/run/docker.sock` 的自动保持 root，也可以设 `FORWARDX_RUN_AS_ROOT=1` 保持 root。本地安装不受影响。
+- 面板的内容安全策略去掉了 `unsafe-inline`，页面脚本改为每请求 nonce。自定义主题的 CSS 不受影响；自己往页面里塞的内联 `<script>` 不再执行。
+- 用 Cookie 登录的写操作多了一道来源校验：面板自己的域名和手机 App 默认放行，只有把面板 API 嵌进别的站点时才需要填 `FORWARDX_TRUSTED_ORIGINS`。API 令牌不受影响。
+- FXP 2.2.150：半关闭后另一方向最长等 1 小时（`FXP_HALF_CLOSE_MAX_WAIT` 可调），以前没有上限。
+
+### 转发性能与稳定性（FXP 2.2.150、Agent 2.2.269）
+
+| 问题 | 修法 | 实测 |
+|---|---|---|
+| 客户端或目标复位连接后，FXP 会话还要再挂 30 秒；连接风暴 2 秒就把 20000 个文件描述符耗光，之后新连接全部失败 | 明文侧断了立刻收掉两头，隧道侧的关闭照旧等 30 秒把在途数据送完；中转、隧道复位同样当场收 | 建连 180 → 5216 连接/秒（0 失败），文件描述符 19969 → 137 且不再堆积 |
+| TCP 隧道每块明文一次逃逸分配 | 封帧流水线的切片头数组放到结构体上 | 每 GB 分配次数 8588 → 1069（−87%），吞吐 +4%～+10%（A/B 交替 3 遍） |
+| Agent 线路组保护期内每次读客户端都分配 32 KiB | 读协程和主循环之间循环使用缓冲 | 保护期吞吐 +63%～+141%，每 GB 分配次数 30856 → 58，CPU −38%～−51% |
+| UDP 发送协程每包取锁判过期；清扫持会话表锁逐条过期分片 | 先看钟再问队列；分片过期挪到锁外 | A/B 未测出差别（±10% 噪声内），按「未证实收益」记录 |
+
+- 两个在旧代码上会失败的复位用例、3 MiB 保护期上传完整性等 9 个新测试；32 流并发、建连速率、256 会话 UDP 三个基准进仓库（`scripts/bench/dataplane.sh`）。
+- CI 的 agent / forwardx-fxp / lbcore 三个 Go 任务加 `go test -race` 数据面子集，每个 PR 必跑；staticcheck 不再允许失败（顺手修了 `agent/actions.go` 里共享运行时端口判定首轮就返回的真 bug）。
+
+### 安全加固
+
+- 面板：Cookie 会话的 tRPC 写操作校验 `Origin` / `Sec-Fetch-Site`（见升级须知）；CSP 去 `unsafe-inline`、CDN 收紧到 jsdelivr 与 live2d。
+- Agent 的 systemd 单元加 `NoNewPrivileges / RestrictSUIDSGID / RestrictRealtime / LockPersonality / ProtectHostname / ProtectClock / ProtectKernelLogs`，新装或重装 Agent 时写入；测试断言不加会挡住 sysctl / 伪装的那几项。
+- 容器：非 root 运行、`HEALTHCHECK`（`/api/database-health`）、compose 的 healthcheck 和 30 秒停机宽限；镜像里附带 LICENSE 与 NOTICE。
+- CI 的类型检查任务加 `pnpm audit --prod --audit-level=moderate`。
+
+### 可观测
+
+- FXP 进程每分钟把数据面计数上报面板（队列挤掉 / 过期丢包、UDP 会话被拒 / 回收、连接池命中与否、对端消失 / 半关闭收尾 / 等待到期，以及此刻活着的 TCP / UDP 会话数），面板按分钟落库留 7 天，`/metrics` 导出 `nex_fxp_events_5m`、`nex_fxp_udp_sessions`、`nex_fxp_tcp_sessions`。旧面板收到会 404，FXP 当成功处理，不影响转发。
+
+### 前端与工程
+
+- 规则页 / 链路页的地球和自测弹窗、系统设置的六个分区抽成懒加载模块：设置页入口块 347 KB → 108 KB，规则页 313 → 294 KB，链路页 323 → 303 KB；地球只在切到地球视图时加载。
+- 服务端分域第一步：Telegram / Discord / OAuth / 支付四个领域各进自己的目录（71 个文件），导入由脚本重写，行为不变；路由层去掉 129 处多余的 `as any`。规矩和工具见 `docs/dev/server-layout.md`。
+- 新增 NOTICE 致谢上游 ForwardX（AGPL-3.0），README 与登录页注明来源；登录页的源码链接对未登录用户可见（AGPL 第 13 条）。
 
 ## 2.3.548（Agent 2.2.268、FXP 2.2.149 不变）
 

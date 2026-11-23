@@ -810,7 +810,7 @@ func TestExitGroupReportsCumulativePicksAndRecentShare(t *testing.T) {
 		t.Fatalf("代理刚起来：到现在为止分出去的都算最近，拿到 %v", shares)
 	}
 	// 一分钟以后：只算这一分钟里新分的
-	shares = state.recentShares(now.Add(30*time.Second), []int{6, 3, 1})
+	_ = state.recentShares(now.Add(30*time.Second), []int{6, 3, 1}) // 一分钟内再看一次，不该影响下面的结果
 	shares = state.recentShares(now.Add(61*time.Second), []int{6, 3, 11})
 	if shares == nil || shares[0] != 0 || shares[2] != 1 {
 		t.Fatalf("一分钟前分的不该再算进比例：%v", shares)

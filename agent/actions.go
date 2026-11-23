@@ -1766,10 +1766,14 @@ func activeSharedRuntimeForwardType(port int, protocol string) string {
 	if !validActionPort(port) {
 		return ""
 	}
-	for _, path := range managedGostConfigPathsForListenPortProtocol(port, protocol) {
+	// 同一个端口同时出现在 nginx 和 gost 的配置里时以 nginx 为准；以前只看切片里的第一条就返回了。
+	sharedPaths := managedGostConfigPathsForListenPortProtocol(port, protocol)
+	for _, path := range sharedPaths {
 		if path == nginxConfigPath {
 			return "nginx"
 		}
+	}
+	if len(sharedPaths) > 0 {
 		return "gost"
 	}
 	if managedRuntimeConfigUsesPort(nginxConfigPath, port) {

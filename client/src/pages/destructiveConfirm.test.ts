@@ -24,7 +24,7 @@ function callSites(source: string, mutation: string) {
 
 for (const [file, mutation] of [
   ["Plans.tsx", "deletePlan"],
-  ["Settings.tsx", "clearLogsMutation"],
+  ["../components/settings/PanelLogsSection.tsx", "clearLogsMutation"],
   ["../components/TrafficBillingConfigManager.tsx", "deleteConfig"],
   ["Billing.tsx", "deleteRedemptionCode"],
   ["Billing.tsx", "deleteDiscountCode"],

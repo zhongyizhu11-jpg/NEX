@@ -12,15 +12,15 @@ import {
   oidcLoginAdminView,
   planOidcSettingsUpdate,
   readOidcLoginSettings,
-} from "../oidcLoginSettings";
-import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSettings";
-import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discordSettings";
-import { activeOidcSubOf } from "../oidcLoginService";
-import { fetchOidcDiscovery, OidcError, type OidcDiscovery } from "../oidcClient";
-import { ASYMMETRIC_JWS_ALGS, importJwks, parseJsonObject } from "../oauthPrimitives";
+} from "../oauth/oidcLoginSettings";
+import { isGoogleLoginUsable, readGoogleLoginSettings } from "../oauth/googleLoginSettings";
+import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discord/discordSettings";
+import { activeOidcSubOf } from "../oauth/oidcLoginService";
+import { fetchOidcDiscovery, OidcError, type OidcDiscovery } from "../oauth/oidcClient";
+import { ASYMMETRIC_JWS_ALGS, importJwks, parseJsonObject } from "../oauth/oauthPrimitives";
 import { setInitialPasswordForPasswordlessUser } from "../repositories/googleAccountRepository";
 import { unlinkOidcAccount } from "../repositories/oidcAccountRepository";
-import { oidcProviders } from "../oidcAuthRoute";
+import { oidcProviders } from "../oauth/oidcAuthRoute";
 import { clientIp } from "../clientIp";
 import type { User } from "../../drizzle/schema";
 
