@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { BUILTIN_WALLPAPERS, normalizeLiquidGlassConfig, type LiquidGlassConfig } from "@shared/personalization";
+import { normalizeLiquidGlassConfig, type LiquidGlassConfig } from "@shared/personalization";
 import { trpc } from "@/lib/trpc";
 import { mobileAuth } from "@/lib/mobileAuth";
-import { useUiTheme } from "@/hooks/useUiTheme";
+import { useUiTheme, useUiThemeStyleLoaded } from "@/hooks/useUiTheme";
 import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT, readLiquidGlassPreview } from "@/lib/liquidGlass";
+import { liquidGlassPhotoSet } from "@/lib/liquidGlassPhotos";
 
 /*
   「液态玻璃」主题（theme-liquid-glass.css）的两件动的东西，只在 <html data-ui-theme="liquid-glass"> 下挂：
@@ -13,7 +14,9 @@ import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT,
                 个性化 › 液态玻璃的「照片来源」定（shared/personalization.ts 的 LIQUID_GLASS_PHOTO_SOURCES）：
                 随机拉（picsum.photos，记在 sessionStorage 里，同一个标签页里换页不换图）、用「自定义背景」
                 那张、内置壁纸里随机挑两张，或者不放。视频壁纸这套不放，照片格退回渐变色块。
-                图拉不到（断网、被墙）就让 CSS 里那组渐变色块露出来，卡仍然是玻璃。
+                照片来源要的东西没有（选了「自定义背景」却没选壁纸）先用内置壁纸顶着，随机照片拉不到
+                （断网、被墙）也退回内置壁纸（lib/liquidGlassPhotos.ts，2.3.550）；真不要照片的选「不放照片」，
+                那时只剩 CSS 里那组渐变色块，卡仍然是玻璃。
     2. 光标跟随 鼠标在玻璃卡上移动时，卡里跟着亮一团白光：把光标相对卡的位置写进卡的 --fx-sheen-x/y，
                 进来 --fx-sheen-a 置 1、离开置 0，画法在 CSS 的卡片背景第一层。只在有鼠标的设备上监听
                 （hover: hover + pointer: fine），触屏一次都不跑；设置里关了就不挂。pointermove 只写三个
@@ -27,7 +30,6 @@ import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT,
   草稿（setLiquidGlassPreview），这里优先按草稿画。
 */
 
-const PHOTO_PROVIDER = "https://picsum.photos";
 const SEED_STORAGE_KEY = "forwardx-liquid-glass-seed";
 const SHEEN_MEDIA = "(hover: hover) and (pointer: fine)";
 const NARROW_MEDIA = "(max-width: 767px)";
@@ -45,37 +47,37 @@ function readSeed(): number {
   }
 }
 
-function randomPhotoUrl(seed: number, index: number) {
-  return `${PHOTO_PROVIDER}/seed/${seed}-${index}/900/1200`;
-}
-
-/* 内置壁纸里按 seed 挑两张不同的：同一个标签页里稳定，下次打开换 */
-function builtinPair(seed: number): [string, string] {
-  const list = BUILTIN_WALLPAPERS;
-  const first = seed % list.length;
-  const second = list.length > 1 ? (first + 1 + (Math.floor(seed / list.length) % (list.length - 1))) % list.length : first;
-  return [list[first].url, list[second].url];
-}
-
-function Photo({ src }: { src: string | null }) {
+/* 一格照片：src 拉不到就换 fallback（内置壁纸）再试一次，还不行就空着露出渐变色块 */
+function Photo({ src, fallback }: { src: string | null; fallback?: string | null }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [useFallback, setUseFallback] = useState(false);
   useEffect(() => {
     setLoaded(false);
     setFailed(false);
-  }, [src]);
-  const show = !!src && !failed;
+    setUseFallback(false);
+  }, [src, fallback]);
+  const current = useFallback ? fallback || null : src;
+  const show = !!current && !failed;
   return (
-    <div className="fx-lg-photo" data-loaded={show && loaded ? "true" : "false"}>
+    <div className="fx-lg-photo" data-loaded={show && loaded ? "true" : "false"} data-fallback={useFallback ? "true" : undefined}>
       {show ? (
         <img
-          src={src}
+          key={current}
+          src={current}
           alt=""
           loading="eager"
           decoding="async"
           referrerPolicy="no-referrer"
           onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
+          onError={() => {
+            if (!useFallback && fallback && fallback !== src) {
+              setLoaded(false);
+              setUseFallback(true);
+            } else {
+              setFailed(true);
+            }
+          }}
         />
       ) : null}
     </div>
@@ -158,7 +160,9 @@ function useLiquidGlassPreview() {
 
 export default function LiquidGlassBackdrop() {
   const uiTheme = useUiTheme();
-  const active = uiTheme === "liquid-glass";
+  /* 样式包没到（手机上网一抖没下下来，后台在重试）就先不画：这层不挂在 data-ui-theme 下，没样式时会当成普通内容排在页面顶上 */
+  const styled = useUiThemeStyleLoaded("liquid-glass");
+  const active = uiTheme === "liquid-glass" && styled;
   const { data } = trpc.system.publicInfo.useQuery(undefined, {
     enabled: active && (!mobileAuth.isNative || mobileAuth.hasPanelUrl()),
     refetchOnWindowFocus: false,
@@ -185,27 +189,19 @@ export default function LiquidGlassBackdrop() {
   const urlType = background?.urlType || "image";
   const customUrl = String(background?.effectiveUrl || "");
   const wallpaper = backgroundSource !== "none" && urlType !== "video" && customUrl ? customUrl : null;
-  const random: [string, string] = [randomPhotoUrl(seed, 1), randomPhotoUrl(seed, 2)];
-  /* 这一套照片：一张（自定义背景）还是两张不同的（随机 / 内置壁纸）。不放照片时是空的，只剩渐变色块 */
-  let photos: string[];
-  switch (config.photoSource) {
-    case "random": photos = random; break;
-    case "wallpaper": photos = wallpaper ? [wallpaper] : []; break;
-    case "builtin": photos = builtinPair(seed); break;
-    case "none": photos = []; break;
-    default: photos = wallpaper ? [wallpaper] : random;
-  }
+  /* 这一套照片：一张（自定义背景）还是两张不同的（随机 / 内置壁纸）；要的没有就用内置壁纸顶着。不放照片时是空的，只剩渐变色块 */
+  const { photos, fallbacks, substituted } = liquidGlassPhotoSet({ photoSource: config.photoSource, wallpaper, seed });
   const full = config.layout === "full" || (config.layout === "auto" && (photos.length < 2 || narrow));
 
   return (
-    <div className="fx-lg-backdrop" data-layout={full ? "full" : "wings"} aria-hidden="true">
+    <div className="fx-lg-backdrop" data-layout={full ? "full" : "wings"} data-substituted={substituted ? "true" : undefined} aria-hidden="true">
       <div className="fx-lg-backdrop-wings">
         {full ? (
-          <Photo src={photos[0] ?? null} />
+          <Photo src={photos[0] ?? null} fallback={fallbacks[0] ?? null} />
         ) : (
           <>
-            <Photo src={photos[0] ?? null} />
-            <Photo src={photos[1] ?? photos[0] ?? null} />
+            <Photo src={photos[0] ?? null} fallback={fallbacks[0] ?? null} />
+            <Photo src={photos[1] ?? photos[0] ?? null} fallback={fallbacks[1] ?? fallbacks[0] ?? null} />
           </>
         )}
       </div>

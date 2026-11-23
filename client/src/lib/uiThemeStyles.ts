@@ -42,7 +42,37 @@ const BUNDLED_LOADERS: Record<string, () => Promise<unknown>> = {
 
 /* 已经有结果的内置样式包（下完了，或者下失败了）。失败的也算：见 loadUiThemeStyles 的说明。 */
 const settled = new Set<string>();
+/* 真正下完了的内置样式包（settled 的子集）。失败的在后台按 BUNDLED_RETRY_DELAYS_MS 再试，下到了才进这里。 */
+const loaded = new Set<string>();
+/* 失败那次 Vite 报的文件地址（Unable to preload CSS for /assets/ui-theme-….css）：再试时按它自己挂 <link>。 */
+const bundledHrefs = new Map<string, string>();
+const bundledRetryCount = new Map<string, number>();
+const bundledRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const inflight = new Map<string, Promise<void>>();
+
+/*
+  内置样式包第一次没下下来之后在后台再试的节奏（用户面板 2026-11-23：手机上液态玻璃的样式包一次没下到，
+  这一页从此一直是「挂着 data-ui-theme、没有主题样式」的四不像 —— 照片层当成普通内容排在页面顶上，
+  用户：「玻璃主题怎么一点都不像玻璃了」；Vite 的预加载对同一个文件只发一次请求，以前只能刷新）。
+  共约 6 分半；网断了的话等 online 事件马上再试。
+*/
+let BUNDLED_RETRY_DELAYS_MS: readonly number[] = [3_000, 10_000, 30_000, 60_000, 120_000, 180_000];
+
+/** 内置样式包下到了（或者主题包的 <link> 到位了）就在 window 上发一下：等它的组件（液态玻璃的照片层）据此再挂。 */
+export const UI_THEME_STYLE_LOADED_EVENT = "fx-ui-theme-style-loaded";
+
+function notifyStyleLoaded() {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof Event === "function") {
+    window.dispatchEvent(new Event(UI_THEME_STYLE_LOADED_EVENT));
+  }
+}
+
+/** Vite 预加载 CSS 失败时错误信息里带着文件地址；别的错误（node 里 import 不了 .css）没有，那就无从再试。 */
+export function failedPreloadHref(error: unknown): string | null {
+  const message = String((error as Error)?.message || error || "");
+  const match = /Unable to preload CSS for (\S+)/.exec(message);
+  return match ? match[1] : null;
+}
 
 /*
   主题包的样式：按「id + revision」记。loaded 是那条已经下完的 <link>；failed 是上次没下下来的地址
@@ -95,6 +125,19 @@ export function isUiThemeStyleUsable(id: string | null | undefined) {
   return !failedPackageHrefs.has(target.href);
 }
 
+/**
+ * 这一套的样式是不是**真的**到了（isUiThemeStyleReady 把下失败的也算「有结果」）。
+ * 只在那套主题下才渲染、又没挂在 data-ui-theme 下面的元素（液态玻璃的照片层）看这个：样式没到就别画，
+ * 不然照片会当成普通内容排在页面顶上。经典和不认识的值没有主题文件，一直是 true。
+ */
+export function isUiThemeStyleLoaded(id: string | null | undefined) {
+  if (bundledLoader(id)) return loaded.has(id as string);
+  const target = packageTarget(id);
+  if (!target) return true;
+  return packageSheets.get(target.id)?.href === target.href;
+}
+
+
 function waitForSheet(link: HTMLLinkElement): Promise<boolean> {
   return new Promise((resolve) => {
     link.addEventListener("load", () => resolve(true), { once: true });
@@ -115,6 +158,88 @@ async function ensureCompactTail() {
   const done = waitForSheet(link);
   document.head.appendChild(link);
   await done;
+}
+
+/** 内置样式包：按失败那次记下的地址自己挂一条 <link>（Vite 不会再发第二次请求）。 */
+async function mountBundledSheet(id: string, href: string) {
+  if (typeof document === "undefined") return false;
+  document.querySelector(`link[href="${href}"]`)?.remove();
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = href;
+  link.setAttribute("data-fx-ui-theme-bundled", id);
+  const done = waitForSheet(link);
+  document.head.appendChild(link);
+  if (await done) return true;
+  link.remove();
+  return false;
+}
+
+function scheduleBundledRetry(id: string) {
+  const href = bundledHrefs.get(id);
+  if (!href || bundledRetryTimers.has(id) || typeof setTimeout !== "function") return;
+  const attempt = bundledRetryCount.get(id) || 0;
+  const delay = BUNDLED_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) return;
+  bundledRetryCount.set(id, attempt + 1);
+  const timer = setTimeout(() => {
+    bundledRetryTimers.delete(id);
+    void retryBundled(id);
+  }, delay);
+  (timer as { unref?: () => void }).unref?.();
+  bundledRetryTimers.set(id, timer);
+}
+
+async function retryBundled(id: string) {
+  if (loaded.has(id)) return;
+  const href = bundledHrefs.get(id);
+  if (!href) return;
+  const ok = await mountBundledSheet(id, href);
+  if (ok) {
+    loaded.add(id);
+    notifyStyleLoaded();
+    return;
+  }
+  scheduleBundledRetry(id);
+}
+
+/* 网断过又连上：失败过的内置样式包马上再试一次，不等退避 */
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("online", () => {
+    for (const id of bundledHrefs.keys()) {
+      if (loaded.has(id)) continue;
+      const timer = bundledRetryTimers.get(id);
+      if (timer) { clearTimeout(timer); bundledRetryTimers.delete(id); }
+      void retryBundled(id);
+    }
+  });
+}
+
+async function loadBundled(id: string, loader: () => Promise<unknown>) {
+  const href = bundledHrefs.get(id);
+  let ok = false;
+  if (href) {
+    ok = await mountBundledSheet(id, href);
+  } else {
+    try {
+      await loader();
+      ok = true;
+    } catch (error) {
+      const failed = failedPreloadHref(error);
+      if (failed) {
+        bundledHrefs.set(id, failed);
+        if (typeof document !== "undefined") document.querySelector(`link[href="${failed}"]`)?.remove();
+      }
+      console.warn(`[ui-theme] 「${id}」的样式没下下来${failed ? "，稍后再试" : ""}`, error);
+    }
+  }
+  settled.add(id);
+  if (ok) {
+    loaded.add(id);
+    notifyStyleLoaded();
+    return;
+  }
+  scheduleBundledRetry(id);
 }
 
 async function loadPackageSheet(target: { id: string; href: string }) {
@@ -138,13 +263,16 @@ async function loadPackageSheet(target: { id: string; href: string }) {
   const previous = packageSheets.get(target.id);
   packageSheets.set(target.id, { href: target.href, link });
   if (previous && previous.link !== link) previous.link.remove();
+  notifyStyleLoaded();
 }
 
 /**
  * 把这一套的样式下下来。总是 resolve（不 reject）：下载失败也照样往下走 —— 宁可这一次主题没画全，
  * 也不能让开机一直卡在启动底色、或者切换一直不生效。
- * 内置的样式包失败了也记成「有结果了」，之后切到它直接挂：Vite 的预加载对同一个文件只发一次请求，
- * 这一页里再要也不会重下，再等也等不来；刷新之后才会再试（一般是刚发版、旧文件已经不在了）。
+ * 内置的样式包失败了也记成「有结果了」，之后切到它直接挂（宁可先没样式，也不让切换一直不生效）；
+ * 同时在后台按 BUNDLED_RETRY_DELAYS_MS 自己挂 <link> 再试（Vite 的预加载对同一个文件只发一次请求，
+ * 这一页里再 import 也不会重下），下到了发 UI_THEME_STYLE_LOADED_EVENT，等它的组件跟着挂上。
+ * 刚发版、旧文件已经不在了的那种（404）再试也没用，退避完就不试了，刷新才能好。
  * 主题包失败了记的是那个地址，isUiThemeStyleUsable 会答「不能用」，调用的人退回经典。
  */
 export function loadUiThemeStyles(id: string | null | undefined): Promise<void> {
@@ -156,10 +284,7 @@ export function loadUiThemeStyles(id: string | null | undefined): Promise<void> 
   const running = inflight.get(key);
   if (running) return running;
   const work = loader
-    ? loader().then(
-      () => undefined,
-      (error: unknown) => { console.warn(`[ui-theme] 「${key}」的样式没下下来`, error); },
-    ).finally(() => { settled.add(key); })
+    ? loadBundled(key, loader)
     : loadPackageSheet(target!).catch(() => { failedPackageHrefs.add(target!.href); });
   const task = work.finally(() => { inflight.delete(key); });
   inflight.set(key, task);
@@ -179,4 +304,21 @@ export function syncUiThemePackageSheets(activeId: string | null | undefined) {
     }
     sheet.link.disabled = id !== activeId;
   }
+}
+
+/* 只给测试用：换掉内置样式包的下载函数和退避节奏，并清空状态。 */
+export function __uiThemeStylesForTest() {
+  return {
+    setBundledLoader(id: string, loader: () => Promise<unknown>) { BUNDLED_LOADERS[id] = loader; },
+    setRetryDelays(delays: readonly number[]) { BUNDLED_RETRY_DELAYS_MS = delays; },
+    reset() {
+      settled.clear();
+      loaded.clear();
+      bundledHrefs.clear();
+      bundledRetryCount.clear();
+      for (const timer of bundledRetryTimers.values()) clearTimeout(timer);
+      bundledRetryTimers.clear();
+      inflight.clear();
+    },
+  };
 }

@@ -29,6 +29,7 @@ import { useCallback, useRef, useState, useEffect } from "react";
 import { useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
 import { UiThemeDot } from "@/components/UiThemeQuickSwitch";
 import { setLiquidGlassPreview } from "@/lib/liquidGlass";
+import { liquidGlassPhotoSourceHint } from "@/lib/liquidGlassPhotos";
 import { useUiThemeOverride } from "@/hooks/useUiThemeOverride";
 import { toast } from "sonner";
 import { BRAND_LOGO_MAX_BYTES } from "@shared/avatar";
@@ -682,6 +683,8 @@ export default function PersonalizationSettingsSection() {
   const updateLiquidGlass = (patch: Partial<LiquidGlassConfig>) => {
     setLiquidGlass((prev) => normalizeLiquidGlassConfig({ ...prev, ...patch }));
   };
+  /* 照片来源选了「自定义背景」却还没在「背景」里选壁纸（用户面板 2026-11-23：照片格空着、玻璃卡压在平底色上） */
+  const liquidGlassPhotoHint = liquidGlassPhotoSourceHint(liquidGlass.photoSource, backgroundConfig.source !== "none" && backgroundConfig.urlType !== "video");
 
   const handleSaveBackground = () => {
     const nextBackground = normalizePersonalizationBackgroundConfig(backgroundConfig);
@@ -1273,6 +1276,7 @@ export default function PersonalizationSettingsSection() {
                   );
                 })}
               </div>
+              {liquidGlassPhotoHint ? <p className="text-xs leading-5 text-[var(--fx-warn-text)]">{liquidGlassPhotoHint}</p> : null}
             </div>
             <div className="space-y-2">
               <Label>照片布局</Label>

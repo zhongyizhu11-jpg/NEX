@@ -86,6 +86,11 @@ test("地区组怎么选：令牌上只认三种，其余跟随全局；全局�
   assert.equal(normalizeProxySubTokenOptions({ regionGroupType: "select" }).regionGroupType, "select");
   assert.equal(normalizeProxySubTokenOptions({ regionGroupType: "FALLBACK" }).regionGroupType, "fallback");
   assert.equal(normalizeProxySubTokenOptions({ regionGroupType: "load-balance" }).regionGroupType, "default");
+  // 某个地区单独选：两位国家码 → 三种之一；键大小写不管、值认不出的丢掉（= 跟上面）、不是对象的当没有
+  assert.deepEqual(normalizeProxySubTokenOptions({}).regionGroupTypes, {});
+  assert.deepEqual(normalizeProxySubTokenOptions({ regionGroupTypes: { hk: "select", JP: "FALLBACK", US: "load-balance", HKG: "select", "": "select" } }).regionGroupTypes, { HK: "select", JP: "fallback" });
+  assert.deepEqual(normalizeProxySubTokenOptions({ regionGroupTypes: ["select"] }).regionGroupTypes, {});
+  assert.deepEqual(normalizeProxySubTokenOptions({ regionGroupTypes: "HK" }).regionGroupTypes, {});
   assert.equal(normalizeProxySubSettings({}).regionGroupTypeDefault, "url-test");
   assert.equal(normalizeProxySubSettings({ regionGroupTypeDefault: "nope" as any }).regionGroupTypeDefault, "url-test");
   assert.equal(parseProxySubSettings({ [proxySubSettingKey("regionGroupTypeDefault")]: "select" }).regionGroupTypeDefault, "select");
