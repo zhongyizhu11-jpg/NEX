@@ -25,7 +25,8 @@ import {
 */
 
 const LATENCY_DAILY_TABLE = "latency_daily_stats";
-const LATENCY_DAILY_WATERMARK_KEY = "latencyDailyRollupThrough";
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const LATENCY_DAILY_WATERMARK_KEY = "latencyDailyRollupThrough";
 const ROLLUP_LAG_SECONDS = 5 * 60;
 const ROLLUP_MAX_WINDOW_SECONDS = 6 * 3600;
 const RAW_RETENTION_SECONDS = 72 * 3600;

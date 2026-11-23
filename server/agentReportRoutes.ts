@@ -493,7 +493,8 @@ export async function validateTunnelProbeSource(
  * 规格指纹 probeKey（hostProbeServiceRepository.hostProbeHttpTaskKey）；方式也要对上 —— 一条服务从 TCPing
  * 改成 URL 检测后，旧的 TCP 延迟不能记到它头上，反过来也一样。失败种类、HTTP 状态码原样带进去，入库时再归一。
  */
-function hostProbeServiceStatFromReport(
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function hostProbeServiceStatFromReport(
   hostId: number,
   report: AgentHostProbeServiceResult,
   expected: { serviceId: number; method?: string; targetIp?: string; targetPort?: number; probeKey?: string },

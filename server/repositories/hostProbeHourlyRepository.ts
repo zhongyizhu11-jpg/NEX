@@ -16,7 +16,8 @@ import { deleteExpiredHistoryRows } from "./historyRetention";
 */
 
 const HOST_PROBE_HOURLY_TABLE = "host_probe_service_hourly";
-const HOST_PROBE_HOURLY_WATERMARK_KEY = "hostProbeHourlyRollupThrough";
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export const HOST_PROBE_HOURLY_WATERMARK_KEY = "hostProbeHourlyRollupThrough";
 const HOST_PROBE_HISTORY_DAYS = 30;
 /** 超过这么多小时的图表读小时表（原始样本的保留期）。 */
 export const HOST_PROBE_RAW_MAX_HOURS = 72;
