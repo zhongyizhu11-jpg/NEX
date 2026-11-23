@@ -37,6 +37,9 @@ test("面板转发：哈希对才缓存，哈希不对的内容丢掉", async ()
   const cwd = process.cwd();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nex-mimic-assets-"));
   process.chdir(tmp);
+  // 缓存放数据目录（按 SQLITE_PATH 所在目录找），测试里指到临时目录的 data/ 下。
+  const previousSqlitePath = process.env.SQLITE_PATH;
+  process.env.SQLITE_PATH = path.join(tmp, "data", "forwardx.db");
   try {
     const asset = "bookworm_mimic_0.7.1-1_amd64.deb";
     let calls = 0;
@@ -54,6 +57,7 @@ test("面板转发：哈希对才缓存，哈希不对的内容丢掉", async ()
     assert.equal(await getOrFetchMimicAssetPath("0.7.1", "not-a-mimic-asset.deb", notFound), null);
   } finally {
     process.chdir(cwd);
+    if (previousSqlitePath === undefined) delete process.env.SQLITE_PATH; else process.env.SQLITE_PATH = previousSqlitePath;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -62,6 +66,9 @@ test("缓存里哈希不对的旧文件会被删掉重拉", async () => {
   const cwd = process.cwd();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nex-mimic-assets-"));
   process.chdir(tmp);
+  // 缓存放数据目录（按 SQLITE_PATH 所在目录找），测试里指到临时目录的 data/ 下。
+  const previousSqlitePath = process.env.SQLITE_PATH;
+  process.env.SQLITE_PATH = path.join(tmp, "data", "forwardx.db");
   try {
     const asset = "noble_mimic_0.7.1-1_amd64.deb";
     const cachePath = path.join(tmp, "data/mimic-assets/v0.7.1", asset);
@@ -72,6 +79,7 @@ test("缓存里哈希不对的旧文件会被删掉重拉", async () => {
     assert.equal(fs.existsSync(cachePath), false);
   } finally {
     process.chdir(cwd);
+    if (previousSqlitePath === undefined) delete process.env.SQLITE_PATH; else process.env.SQLITE_PATH = previousSqlitePath;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
