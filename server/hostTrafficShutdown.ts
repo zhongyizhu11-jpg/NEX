@@ -23,7 +23,7 @@ import {
 */
 
 /** 计数多久没更新就不认（秒）：Agent 掉线期间的旧计数不拿来关机。 */
-export const TRAFFIC_SHUTDOWN_COUNTER_FRESH_SECONDS = 600;
+const TRAFFIC_SHUTDOWN_COUNTER_FRESH_SECONDS = 600;
 
 const ENABLED_CACHE_TTL_MS = 30_000;
 let enabledCache: { ids: Set<number>; loadedAt: number } | null = null;

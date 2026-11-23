@@ -16,7 +16,7 @@ const q = quoteDbIdentifier;
  * 节点池的两种用途（2.3.500 起）：中转 = 线路里一层候选；落地 = 同一份落地配置开在每台成员上
  * （server/landingPools.ts）。2.3.499 以前的「通用」（any）读成中转：它本来就只在中转层里用得上。
  */
-export const NODE_POOL_ROLES = ["relay", "landing"] as const;
+const NODE_POOL_ROLES = ["relay", "landing"] as const;
 export type NodePoolRole = (typeof NODE_POOL_ROLES)[number];
 
 export type NodePool = {

@@ -7,12 +7,12 @@ export const AGENT_PLUGIN_TASK_VERSION = "2.2.151";
 
 // 版本比较的唯一一份在 shared/version.ts。这里保持再导出，是因为服务端十几处
 // 都从 agentRouteUtils 拿 isAgentVersionAtLeast，没必要为了搬家改一圈 import。
-export { normalizeVersion, compareVersions, isAgentVersionAtLeast, isAgentVersionBehind } from "../shared/version";
+export {  compareVersions, isAgentVersionAtLeast,  } from "../shared/version";
 import { compareVersions, normalizeVersion } from "../shared/version";
 import { fxpRuntimeNeedsUpgrade } from "../shared/fxpRuntime";
 import { FORWARDX_AGENT_DISTRIBUTION, NEX_AGENT_DISTRIBUTION, normalizeAgentDistribution } from "../shared/agentDistribution";
 
-export function isAgentUpgradeTargetSatisfied(
+function isAgentUpgradeTargetSatisfied(
   version: string | null | undefined,
   target: string | null | undefined,
   currentSupportedVersion?: string | null,

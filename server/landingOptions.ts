@@ -22,7 +22,7 @@ import { dbBool } from "./repositories/repositoryUtils";
 
 type Actor = { id: number; role: string };
 
-export type LandingOptionInbound = {
+type LandingOptionInbound = {
   id: number;
   name: string;
   port: number;

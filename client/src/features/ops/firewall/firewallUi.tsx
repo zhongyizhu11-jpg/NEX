@@ -67,7 +67,7 @@ export function ModeSegmented({ value, onChange, ariaLabel, disabled }: {
   );
 }
 
-export function countryLabel(code: string) {
+function countryLabel(code: string) {
   const flag = countryFlagEmoji(code);
   return `${flag ? `${flag} ` : ""}${firewallCountryName(code)}`;
 }

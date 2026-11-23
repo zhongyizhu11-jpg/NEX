@@ -34,7 +34,7 @@ export const PROXY_SUB_IP_VERSION_LABELS: Record<ProxySubIpVersion, string> = {
 };
 
 /** 跳过原因（和 plan.skipped 里别的原因同一张表，见 PROXY_SUBSCRIPTION_SKIP_LABELS）。 */
-export const PROXY_SUB_IP_VERSION_SKIP_REASON = {
+const PROXY_SUB_IP_VERSION_SKIP_REASON = {
   "4": "no-ipv4-address",
   "6": "no-ipv6-address",
 } as const;

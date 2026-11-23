@@ -20,7 +20,7 @@ const MAX_ITEMS = 20;
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,63}$/;
 const VERSION_PATTERN = /^v?\d+\.\d+\.\d+$/;
 
-export type DeveloperAnnouncementType = "normal" | "popup" | "upgrade_popup";
+type DeveloperAnnouncementType = "normal" | "popup" | "upgrade_popup";
 
 export type DeveloperAnnouncement = {
   id: string;
@@ -94,7 +94,7 @@ export function developerAnnouncementApplies(item: DeveloperAnnouncement, panelV
 const markerKey = (id: string) => `developer-announcement-feed:${id}`;
 
 /** 把适用的、还没发过的几条插进公告。返回这次插了哪几条。 */
-export async function applyDeveloperAnnouncementFeed(items: DeveloperAnnouncement[], panelVersion = APP_VERSION, nowSeconds = Math.floor(Date.now() / 1000)) {
+async function applyDeveloperAnnouncementFeed(items: DeveloperAnnouncement[], panelVersion = APP_VERSION, nowSeconds = Math.floor(Date.now() / 1000)) {
   const inserted: string[] = [];
   for (const item of items) {
     if (!developerAnnouncementApplies(item, panelVersion, nowSeconds)) continue;
@@ -146,9 +146,4 @@ export function syncDeveloperAnnouncementFeed(fetchText: () => Promise<string>, 
     })
     .finally(() => { inflight = null; });
   return inflight;
-}
-
-export function resetDeveloperAnnouncementFeedForTests() {
-  lastSyncAt = 0;
-  inflight = null;
 }

@@ -12,7 +12,7 @@
 
 import { isDatabaseTransactionActive } from "../dbRuntime";
 
-export type OpsReservedPort = { hostId: number; port: number };
+type OpsReservedPort = { hostId: number; port: number };
 
 type Loader = () => Promise<OpsReservedPort[]>;
 

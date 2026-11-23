@@ -49,9 +49,9 @@ import { withKeyedTaskLock } from "./keyedTaskLock";
   的对账逻辑只有一份（下面的 publishDdnsLineRecords / deleteDdnsLineRecords）。
 */
 
-export type DdnsLineTransport = (action: string, payload: Record<string, unknown>) => Promise<unknown>;
-export type AliyunLineTransport = (action: string, params: Record<string, string | number | undefined>) => Promise<unknown>;
-export type HuaweiLineTransport = (
+type DdnsLineTransport = (action: string, payload: Record<string, unknown>) => Promise<unknown>;
+type AliyunLineTransport = (action: string, params: Record<string, string | number | undefined>) => Promise<unknown>;
+type HuaweiLineTransport = (
   method: string,
   path: string,
   query: Record<string, string | number | undefined>,

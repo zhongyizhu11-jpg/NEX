@@ -30,7 +30,7 @@ export type LayoutOptions = {
   sweeps?: number;
 };
 
-export type LayoutNode = { id: string; x: number; y: number; layer: number; order: number; width: number; height: number };
+type LayoutNode = { id: string; x: number; y: number; layer: number; order: number; width: number; height: number };
 
 export type TopologyLayout = {
   nodes: Map<string, LayoutNode>;
@@ -57,7 +57,7 @@ function compareIds(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-export function edgeKey(from: string, to: string) {
+function edgeKey(from: string, to: string) {
   return `${from}>${to}`;
 }
 

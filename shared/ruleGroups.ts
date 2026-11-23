@@ -17,7 +17,7 @@ export const PERSONAL_RULE_GROUP_NAME_MAX = 64;
 /** 一次归组最多动多少条规则。 */
 export const MAX_PERSONAL_RULE_GROUP_CHANGE = 500;
 
-export const ruleGroupNameSchema = z.string().trim()
+const ruleGroupNameSchema = z.string().trim()
   .min(1, "分组名不能为空")
   .max(PERSONAL_RULE_GROUP_NAME_MAX, `分组名最多 ${PERSONAL_RULE_GROUP_NAME_MAX} 个字符`);
 

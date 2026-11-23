@@ -22,7 +22,7 @@ function sameLine(a: DdnsLineRef, b: DdnsLineRef | null) {
 }
 
 /** 「电信、联通」/「只在默认线路」。 */
-export function describeMemberDdnsLines(value: DdnsLineRef[] | null | undefined) {
+function describeMemberDdnsLines(value: DdnsLineRef[] | null | undefined) {
   return value && value.length > 0 ? value.map((line) => line.name).join("、") : "只在默认线路";
 }
 

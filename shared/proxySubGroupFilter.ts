@@ -83,7 +83,7 @@ function compileTerm(raw: string): Term | null {
   return { negate: false, test: (name) => atoms.every((atom) => atom(name)) };
 }
 
-export function parseProxySubGroupTerms(filter: string): Term[] {
+function parseProxySubGroupTerms(filter: string): Term[] {
   return String(filter || "")
     .split(/[,，\n]/)
     .map(compileTerm)

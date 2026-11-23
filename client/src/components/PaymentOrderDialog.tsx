@@ -34,7 +34,7 @@ export function usePaymentOrderDialog(options: { onPaid?: () => void } = {}) {
   return { order, launch, close: () => setOrder(null), dialog };
 }
 
-export function PaymentOrderDialog({
+function PaymentOrderDialog({
   order,
   onClose,
   onPaid,

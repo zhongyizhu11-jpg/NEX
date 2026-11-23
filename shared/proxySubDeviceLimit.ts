@@ -13,7 +13,7 @@
  * 这里只做纯判断，设备记录的增删由服务端做。
  */
 
-export type ProxySubDeviceRecord = {
+type ProxySubDeviceRecord = {
   /** 真 hwid，或退化模式下的 `ip:<地址>`。 */
   hwid: string;
   lastSeenAt: number;
@@ -51,7 +51,7 @@ export function normalizeProxySubHwid(value: unknown): string {
   return /^[A-Za-z0-9=-]{10,64}$/.test(raw) ? raw : "";
 }
 
-export function ipDeviceKey(ip: string): string {
+function ipDeviceKey(ip: string): string {
   const clean = String(ip || "").trim();
   return clean ? `ip:${clean}` : "";
 }

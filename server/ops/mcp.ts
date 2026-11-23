@@ -18,9 +18,9 @@ import { APP_VERSION } from "../../shared/versions";
 import { API_TOKEN_READ_ONLY_MESSAGE, apiTokenModuleDeniedMessage, type ApiTokenScope } from "./apiTokenPolicy";
 import { apiTokenModulesAllowPath, type ApiTokenModule } from "../../shared/apiTokenModules";
 
-export const MCP_SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
-export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-export const MCP_SERVER_NAME = "nex";
+const MCP_SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
+const MCP_DEFAULT_PROTOCOL_VERSION = "2025-06-18";
+const MCP_SERVER_NAME = "nex";
 
 /** 按 tRPC 路径调一个过程（例如 "rules.listPage"）。 */
 export type McpInvoker = (path: string, input?: unknown) => Promise<unknown>;
@@ -55,8 +55,8 @@ type JsonRpcResponse =
   | { jsonrpc: "2.0"; id: JsonRpcId; result: unknown }
   | { jsonrpc: "2.0"; id: JsonRpcId; error: { code: number; message: string; data?: unknown } };
 
-export const JSON_RPC_PARSE_ERROR = -32700;
-export const JSON_RPC_INVALID_REQUEST = -32600;
+const JSON_RPC_PARSE_ERROR = -32700;
+const JSON_RPC_INVALID_REQUEST = -32600;
 export const JSON_RPC_METHOD_NOT_FOUND = -32601;
 export const JSON_RPC_INVALID_PARAMS = -32602;
 export const JSON_RPC_INTERNAL_ERROR = -32603;

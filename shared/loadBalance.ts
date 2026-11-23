@@ -53,7 +53,7 @@ export const BALANCE_DEFAULT_STRATEGY: BalanceStrategy = "auto";
  * 延迟优先开了「只走最快的一台」（BalanceDetect.fastestOnly）时那一句换成这句：分配方式还是延迟优先，只是不在
  * 「一样快」的几个里分，只走最快的一个（lbcore/fastest.go，GOST 出口组和 NEX 隧道一样）。
  */
-export const BALANCE_LATENCY_FASTEST_ONLY_HINT = "只走最快的一台，别的候补；快出门槛且稳 60 秒才换";
+const BALANCE_LATENCY_FASTEST_ONLY_HINT = "只走最快的一台，别的候补；快出门槛且稳 60 秒才换";
 
 /** 那一句说明；perSession：只转 UDP 时说「新会话」。detect：给了而且开了「只走最快的一台」时，延迟优先说那一句。 */
 export function balanceStrategyHint(strategy: BalanceStrategy, perSession = false, detect?: Pick<BalanceDetect, "fastestOnly"> | null) {
@@ -164,7 +164,7 @@ export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
 };
 
 /** 「只走最快的一台」：另一台要连着快出门槛多久才换过去（lbcore.DefaultFastestHold）。不给调。 */
-export const BALANCE_FASTEST_HOLD_SECONDS = 60;
+const BALANCE_FASTEST_HOLD_SECONDS = 60;
 
 /*
   检测灵敏度三档（2.3.539）：大多数人只需要选一档，不用逐项调。「均衡」就是默认值；改过任何一项就显示「自定义」。

@@ -17,7 +17,7 @@ import { AGENT_VERSION } from "../shared/versions";
 
 import { DEV_ADMIN_PASSWORD, DEV_ADMIN_USERNAME, isDevPanelMode } from "./devPanelMode";
 
-export { DEV_ADMIN_PASSWORD, DEV_ADMIN_USERNAME, DEV_PANEL_FLAG, isDevPanelMode } from "./devPanelMode";
+;
 
 type DevUsers = {
   adminId: number;

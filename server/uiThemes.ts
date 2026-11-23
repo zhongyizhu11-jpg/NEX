@@ -104,7 +104,7 @@ export async function listInstalledUiThemes(): Promise<UiThemeSummary[]> {
   }
 }
 
-export async function installedUiThemeIds(): Promise<string[]> {
+async function installedUiThemeIds(): Promise<string[]> {
   return (await listInstalledUiThemes()).map((theme) => theme.id);
 }
 
@@ -184,7 +184,7 @@ let activeDownloads = 0;
  * 走 ssrf.ts 的 safeHttpGet —— 不许连内网和本机（管理员填的地址也一样：填错了、或者被人骗着填一个内网地址，
  * 面板不该替他去探内网），连接钉在检查过的地址上，正文超过上限立刻断。跳转自己一跳一跳跟，每一跳都重新检查。
  */
-export async function downloadUiThemeArchive(rawUrl: string, fetcher: typeof safeHttpGet = safeHttpGet): Promise<Buffer> {
+async function downloadUiThemeArchive(rawUrl: string, fetcher: typeof safeHttpGet = safeHttpGet): Promise<Buffer> {
   let current = String(rawUrl || "").trim();
   if (!/^https?:\/\//i.test(current)) throw new UiThemeError("请填写 http:// 或 https:// 开头的压缩包直链");
   if (current.length > 2000) throw new UiThemeError("链接太长了");

@@ -1,7 +1,7 @@
 import { isAgentVersionAtLeast } from "./agentRouteUtils";
 import { clearAuthenticatedAgentActivity } from "./agentActivity";
 
-export const AGENT_FAST_LIVENESS_MIN_VERSION = "2.2.171";
+const AGENT_FAST_LIVENESS_MIN_VERSION = "2.2.171";
 // Presence normally arrives every five seconds, but one attempt can occupy up
 // to eight seconds and transient failures use bounded retries. Requiring 90
 // seconds of silence tolerates transient network stalls without falling back
@@ -36,7 +36,7 @@ export type AgentFastLivenessHost = {
   updatedAt?: unknown;
 };
 
-export type AgentFastLivenessState = {
+type AgentFastLivenessState = {
   hostId: number;
   agentVersion: string;
   transitionEpoch: number;

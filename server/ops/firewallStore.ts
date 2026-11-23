@@ -15,17 +15,17 @@ import { formatCidrShort, parseCidr } from "./firewallCidr";
 
 const q = (name: string) => quoteDbIdentifier(name);
 
-export const HOST_RULE_SETTING = "ops.firewall.hostRule";
-export const PANEL_RULE_SETTING = "ops.firewall.panelRule";
+const HOST_RULE_SETTING = "ops.firewall.hostRule";
+const PANEL_RULE_SETTING = "ops.firewall.panelRule";
 
 export type CountryRule = { mode: FirewallMode; countries: string[] };
 export type PanelAccessRule = CountryRule & { includeSubscription: boolean };
 
-export function normalizeMode(value: unknown): FirewallMode {
+function normalizeMode(value: unknown): FirewallMode {
   return FIREWALL_MODES.includes(value as FirewallMode) ? value as FirewallMode : "off";
 }
 
-export function normalizeHostPolicy(value: unknown): FirewallHostPolicy {
+function normalizeHostPolicy(value: unknown): FirewallHostPolicy {
   return FIREWALL_HOST_POLICIES.includes(value as FirewallHostPolicy) ? value as FirewallHostPolicy : "follow";
 }
 

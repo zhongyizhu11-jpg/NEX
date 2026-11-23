@@ -42,11 +42,6 @@ export async function getAutoIpChangePluginStatus(options: { fresh?: boolean } =
   return value;
 }
 
-export function invalidateAutoIpChangePluginStatus() {
-  statusCache = null;
-  serviceInstance?.invalidateProbeCache();
-}
-
 let cipherInstance: CredentialCipher | null = null;
 
 let serviceInstance: IpChangeService | null = null;

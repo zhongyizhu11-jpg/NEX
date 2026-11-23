@@ -33,7 +33,7 @@ export function isLinkProbeFresh(at: unknown, now = Date.now()): boolean {
 }
 
 /** 连续几次端到端探测都超时，才算这条转发「不通」（订阅自动隐藏用）。 */
-export const RULE_UNREACHABLE_CONSECUTIVE_TIMEOUTS = 3;
+const RULE_UNREACHABLE_CONSECUTIVE_TIMEOUTS = 3;
 
 /**
  * 这条转发现在是不是不通：最近的 RULE_UNREACHABLE_CONSECUTIVE_TIMEOUTS 次探测全超时，

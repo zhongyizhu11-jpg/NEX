@@ -420,8 +420,3 @@ export async function collectMetricsSnapshot(options: MetricsCollectOptions): Pr
   snapshot.routes = routes;
   return finish();
 }
-
-export function resetMetricsCollectStateForTest() {
-  trafficIn = new MonotonicTotal();
-  trafficOut = new MonotonicTotal();
-}

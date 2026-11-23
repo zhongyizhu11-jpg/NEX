@@ -88,7 +88,7 @@ async function telegramHostStatusEnabled() {
 }
 
 /** 一轮巡检里超过这么多台主机同时掉线，就改发一条汇总，而不是每台一条。 */
-export const HOST_STATUS_SUMMARY_THRESHOLD = 5;
+const HOST_STATUS_SUMMARY_THRESHOLD = 5;
 /** 汇总消息里最多列出多少台主机的名字，其余只报数量。 */
 const HOST_STATUS_SUMMARY_MAX_NAMES = 30;
 
@@ -309,7 +309,7 @@ async function handlePresenceCapableHostOnline(event: AgentFastLivenessTransitio
   await notifyHostStatusChange({ ...host, isOnline: true, lastHeartbeat: new Date() }, "online");
 }
 
-export async function handlePresenceCapableHostOffline(event: AgentFastLivenessTransition) {
+async function handlePresenceCapableHostOffline(event: AgentFastLivenessTransition) {
   if (event.kind !== "confirmed-offline" || event.confirmedOffline !== true || !event.offlineAt) return;
   const hostId = Number(event.hostId || 0);
   // 多实例部署：只有跑后台任务的实例把主机写成离线、清运行状态、发通知（server/panelLease.ts）。别的实例

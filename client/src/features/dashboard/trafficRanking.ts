@@ -14,7 +14,7 @@
  * 类型还在，只是从「分三张图」退成每一行上的一个标记。
  */
 
-export type TrafficBreakdownItem = {
+type TrafficBreakdownItem = {
   id: number;
   name: string;
   bytesIn?: number;
@@ -36,7 +36,7 @@ export const TRAFFIC_RANK_KIND_LABELS: Record<TrafficRankKind, string> = {
   group: "转发组",
 };
 
-export type TrafficRankItem = {
+type TrafficRankItem = {
   key: string;
   id: number;
   name: string;

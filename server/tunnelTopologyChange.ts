@@ -44,7 +44,7 @@ export function noteRuleRouteChanged(ruleId: number, options: { reason: string; 
 }
 
 /** 清掉这条链路在内存里的旧路线状态（同步，保存事务里也能调）。返回链路上的规则 id。 */
-export async function forgetTunnelTopologyState(tunnelId: number) {
+async function forgetTunnelTopologyState(tunnelId: number) {
   const rules = await db.getForwardRulesByTunnel(Number(tunnelId)).catch(() => [] as TunnelRuleRow[]) as TunnelRuleRow[];
   const ruleIds = rules.map((rule) => Number(rule.id)).filter((id) => id > 0);
   forgetTunnelLatencyView(tunnelId, ruleIds);

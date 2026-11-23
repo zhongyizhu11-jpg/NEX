@@ -1,6 +1,6 @@
 import { LINK_TERM_FAILOVER, LINK_TERM_SPLIT_CONNECTION } from "./linkTerms";
 
-export const TUNNEL_RELAY_MODES = ["chain", "failover", "aggregate", "hot_standby"] as const;
+const TUNNEL_RELAY_MODES = ["chain", "failover", "aggregate", "hot_standby"] as const;
 
 export type TunnelRelayMode = (typeof TUNNEL_RELAY_MODES)[number];
 
@@ -55,7 +55,7 @@ export function tunnelRelayHotStandbySupported(mode: unknown) {
 export const GOST_RELAY_SELECTOR_MIN_NEX_BUILD = 6;
 
 /** 运行时版本串里的 NEX 构建号：3.2.6-nex6 → 6；官方版、没装、认不出是 null。 */
-export function gostRuntimeNexBuild(runtimeVersion: unknown): number | null {
+function gostRuntimeNexBuild(runtimeVersion: unknown): number | null {
   const match = String(runtimeVersion ?? "").trim().match(/-nex(\d+)\b/i);
   if (!match) return null;
   const build = Number(match[1]);
@@ -121,7 +121,7 @@ export function isTunnelRelayMultiLeg(tunnel: any, hops: any[]) {
 }
 
 /** Minimum relays before a side-by-side relay mode has anything to work with. */
-export const TUNNEL_RELAY_PARALLEL_MIN_RELAYS = 2;
+const TUNNEL_RELAY_PARALLEL_MIN_RELAYS = 2;
 
 export type TunnelRelayModeAvailability = {
   available: boolean;

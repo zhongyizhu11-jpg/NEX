@@ -15,7 +15,7 @@
   依赖都从 createDiscordNotifier 注入，测试里换成假的。
 */
 import { appendPanelLog } from "../_core/panelLogger";
-import { DiscordApiError, getDiscordRestClient, isDiscordRecipientError, isDiscordUnauthorizedError, type DiscordRestClient } from "./discordBot";
+import { getDiscordRestClient, isDiscordRecipientError, isDiscordUnauthorizedError, type DiscordRestClient } from "./discordBot";
 import { telegramHtmlToDiscordText } from "./discordText";
 import { DISCORD_SETTING_KEYS, isDiscordBotReadyFromSettings, readDiscordBotSettings } from "./discordSettings";
 import { isTelegramNotifyMuted, type TelegramNotifyCategory, type TelegramNotifyPrefs } from "../telegram/telegramNotifyPrefs";
@@ -31,7 +31,7 @@ export type DiscordNotifyRecipient = {
   role?: string | null;
 };
 
-export type DiscordDeliveryStatus = "sent" | "blocked" | "skipped_blocked" | "not_linked" | "disabled" | "failed";
+type DiscordDeliveryStatus = "sent" | "blocked" | "skipped_blocked" | "not_linked" | "disabled" | "failed";
 
 export type DiscordDeliveryResult = { status: DiscordDeliveryStatus; error?: unknown };
 
@@ -226,4 +226,4 @@ export async function isDiscordHostStatusNotifyEnabled() {
   }
 }
 
-export { DiscordApiError };
+;

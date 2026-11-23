@@ -83,7 +83,7 @@ function isIpv6(value: string) {
 }
 
 /** CNAME 的目标：一个完整域名，去掉结尾的点、转小写。不合法返回 null。 */
-export function normalizeDnspodCnameTarget(value: unknown): string | null {
+function normalizeDnspodCnameTarget(value: unknown): string | null {
   const text = String(value ?? "").trim().toLowerCase().replace(/\.+$/, "");
   if (!text || text.length > 253) return null;
   const labels = text.split(".");

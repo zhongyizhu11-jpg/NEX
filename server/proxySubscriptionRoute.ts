@@ -51,7 +51,7 @@ function formatFromUserAgent(userAgent: string, flag?: unknown): ProxySubscripti
  * 只认 mihomo / Clash 内核（Clash Verge、Mihomo Party、FlClash、ClashMetaForAndroid……），
  * 代码里核实过不去重；Stash 是另一套实现，没核实，不展开。
  */
-export function clientSupportsWeightedLoadBalance(userAgent: string): boolean {
+function clientSupportsWeightedLoadBalance(userAgent: string): boolean {
   const ua = userAgent.toLowerCase();
   if (!ua || ua.includes("stash") || ua.includes("shadowrocket")) return false;
   return ua.includes("clash") || ua.includes("mihomo");
@@ -290,7 +290,7 @@ async function deviceGateLocked(req: Request, context: ProxySubTokenContext, cli
  * 按 IPv4 / IPv6 输出时跳过了几条（没有那种地址的）。和上游 ForwardX 的接入订阅同一个头名，
  * 客户端 / 脚本据此提示「少了几个」；不带 ipVersion 时不发这个头，响应和原来一样。
  */
-export const PROXY_SUB_SKIPPED_ENTRIES_HEADER = "X-ForwardX-Skipped-Entries";
+const PROXY_SUB_SKIPPED_ENTRIES_HEADER = "X-ForwardX-Skipped-Entries";
 
 /** 和 server/index.ts 的 compression({ threshold: 1024 }) 一致：小于它的不压。 */
 const COMPRESSION_THRESHOLD = 1024;

@@ -22,7 +22,7 @@ export type InstalledUiTheme = {
   revision: string;
 };
 
-export const UI_THEMES_STORAGE_KEY = "forwardx-ui-themes";
+const UI_THEMES_STORAGE_KEY = "forwardx-ui-themes";
 
 function sanitize(raw: unknown): InstalledUiTheme[] {
   if (!Array.isArray(raw)) return [];
@@ -65,7 +65,7 @@ function current() {
   return installed;
 }
 
-export function getInstalledUiThemes(): InstalledUiTheme[] {
+function getInstalledUiThemes(): InstalledUiTheme[] {
   return current();
 }
 
@@ -124,9 +124,4 @@ export function uiThemeListKey(raw: unknown): string | null {
     const item = theme && typeof theme === "object" ? theme as Record<string, unknown> : {};
     return `${String(item.id ?? "")}@${String(item.revision ?? "")}`;
   }).join(",");
-}
-
-/** 测试用：忘掉内存里那份，下次重新读 localStorage。 */
-export function resetInstalledUiThemesForTests() {
-  installed = null;
 }

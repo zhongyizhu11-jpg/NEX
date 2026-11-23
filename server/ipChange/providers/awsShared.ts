@@ -25,7 +25,7 @@ export function readAwsRegion(target: IpChangeTarget): string {
   return requirePattern(target, "region", "地域", REGION_PATTERN, REGION_HINT);
 }
 
-export function awsHost(service: string, region: string): string {
+function awsHost(service: string, region: string): string {
   return region.startsWith("cn-") ? `${service}.${region}.amazonaws.com.cn` : `${service}.${region}.amazonaws.com`;
 }
 

@@ -28,7 +28,7 @@ import {
   validateOidcIssuer,
 } from "../../shared/oidcLogin";
 
-export const OIDC_SETTING_KEYS = {
+const OIDC_SETTING_KEYS = {
   enabled: "oidcLoginEnabled",
   providerName: "oidcProviderName",
   issuer: "oidcIssuer",

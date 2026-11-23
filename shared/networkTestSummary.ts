@@ -283,7 +283,7 @@ export function summarizeNetworkTest(method: string, output: string, target?: st
 export type SummaryNote = { level: "ok" | "info" | "warn"; text: string };
 
 /** 一跳延迟比上一跳多出这么多，才单独说一句（跨境、跨运营商出口通常是几十上百毫秒）。 */
-export const ROUTE_LATENCY_JUMP_MS = 50;
+const ROUTE_LATENCY_JUMP_MS = 50;
 
 export function pingSummaryNotes(summary: PingSummary): SummaryNote[] {
   const notes: SummaryNote[] = [];

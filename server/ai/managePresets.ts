@@ -1,4 +1,4 @@
-export type ManagePresetAction =
+type ManagePresetAction =
   | "balance_set"
   | "balance_adjust"
   | "renew"
@@ -15,7 +15,7 @@ export type ManagePresetPatch = {
   discountPercent?: number;
 };
 
-export type ManagePresetChoice = {
+type ManagePresetChoice = {
   label: string;
   value: string;
 };

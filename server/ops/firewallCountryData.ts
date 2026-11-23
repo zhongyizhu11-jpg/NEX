@@ -21,7 +21,7 @@ import { recordPanelEvent } from "./panelEvents";
 
 const q = (name: string) => quoteDbIdentifier(name);
 
-export const COUNTRY_DATA_REFRESH_MS = 7 * 86400_000;
+const COUNTRY_DATA_REFRESH_MS = 7 * 86400_000;
 const COUNTRY_DATA_RETRY_MS = 60 * 60_000;
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -176,7 +176,7 @@ function rowToData(row: any): CountryDataRow {
   };
 }
 
-export async function loadCountryData(countries: string[]): Promise<Map<string, CountryDataRow>> {
+async function loadCountryData(countries: string[]): Promise<Map<string, CountryDataRow>> {
   const codes = normalizeFirewallCountries(countries);
   const out = new Map<string, CountryDataRow>();
   const missing = codes.filter((code) => {

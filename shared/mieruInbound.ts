@@ -46,7 +46,7 @@ export function normalizeMieruTransport(value: unknown): MieruTransport {
   return (MIERU_TRANSPORTS as readonly string[]).includes(raw) ? raw as MieruTransport : "TCP";
 }
 
-export function mieruTransportProtocols(transport: unknown): Array<"TCP" | "UDP"> {
+function mieruTransportProtocols(transport: unknown): Array<"TCP" | "UDP"> {
   const normalized = normalizeMieruTransport(transport);
   return normalized === "BOTH" ? ["TCP", "UDP"] : [normalized];
 }
@@ -58,7 +58,7 @@ export function mieruTransportProtocols(transport: unknown): Array<"TCP" | "UDP"
 export const MIERU_PORT_RANGE_MAX_PORTS = 100;
 
 /** mita 的 UDP MTU，取官方默认值。只影响 UDP 承载，1400 在常见线路上不会分片。 */
-export const MIERU_MTU = 1400;
+const MIERU_MTU = 1400;
 
 /**
  * 用户名的字符集。面板生成的是「nex」加随机十六进制；粘来的、旧数据里的也按这个收，免得一个
@@ -66,7 +66,7 @@ export const MIERU_MTU = 1400;
  */
 const MIERU_USERNAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
-export function isValidMieruUsername(value: unknown): boolean {
+function isValidMieruUsername(value: unknown): boolean {
   return MIERU_USERNAME_PATTERN.test(String(value ?? ""));
 }
 
@@ -119,7 +119,7 @@ export type MitaServerConfig = {
 };
 
 /** mita 里的一个用户对应面板里的哪个入站、哪一行凭据。流量按它记回去。 */
-export type MitaUserRef = {
+type MitaUserRef = {
   name: string;
   inboundId: number;
   inboundUserId: number;

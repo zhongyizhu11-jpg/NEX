@@ -35,27 +35,27 @@ export const NETPROFILE_IPV6_URLS: ReadonlyArray<string> = ["https://ipv6.icanha
 export const DNSBL_QUERY_REFUSED = "无法查询（公共解析器被拒绝）";
 export const DNSBL_UNEXPECTED_ANSWER = "解析器返回了异常结果（可能被劫持）";
 
-export type NetProfileFamilyCheck = {
+type NetProfileFamilyCheck = {
   ok: boolean;
   address: string | null;
   latencyMs: number | null;
   error: string | null;
 };
 
-export type NetProfileIpv6Check = NetProfileFamilyCheck & {
+type NetProfileIpv6Check = NetProfileFamilyCheck & {
   /** 本机网卡上有没有全局单播 IPv6（不含 fe80::/10、fc00::/7）。null = 没测。 */
   configured: boolean | null;
 };
 
 export type Smtp25Status = "open" | "blocked" | "timeout";
 
-export type Smtp25TargetResult = {
+type Smtp25TargetResult = {
   target: string;
   status: "open" | "refused" | "timeout" | "error";
   detail: string | null;
 };
 
-export type NetProfileSmtp25 = {
+type NetProfileSmtp25 = {
   status: Smtp25Status;
   detail: string | null;
   targets: Smtp25TargetResult[];
@@ -70,7 +70,7 @@ export type DnsblEntry = {
   error: string | null;
 };
 
-export type NetProfileSource = "agent" | "panel";
+type NetProfileSource = "agent" | "panel";
 
 export type NetProfileReport = {
   /** 最近一次检测时间（Unix 秒）。 */
@@ -240,7 +240,7 @@ function normalizeSmtp(raw: unknown): NetProfileSmtp25 | null {
   return { status: status as Smtp25Status, detail: str(item.detail, 300), targets };
 }
 
-export function normalizeDnsblEntries(raw: unknown): DnsblEntry[] {
+function normalizeDnsblEntries(raw: unknown): DnsblEntry[] {
   return (Array.isArray(raw) ? raw : []).slice(0, 16).flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const item = entry as Record<string, unknown>;

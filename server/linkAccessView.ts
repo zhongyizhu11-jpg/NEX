@@ -206,7 +206,7 @@ export function expandLinkAccessScope(input: LinkAccessClosureInput): LinkAccess
  *
  * 查不到拓扑的隧道（那一轮查询失败）维持原样，和本文件其余「查询失败时自己的资源照常可用」一致。
  */
-export function restrictOwnedTunnelUse(scope: LinkAccessScope, input: {
+function restrictOwnedTunnelUse(scope: LinkAccessScope, input: {
   ownedTunnelIds: Iterable<unknown>;
   grantedTunnelIds: Iterable<unknown>;
   tunnels?: Iterable<any>;

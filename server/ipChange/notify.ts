@@ -10,7 +10,7 @@ function hostName(notice: IpChangeNotice) {
   return String(notice.host?.name || "").trim() || `主机 #${notice.host?.id}`;
 }
 
-export function ipChangeNoticeEvent(notice: IpChangeNotice) {
+function ipChangeNoticeEvent(notice: IpChangeNotice) {
   const name = hostName(notice);
   if (notice.kind === "changed") {
     return {
@@ -36,7 +36,7 @@ export function ipChangeNoticeEvent(notice: IpChangeNotice) {
   };
 }
 
-export function ipChangeTelegramText(notice: IpChangeNotice) {
+function ipChangeTelegramText(notice: IpChangeNotice) {
   const name = escapeHtml(hostName(notice));
   const time = escapeHtml(new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }));
   if (notice.kind === "changed") {

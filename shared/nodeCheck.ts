@@ -15,8 +15,8 @@
 import { normalizeUnlockResults, type UnlockServiceResult } from "./unlockCheck";
 
 
-export const SPEED_TEST_SERVERS = ["ookla", "cloudflare", "panel"] as const;
-export type SpeedTestServer = (typeof SPEED_TEST_SERVERS)[number];
+const SPEED_TEST_SERVERS = ["ookla", "cloudflare", "panel"] as const;
+type SpeedTestServer = (typeof SPEED_TEST_SERVERS)[number];
 
 export const NODE_CHECK_KINDS = ["speed", "exit"] as const;
 export type NodeCheckKind = (typeof NODE_CHECK_KINDS)[number];
@@ -51,7 +51,7 @@ export type SpeedTestResult = {
   samples: SpeedSample[];
 };
 
-export type ExitCheckSite = { key: string; ms: number | null; fail: string | null; tries: number; ok: number };
+type ExitCheckSite = { key: string; ms: number | null; fail: string | null; tries: number; ok: number };
 
 export type ExitCheckResult = {
   sites: ExitCheckSite[];
@@ -86,7 +86,7 @@ const num = (value: unknown, fallback = 0) => {
 };
 const text = (value: unknown, max = 128) => String(value ?? "").trim().slice(0, max);
 
-export function normalizeSpeedSamples(raw: unknown): SpeedSample[] {
+function normalizeSpeedSamples(raw: unknown): SpeedSample[] {
   if (!Array.isArray(raw)) return [];
   return raw.slice(0, 400).map((item) => {
     const entry = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
@@ -121,7 +121,7 @@ export function normalizeSpeedTestResult(raw: unknown): SpeedTestResult | null {
   };
 }
 
-export function normalizeExitCheckResult(raw: unknown): ExitCheckResult | null {
+function normalizeExitCheckResult(raw: unknown): ExitCheckResult | null {
   if (!raw || typeof raw !== "object") return null;
   const entry = raw as Record<string, unknown>;
   const sites: ExitCheckSite[] = [];

@@ -45,10 +45,6 @@ export function setSettingsCipherSecretForTests(secret: string | null) {
 /** 解不开的键（只在内存里记，设置页拿去提示「需要重新填写」）。重新保存一次就从这里消失。 */
 const undecryptable = new Set<string>();
 
-export function isEncryptedSettingValue(value: unknown) {
-  return isSealedSecret(value);
-}
-
 /** 写库前：密钥类键的非空值加密；已经是密文的不再套一层；其余原样。 */
 export function encodeSettingValueForStorage(key: string, value: string | null): string | null {
   if (value === null || value === undefined) {

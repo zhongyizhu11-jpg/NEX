@@ -91,7 +91,7 @@ export type MetricsSnapshot = {
   collectSeconds: number;
 };
 
-export type MetricsFxpSample = {
+type MetricsFxpSample = {
   hostId: number;
   hostName: string;
   /** 0 = 进程级事件（没有隧道标签）。 */

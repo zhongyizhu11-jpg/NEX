@@ -9,7 +9,7 @@ import {
 import { getSetting } from "./repositories/settingsRepository";
 import { getTunnelById } from "./repositories/tunnelRepository";
 
-export const UNSUPPORTED_FORWARD_PROTOCOL_MESSAGE = "当前不支持，请联系管理员";
+const UNSUPPORTED_FORWARD_PROTOCOL_MESSAGE = "当前不支持，请联系管理员";
 
 function parseSettings(value: string | null | undefined) {
   if (!value) return null;
@@ -52,7 +52,7 @@ export function isRuleProtocolEnabled(settings: ForwardProtocolSettings, rule: a
   return isForwardProtocolKeyEnabled(settings, getRuleProtocolKey(rule, tunnel));
 }
 
-export function disabledProtocolError(key: ForwardProtocolKey | null) {
+function disabledProtocolError(key: ForwardProtocolKey | null) {
   const label = key ? FORWARD_PROTOCOL_LABELS[key] : "该协议";
   return `${label} ${UNSUPPORTED_FORWARD_PROTOCOL_MESSAGE}`;
 }

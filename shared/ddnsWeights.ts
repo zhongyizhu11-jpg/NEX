@@ -18,8 +18,8 @@ import type { BandwidthAggregationPlan } from "./bandwidthAggregation";
 export const DDNS_WEIGHT_MIN = 1;
 export const DDNS_WEIGHT_MAX = 100;
 
-export const DDNS_WEIGHT_PROVIDERS = ["tencentcloud", "aliyun", "huaweicloud"] as const;
-export type DdnsWeightProvider = (typeof DDNS_WEIGHT_PROVIDERS)[number];
+const DDNS_WEIGHT_PROVIDERS = ["tencentcloud", "aliyun", "huaweicloud"] as const;
+type DdnsWeightProvider = (typeof DDNS_WEIGHT_PROVIDERS)[number];
 
 export type DdnsWeightSupport = {
   supported: boolean;

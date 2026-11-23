@@ -78,7 +78,7 @@ export async function planSniChild(template: SniGroupTemplate, hostId: number, e
  * 子规则写进库以后把名字记上（或放掉）。后台同步时并发抢名字撞了唯一索引：这台先不用，子规则改挂
  * 锚点，下一次同步再试。返回最终用的入站 id。
  */
-export async function registerSniChildNames(childRuleId: number, template: SniGroupTemplate, plan: SniChildPlan, context: { groupId: number; hostId: number }) {
+async function registerSniChildNames(childRuleId: number, template: SniGroupTemplate, plan: SniChildPlan, context: { groupId: number; hostId: number }) {
   if (plan.blockedReason) {
     appendPanelLog("warn", `[SniGroup] group=${context.groupId} template=${Number(template.id)} host=${context.hostId} child=${childRuleId}: ${plan.blockedReason}`);
   }

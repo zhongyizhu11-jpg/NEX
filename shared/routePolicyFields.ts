@@ -32,7 +32,5 @@ export const ROUTE_POLICY_RULE_FIELDS = [
   "routeDelivery",
 ] as const;
 
-export type RoutePolicyRuleField = (typeof ROUTE_POLICY_RULE_FIELDS)[number];
-
 /** 读策略时还会碰到、但不属于「调度参数」的列：开关和路径（子规则各有各的）。 */
 export const ROUTE_POLICY_NON_POLICY_READS = ["failoverEnabled", "routePaths", "routeLines", "failoverTargets", "failoverProbeTarget", "targetIp", "targetPort"] as const;

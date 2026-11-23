@@ -23,8 +23,8 @@ import { clientIp } from "../clientIp";
 
 export * from "./apiTokenPolicy";
 
-export const API_TOKEN_PREFIX = "nex_";
-export const API_TOKEN_RANDOM_LENGTH = 40;
+const API_TOKEN_PREFIX = "nex_";
+const API_TOKEN_RANDOM_LENGTH = 40;
 /** 列表里给人看的那一截：令牌开头 8 个字符。 */
 export const API_TOKEN_DISPLAY_PREFIX_LENGTH = 8;
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -187,7 +187,7 @@ export async function listUserApiTokens(userId: number): Promise<ApiTokenListIte
   });
 }
 
-export const MAX_API_TOKENS_PER_USER = 50;
+const MAX_API_TOKENS_PER_USER = 50;
 
 export async function createUserApiToken(input: { userId: number; name: string; scope: ApiTokenScope; modules?: readonly ApiTokenModule[] | null; expiresInDays?: number | null }) {
   const q = quoteDbIdentifier;

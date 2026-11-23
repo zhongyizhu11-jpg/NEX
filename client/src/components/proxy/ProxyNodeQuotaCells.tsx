@@ -30,7 +30,7 @@ import {
  * 不点破区别的话，人只会以为面板前后矛盾，然后两个数都不敢信。
  */
 
-export const QUOTA_STATE_STYLES = {
+const QUOTA_STATE_STYLES = {
   none: "text-muted-foreground",
   normal: "text-muted-foreground",
   warn: "text-[var(--fx-warn-text)]",
@@ -38,7 +38,7 @@ export const QUOTA_STATE_STYLES = {
 } as const;
 
 /** 端口 / 节点自己那一份额度。两张表用的是同一组列名。 */
-export function nodeQuotaOf(node: any) {
+function nodeQuotaOf(node: any) {
   return {
     bandwidthMbps: Number(node?.bandwidthMbps || 0),
     trafficLimit: Number(node?.trafficLimit || 0),

@@ -15,7 +15,7 @@ export type EffectiveGithubAccelerator = {
 export type PanelInstallerDeployment = "local" | "docker";
 export type PanelInstallerAction = "install" | "upgrade" | "uninstall";
 
-export const PANEL_INSTALLER_RAW_URLS: Record<PanelInstallerDeployment, string> = {
+const PANEL_INSTALLER_RAW_URLS: Record<PanelInstallerDeployment, string> = {
   local: "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-panel-local.sh",
   docker: "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-panel-docker.sh",
 };
@@ -32,7 +32,7 @@ export function normalizeGithubAcceleratorUrl(value: unknown) {
   }
 }
 
-export function isGithubDownloadUrl(value: unknown) {
+function isGithubDownloadUrl(value: unknown) {
   try {
     const url = new URL(String(value || ""));
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
@@ -74,7 +74,7 @@ export function githubDownloadCandidates(value: string, config?: GithubAccelerat
     : [sourceUrl];
 }
 
-export function shellSingleQuote(value: unknown) {
+function shellSingleQuote(value: unknown) {
   return `'${String(value ?? "").replace(/'/g, `'\\''`)}'`;
 }
 

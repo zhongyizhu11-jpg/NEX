@@ -37,7 +37,7 @@ export function detectedAddressesUpdate(host: DetectedAddressHost | null | undef
   return serializeHostDetectedAddresses(report);
 }
 
-export async function syncHostDetectedAddresses(host: DetectedAddressHost, body: HeartbeatBody) {
+async function syncHostDetectedAddresses(host: DetectedAddressHost, body: HeartbeatBody) {
   const next = detectedAddressesUpdate(host, body);
   if (next === null) return false;
   const hostId = Number(host?.id || 0);

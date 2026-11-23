@@ -15,8 +15,8 @@ export type OnlinePortOwner = {
   label: string;
 };
 
-export type OnlineReportIp = { ip: string; conns: number; since: number };
-export type OnlineReportPort = { port: number; ruleId: number; inboundId: number; ips: OnlineReportIp[]; truncated: boolean };
+type OnlineReportIp = { ip: string; conns: number; since: number };
+type OnlineReportPort = { port: number; ruleId: number; inboundId: number; ips: OnlineReportIp[]; truncated: boolean };
 export type OnlineReport = { at: number; conntrack: boolean; ports: OnlineReportPort[] };
 
 export type OnlineIpRow = {
@@ -185,7 +185,7 @@ export function sightingKey(row: Pick<OnlineIpRow, "hostId" | "ip" | "userId" | 
   return `${row.hostId}|${row.ip}|${row.userId}|${row.ruleId}|${row.inboundId}`;
 }
 
-export const SIGHTING_WRITE_INTERVAL_MS = 60_000;
+const SIGHTING_WRITE_INTERVAL_MS = 60_000;
 
 /** 这一轮要不要写库：第一次见、过了一分钟、或者连接数创了新高（max 要准）。 */
 export function shouldWriteSighting(

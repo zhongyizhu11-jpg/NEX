@@ -18,7 +18,7 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 /** 身份提供方的 token / JWKS / discovery 响应只有几 KB；多出来的不读，免得被一个异常的大响应拖住。 */
 export const OAUTH_RESPONSE_MAX_BYTES = 128 * 1024;
 export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-export const OAUTH_STATE_MAX_ENTRIES = 10_000;
+const OAUTH_STATE_MAX_ENTRIES = 10_000;
 
 export function randomUrlToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("base64url");
@@ -247,7 +247,7 @@ export function verifyJwsSignature(
 
 // ---------- JWKS ----------
 
-export type Jwk = { kid?: string; kty?: string; alg?: string; use?: string; n?: string; e?: string; crv?: string; x?: string; y?: string };
+type Jwk = { kid?: string; kty?: string; alg?: string; use?: string; n?: string; e?: string; crv?: string; x?: string; y?: string };
 
 type ImportedJwk = { kid: string | null; alg: AsymmetricJwsAlg; key: crypto.KeyObject };
 
@@ -285,7 +285,7 @@ export function importJwks(data: unknown, allowedAlgs: readonly AsymmetricJwsAlg
 const JWKS_DEFAULT_MAX_AGE_MS = 60 * 60 * 1000;
 const JWKS_MIN_MAX_AGE_MS = 5 * 60 * 1000;
 const JWKS_MAX_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-export const JWKS_FORCED_REFRESH_INTERVAL_MS = 60 * 1000;
+const JWKS_FORCED_REFRESH_INTERVAL_MS = 60 * 1000;
 
 export function jwksMaxAgeMs(cacheControl: string | null | undefined) {
   const match = String(cacheControl || "").match(/max-age=(\d+)/i);

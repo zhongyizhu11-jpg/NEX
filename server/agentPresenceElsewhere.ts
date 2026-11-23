@@ -13,13 +13,13 @@ import { panelHasOtherLiveInstances } from "./panelLease";
   只有一个实例时不读库、不参与（panelHasOtherLiveInstances 为 false）。
 */
 
-export const AGENT_PRESENCE_ELSEWHERE_REFRESH_MS = 10_000;
+const AGENT_PRESENCE_ELSEWHERE_REFRESH_MS = 10_000;
 
 const lastSeenByHost = new Map<number, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let refreshing = false;
 
-export function agentLastSeenElsewhere(hostId: number) {
+function agentLastSeenElsewhere(hostId: number) {
   if (!panelHasOtherLiveInstances()) return null;
   return lastSeenByHost.get(Number(hostId)) ?? null;
 }

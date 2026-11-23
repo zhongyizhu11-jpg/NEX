@@ -3,7 +3,7 @@ import { normalizeForwardRuleProtocol } from "./forwardTypes";
 export type LinkProbeMethod = "tcp" | "ping";
 export type RuleLatencyProbeMethod = "tcping" | "ping";
 
-export function isUdpOnlyProtocol(protocol: unknown) {
+function isUdpOnlyProtocol(protocol: unknown) {
   return normalizeForwardRuleProtocol(protocol) === "udp";
 }
 

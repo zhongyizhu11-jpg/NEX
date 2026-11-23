@@ -17,8 +17,8 @@ import { writeZipArchive } from "./zipArchive";
 */
 
 export type XlsxCellValue = string | number | boolean | Date | null | undefined;
-export type XlsxColumnType = "text" | "money" | "integer" | "datetime";
-export type XlsxColumn = { header: string; width?: number; type?: XlsxColumnType };
+type XlsxColumnType = "text" | "money" | "integer" | "datetime";
+type XlsxColumn = { header: string; width?: number; type?: XlsxColumnType };
 export type XlsxSheet = { name: string; columns: XlsxColumn[]; rows: XlsxCellValue[][] };
 
 /** Excel 单元格最多 32767 个字符，超了打开时报错。 */

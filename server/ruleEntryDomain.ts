@@ -35,7 +35,7 @@ import {
  * 21 亿，结果在 -31 亿以内，JSON 和 JS 数字都放得下。接 Webhook 的脚本可以按
  * 「<= -1000000000」认出这是规则域名。
  */
-export const RULE_ENTRY_DOMAIN_WEBHOOK_GROUP_ID_BASE = 1_000_000_000;
+const RULE_ENTRY_DOMAIN_WEBHOOK_GROUP_ID_BASE = 1_000_000_000;
 
 export function ruleEntryDomainWebhookGroupId(ruleId: number) {
   return -(RULE_ENTRY_DOMAIN_WEBHOOK_GROUP_ID_BASE + Math.max(0, Math.floor(Number(ruleId) || 0)));
@@ -47,7 +47,7 @@ const RULE_ENTRY_DOMAIN_RETRY_BASE_MS = 60_000;
 const RULE_ENTRY_DOMAIN_RETRY_MAX_MS = 30 * 60_000;
 const RULE_ENTRY_DOMAIN_RECORD_TYPES: RuleEntryDomainRecordType[] = ["A", "AAAA", "CNAME"];
 
-export type RuleEntryDomainDnsClient = {
+type RuleEntryDomainDnsClient = {
   updateValues(input: DdnsRecordValuesInput): Promise<void>;
 };
 
@@ -91,21 +91,6 @@ function createRetryScheduler() {
   );
 }
 
-/** 测试用：换掉 DNS 客户端、缩短退避。传 null 恢复默认。 */
-export function configureRuleEntryDomainForTests(options: {
-  dnsClient?: RuleEntryDomainDnsClient | null;
-  retryBaseMs?: number;
-  retryMaxMs?: number;
-} = {}) {
-  if (options.dnsClient !== undefined) dnsClient = options.dnsClient || defaultDnsClient;
-  if (options.retryBaseMs !== undefined || options.retryMaxMs !== undefined) {
-    retryBaseMs = options.retryBaseMs ?? RULE_ENTRY_DOMAIN_RETRY_BASE_MS;
-    retryMaxMs = options.retryMaxMs ?? RULE_ENTRY_DOMAIN_RETRY_MAX_MS;
-    coordinatorInstance = null;
-    retrySchedulerInstance = null;
-  }
-}
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -144,7 +129,7 @@ function track(promise: Promise<void>) {
  * 某条规则的域名可能要变了：稍等一下再同步（合并同一次保存里的多次触发，也避开
  * 调用方还没提交的事务）。不等结果、不抛错。
  */
-export function scheduleRuleEntryDomainSync(ruleIdValue: unknown, reason: string, options: { force?: boolean } = {}) {
+function scheduleRuleEntryDomainSync(ruleIdValue: unknown, reason: string, options: { force?: boolean } = {}) {
   const ruleId = Number(ruleIdValue);
   if (!Number.isInteger(ruleId) || ruleId <= 0) return;
   const existing = debounceTimers.get(ruleId);
@@ -175,7 +160,7 @@ export async function scheduleRuleEntryDomainSyncForHost(hostIdValue: unknown, r
 /** 规则行被删之后：尽快去删记下来的待删域名。 */
 let cleanupSweepTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function scheduleRuleEntryDomainCleanupSweep(reason = "rule-deleted") {
+function scheduleRuleEntryDomainCleanupSweep(reason = "rule-deleted") {
   // 一批删行只扫一遍待删表。
   if (cleanupSweepTimer) return;
   cleanupSweepTimer = setTimeout(() => {
@@ -185,16 +170,6 @@ export function scheduleRuleEntryDomainCleanupSweep(reason = "rule-deleted") {
     }));
   }, RULE_ENTRY_DOMAIN_DEBOUNCE_MS);
   cleanupSweepTimer.unref?.();
-}
-
-/** 测试用：等排着的和在跑的同步都结束（不含退避中的重试）。 */
-export async function waitForRuleEntryDomainIdle(timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (debounceTimers.size > 0 || cleanupSweepTimer || inFlightRuns.size > 0) {
-    if (Date.now() > deadline) throw new Error("rule entry domain sync did not settle");
-    if (inFlightRuns.size > 0) await Promise.allSettled(Array.from(inFlightRuns));
-    else await new Promise((resolve) => setTimeout(resolve, 20));
-  }
 }
 
 async function runRuleEntryDomainSync(ruleId: number, reason: string, options: { force?: boolean } = {}) {
@@ -336,7 +311,7 @@ async function executeRuleEntryDomainSync(ruleId: number, reason: string, option
 // ===== 对账 =====
 
 /** 删到期的待删域名。DNS 不可用时什么也不做（删不了），等它恢复。 */
-export async function processRuleEntryDomainCleanups(options: { reason?: string; limit?: number } = {}) {
+async function processRuleEntryDomainCleanups(options: { reason?: string; limit?: number } = {}) {
   const settings = await repo.getRuleEntryDomainRuntimeSettings();
   if (!settings.ddnsActive) return { deleted: 0, failed: 0 };
   const rows = await repo.listDueRuleEntryDomainCleanups({ limit: options.limit ?? 100 });

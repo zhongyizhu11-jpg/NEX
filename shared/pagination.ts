@@ -17,7 +17,7 @@ export type PageWindow = {
   offset: number;
 };
 
-export function normalizePageRequest(input: PageRequest | null | undefined, defaultPageSize = 12) {
+function normalizePageRequest(input: PageRequest | null | undefined, defaultPageSize = 12) {
   const page = Math.max(1, Math.floor(Number(input?.page) || 1));
   const pageSize = Math.min(100, Math.max(1, Math.floor(Number(input?.pageSize) || defaultPageSize)));
   return { page, pageSize };

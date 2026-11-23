@@ -119,7 +119,7 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
-export function pruneEmailAuthStores(now = Date.now()) {
+function pruneEmailAuthStores(now = Date.now()) {
   pruneMapEntries(emailCodeStore, (entry) => entry.expiresAt <= now);
   pruneMapEntries(emailSendIpStore, (entry) => now - entry.lastFailAt >= EMAIL_CODE_IP_WINDOW_MS);
 }

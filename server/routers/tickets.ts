@@ -136,7 +136,7 @@ const messagesInput = z.object({
   工单总开关（设置项 ticketsEnabled，默认开）。关掉以后：普通用户侧边栏不显示「工单」，
   不能新建、不能回复（自己的历史工单还能看）；管理员照常查看、回复、关单，也在工单管理页里开关。
 */
-export const TICKETS_DISABLED_MESSAGE = "工单功能已关闭，如需帮助请通过其他方式联系管理员";
+const TICKETS_DISABLED_MESSAGE = "工单功能已关闭，如需帮助请通过其他方式联系管理员";
 
 async function ticketsEnabled() {
   return (await db.getSetting("ticketsEnabled")) !== "false";

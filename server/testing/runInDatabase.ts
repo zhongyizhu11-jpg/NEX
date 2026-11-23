@@ -36,7 +36,7 @@ export type RunInDatabaseOptions = {
 
 export type RunInDatabaseResult = { stdout: string; stderr: string };
 
-export function buildDatabaseTestScript(body: string, options: RunInDatabaseOptions = {}): string {
+function buildDatabaseTestScript(body: string, options: RunInDatabaseOptions = {}): string {
   return String.raw`
     import assert from "node:assert/strict";
     import path from "node:path";

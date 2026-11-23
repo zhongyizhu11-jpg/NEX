@@ -148,8 +148,8 @@ export function evaluateUpgradeItem(
 /* ───────────────────────── 资源 ───────────────────────── */
 
 /** 最近一次采样超过这么久就不拿来下结论（Agent 每分钟左右报一次）。 */
-export const METRIC_FRESH_MS = 3 * 60 * 1000;
-export const RESOURCE_WARN_PERCENT = 90;
+const METRIC_FRESH_MS = 3 * 60 * 1000;
+const RESOURCE_WARN_PERCENT = 90;
 
 export function evaluateResourceItem(
   host: { id: number; name: string; isOnline: unknown },
@@ -209,7 +209,7 @@ function ruleLabel(rule: ConfigCheckRuleFacts) {
   return ports ? `规则「${rule.name}」（端口 ${ports}）` : `规则「${rule.name}」`;
 }
 
-export function runtimeHint(warning: RulePortWarning | undefined) {
+function runtimeHint(warning: RulePortWarning | undefined) {
   switch (warning?.kind) {
     case "bind":
       return "换一个入口端口，或停掉占着这个端口的程序（在主机上 ss -ltnup | grep :端口 能看到是谁）";

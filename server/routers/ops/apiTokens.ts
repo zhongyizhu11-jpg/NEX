@@ -12,7 +12,7 @@ import { recordPanelEvent } from "../../ops/panelEvents";
  * 用令牌本身调这里一律被拒（见 server/ops/apiTokenPolicy.ts）：令牌不能给自己续命。
  */
 /** 新令牌不指定有效期时的默认值（天）。 */
-export const DEFAULT_API_TOKEN_EXPIRY_DAYS = 90;
+const DEFAULT_API_TOKEN_EXPIRY_DAYS = 90;
 
 /** 模块列表：不传 / 空数组 = 不限。 */
 const modulesInput = z.array(z.enum(API_TOKEN_MODULES)).max(API_TOKEN_MODULES.length).nullable().optional();

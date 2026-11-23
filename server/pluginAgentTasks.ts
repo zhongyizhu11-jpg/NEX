@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { appendPanelLog } from "./_core/panelLogger";
 
 export type PluginAgentTaskStatus = "queued" | "running" | "success" | "error" | "timeout";
-export type PluginAgentGroupStatus = "queued" | "running" | "success" | "partial" | "error" | "timeout";
+type PluginAgentGroupStatus = "queued" | "running" | "success" | "partial" | "error" | "timeout";
 
 export type PluginAgentTask = {
   taskId: string;
@@ -50,7 +50,7 @@ export type PluginAgentTaskResult = {
   endToEndDurationMs?: number;
 };
 
-export type PluginAgentTaskHostResult = PluginAgentTaskResult & {
+type PluginAgentTaskHostResult = PluginAgentTaskResult & {
   hostId: number;
   hostName: string;
   status: PluginAgentTaskStatus;

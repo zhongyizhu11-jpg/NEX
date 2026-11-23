@@ -42,7 +42,7 @@ export type RouteTargetHintContext = {
 };
 
 /** 一个提示看到的东西：路径、它的拨号地址（解析不出来是 null）、整条规则的上下文。 */
-export type RouteTargetHintInput = {
+type RouteTargetHintInput = {
   path: RoutePath;
   dial: RouteEndpoint | null;
   context: RouteTargetHintContext;

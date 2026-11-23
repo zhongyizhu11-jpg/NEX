@@ -97,7 +97,7 @@ function normalizedPolicy(policy: PortPolicy) {
   return policy;
 }
 
-export function parsePortAllowlist(value: unknown) {
+function parsePortAllowlist(value: unknown) {
   const text = String(value || "").trim();
   if (!text) return [];
   const ports = text

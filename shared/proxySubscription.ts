@@ -66,18 +66,6 @@ export const PROXY_SUBSCRIPTION_FORMAT_LABELS: Record<ProxySubscriptionFormat, s
   egern: "Egern",
 };
 
-export const PROXY_SUBSCRIPTION_FORMAT_HINTS: Record<ProxySubscriptionFormat, string> = {
-  base64: "v2rayN、v2rayNG、Shadowrocket 等通用客户端。不支持 Snell（该协议没有分享链接）和 Mieru。",
-  clash: "Clash、Clash.Meta、mihomo、Stash。协议最全，Snell 到 v5；Mieru 只发给 mihomo（只走 TCP 的那份）。",
-  singbox: "sing-box 及基于它的客户端。协议最全，不支持 XHTTP 传输。",
-  v2rayjson: "v2rayN 6.40+、v2rayNG 1.8.29+、Happ 的完整 Xray 配置订阅，每个节点一份配置，分流规则一起带。只有 Xray 内核有的协议（VLESS / VMess / Trojan / Shadowsocks / SOCKS）。",
-  loon: "Loon（iOS）。不支持 TUIC、Snell、XHTTP。",
-  surge: "Surge（iOS/Mac）与 Surfboard（Android）。不支持 VLESS、REALITY、XHTTP。",
-  quantumultx: "Quantumult X（iOS）。不支持 Hysteria2 / TUIC / AnyTLS / Snell / REALITY / XHTTP。",
-  shadowrocket: "Shadowrocket（iOS）。节点订阅同通用 Base64；规则订阅是一份完整配置，节点仍来自节点订阅。",
-  egern: "Egern（iOS）自己的 YAML 配置。节点订阅只有 proxies；规则订阅是完整配置，能带模板里的模块。不支持 XHTTP、HTTPUpgrade、Snell v6。",
-};
-
 export const PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES: Record<ProxySubscriptionFormat, string> = {
   base64: "text/plain; charset=utf-8",
   clash: "text/yaml; charset=utf-8",
@@ -114,7 +102,7 @@ export const PROXY_SUBSCRIPTION_GROUP_NAME = "NEX";
  * 行，策略组要写在用户自己的配置文件里 —— 硬塞 [Proxy Group] 会让节点订阅解析
  * 失败，所以这里宁可不出组，也不产出会坏掉的内容。
  */
-export const PROXY_SUBSCRIPTION_FORMATS_WITH_GROUPS: readonly ProxySubscriptionFormat[] = ["clash", "singbox"];
+const PROXY_SUBSCRIPTION_FORMATS_WITH_GROUPS: readonly ProxySubscriptionFormat[] = ["clash", "singbox"];
 
 export function proxySubscriptionFormatSupportsGroups(format: ProxySubscriptionFormat): boolean {
   return PROXY_SUBSCRIPTION_FORMATS_WITH_GROUPS.includes(format);
@@ -344,7 +332,7 @@ export type ProxySubRenderSettings = {
   updateIntervalHours: number;
 };
 
-export const PROXY_SUB_RENDER_DEFAULTS: ProxySubRenderSettings = {
+const PROXY_SUB_RENDER_DEFAULTS: ProxySubRenderSettings = {
   testUrl: "http://www.gstatic.com/generate_204",
   testIntervalSec: 300,
   toleranceMs: 50,
@@ -1172,7 +1160,7 @@ function renderQuantumultX(nodes: readonly ProxyNode[], notices: readonly string
  *                 [Proxy] 只为兼容保留、写法自成一套，所以节点不写进配置，
  *                 仍由节点订阅提供，组按名字引用。
  */
-export const PROXY_SUBSCRIPTION_PROFILE_FORMATS = ["surge", "loon", "quantumultx", "shadowrocket", "egern"] as const;
+const PROXY_SUBSCRIPTION_PROFILE_FORMATS = ["surge", "loon", "quantumultx", "shadowrocket", "egern"] as const;
 
 /** Egern 也有「节点订阅 / 完整配置」之分，但它的配置是 YAML，走 proxySubEgern.ts，不走下面这套 INI 式的。 */
 type IosProfileFormat = Exclude<(typeof PROXY_SUBSCRIPTION_PROFILE_FORMATS)[number], "egern">;

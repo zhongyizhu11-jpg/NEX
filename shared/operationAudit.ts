@@ -27,7 +27,7 @@ export const OPERATION_AUDIT_CHANNEL_LABELS: Record<OperationAuditChannel, strin
 };
 
 /** 保留天数的边界：至少 7 天（排查一次事故够用），最多 10 年。 */
-export const OPERATION_AUDIT_RETENTION_DEFAULT_DAYS = 90;
+const OPERATION_AUDIT_RETENTION_DEFAULT_DAYS = 90;
 export const OPERATION_AUDIT_RETENTION_MIN_DAYS = 7;
 export const OPERATION_AUDIT_RETENTION_MAX_DAYS = 3650;
 export const OPERATION_AUDIT_RETENTION_OPTIONS = [30, 90, 180, 365] as const;
@@ -93,7 +93,7 @@ export function isSecretAuditKey(key: string): boolean {
 }
 
 /** 不看键名也要藏的值：PEM、面板 / Agent 令牌、代入令牌（nxu_）、密码重置令牌（nxr_）、Bearer 头、JWT。 */
-export function looksLikeSecretValue(value: string): boolean {
+function looksLikeSecretValue(value: string): boolean {
   const text = value.trim();
   if (!text) return false;
   if (/-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----/.test(text)) return true;
@@ -172,7 +172,7 @@ export function operationAuditModule(path: string): string {
 }
 
 /** 筛选下拉里的模块，按页面上的叫法。没列到的模块显示原始路径前缀。 */
-export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
+const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   system: "系统设置",
   users: "用户",
   plans: "套餐",

@@ -10,14 +10,14 @@
   @everyone / @here / <@id> 这类提及另外靠发送时的 allowed_mentions: { parse: [] } 挡住，不会真的提醒到人。
 */
 
-export const DISCORD_MESSAGE_MAX_LENGTH = 2000;
+const DISCORD_MESSAGE_MAX_LENGTH = 2000;
 /**
  * 一条通知最多拆成几条私信（照上游 poouo/Forwardx discordBot 的做法：长内容分几条发，不再截断）。
  * 再多就是刷屏了：最后一条注明「完整内容请到面板查看」。每条之间的限流由 DiscordRestClient 的 429 处理兜着。
  */
 export const DISCORD_MESSAGE_MAX_CHUNKS = 10;
 /** 转换后整段的上限：10 条 × 2000 字。 */
-export const DISCORD_TEXT_MAX_TOTAL_LENGTH = DISCORD_MESSAGE_MAX_LENGTH * DISCORD_MESSAGE_MAX_CHUNKS;
+const DISCORD_TEXT_MAX_TOTAL_LENGTH = DISCORD_MESSAGE_MAX_LENGTH * DISCORD_MESSAGE_MAX_CHUNKS;
 
 const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
 

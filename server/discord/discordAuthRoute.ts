@@ -56,14 +56,14 @@ import {
   type OAuthAppPage,
 } from "../oauth/oauthRouteHelpers";
 
-export const DISCORD_BINDING_COOKIE = "nex_discord_oauth";
+const DISCORD_BINDING_COOKIE = "nex_discord_oauth";
 const DISCORD_COOKIE_PATH = "/api/auth/discord";
 
-export const discordAuthStates = new DiscordAuthStateStore();
+const discordAuthStates = new DiscordAuthStateStore();
 export const discordAppFlows = new DiscordAppFlowStore();
 
 /** 每个来源一分钟最多发起 20 次（网页 + App 一起算）。 */
-export const discordStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
+const discordStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
 
 export function consumeDiscordStartQuota(ip: string) {
   return discordStartLimiter.consume(`discord-start:${ipRateLimitScope(ip)}`).allowed;
@@ -91,7 +91,7 @@ function failureRedirect(res: Response, mode: DiscordLoginMode | null, code: Dis
   res.redirect(302, withQuery(mode === "link" ? "/profile" : "/login", { discordError: code }));
 }
 
-export function renderDiscordAppPage(input: OAuthAppPage) {
+function renderDiscordAppPage(input: OAuthAppPage) {
   return renderOAuthAppPage({ ...input, confirmAction: DISCORD_APP_CONFIRM_PATH });
 }
 

@@ -118,7 +118,7 @@ function startPending(chatId: number | string, telegramId: number | string, inpu
   pendingInputs.set(pendingKey(chatId, telegramId), { input, expiresAt: Date.now() + PENDING_TTL_MS });
 }
 
-export function clearTelegramMorePending(chatId: number | string, telegramId: number | string) {
+function clearTelegramMorePending(chatId: number | string, telegramId: number | string) {
   pendingInputs.delete(pendingKey(chatId, telegramId));
 }
 

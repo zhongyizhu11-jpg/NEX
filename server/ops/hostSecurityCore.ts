@@ -27,7 +27,7 @@ export type IncomingFinding = {
   at: number;
 };
 
-export type IncomingActionResult = { id: number; ok: boolean; message: string; quarantineId: string; at: number };
+type IncomingActionResult = { id: number; ok: boolean; message: string; quarantineId: string; at: number };
 
 export type SecurityReport = {
   checkedAt: number;

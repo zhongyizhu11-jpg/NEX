@@ -31,7 +31,7 @@ export function shopPlanIdLabel(kind: ShopKind) {
   return kind === "sspanel" ? "用户等级" : "商城套餐 ID";
 }
 
-export type ShopPlanMapping = {
+type ShopPlanMapping = {
   /** 商城那边的套餐 id（SSPanel 是等级 class），一律按字符串存，比较时去掉首尾空白。 */
   shopPlanId: string;
   /** NEX 的套餐 id。 */
@@ -167,7 +167,7 @@ export function laterClock(current: number | null | undefined, next: number) {
   return current && current > next ? current : next;
 }
 
-export const SHOP_SYNC_RECORD_STATUSES = ["processing", "applied", "ignored", "unmapped", "failed"] as const;
+const SHOP_SYNC_RECORD_STATUSES = ["processing", "applied", "ignored", "unmapped", "failed"] as const;
 export type ShopSyncRecordStatus = (typeof SHOP_SYNC_RECORD_STATUSES)[number];
 
 /** 已经有结论、同一个订单号再来就原样回给它的状态。unmapped / failed 允许重试：补好映射、腾出端口后商城重发能成。 */

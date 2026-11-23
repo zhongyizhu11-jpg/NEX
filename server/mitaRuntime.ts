@@ -28,9 +28,7 @@ import {
   type MitaArch,
 } from "../shared/mitaAssets";
 
-export const MITA_SERVICE_NAME = "forwardx-mita";
-
-export type MitaBinarySource = {
+type MitaBinarySource = {
   /** 包里 mita 二进制的 SHA-256：不管从哪拿到的，对不上就不装。 */
   sha256: string;
   /**
@@ -88,7 +86,7 @@ export function buildMitaDirective(
 
 // ==================== Agent 上报 ====================
 
-export type MitaListenerReport = { port: number; protocol: "TCP" | "UDP"; ready: boolean };
+type MitaListenerReport = { port: number; protocol: "TCP" | "UDP"; ready: boolean };
 
 export type MitaRuntimeReport = {
   /** disabled / installing / running / error */
@@ -157,7 +155,7 @@ export function parseMitaTrafficReport(value: unknown): MitaTrafficReport | null
 }
 
 /** 超过这么久没上报，界面上当「等主机上报」，不把旧状态当实时的。扩展通道一分钟一轮。 */
-export const MITA_REPORT_STALE_MS = 5 * 60_000;
+const MITA_REPORT_STALE_MS = 5 * 60_000;
 
 const reports = new Map<number, MitaRuntimeReport>();
 const plans = new Map<number, { plan: MitaHostPlan; revision: string; at: number }>();

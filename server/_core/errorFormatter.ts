@@ -34,7 +34,7 @@ function issueOrigin(issue: { origin?: unknown }): string {
 }
 
 /** 把一条 zod issue 翻成一句人话；schema 里自带中文提示的直接用。 */
-export function zodIssueReason(issue: ZodIssue): string {
+function zodIssueReason(issue: ZodIssue): string {
   const message = String(issue.message || "").trim();
   if (message && CJK_PATTERN.test(message)) return message;
   switch (issue.code) {
@@ -138,7 +138,7 @@ function causeLooksLikeDriverError(cause: unknown): boolean {
  * 判断一条 INTERNAL_SERVER_ERROR 的 message 要不要藏起来。
  * 中文提示、前端解析的错误码一律保留；只有像驱动 / 系统原文的才换掉。
  */
-export function shouldMaskInternalErrorMessage(message: string, cause?: unknown): boolean {
+function shouldMaskInternalErrorMessage(message: string, cause?: unknown): boolean {
   const text = String(message || "").trim();
   if (!text) return false;
   if (CJK_PATTERN.test(text)) return false;
@@ -147,11 +147,11 @@ export function shouldMaskInternalErrorMessage(message: string, cause?: unknown)
   return causeLooksLikeDriverError(cause);
 }
 
-export function newInternalErrorId(): string {
+function newInternalErrorId(): string {
   return randomBytes(4).toString("hex");
 }
 
-export function maskedInternalErrorMessage(errorId: string): string {
+function maskedInternalErrorMessage(errorId: string): string {
   return `操作失败，请稍后重试（编号 ${errorId}）`;
 }
 

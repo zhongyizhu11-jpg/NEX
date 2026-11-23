@@ -94,7 +94,7 @@ export function compareClientVersion(a: string, b: string): number {
   return 0;
 }
 
-export function clientVersionAtLeast(version: string, minimum: string): boolean {
+function clientVersionAtLeast(version: string, minimum: string): boolean {
   if (!version) return false;
   return compareClientVersion(version, minimum) >= 0;
 }

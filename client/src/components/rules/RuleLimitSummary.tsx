@@ -20,7 +20,7 @@ function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-export function formatRuleExpiry(value: unknown, now = Date.now()) {
+function formatRuleExpiry(value: unknown, now = Date.now()) {
   const date = value ? new Date(value as any) : null;
   if (!date || !Number.isFinite(date.getTime())) return null;
   const sameYear = date.getFullYear() === new Date(now).getFullYear();

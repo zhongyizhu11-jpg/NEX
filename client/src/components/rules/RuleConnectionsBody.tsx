@@ -33,7 +33,7 @@ function Row({ row }: { row: RuleConnectionRow }) {
   );
 }
 
-export function RuleConnectionsList({ snapshot }: { snapshot: RuleConnectionsSnapshot }) {
+function RuleConnectionsList({ snapshot }: { snapshot: RuleConnectionsSnapshot }) {
   if (snapshot.rows.length === 0) {
     return <p className="py-6 text-center text-sm text-muted-foreground">此刻没有连接{snapshot.error ? `（${snapshot.error}）` : ""}</p>;
   }

@@ -14,7 +14,6 @@ import { SettingList, SettingRow } from "@/components/SettingRow";
 import { trpc } from "@/lib/trpc";
 import { AlertTriangle, BellRing, KeyRound, Loader2, Mail, Send } from "lucide-react";
 import { toast } from "sonner";
-import { Redirect } from "wouter";
 
 type SmtpSecurityMode = "auto" | "implicit-tls" | "starttls" | "none";
 
@@ -25,10 +24,6 @@ function normalizeSmtpSecurityMode(value: unknown, port: number, secure: boolean
   if (port === 465) return "implicit-tls";
   if (port === 587) return "starttls";
   return secure ? "implicit-tls" : "auto";
-}
-
-export default function EmailSettings() {
-  return <Redirect to="/settings?tab=email" />;
 }
 
 export function EmailSettingsContent() {

@@ -15,7 +15,7 @@
 */
 import type { IpChangeState } from "../../shared/ipChange";
 
-export type ProbeOutcome = { index: number; ok: boolean };
+type ProbeOutcome = { index: number; ok: boolean };
 
 export type ProbeRoundInput = {
   /** 配置里一共几个目标。 */
@@ -36,7 +36,7 @@ export type ProbeRoundResult =
   | { kind: "success" | "failure-round"; consecutiveFailures: number; lastCheckAt: Date; window: Set<number>; recorded: boolean };
 
 /** 两轮记账之间至少隔多久（检测间隔的 80%，给 Agent 周期的抖动留余地）。 */
-export function minRoundGapMs(checkIntervalSeconds: number) {
+function minRoundGapMs(checkIntervalSeconds: number) {
   return Math.max(1, checkIntervalSeconds) * 1000 * 0.8;
 }
 

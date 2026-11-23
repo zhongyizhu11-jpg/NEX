@@ -10,7 +10,6 @@ export type Language = "zh-CN" | "en";
 export type LanguagePreference = Language | "auto";
 
 export const LANGUAGE_STORAGE_KEY = "forwardx.language";
-export const LANGUAGE_PREFERENCES: readonly LanguagePreference[] = ["auto", "zh-CN", "en"];
 
 export function parseLanguagePreference(value: unknown): LanguagePreference {
   return value === "en" || value === "zh-CN" ? value : "auto";

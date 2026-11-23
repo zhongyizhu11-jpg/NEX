@@ -23,7 +23,7 @@ export type SystemHealth = {
  * 首页那一格的补充行：TCP 和 UDP 都给（2026-11 用户要手机上也看到 UDP）。
  * 两段各自不折行，窄了 UDP 那段整段换到下一行，不会截成「TCP 72 · UD…」；完整的挂在 title 上。
  */
-export function connectionsHint(connections: { tcp: number; udp: number }) {
+function connectionsHint(connections: { tcp: number; udp: number }) {
   const tcp = `TCP ${connections.tcp.toLocaleString(getFormatLocale())}`;
   const udp = `UDP ${connections.udp.toLocaleString(getFormatLocale())}`;
   return {

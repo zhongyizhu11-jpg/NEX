@@ -30,7 +30,7 @@ export function hostBandwidthHintMbps(host: { lineBandwidthMbps?: unknown; rateL
 }
 
 /** 每个成员最多分几份：份数就是它在组里重复出现的次数，太多会让客户端里的列表很长。 */
-export const PROXY_LOAD_BALANCE_MAX_WEIGHT = 10;
+const PROXY_LOAD_BALANCE_MAX_WEIGHT = 10;
 
 /**
  * 按带宽算每个成员分几份连接。有任何一个不知道带宽、或者都一样，就返回 null（平均分）——

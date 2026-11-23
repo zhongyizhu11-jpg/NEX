@@ -159,7 +159,7 @@ export function invalidateInboundRoutingContext() {
 }
 
 /** 全部 SS 入站 + 它们所在主机 + 这些主机的最新解锁结论。30 秒缓存：每台落地每次心跳都会问。 */
-export async function loadRoutingContext(now = Date.now()): Promise<RoutingContext> {
+async function loadRoutingContext(now = Date.now()): Promise<RoutingContext> {
   if (contextCache && now - contextCache.at < CONTEXT_CACHE_MS) return contextCache.value;
   // 落地池的成员入站不当分流落地（跟着池走，池里去掉那台它就没了）
   const inbounds = ((await db.getAllProxyInbounds()) as any[]).filter((row) => String(row.protocol) === "shadowsocks" && !(Number(row.nodePoolId || 0) > 0));
@@ -205,7 +205,7 @@ async function routingOwnerIdOf(row: { userId?: unknown; clonedFromInboundId?: u
   return Number(row.userId || 0);
 }
 
-export async function loadRoutingOwner(userId: number): Promise<RoutingOwner> {
+async function loadRoutingOwner(userId: number): Promise<RoutingOwner> {
   const user = await db.getUserById(userId);
   const role = String((user as any)?.role || "user");
   const allowed = role === "admin" ? [] : await db.getUserEffectiveAllowedHostIds(userId);

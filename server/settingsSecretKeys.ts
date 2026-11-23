@@ -9,7 +9,7 @@
   Webhook 方法这类配置项；主机安全基线令牌（ops.hostSecurity.baselineToken.*，只是一个防重复的随机串）。
 */
 
-export const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
+const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
   panelSslKeyPem: "面板 HTTPS 私钥",
   ddnsWebhookUrl: "DDNS Webhook 地址",
   ddnsWebhookHeaders: "DDNS Webhook 请求头",

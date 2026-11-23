@@ -4,7 +4,7 @@ export type ForwardType = (typeof FORWARD_TYPES)[number];
 export type ForwardRuleProtocol = "tcp" | "udp" | "both";
 
 /** NEX 隧道的传输版本：V1 FXP 加密直连、V2 WireGuard、V3 HTTP / WS / TLS 外层（shared/forwardXV3.ts）。 */
-export const FORWARDX_VERSIONS = ["v1", "v2", "v3"] as const;
+const FORWARDX_VERSIONS = ["v1", "v2", "v3"] as const;
 export type ForwardXVersion = (typeof FORWARDX_VERSIONS)[number];
 
 export function normalizeForwardXVersion(value: unknown): ForwardXVersion {
@@ -43,7 +43,7 @@ export function isUserspaceForwardType(value: unknown): boolean {
   return !(KERNEL_FORWARD_TYPES as readonly string[]).includes(normalized);
 }
 
-export const FORWARD_RULE_PROTOCOL_LABELS: Record<ForwardRuleProtocol, string> = {
+const FORWARD_RULE_PROTOCOL_LABELS: Record<ForwardRuleProtocol, string> = {
   tcp: "TCP",
   udp: "UDP",
   both: "TCP + UDP",
@@ -82,7 +82,7 @@ export const TUNNEL_PROTOCOLS = ["forwardx", "tls", "wss", "tcp", "mtls", "mwss"
 
 export type TunnelProtocol = (typeof TUNNEL_PROTOCOLS)[number];
 
-export const FORWARD_PROTOCOLS = Array.from(new Set([...FORWARD_TYPES, ...TUNNEL_PROTOCOLS])) as Array<ForwardType | TunnelProtocol>;
+const FORWARD_PROTOCOLS = Array.from(new Set([...FORWARD_TYPES, ...TUNNEL_PROTOCOLS])) as Array<ForwardType | TunnelProtocol>;
 
 export type ForwardProtocolKey = ForwardType | TunnelProtocol;
 
@@ -105,7 +105,7 @@ export const FORWARD_PROTOCOL_LABELS: Record<ForwardProtocolKey, string> = {
   nginx_stream: "Nginx",
 };
 
-export const DEFAULT_FORWARD_PROTOCOL_SETTINGS: ForwardProtocolSettings = {
+const DEFAULT_FORWARD_PROTOCOL_SETTINGS: ForwardProtocolSettings = {
   iptables: true,
   nftables: true,
   realm: true,

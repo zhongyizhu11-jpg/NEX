@@ -23,7 +23,7 @@ import { dbBool } from "./repositories/repositoryUtils";
   Agent 那边怎么判健康见 agent/failover_exit_group.go。
 */
 
-export type GostBalanceExit = {
+type GostBalanceExit = {
   hostId: number;
   /** 入口机上只走这台出口的本机 gost 端口（TCP、UDP 同一个号） */
   localPort: number;
@@ -176,7 +176,7 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
   };
 }
 
-export type GostBalanceProxySpec = ReturnType<typeof buildGostBalanceProxySpec>;
+type GostBalanceProxySpec = ReturnType<typeof buildGostBalanceProxySpec>;
 
 type BalanceRule = { id: number; tunnelId?: number | null; protocol?: string | null; pendingDelete?: unknown; isEnabled?: unknown; failoverEnabled?: unknown };
 type BalanceTunnel = { id: number; isEnabled?: unknown; loadBalanceStrategy?: string | null; balancePinHostId?: number | null };

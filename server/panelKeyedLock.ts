@@ -15,7 +15,7 @@ import { PANEL_KEYED_LOCK_ROW_PREFIX, SqlPanelLeaseStore, panelBackgroundLeaseSt
   同一组的两把锁（编辑 forward-group:<id>、评估 forward-group-failover:<id>）总是先编辑后评估，不会交叉等。
 */
 
-export const PANEL_KEYED_LOCK_PREFIX = PANEL_KEYED_LOCK_ROW_PREFIX;
+const PANEL_KEYED_LOCK_PREFIX = PANEL_KEYED_LOCK_ROW_PREFIX;
 export const PANEL_KEYED_LOCK_TTL_MS = 120_000;
 const RENEW_INTERVAL_MS = 30_000;
 const DEFAULT_WAIT_MS = 90_000;
@@ -42,7 +42,7 @@ async function acquireRow(name: string, token: string, waitMs: number) {
   }
 }
 
-export async function withPanelKeyedLock<T>(keyValue: unknown, task: () => Promise<T>, options: { waitMs?: number } = {}): Promise<T> {
+async function withPanelKeyedLock<T>(keyValue: unknown, task: () => Promise<T>, options: { waitMs?: number } = {}): Promise<T> {
   const key = String(keyValue || "").trim();
   if (!key) return task();
   return withKeyedTaskLock(key, async () => {

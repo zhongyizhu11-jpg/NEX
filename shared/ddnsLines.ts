@@ -201,11 +201,6 @@ export function parseDdnsLineState(value: unknown): DdnsLineState | null {
   };
 }
 
-/** 组里有没有成员分了线路。 */
-export function groupHasDdnsLineAssignments(members: Array<{ ddnsLines?: unknown; isEnabled?: unknown }> | null | undefined) {
-  return (members || []).some((member) => parseDdnsLines(member?.ddnsLines).length > 0);
-}
-
 export const DDNS_LINE_SOURCE_LABELS: Record<DdnsLineSource, string> = {
   members: "线路成员",
   fallback: "线路成员全不可用，暂用默认线路",

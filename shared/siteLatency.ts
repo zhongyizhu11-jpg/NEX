@@ -19,7 +19,7 @@
 */
 
 export const SITE_LATENCY_INTERVAL_SECONDS = 120;
-export const SITE_LATENCY_KEEP = 60;
+const SITE_LATENCY_KEEP = 60;
 
 export type SiteLatencyTarget = { key: string; label: string; host: string; port: number };
 
@@ -80,7 +80,7 @@ export const SITE_LATENCY_WARN_MS = 150;
 export const SITE_LATENCY_BAD_MS = 350;
 
 /** 一轮握了几次、连上几次：老样本没有这两个数，连上算 1/1，没连上算 0/1。 */
-export function siteSampleCounts(sample: SiteLatencySample): { tries: number; ok: number } {
+function siteSampleCounts(sample: SiteLatencySample): { tries: number; ok: number } {
   const tries = Number.isInteger(sample.tries) && Number(sample.tries) > 0 ? Number(sample.tries) : 1;
   if (sample.ms === null) return { tries, ok: 0 };
   const ok = Number.isInteger(sample.ok) && Number(sample.ok) > 0 ? Math.min(tries, Number(sample.ok)) : tries;

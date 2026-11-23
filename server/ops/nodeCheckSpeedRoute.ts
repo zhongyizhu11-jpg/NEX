@@ -35,7 +35,7 @@ function authorize(req: Request, res: Response): number | null {
 }
 
 /** 往响应里写 total 个零字节，顾着背压；对方断开就停。 */
-export function streamZeroBytes(res: Response, total: number): Promise<void> {
+function streamZeroBytes(res: Response, total: number): Promise<void> {
   return new Promise((resolve) => {
     let remaining = total;
     let done = false;

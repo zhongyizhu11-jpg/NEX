@@ -19,10 +19,10 @@ import { ipRateLimitScope } from "../ipRateLimitScope";
 import { isEmailDomainAllowed } from "../../shared/googleLogin";
 import { sha256Base64Url, timingSafeEqualText } from "./googleOidc";
 
-export type OAuthLoginMode = "login" | "link" | "app";
+type OAuthLoginMode = "login" | "link" | "app";
 
 /** 判断规则会给出的失败码（各家的失败码表都包含这些）。 */
-export type OAuthSignInErrorCode =
+type OAuthSignInErrorCode =
   | "domain_not_allowed"
   | "link_requires_login"
   | "account_disabled"
@@ -34,7 +34,7 @@ export type OAuthSignInErrorCode =
   | "invite_required"
   | "server_error";
 
-export type OAuthIdentity = {
+type OAuthIdentity = {
   /** 第三方账号的永久 ID：认人只看它。 */
   id: string;
   /** 邮箱（小写）。Google / Discord 只给已验证的；通用 OIDC 在管理员关了「只接受已验证邮箱」时可能没验证过。 */
@@ -129,7 +129,7 @@ export async function allocateUsername(base: string, isTaken: (name: string) => 
   throw new Error("无法分配用户名");
 }
 
-export function isUniqueViolation(error: unknown) {
+function isUniqueViolation(error: unknown) {
   const text = error instanceof Error ? `${(error as any).code || ""} ${error.message}` : String(error);
   return /unique|duplicate|ER_DUP_ENTRY|23505|SQLITE_CONSTRAINT/i.test(text);
 }
@@ -232,10 +232,10 @@ export async function resolveOAuthSignIn<U extends OAuthUserLike>(
   一样（IPv6 按 /64）。对不上时浏览器里先显示一页确认，写明发起设备的 IP，用户点了确认才算数。
 */
 
-export const OAUTH_APP_FLOW_TTL_MS = 10 * 60 * 1000;
+const OAUTH_APP_FLOW_TTL_MS = 10 * 60 * 1000;
 const OAUTH_APP_FLOW_MAX = 10_000;
 
-export type OAuthAppFlowStatus = "pending" | "started" | "awaiting_confirm" | "done" | "failed";
+type OAuthAppFlowStatus = "pending" | "started" | "awaiting_confirm" | "done" | "failed";
 
 export type OAuthAppFlow<C extends string = string> = {
   flowId: string;

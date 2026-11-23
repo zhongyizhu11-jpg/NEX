@@ -23,7 +23,7 @@ export const ATTENTION_VISIBLE_ROWS = 5;
  * 说明里的「A → B」画成一小段线：那是隧道两头的两台机器，线断了就是虚线。
  * 其余部分（「隧道没在运行 · 」）照原样是字。
  */
-export function renderAttentionDetail(detail: string, health: Parameters<typeof PathLine>[0]["health"]) {
+function renderAttentionDetail(detail: string, health: Parameters<typeof PathLine>[0]["health"]) {
   const parts = detail.split(" · ");
   const index = parts.findIndex((part) => part.includes(" → "));
   if (index < 0) return detail;

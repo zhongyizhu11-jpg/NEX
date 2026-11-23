@@ -8,8 +8,8 @@ type EmptyObservation = {
 };
 
 const observations = new Map<string, EmptyObservation>();
-export const MIMIC_REMOVAL_MIN_STREAK = 3;
-export const MIMIC_REMOVAL_MIN_AGE_MS = 60_000;
+const MIMIC_REMOVAL_MIN_STREAK = 3;
+const MIMIC_REMOVAL_MIN_AGE_MS = 60_000;
 
 function observationKey(hostId: number, networkInterface: string) {
   return `${Math.floor(Number(hostId))}:${String(networkInterface || "").trim()}`;
@@ -19,7 +19,7 @@ function removalToken(key: string, firstSeenAt: number) {
   return createHash("sha256").update(`${key}:${firstSeenAt}:forwardx-mimic-removal-v1`).digest("hex");
 }
 
-export function resetMimicRemovalGuard(hostId: number) {
+function resetMimicRemovalGuard(hostId: number) {
   const prefix = `${Math.floor(Number(hostId))}:`;
   for (const key of observations.keys()) if (key.startsWith(prefix)) observations.delete(key);
 }

@@ -23,7 +23,7 @@ const RESTART_TIMEOUT_MS = 3 * 60 * 1000;
 const SCAN_TIMEOUT_MS = 2 * 60 * 1000;
 const STOP_TIMEOUT_MS = 2 * 60 * 1000;
 
-export function newOpsId(prefix: string) {
+function newOpsId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
 }
 

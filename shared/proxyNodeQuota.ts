@@ -24,7 +24,7 @@ export const PROXY_NODE_TRAFFIC_WARN_PERCENT = 80;
  * 显示成「1000G」（跟机房卖的写法一致），把这里改成 `2e12` 即可 ——
  * 只有这一个地方要改，测试里也只有几条断言跟着动。
  */
-export const QUOTA_TERABYTE_THRESHOLD = 1e12;
+const QUOTA_TERABYTE_THRESHOLD = 1e12;
 
 export type ProxyNodeQuota = {
   /** 上行带宽 Mbps，0 表示没填。 */

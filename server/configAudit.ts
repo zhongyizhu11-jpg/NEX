@@ -127,7 +127,7 @@ export function runWithConfigAuditContext<T>(context: Partial<ConfigAuditContext
   }, callback);
 }
 
-export function currentConfigAuditContext() {
+function currentConfigAuditContext() {
   return auditContext.getStore();
 }
 

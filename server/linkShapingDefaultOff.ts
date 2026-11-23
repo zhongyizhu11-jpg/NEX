@@ -17,7 +17,7 @@ import { appendPanelLog } from "./_core/panelLogger";
   手动档和手动填的上限一律不动，那是明明白白设过的。
 */
 
-export const LINK_SHAPING_DEFAULT_OFF_SETTING = "tunnel.linkShaping.defaultOffAt";
+const LINK_SHAPING_DEFAULT_OFF_SETTING = "tunnel.linkShaping.defaultOffAt";
 
 /** 升级到这个版本时把还停在旧默认值「自动」的隧道关掉；返回改了几条。只在第一次跑时真的改。 */
 export async function applyLinkShapingDefaultOffOnce(): Promise<number> {

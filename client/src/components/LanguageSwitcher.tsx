@@ -22,7 +22,7 @@ const OPTIONS: ReadonlyArray<{ value: LanguagePreference; label: string; hint?: 
   { value: "en", label: "English" },
 ];
 
-export function useLanguagePreference() {
+function useLanguagePreference() {
   const preference = useSyncExternalStore(subscribeLanguage, getLanguagePreference, getLanguagePreference);
   const language = useSyncExternalStore(subscribeLanguage, getLanguage, getLanguage);
   return { preference, language };

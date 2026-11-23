@@ -123,7 +123,7 @@ async function runItem(
   }
 }
 
-export const ruleBatchJobQueue = new RuleBatchJobQueue<OwnerExtra>(runItem);
+const ruleBatchJobQueue = new RuleBatchJobQueue<OwnerExtra>(runItem);
 
 // 做完的任务过期后从内存里清掉（查询时也会顺手清）。
 const ruleBatchJobPruneTimer = setInterval(() => ruleBatchJobQueue.prune(), 60_000);

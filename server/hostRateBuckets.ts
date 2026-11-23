@@ -25,9 +25,9 @@ import { normalizeHostBandwidthBilling, P95_BUCKET_SECONDS, type HostRateBucket 
 
 export const HOST_RATE_BUCKET_TABLE = "host_rate_buckets";
 /** 留 40 天：够算完整一个月的 95，再多留几天给跨月对账。 */
-export const HOST_RATE_BUCKET_RETENTION_DAYS = 40;
+const HOST_RATE_BUCKET_RETENTION_DAYS = 40;
 /** 两次心跳最多隔多久还摊：15 分钟（三个桶）。再长就当这一段没数据。 */
-export const HOST_RATE_MAX_GAP_MS = 15 * 60 * 1000;
+const HOST_RATE_MAX_GAP_MS = 15 * 60 * 1000;
 const MAX_TRACKED_HOSTS = 10_000;
 
 type Baseline = { atMs: number; bytesIn: number; bytesOut: number };
@@ -152,7 +152,7 @@ function upsertSql() {
 }
 
 /** 累加进库（同一个桶写两次是加，不是覆盖：面板重启前后各记了半个桶）。 */
-export async function upsertHostRateBuckets(hostId: number, buckets: readonly HostRateBucket[]) {
+async function upsertHostRateBuckets(hostId: number, buckets: readonly HostRateBucket[]) {
   const sql = upsertSql();
   for (const bucket of buckets) {
     await executeRaw(sql, [
@@ -194,11 +194,6 @@ export async function getHostRateBuckets(hostIds: readonly number[], sinceSec: n
 export async function cleanOldHostRateBuckets(nowMs = Date.now()) {
   const cutoff = Math.floor(nowMs / 1000) - HOST_RATE_BUCKET_RETENTION_DAYS * 86_400;
   return deleteExpiredHistoryRows(HOST_RATE_BUCKET_TABLE, "bucketStart", cutoff);
-}
-
-/** 测试用：清掉内存里的基线和没写完的桶。 */
-export function resetHostRateStateForTest() {
-  states.clear();
 }
 
 onHostDeleted((hostId) => {

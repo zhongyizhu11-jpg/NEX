@@ -1,4 +1,4 @@
-export const MAX_NGINX_PEM_BYTES = 64 * 1024;
+const MAX_NGINX_PEM_BYTES = 64 * 1024;
 export const MAX_NGINX_PEM_UPLOAD_BYTES = MAX_NGINX_PEM_BYTES * 2;
 export const MAX_NGINX_PEM_FILES = 2;
 

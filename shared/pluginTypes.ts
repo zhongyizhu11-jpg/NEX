@@ -54,13 +54,13 @@ export const PLUGIN_SETTING_FIELD_TYPES = [
   "url",
 ] as const;
 
-export type PluginSettingFieldType = typeof PLUGIN_SETTING_FIELD_TYPES[number];
+type PluginSettingFieldType = typeof PLUGIN_SETTING_FIELD_TYPES[number];
 
 export const PLUGIN_PAGE_CONTENT_TYPES = ["markdown", "html", "text"] as const;
-export type PluginPageContentType = typeof PLUGIN_PAGE_CONTENT_TYPES[number];
+type PluginPageContentType = typeof PLUGIN_PAGE_CONTENT_TYPES[number];
 
 export const PLUGIN_SIDEBAR_TARGETS = ["usage", "settings", "page"] as const;
-export type PluginSidebarTarget = typeof PLUGIN_SIDEBAR_TARGETS[number];
+type PluginSidebarTarget = typeof PLUGIN_SIDEBAR_TARGETS[number];
 
 export const PLUGIN_ACTION_TYPES = [
   "noop",
@@ -71,7 +71,7 @@ export const PLUGIN_ACTION_TYPES = [
   "data.whitelist.refresh",
 ] as const;
 
-export type PluginActionType = typeof PLUGIN_ACTION_TYPES[number];
+type PluginActionType = typeof PLUGIN_ACTION_TYPES[number];
 
 export const PLUGIN_PANEL_OPERATIONS = [
   "system.summary",
@@ -123,7 +123,7 @@ export const PLUGIN_HTTP_METHODS = [
   "DELETE",
 ] as const;
 
-export type PluginHttpMethod = typeof PLUGIN_HTTP_METHODS[number];
+type PluginHttpMethod = typeof PLUGIN_HTTP_METHODS[number];
 
 export const PLUGIN_HTTP_RESPONSE_TYPES = [
   "auto",
@@ -131,7 +131,7 @@ export const PLUGIN_HTTP_RESPONSE_TYPES = [
   "text",
 ] as const;
 
-export type PluginHttpResponseType = typeof PLUGIN_HTTP_RESPONSE_TYPES[number];
+type PluginHttpResponseType = typeof PLUGIN_HTTP_RESPONSE_TYPES[number];
 
 export const PLUGIN_HTTP_AUTH_TYPES = [
   "none",
@@ -140,28 +140,28 @@ export const PLUGIN_HTTP_AUTH_TYPES = [
   "cookie",
 ] as const;
 
-export type PluginHttpAuthType = typeof PLUGIN_HTTP_AUTH_TYPES[number];
+type PluginHttpAuthType = typeof PLUGIN_HTTP_AUTH_TYPES[number];
 
 export const PLUGIN_AGENT_EXECUTORS = ["script"] as const;
-export type PluginAgentExecutor = typeof PLUGIN_AGENT_EXECUTORS[number];
+type PluginAgentExecutor = typeof PLUGIN_AGENT_EXECUTORS[number];
 
 export const PLUGIN_AGENT_INTERPRETERS = ["bash", "sh", "python3"] as const;
-export type PluginAgentInterpreter = typeof PLUGIN_AGENT_INTERPRETERS[number];
+type PluginAgentInterpreter = typeof PLUGIN_AGENT_INTERPRETERS[number];
 
 export const PLUGIN_AGENT_OUTPUT_TYPES = ["json", "text"] as const;
-export type PluginAgentOutputType = typeof PLUGIN_AGENT_OUTPUT_TYPES[number];
+type PluginAgentOutputType = typeof PLUGIN_AGENT_OUTPUT_TYPES[number];
 
 export const PLUGIN_AGENT_TARGETS = ["usage-hosts", "selected-hosts"] as const;
-export type PluginAgentTarget = typeof PLUGIN_AGENT_TARGETS[number];
+type PluginAgentTarget = typeof PLUGIN_AGENT_TARGETS[number];
 
 export const PLUGIN_ACTION_INTENTS = ["read", "write", "execute"] as const;
-export type PluginActionIntent = typeof PLUGIN_ACTION_INTENTS[number];
+type PluginActionIntent = typeof PLUGIN_ACTION_INTENTS[number];
 
 export const PLUGIN_RESOURCE_VIEW_TYPES = ["agent-resource"] as const;
-export type PluginResourceViewType = typeof PLUGIN_RESOURCE_VIEW_TYPES[number];
+type PluginResourceViewType = typeof PLUGIN_RESOURCE_VIEW_TYPES[number];
 
 export const PLUGIN_RESOURCE_SOURCE_TRIGGERS = ["onOpen", "onHostSelected", "manual"] as const;
-export type PluginResourceSourceTrigger = typeof PLUGIN_RESOURCE_SOURCE_TRIGGERS[number];
+type PluginResourceSourceTrigger = typeof PLUGIN_RESOURCE_SOURCE_TRIGGERS[number];
 
 export const PLUGIN_RESOURCE_COLUMN_TYPES = [
   "text",
@@ -172,7 +172,7 @@ export const PLUGIN_RESOURCE_COLUMN_TYPES = [
   "code",
   "datetime",
 ] as const;
-export type PluginResourceColumnType = typeof PLUGIN_RESOURCE_COLUMN_TYPES[number];
+type PluginResourceColumnType = typeof PLUGIN_RESOURCE_COLUMN_TYPES[number];
 
 export const PLUGIN_RESOURCE_FIELD_TYPES = [
   "text",
@@ -183,7 +183,7 @@ export const PLUGIN_RESOURCE_FIELD_TYPES = [
   "select",
   "multi-select",
 ] as const;
-export type PluginResourceFieldType = typeof PLUGIN_RESOURCE_FIELD_TYPES[number];
+type PluginResourceFieldType = typeof PLUGIN_RESOURCE_FIELD_TYPES[number];
 
 export const PLUGIN_RESOURCE_CONDITION_OPERATORS = [
   "eq",
@@ -193,10 +193,10 @@ export const PLUGIN_RESOURCE_CONDITION_OPERATORS = [
   "truthy",
   "falsy",
 ] as const;
-export type PluginResourceConditionOperator = typeof PLUGIN_RESOURCE_CONDITION_OPERATORS[number];
+type PluginResourceConditionOperator = typeof PLUGIN_RESOURCE_CONDITION_OPERATORS[number];
 
 export const PLUGIN_RESULT_SCHEMA_TYPES = ["keyValue", "table"] as const;
-export type PluginResultSchemaType = typeof PLUGIN_RESULT_SCHEMA_TYPES[number];
+type PluginResultSchemaType = typeof PLUGIN_RESULT_SCHEMA_TYPES[number];
 
 export const PLUGIN_RESULT_FIELD_TYPES = [
   "text",
@@ -206,13 +206,13 @@ export const PLUGIN_RESULT_FIELD_TYPES = [
   "code",
   "datetime",
 ] as const;
-export type PluginResultFieldType = typeof PLUGIN_RESULT_FIELD_TYPES[number];
+type PluginResultFieldType = typeof PLUGIN_RESULT_FIELD_TYPES[number];
 
 export const PLUGIN_USAGE_VIEW_TYPES = [
   "host-asset-sync",
 ] as const;
 
-export type PluginUsageViewType = typeof PLUGIN_USAGE_VIEW_TYPES[number];
+type PluginUsageViewType = typeof PLUGIN_USAGE_VIEW_TYPES[number];
 
 export const PLUGIN_USAGE_FIELD_TYPES = [
   "text",
@@ -222,9 +222,9 @@ export const PLUGIN_USAGE_FIELD_TYPES = [
   "multi-select",
 ] as const;
 
-export type PluginUsageFieldType = typeof PLUGIN_USAGE_FIELD_TYPES[number];
+type PluginUsageFieldType = typeof PLUGIN_USAGE_FIELD_TYPES[number];
 
-export type PluginSettingOption = {
+type PluginSettingOption = {
   label: string;
   value: string;
   exclusive?: boolean;
@@ -417,7 +417,7 @@ export type PluginResourceViewDefinition = {
   };
 };
 
-export type PluginAssetDeclaration = {
+type PluginAssetDeclaration = {
   path: string;
   label?: string;
   description?: string;
@@ -440,12 +440,12 @@ export type PluginUsageSelectorCopy = {
   hidden?: boolean;
 };
 
-export type PluginUsageNoteField = {
+type PluginUsageNoteField = {
   label?: string;
   placeholder?: string;
 };
 
-export type PluginUsageFooter = {
+type PluginUsageFooter = {
   title?: string;
   description?: string;
   submitLabel?: string;

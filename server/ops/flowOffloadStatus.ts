@@ -18,7 +18,7 @@ export type FlowOffloadReport = {
 
 const reports = new Map<number, FlowOffloadReport>();
 
-export function flowOffloadReportFor(hostId: number): FlowOffloadReport | undefined {
+function flowOffloadReportFor(hostId: number): FlowOffloadReport | undefined {
   return reports.get(Number(hostId));
 }
 

@@ -12,7 +12,7 @@ import * as db from "./db";
 import { loadProxySubSettings } from "./proxySubSettings";
 import { notifyUserDirect } from "./userNotify";
 
-export type ProxySubNotifyKind = "first-access" | "new-device" | "device-limit" | "failure";
+type ProxySubNotifyKind = "first-access" | "new-device" | "device-limit" | "failure";
 
 export type ProxySubNotifyEvent = {
   kind: ProxySubNotifyKind;

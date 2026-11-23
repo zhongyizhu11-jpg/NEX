@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { aiSkillRegistry, type AiSkillDefinition } from "./registry";
 
-export const FORWARDX_QUERY_INTENTS = [
+const FORWARDX_QUERY_INTENTS = [
   "usage",
   "rules",
   "rule_detail",
@@ -16,7 +16,7 @@ export const FORWARDX_QUERY_INTENTS = [
   "unsupported",
 ] as const;
 
-export const FORWARDX_MANAGE_ACTIONS = [
+const FORWARDX_MANAGE_ACTIONS = [
   "none",
   "balance_set",
   "balance_adjust",

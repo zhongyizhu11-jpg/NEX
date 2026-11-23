@@ -13,7 +13,7 @@
  * next heartbeat instead of being hidden for the whole cooldown window.
  */
 
-export const AGENT_RUNTIME_RECOVERY_COOLDOWN_MS = 60 * 1000;
+const AGENT_RUNTIME_RECOVERY_COOLDOWN_MS = 60 * 1000;
 
 export type AgentRuntimeRecoveryOptions = {
   preserveReportedRuntime?: boolean;
@@ -129,7 +129,7 @@ export class AgentRuntimeRecoveryCoordinator {
   }
 }
 
-export const agentRuntimeRecoveryCoordinator = new AgentRuntimeRecoveryCoordinator();
+const agentRuntimeRecoveryCoordinator = new AgentRuntimeRecoveryCoordinator();
 
 export async function runAgentRuntimeRecovery(
   hostId: number,

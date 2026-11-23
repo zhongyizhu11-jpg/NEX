@@ -51,7 +51,7 @@ export type WebhookConfig = {
   minLevel: OpsEventLevel;
 };
 
-export async function readWebhookConfig(): Promise<WebhookConfig> {
+async function readWebhookConfig(): Promise<WebhookConfig> {
   const settings = await getAllSettings().catch(() => ({} as Record<string, string | null>));
   return {
     enabled: settings[KEY_ENABLED] === "true",
@@ -77,7 +77,7 @@ export async function getWebhookSettingsView() {
 }
 
 /** 只许 https，过 SSRF 检查。返回规整后的地址；不合格抛出一句给人看的错。 */
-export async function validateWebhookUrl(raw: string): Promise<string> {
+async function validateWebhookUrl(raw: string): Promise<string> {
   const text = String(raw || "").trim();
   if (!text) throw new Error("请填写 Webhook 地址");
   if (text.length > WEBHOOK_URL_MAX_LENGTH) throw new Error("Webhook 地址太长");

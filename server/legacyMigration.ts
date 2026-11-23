@@ -1,4 +1,4 @@
-export const LEGACY_COMPAT_MIGRATION_ID = "legacy-compat-v1";
+const LEGACY_COMPAT_MIGRATION_ID = "legacy-compat-v1";
 
 export type LegacyMigrationDatabaseKind = "sqlite" | "mysql" | "postgresql";
 
@@ -9,7 +9,7 @@ export interface LegacyMigrationDatabase {
   transaction<T>(work: () => Promise<T>): Promise<T>;
 }
 
-export const LEGACY_SESSION_FIELDS = [
+const LEGACY_SESSION_FIELDS = [
   "browserSessionToken",
   "mobileSessionToken",
   "telegramSessionToken",

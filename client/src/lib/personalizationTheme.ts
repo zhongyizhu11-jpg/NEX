@@ -163,7 +163,7 @@ const PAGE_TINT_VARS = ["--fx-l0-page", "--fx-l3-control-fill"] as const;
   index.html 顶部那段内联脚本开机就按它先把属性挂上（和深浅色 forwardx-theme 同一套做法）。
   主题样式现在按需下（uiThemeStyles.ts），main.tsx 也按这个属性先把那一套的样式下完再画第一帧。
 */
-export const UI_THEME_STORAGE_KEY = "forwardx-ui-theme";
+const UI_THEME_STORAGE_KEY = "forwardx-ui-theme";
 
 function rememberUiTheme(uiTheme: string) {
   try {
@@ -189,7 +189,7 @@ export const UI_THEME_OVERRIDE_EVENT = "fx-ui-theme-override";
   进了安全模式就能照常进设置页把它换掉或卸载。记在 sessionStorage：关掉标签页就恢复，?themeSafe=0 当场退出。
   index.html 开机那段脚本认同一个开关。
 */
-export const UI_THEME_SAFE_MODE_KEY = "forwardx-ui-theme-safe";
+const UI_THEME_SAFE_MODE_KEY = "forwardx-ui-theme-safe";
 
 export function isUiThemeSafeMode(): boolean {
   try {

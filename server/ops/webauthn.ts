@@ -21,7 +21,7 @@ export function base64urlEncode(data: Uint8Array | Buffer) {
   return Buffer.from(data).toString("base64url");
 }
 
-export function base64urlDecode(value: string) {
+function base64urlDecode(value: string) {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]*={0,2}$/.test(value)) throw new WebAuthnError("数据格式不对");
   return Buffer.from(value.replace(/=+$/, ""), "base64url");
 }
@@ -151,10 +151,10 @@ export function decodeCbor(buffer: Buffer): CborValue {
 
 // ---------- authenticatorData ----------
 
-export const AUTH_FLAG_UP = 0x01;
-export const AUTH_FLAG_UV = 0x04;
-export const AUTH_FLAG_AT = 0x40;
-export const AUTH_FLAG_ED = 0x80;
+const AUTH_FLAG_UP = 0x01;
+const AUTH_FLAG_UV = 0x04;
+const AUTH_FLAG_AT = 0x40;
+const AUTH_FLAG_ED = 0x80;
 
 export type ParsedAuthenticatorData = {
   rpIdHash: Buffer;
@@ -205,9 +205,9 @@ export function parseAuthenticatorData(data: Buffer): ParsedAuthenticatorData {
 
 // ---------- COSE 公钥 ----------
 
-export const COSE_ALG_ES256 = -7;
-export const COSE_ALG_EDDSA = -8;
-export const COSE_ALG_RS256 = -257;
+const COSE_ALG_ES256 = -7;
+const COSE_ALG_EDDSA = -8;
+const COSE_ALG_RS256 = -257;
 export const SUPPORTED_COSE_ALGS = [COSE_ALG_ES256, COSE_ALG_EDDSA, COSE_ALG_RS256];
 
 function coseBytes(map: Map<CborValue, CborValue>, label: number) {
@@ -217,7 +217,7 @@ function coseBytes(map: Map<CborValue, CborValue>, label: number) {
 }
 
 /** COSE_Key → { alg, SPKI DER }。 */
-export function coseToPublicKey(cose: Map<CborValue, CborValue>): { alg: number; spki: Buffer } {
+function coseToPublicKey(cose: Map<CborValue, CborValue>): { alg: number; spki: Buffer } {
   const kty = cose.get(1);
   const alg = Number(cose.get(3));
   let jwk: crypto.JsonWebKey;
@@ -239,7 +239,7 @@ export function coseToPublicKey(cose: Map<CborValue, CborValue>): { alg: number;
   return { alg, spki: key.export({ type: "spki", format: "der" }) as Buffer };
 }
 
-export function verifyWebAuthnSignature(alg: number, spki: Buffer, data: Buffer, signature: Buffer) {
+function verifyWebAuthnSignature(alg: number, spki: Buffer, data: Buffer, signature: Buffer) {
   const key = crypto.createPublicKey({ key: spki, format: "der", type: "spki" });
   try {
     if (alg === COSE_ALG_ES256) return crypto.verify("sha256", data, { key, dsaEncoding: "der" }, signature);

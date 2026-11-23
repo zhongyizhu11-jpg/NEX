@@ -21,16 +21,16 @@ import { databaseNowMsSql, isPanelBackgroundLeaseHolder, onPanelBackgroundLeaseC
   只有一个实例时持有者不轮询（没人会写），拿到租约那一刻补取一次，防着上一任没取完。
 */
 
-export const PANEL_WORK_POLL_INTERVAL_MS = 2_000;
+const PANEL_WORK_POLL_INTERVAL_MS = 2_000;
 /** 放了这么久还没跑成的不再执行（持有者长时间不在时，回来按巡检重新算，不补旧请求）。 */
 export const PANEL_WORK_REQUEST_MAX_AGE_MS = 10 * 60_000;
 /** 认领后这么久还没删（跑的实例没了）就算没人在跑，可以重新认领。 */
-export const PANEL_WORK_CLAIM_MS = 2 * 60_000;
-export const PANEL_WORK_RETRY_BASE_MS = 2_000;
-export const PANEL_WORK_RETRY_MAX_MS = 60_000;
+const PANEL_WORK_CLAIM_MS = 2 * 60_000;
+const PANEL_WORK_RETRY_BASE_MS = 2_000;
+const PANEL_WORK_RETRY_MAX_MS = 60_000;
 
 /** ageMs：从请求写进来到现在过了多久（库的时钟算，和各实例的时钟差无关）。 */
-export type PanelWorkContext = { ageMs: number };
+type PanelWorkContext = { ageMs: number };
 type Handler = (key: string, payload: unknown, context: PanelWorkContext) => Promise<void> | void;
 const handlers = new Map<string, Handler>();
 
@@ -52,7 +52,7 @@ function databaseClock() {
   return `(${databaseNowMsSql()} + ${clockOffsetMs})`;
 }
 
-export function panelWorkRetryDelayMs(attempts: number) {
+function panelWorkRetryDelayMs(attempts: number) {
   return Math.min(PANEL_WORK_RETRY_MAX_MS, PANEL_WORK_RETRY_BASE_MS * 2 ** Math.max(0, Math.min(20, attempts - 1)));
 }
 
@@ -169,10 +169,4 @@ export function startPanelWorkPoller() {
     pollTimer.unref?.();
   };
   void pollOnce(true).finally(loop);
-}
-
-export function stopPanelWorkPollerForTests() {
-  if (pollTimer) clearTimeout(pollTimer);
-  pollTimer = null;
-  started = false;
 }

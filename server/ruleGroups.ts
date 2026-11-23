@@ -52,7 +52,7 @@ function positiveIds(values: readonly unknown[]) {
  * JS 锁各管各的；而且写入本来就要在事务里，锁跟着事务提交 / 回滚一起放，不会漏放。
  * SQLite 的事务是 BEGIN IMMEDIATE，同一时刻只有一个写事务，不需要（也不认）FOR UPDATE。
  */
-export function withPersonalRuleGroupLock<T>(userId: number, work: () => Promise<T>): Promise<T> {
+function withPersonalRuleGroupLock<T>(userId: number, work: () => Promise<T>): Promise<T> {
   return withDatabaseTransaction(async () => {
     const rows = await queryRaw(`SELECT ${q("id")} FROM ${q("users")} WHERE ${q("id")} = ?${rowLockSuffix()}`, [userId]);
     if (rows.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "用户不存在" });

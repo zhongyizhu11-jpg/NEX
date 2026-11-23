@@ -10,7 +10,7 @@ export const AUTO_IP_CHANGE_PLUGIN_ID = "auto-ip-change";
 /** 核心里的管理页。插件的侧边栏入口直接指向这里（见 pluginRepository.resolvePluginSidebarCapability）。 */
 export const AUTO_IP_CHANGE_ROUTE = "/ip-change";
 
-export const IP_CHANGE_STATES = [
+const IP_CHANGE_STATES = [
   "idle",
   "healthy",
   "failing",
@@ -114,7 +114,7 @@ export function isIpChangeProbeServiceId(serviceId: unknown) {
   return ipChangeProbeIndex(serviceId) >= 0;
 }
 
-export type IpChangeCheckTarget = { host: string; port: number };
+type IpChangeCheckTarget = { host: string; port: number };
 
 /**
  * 一行一个目标：`域名:端口`、`IP:端口`、`[IPv6]:端口`，或只写主机（TCP 默认 80 端口，ping 不看端口）。

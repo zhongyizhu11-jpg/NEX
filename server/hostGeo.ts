@@ -137,20 +137,6 @@ function allGeoProvidersRateLimited(now = Date.now()) {
   return GEO_PROVIDERS.every((provider) => provider.rateLimitedUntil > now);
 }
 
-/** 测试用：看各家的限流状态 */
-export function getGeoProviderStates() {
-  return GEO_PROVIDERS.map((provider) => ({ name: provider.name, rateLimitedUntil: provider.rateLimitedUntil }));
-}
-
-/** 测试用：把内存里的缓存、限流、退避全部清掉 */
-export function resetHostGeoStateForTests() {
-  for (const provider of GEO_PROVIDERS) provider.rateLimitedUntil = 0;
-  addressGeoCache.clear();
-  addressGeoInflight.clear();
-  hostGeoRetryState.clear();
-  refreshingHostIds.clear();
-}
-
 type AddressGeoCacheEntry = {
   freshUntil: number;
   expiresAt: number;
@@ -268,11 +254,6 @@ function noteHostGeoFailure(hostId: number) {
   return delay;
 }
 
-/** 测试用：某台主机下次自动定位最早什么时候 */
-export function getHostGeoRetryState(hostId: number) {
-  return hostGeoRetryState.get(hostId) || null;
-}
-
 function isLookupCandidate(value: string) {
   if (!value || value.toLowerCase() === "unknown") return false;
   // 上报的是内网/保留地址（NAT 机器的网卡地址）查不出归属地，跳过去看下一个
@@ -351,7 +332,7 @@ async function fetchFromGeoProvider(provider: GeoProvider, address: string): Pro
  * 要的是点，光有国家画不出来。全部失败时把每家的原因串起来抛出去，日志里
  * 一眼能看出是哪家在闹。
  */
-export async function fetchHostGeo(address: string): Promise<ProviderGeo> {
+async function fetchHostGeo(address: string): Promise<ProviderGeo> {
   const errors: string[] = [];
   const now = Date.now();
   /*

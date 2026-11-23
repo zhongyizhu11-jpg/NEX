@@ -26,7 +26,7 @@ import { registerAgentExtModule, type AgentExtHost } from "./agentExt";
 const loggedSkips = new Set<string>();
 
 /** 这台机器该收到什么。只有确实有 Mieru 入站时才去读用户表（扩展通道每台机器一分钟一轮）。 */
-export async function mitaDirectiveForHost(host: AgentExtHost) {
+async function mitaDirectiveForHost(host: AgentExtHost) {
   if (!isMieruAgentSupported(host.agentVersion)) return undefined;
   const hostId = Number(host.id);
   const rows = await getEnabledProxyInboundsByHost(hostId);
@@ -48,7 +48,7 @@ export async function mitaDirectiveForHost(host: AgentExtHost) {
   return directive;
 }
 
-export async function ingestMitaReport(host: AgentExtHost, report: unknown) {
+async function ingestMitaReport(host: AgentExtHost, report: unknown) {
   const parsed = parseMitaRuntimeReport(report);
   if (parsed) rememberMitaReport(Number(host.id), parsed);
   const traffic = parseMitaTrafficReport(report);

@@ -3,7 +3,7 @@
   运行时上下文、setup 路由、后台服务只需要「现在是不是开发面板」这一个判断，
   不该为此把 devPanel.ts 里几千行的演示数据种子一起拉进生产包。
 */
-export const DEV_PANEL_FLAG = "FORWARDX_DEV_PANEL";
+const DEV_PANEL_FLAG = "FORWARDX_DEV_PANEL";
 export const DEV_ADMIN_USERNAME = "dev.admin@forwardx.local";
 export const DEV_ADMIN_PASSWORD = "forwardx-dev";
 

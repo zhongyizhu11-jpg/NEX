@@ -159,10 +159,10 @@ export function buildPresenceAgentHeartbeatResponse(input: {
 }
 
 export const AGENT_IDLE_HEARTBEAT_INTERVAL_SECONDS = 60;
-export const AGENT_PRESENCE_PERSIST_INTERVAL_MS = 90 * 1000;
-export const AGENT_TRAFFIC_REPORT_INTERACTIVE_SECONDS = 10;
-export const AGENT_TRAFFIC_REPORT_STEADY_SECONDS = 30;
-export const AGENT_STABLE_PLAN_AUDIT_INTERVAL_MS = 5 * 60 * 1000;
+const AGENT_PRESENCE_PERSIST_INTERVAL_MS = 90 * 1000;
+const AGENT_TRAFFIC_REPORT_INTERACTIVE_SECONDS = 10;
+const AGENT_TRAFFIC_REPORT_STEADY_SECONDS = 30;
+const AGENT_STABLE_PLAN_AUDIT_INTERVAL_MS = 5 * 60 * 1000;
 
 export function selectAgentTrafficReportInterval(input: {
   metricsWatching: boolean;

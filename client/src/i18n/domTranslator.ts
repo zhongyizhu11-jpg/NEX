@@ -23,7 +23,7 @@ import { hasCjk } from "./translate";
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
 
-export const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "alt"] as const;
+const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "alt"] as const;
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "CODE", "PRE", "TEXTAREA", "KBD", "SAMP", "TEMPLATE"]);
 
 /** 测试用的假 DOM 只需要实现这几样 */
@@ -46,7 +46,7 @@ interface Recorded {
   written: string;
 }
 
-export interface DomTranslatorStats {
+interface DomTranslatorStats {
   flushes: number;
   nodes: number;
   translated: number;

@@ -34,7 +34,7 @@ export function useDeadlinePassed(deadlineMs: number) {
 }
 
 /** 每秒更新剩余秒数；到点后停。只在用它的组件里重画。 */
-export function useSecondsLeft(deadlineMs: number) {
+function useSecondsLeft(deadlineMs: number) {
   const [left, setLeft] = useState(() => secondsLeft(deadlineMs));
   useEffect(() => {
     setLeft(secondsLeft(deadlineMs));

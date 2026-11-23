@@ -51,20 +51,20 @@ import { forwardGroupModeOf } from "../shared/forwardTypes";
 import type { TlsInboundRow } from "./repositories/tlsInboundRepository";
 
 /** node:url 的 IDNA。失败时回空串，上层报「域名格式无效」。 */
-export function sniToAscii(value: string) {
+function sniToAscii(value: string) {
   return domainToASCII(value);
 }
 
-export function normalizeServerSniNameList(raw: unknown) {
+function normalizeServerSniNameList(raw: unknown) {
   return normalizeSniNameList(raw, sniToAscii);
 }
 
-export function normalizeServerSniAllowlist(raw: unknown) {
+function normalizeServerSniAllowlist(raw: unknown) {
   return normalizeSniAllowlist(raw, sniToAscii);
 }
 
 /** 规则在本机回环上听的端口从这段里挑：避开常用服务端口，也离守卫内部端口的起点远一些。 */
-export const SNI_BACKEND_PORT_RANGE = { start: 45000, end: 59999 } as const;
+const SNI_BACKEND_PORT_RANGE = { start: 45000, end: 59999 } as const;
 
 /** 共享入站规则能用哪些转发工具：都走「守卫在回环上接 → 工具 / 直拨」这条路，六种都行。 */
 export const SNI_RULE_FORWARD_TYPES = ["iptables", "nftables", "realm", "socat", "gost", "nginx"] as const;

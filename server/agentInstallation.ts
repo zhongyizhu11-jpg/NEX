@@ -32,20 +32,20 @@ const STATE_CACHE_MAX = 20_000;
 const stateCache = new Map<number, AgentInstallationState & { loadedAt: number }>();
 
 /** 被接管的旧实例收到的回包（409）。字段名和 agent/installation.go 对得上。 */
-export const agentSupersededResponse = {
+const agentSupersededResponse = {
   success: false,
   [AGENT_SUPERSEDED_FIELD]: true,
   error: "Agent installation superseded",
   message: "这个 Token 已经由另一台机器上新装的 Agent 接管；本机停止和面板同步，已有转发保留。",
 };
 
-export const agentLegacyInstallationRejectedResponse = {
+const agentLegacyInstallationRejectedResponse = {
   success: false,
   error: "Agent installation required",
   message: "这台主机已经由另一台机器上新装的 Agent 接管；这台旧版 Agent 的上报不再接受。需要换回这台机器时，请在主机设置里解除实例绑定后升级它的 Agent。",
 };
 
-export function invalidateAgentInstallationState(hostId?: number) {
+function invalidateAgentInstallationState(hostId?: number) {
   if (hostId === undefined) stateCache.clear();
   else stateCache.delete(Number(hostId));
 }
@@ -106,7 +106,7 @@ export type AgentInstallationOutcome =
  * 判定并落库一次。认领撞上并发（别的请求刚改过）就按最新状态再判一次；还撞上就放行这一次
  * （下一次上报再判），不在这里死循环。
  */
-export async function applyAgentInstallation(hostId: number, presented: unknown): Promise<AgentInstallationOutcome> {
+async function applyAgentInstallation(hostId: number, presented: unknown): Promise<AgentInstallationOutcome> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const state = await getAgentInstallationState(hostId, { force: attempt > 0 });
     if (!state) return { kind: "accept" };
@@ -129,7 +129,7 @@ export async function resetAgentInstallation(hostId: number) {
   invalidateAgentInstallationState(hostId);
 }
 
-export function getRequestAgentInstallationId(req: Request) {
+function getRequestAgentInstallationId(req: Request) {
   return normalizeAgentInstallationId((req as Request & { agentInstallationId?: unknown }).agentInstallationId);
 }
 

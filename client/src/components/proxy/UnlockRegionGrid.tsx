@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
   双栈主机 IPv4、IPv6 分开测，各一页；只有一份结果时不出页签。
 */
 
-export type UnlockGridResult = { service: string; name: string; status: string; region: string | null; detail?: string | null };
+type UnlockGridResult = { service: string; name: string; status: string; region: string | null; detail?: string | null };
 export type UnlockGridFamily = { family: string; checkedAt: number; results: UnlockGridResult[] };
 
 const STATUS_COLOR: Record<string, string> = {

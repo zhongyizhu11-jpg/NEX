@@ -193,7 +193,7 @@ function NumberField({
 }
 
 /** `地址:端口` 输入框的当场校验；空串是「留空」，不报错。 */
-export function routeEndpointError(text: string): string | null {
+function routeEndpointError(text: string): string | null {
   const parsed = parseRouteEndpoint(text);
   if (parsed === null) return null;
   return "error" in parsed ? parsed.error : null;

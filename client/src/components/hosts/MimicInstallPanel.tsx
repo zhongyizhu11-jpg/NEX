@@ -38,7 +38,7 @@ type MimicHost = {
   mimicMessage?: string | null;
 };
 
-export function mimicStatusText(host: MimicHost): { label: string; tone: "ok" | "warn" | "muted"; detail?: string } {
+function mimicStatusText(host: MimicHost): { label: string; tone: "ok" | "warn" | "muted"; detail?: string } {
   if (host.mimicAvailable === true) {
     return { label: host.mimicVersion ? `就绪 · v${String(host.mimicVersion).replace(/^v/, "")}` : "就绪", tone: "ok" };
   }

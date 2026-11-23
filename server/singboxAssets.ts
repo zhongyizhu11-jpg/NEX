@@ -21,7 +21,7 @@ const getStore = () => (store ??= createPinnedReleaseAssetStore({
   sha256: singboxReleaseSha256,
 }));
 
-export function getOrFetchSingboxAssetPath(version: string, asset: string, fetchImpl?: FetchLike) {
+function getOrFetchSingboxAssetPath(version: string, asset: string, fetchImpl?: FetchLike) {
   return getStore().getOrFetch(version, asset, fetchImpl);
 }
 

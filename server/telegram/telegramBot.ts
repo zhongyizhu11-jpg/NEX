@@ -702,7 +702,7 @@ export async function sendTelegramMessage(chatId: number | string, text: string)
   }
 }
 
-export async function syncTelegramBotCommands() {
+async function syncTelegramBotCommands() {
   const settings = await getTelegramSettings();
   if (!settings.token) return false;
   await telegramApi("setMyCommands", {
@@ -985,7 +985,7 @@ function buildTelegramWebAppUrl(panelPublicUrl: string, challenge?: string) {
  * 带 web_app 的键盘整条被拒（Bad Request: ... Only HTTPS links are allowed），连菜单都发不出来
  * —— 2026-10-09 用户点「返回菜单」就是这样失败的。http 面板退成普通链接按钮（在浏览器打开）。
  */
-export function isTelegramWebAppUrl(url: string) {
+function isTelegramWebAppUrl(url: string) {
   return /^https:\/\//i.test(String(url || "").trim());
 }
 
@@ -1462,7 +1462,7 @@ async function telegramRulesCaller(user: any) {
 }
 
 /** 文字进度条：十格，满格按 100%。 */
-export function telegramMeter(percent: unknown) {
+function telegramMeter(percent: unknown) {
   const value = Number(percent);
   if (!Number.isFinite(value)) return "";
   const filled = Math.max(0, Math.min(10, Math.round(value / 10)));
@@ -1509,7 +1509,7 @@ function hostStateMark(state: TelegramHostState) {
   return state === "online" ? "🟢" : state === "offline" ? "🔴" : "⚪";
 }
 
-export function hostNeedsAgentUpgrade(host: any) {
+function hostNeedsAgentUpgrade(host: any) {
   const current = String(host?.agentVersion || "").trim();
   if (!current) return false;
   const target = String(AGENT_VERSION || "").trim();
@@ -4705,7 +4705,7 @@ function effectiveRuleStatusText(rule: any, summary?: AiRuleTrafficSummary, offl
  * 每条规则经过的机器里掉线了的（名字）：入口机，隧道的话再加上从入口到出口的每一跳。
  * 主机在不在线按 getHostsByIds 的口径算（和主机列表、状态通知同一套）。
  */
-export async function offlineHostNamesByRule(rules: readonly any[]): Promise<Map<number, string[]>> {
+async function offlineHostNamesByRule(rules: readonly any[]): Promise<Map<number, string[]>> {
   const result = new Map<number, string[]>();
   const list = (rules || []).filter((rule) => rule && Number(rule.id) > 0);
   if (list.length === 0) return result;
@@ -4843,7 +4843,7 @@ function formatRuleTrafficSummaryLines(summary: AiRuleTrafficSummary | undefined
     connections > 0 ? `连接：<b>${connections}</b>` : "",
   ].filter(Boolean);
 }
-export async function aiRuleTrafficSummaryMap(user: any, ruleIds: number[], options: { includeLatency?: boolean } = {}) {
+async function aiRuleTrafficSummaryMap(user: any, ruleIds: number[], options: { includeLatency?: boolean } = {}) {
   const ids = Array.from(new Set(ruleIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
   const map = new Map<number, AiRuleTrafficSummary>();
   if (ids.length === 0) return map;
@@ -6376,7 +6376,7 @@ function telegramUpdateQueueKey(update: TelegramUpdate) {
   return chatId ? `telegram-chat:${chatId}` : `telegram-update:${update.update_id}`;
 }
 
-export async function processTelegramUpdate(update: TelegramUpdate) {
+async function processTelegramUpdate(update: TelegramUpdate) {
   try {
     if (update.message) await handleMessage(update.message);
     if (update.callback_query) await handleCallback(update.callback_query);

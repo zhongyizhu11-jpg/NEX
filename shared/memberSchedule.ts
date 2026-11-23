@@ -30,7 +30,7 @@ export type MemberScheduleWindow = { days: number[]; from: string; to: string };
 export type MemberActiveSchedule = { timezone: string; windows: MemberScheduleWindow[] };
 
 /** 只有这几种组的成员能设时段：转发链有先后顺序，端口转发的成员总是启用的。 */
-export const MEMBER_SCHEDULE_GROUP_MODES = ["failover", "entry", "exit"] as const;
+const MEMBER_SCHEDULE_GROUP_MODES = ["failover", "entry", "exit"] as const;
 
 export function groupModeSupportsMemberSchedule(mode: unknown) {
   return (MEMBER_SCHEDULE_GROUP_MODES as readonly string[]).includes(String(mode || ""));

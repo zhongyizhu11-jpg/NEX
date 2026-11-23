@@ -33,7 +33,7 @@ export function normalizeProxyRulePreset(value: unknown): ProxyRulePreset {
 }
 
 /** 分类命中后默认去向。proxy 表示交给主选择器。 */
-export type ProxyRuleOutbound = "proxy" | "direct" | "reject";
+type ProxyRuleOutbound = "proxy" | "direct" | "reject";
 
 export type ProxyRuleCategory = {
   /** 内部标识，同时用作规则集名称前缀，必须是安全标识符 */
@@ -221,7 +221,7 @@ export function proxyRuleCategoryGroupName(category: ProxyRuleCategory): string 
 
 // ==================== 规则集引用 ====================
 
-export type ProxyRuleSetBehavior = "domain" | "ipcidr";
+type ProxyRuleSetBehavior = "domain" | "ipcidr";
 
 export type ProxyRuleSetRef = {
   /** 规则集名称，Clash 的 rule-provider 名与 sing-box 的 tag 共用 */
@@ -271,7 +271,7 @@ export const PROXY_RULE_TARGET_DIRECT = "DIRECT";
 export const PROXY_RULE_TARGET_REJECT = "REJECT";
 
 /** 上游规则集地址。分开定义是因为两家的仓库和文件格式都不一样。 */
-export const MIHOMO_RULESET_BASE = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo";
+const MIHOMO_RULESET_BASE = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo";
 export const SINGBOX_GEOSITE_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
 export const SINGBOX_GEOIP_BASE = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
 
@@ -299,7 +299,7 @@ export function singboxRuleSetUrl(ref: ProxyRuleSetRef): string {
  */
 export type IosRuleClient = "Surge" | "Loon" | "QuantumultX" | "Shadowrocket";
 
-export const IOS_RULE_SCRIPT_BASE = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule";
+const IOS_RULE_SCRIPT_BASE = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule";
 
 const IOS_RULE_LIST_NAMES: Record<string, readonly string[]> = {
   "domain:private": ["Lan"],
@@ -392,7 +392,7 @@ function isCountryCode(geoKey: string): boolean {
   return /^[a-z]{2}$/.test(geoKey);
 }
 
-export function geoKeyIsMihomoOnly(behavior: ProxyRuleSetBehavior, geoKey: string): boolean {
+function geoKeyIsMihomoOnly(behavior: ProxyRuleSetBehavior, geoKey: string): boolean {
   return behavior === "ipcidr" ? !isCountryCode(geoKey) : SINGBOX_MISSING_GEOSITE_KEYS.has(geoKey);
 }
 

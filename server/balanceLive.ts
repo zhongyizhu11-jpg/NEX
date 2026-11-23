@@ -13,7 +13,7 @@ import { getTunnelEntryHostIds, getTunnelsByIds, getTunnelExitNodesByTunnelIds }
   面板重启后 10 秒内就有数据，所以不落库。超过 35 秒没报的当作没有，退回老办法（exitTargetHealth.ts 的估算）。
 */
 
-export type LiveExitState = "active" | "standby" | "down" | "unstable";
+type LiveExitState = "active" | "standby" | "down" | "unstable";
 
 export type LiveExit = {
   hostId: number;
@@ -49,9 +49,9 @@ export type LiveExit = {
   peerOutdated: boolean;
 };
 
-export type LiveUdpState = "ok" | "down" | "unverified";
+type LiveUdpState = "ok" | "down" | "unverified";
 
-export type LiveEvent = {
+type LiveEvent = {
   at: number;
   hostId: number;
   hostName: string;

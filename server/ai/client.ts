@@ -54,7 +54,7 @@ type CircuitState = {
 const TRANSIENT_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RESPONSE_FORMAT_UNSUPPORTED_STATUS = new Set([400, 404, 415, 422]);
 /** 结构化 JSON 回复的正文上限。超过就当作异常响应，不再往内存里读。 */
-export const AI_RESPONSE_MAX_BYTES = 256 * 1024;
+const AI_RESPONSE_MAX_BYTES = 256 * 1024;
 
 function emptyMetrics(): AiClientMetrics {
   return {

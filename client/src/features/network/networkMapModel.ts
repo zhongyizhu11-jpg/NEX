@@ -51,7 +51,7 @@ function hostHealth(host: any): NetworkHealth {
 }
 
 /** 图上的一台主机 */
-export type NetworkMapNode = {
+type NetworkMapNode = {
   id: number;
   name: string;
   health: NetworkHealth;
@@ -64,7 +64,7 @@ export type NetworkMapNode = {
 };
 
 /** 图上的一条隧道 */
-export type NetworkMapLink = {
+type NetworkMapLink = {
   id: number;
   name: string;
   /** 依次经过的主机 id：入口、中转…、出口。少于两个的不画 */
@@ -73,7 +73,7 @@ export type NetworkMapLink = {
   latencyMs?: number | null;
 };
 
-export type NetworkMapHostNode = NetworkMapNode & {
+type NetworkMapHostNode = NetworkMapNode & {
   countryCode: string | null;
   /** 图上写的中文城市名：地区 → 国家 → 主机名 */
   city: string;
@@ -83,7 +83,7 @@ export type NetworkMapHostNode = NetworkMapNode & {
   linkCount: number;
 };
 
-export type NetworkMapTunnelLink = NetworkMapLink & {
+type NetworkMapTunnelLink = NetworkMapLink & {
   /** 逐跳延迟（来自最近一次诊断），按 path 的段序；拿不到是空数组 */
   hopLatencies: Array<number | null>;
   /** 地图上的四类线之一（networkMapLines：正常 = 主线路、停用 / 未上报 = 备用…） */
@@ -91,7 +91,7 @@ export type NetworkMapTunnelLink = NetworkMapLink & {
 };
 
 /** 租户看不到一端的隧道：画不成线，但计入图例 */
-export type NetworkMapStub = {
+type NetworkMapStub = {
   tunnelId: number;
   hostId: number;
   health: NetworkHealth;
@@ -115,7 +115,7 @@ export type NetworkMapModel = {
  * 诊断结果是 JSON 文本（LinkTestLatencySummary.parseLinkTestMessage 那套），这里只认
  * 带 hostId 的明细；老格式、租户被抹掉的字段都对不上，就给空。
  */
-export function tunnelHopLatencies(tunnel: any, path: number[]): Array<number | null> {
+function tunnelHopLatencies(tunnel: any, path: number[]): Array<number | null> {
   const raw = typeof tunnel?.lastTestMessage === "string" ? tunnel.lastTestMessage.trim() : "";
   if (!raw || path.length < 2) return [];
   let details: any[] = [];
@@ -220,7 +220,7 @@ export function buildNetworkMapModel(input: {
 }
 
 /** 协议开关 → 「这条隧道的协议还开着吗」：和隧道页同一条规则（停用了协议的隧道算中断） */
-export function tunnelSupportCheck(forwardProtocols: unknown): (tunnel: any) => boolean {
+function tunnelSupportCheck(forwardProtocols: unknown): (tunnel: any) => boolean {
   const protocolSettings = normalizeForwardProtocolSettings(forwardProtocols as any);
   return (tunnel: any) => {
     const key = String(tunnel?.mode || "").toLowerCase();

@@ -133,7 +133,7 @@ function egressModeOf(type: RuleEgressType): EgressMode {
 }
 
 /** 粘的链接是哪种出口：vless:// 是 VLESS Reality，其余按 Shadowsocks（解析时会说清楚哪里不对）。 */
-export function egressLinkType(link: string): RuleEgressType {
+function egressLinkType(link: string): RuleEgressType {
   return /^\s*vless:\/\//i.test(link) ? "vless_link" : "ss_link";
 }
 

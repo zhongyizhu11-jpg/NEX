@@ -14,8 +14,8 @@ import crypto from "crypto";
   hasQueuedDiagnosticsAgentTasks），否则配置没变的主机永远拿不到任务。
 */
 
-export type DiagnosticsAgentCheckKind = "listen" | "nat" | "firewall" | "loopback" | "dns" | "dial" | "process";
-export type DiagnosticsAgentCheckStatus = "pass" | "warn" | "fail" | "skip";
+type DiagnosticsAgentCheckKind = "listen" | "nat" | "firewall" | "loopback" | "dns" | "dial" | "process";
+type DiagnosticsAgentCheckStatus = "pass" | "warn" | "fail" | "skip";
 
 export type DiagnosticsAgentCheck = {
   /** 面板起的编号，Agent 原样带回。 */
@@ -50,7 +50,7 @@ export type DiagnosticsAgentTask = {
   createdAt: string;
 };
 
-export type DiagnosticsTaskState = "queued" | "running" | "done" | "timeout";
+type DiagnosticsTaskState = "queued" | "running" | "done" | "timeout";
 
 export type DiagnosticsTaskStatus = {
   taskId: string;
@@ -67,11 +67,11 @@ export type DiagnosticsTaskStatus = {
 type TaskState = DiagnosticsTaskStatus & { task: DiagnosticsAgentTask; timer: NodeJS.Timeout };
 
 /** Agent 那边整包 ≤ 30 秒。 */
-export const DIAGNOSTICS_AGENT_TASK_TIMEOUT_MS = 25_000;
+const DIAGNOSTICS_AGENT_TASK_TIMEOUT_MS = 25_000;
 /** 面板等多久：Agent 等下一次心跳取任务 + 跑 + 回报。 */
-export const DIAGNOSTICS_PANEL_TIMEOUT_MS = 60_000;
+const DIAGNOSTICS_PANEL_TIMEOUT_MS = 60_000;
 export const DIAGNOSTICS_MAX_ACTIVE_PER_HOST = 3;
-export const DIAGNOSTICS_MAX_CHECKS = 48;
+const DIAGNOSTICS_MAX_CHECKS = 48;
 const TERMINAL_RETENTION_MS = 15 * 60 * 1000;
 const RESULT_TEXT_MAX = 4000;
 
@@ -122,7 +122,7 @@ function markTimeout(taskId: string) {
   scheduleRemoval(taskId);
 }
 
-export function countActiveDiagnosticsTasks(hostId: number) {
+function countActiveDiagnosticsTasks(hostId: number) {
   let count = 0;
   for (const state of states.values()) {
     if (state.hostId === hostId && (state.status === "queued" || state.status === "running")) count += 1;

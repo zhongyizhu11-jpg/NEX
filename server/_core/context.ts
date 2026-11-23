@@ -28,7 +28,7 @@ import { TRPCError } from "@trpc/server";
 import { databaseHealth, describeDatabaseError } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
 
-export interface AuthSession {
+interface AuthSession {
   kind: SessionKind;
   sid: string | null;
   token: string;

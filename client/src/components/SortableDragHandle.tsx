@@ -47,7 +47,7 @@ type SortableHandleProps = HTMLAttributes<HTMLElement> & {
 };
 
 /** 触屏上按住卡片多久算拖（毫秒）。用户要的是「按住再拖」，短了会把停一下再滑的手势当成拖。 */
-export const TOUCH_HOLD_MS = 1000;
+const TOUCH_HOLD_MS = 1000;
 
 /*
   只在拖的时候量位置。原来是 Always：每次渲染都把每张卡 getBoundingClientRect 一遍（强制排版），

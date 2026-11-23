@@ -53,7 +53,7 @@ const TONE_CLASS: Record<string, string> = {
   standby: "border-transparent bg-[var(--fx-standby-soft)] text-muted-foreground",
 };
 
-export function IpChangeStateBadge({ state }: { state: unknown }) {
+function IpChangeStateBadge({ state }: { state: unknown }) {
   const normalized = normalizeIpChangeState(state);
   return <Badge className={TONE_CLASS[IP_CHANGE_STATE_TONES[normalized]]}>{IP_CHANGE_STATE_LABELS[normalized]}</Badge>;
 }

@@ -2,7 +2,7 @@ export const MAX_CUSTOM_SIDEBAR_PAGES = 20;
 export const MAX_CUSTOM_SIDEBAR_ICON_BYTES = 24 * 1024;
 export const MAX_CUSTOM_SIDEBAR_ICON_DATA_URL_LENGTH = 40 * 1024;
 
-export const CUSTOM_SIDEBAR_VISIBILITIES = ["all", "admin"] as const;
+const CUSTOM_SIDEBAR_VISIBILITIES = ["all", "admin"] as const;
 export type CustomSidebarVisibility = typeof CUSTOM_SIDEBAR_VISIBILITIES[number];
 export const CUSTOM_SIDEBAR_OPEN_MODES = ["embed", "external"] as const;
 export type CustomSidebarOpenMode = typeof CUSTOM_SIDEBAR_OPEN_MODES[number];

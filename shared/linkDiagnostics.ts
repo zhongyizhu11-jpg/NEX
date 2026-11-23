@@ -15,7 +15,7 @@ export type DiagnosticStatus = "pass" | "warn" | "fail" | "skip" | "pending";
 export type DiagnosticGroup = "config" | "host" | "entry" | "link" | "target";
 export type DiagnosticSubjectKind = "rule" | "tunnel" | "forwardGroup";
 /** 报告能对着什么出：上面三种之外，网络测试页的「配置体检」还能对着一台主机出（server/networkConfigCheck.ts）。 */
-export type DiagnosticReportSubjectKind = DiagnosticSubjectKind | "host";
+type DiagnosticReportSubjectKind = DiagnosticSubjectKind | "host";
 
 export const DIAGNOSTIC_GROUPS: readonly DiagnosticGroup[] = ["config", "host", "entry", "link", "target"];
 
@@ -83,7 +83,7 @@ export type LinkDiagnosticsReport = {
   counts: Record<DiagnosticStatus, number>;
 };
 
-export function countDiagnosticStatuses(items: readonly DiagnosticItem[]): Record<DiagnosticStatus, number> {
+function countDiagnosticStatuses(items: readonly DiagnosticItem[]): Record<DiagnosticStatus, number> {
   const counts: Record<DiagnosticStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0, pending: 0 };
   for (const item of items) counts[item.status] += 1;
   return counts;
@@ -122,7 +122,7 @@ export function diagnosticVerdict(items: readonly DiagnosticItem[]): DiagnosticV
   return "pass";
 }
 
-export function diagnosticVerdictText(verdict: DiagnosticVerdict, counts: Record<DiagnosticStatus, number>) {
+function diagnosticVerdictText(verdict: DiagnosticVerdict, counts: Record<DiagnosticStatus, number>) {
   switch (verdict) {
     case "fail":
       return counts.pending > 0

@@ -119,7 +119,7 @@ export function addRulePortSpan(used: Set<number>, portValue: unknown, portEndVa
   for (let current = port; current <= end; current += 1) used.add(current);
 }
 
-export function portSpansOverlap(left: PortSpan, right: PortSpan) {
+function portSpansOverlap(left: PortSpan, right: PortSpan) {
   return left.start <= right.end && right.start <= left.end;
 }
 
@@ -170,7 +170,7 @@ export type PortRangeRuleContext = {
   rateLimited?: boolean;
 };
 
-export const PORT_RANGE_USERSPACE_REASON = "端口段只支持 iptables / nftables：gost、realm 这些每个端口都要单独开一个监听";
+const PORT_RANGE_USERSPACE_REASON = "端口段只支持 iptables / nftables：gost、realm 这些每个端口都要单独开一个监听";
 
 function truthy(value: unknown) {
   return value === true || value === 1 || value === "1" || value === "true";

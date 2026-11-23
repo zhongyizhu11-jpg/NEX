@@ -11,7 +11,7 @@ export const GOOGLE_START_PATH = "/api/auth/google/start";
 
 export type GoogleLoginMode = "login" | "link" | "app";
 
-export const GOOGLE_LOGIN_ERROR_MESSAGES = {
+const GOOGLE_LOGIN_ERROR_MESSAGES = {
   disabled: "管理员没有开启 Google 登录",
   not_configured: "Google 登录还没有配置完整，请联系管理员",
   cancelled: "已取消 Google 登录",
@@ -42,7 +42,7 @@ export function sanitizeGoogleInviteCode(value: unknown): string | null {
   return /^[A-Za-z0-9]{4,32}$/.test(code) ? code : null;
 }
 
-export function isGoogleLoginErrorCode(value: unknown): value is GoogleLoginErrorCode {
+function isGoogleLoginErrorCode(value: unknown): value is GoogleLoginErrorCode {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(GOOGLE_LOGIN_ERROR_MESSAGES, value);
 }
 
@@ -118,7 +118,7 @@ export function parseEmailDomainList(value: string | null | undefined) {
   return [...new Set(items)];
 }
 
-export function emailDomainOf(email: string | null | undefined) {
+function emailDomainOf(email: string | null | undefined) {
   const text = String(email || "").trim().toLowerCase();
   const at = text.lastIndexOf("@");
   return at > 0 ? text.slice(at + 1) : "";

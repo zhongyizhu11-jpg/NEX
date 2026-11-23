@@ -39,7 +39,7 @@ type AvailabilitySummaryInput = {
   usableMemberIds?: unknown[];
 };
 
-export function resolveFreshLinkProbe(
+function resolveFreshLinkProbe(
   probe: ProbeInput | null | undefined,
   now = Date.now(),
 ): "available" | "unavailable" | null {

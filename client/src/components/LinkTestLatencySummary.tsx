@@ -1,4 +1,3 @@
-import { LatencyRating } from "@/components/LatencyRating";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type LinkTestNodeMeta } from "@/lib/linkTestNodeMeta";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
@@ -127,7 +126,7 @@ export function hasPendingLinkTestDetails(parsed: ParsedLinkTestMessage | null |
   return (parsed?.details || []).some((detail) => detail.pending === true);
 }
 
-export function formatLinkTestRoute(detail: LinkTestDetail) {
+function formatLinkTestRoute(detail: LinkTestDetail) {
   const route = String(detail.routeLabel || detail.hopLabel || "链路").trim();
   return route.replace(/^第\s*\d+\s*跳\s*/, "");
 }
@@ -1278,81 +1277,4 @@ export function LinkTestProbeView({
       </div>
     </div>
   );
-}
-function renderLatencyValue(latencyMs: number | null | undefined) {
-  return <LatencyRating latencyMs={latencyMs} emptyText="--" icon="none" className="text-sm" />;
-}
-
-export function LinkTestLatencySummary({
-  parsed,
-  fallbackLatencyMs,
-  isSuccess,
-  isTesting,
-}: {
-  parsed: ParsedLinkTestMessage;
-  fallbackLatencyMs?: number | null;
-  isSuccess: boolean;
-  isTesting: boolean;
-}) {
-  if (isTesting || hasPendingLinkTestDetails(parsed)) return <span className="text-sm font-semibold tabular-nums">正在测试中</span>;
-
-  const details = parsed.details || [];
-  const visibleDetails = details.filter((detail) => detail.pending || detail.success || detail.message || hasLatencyValue(detail));
-  const successfulLatencyDetails = visibleDetails.filter((detail) => detail.success && hasLatencyValue(detail));
-
-  if (visibleDetails.length > 0) {
-    const totalLatency = getLinkTestTotalLatency({ parsed, fallbackLatencyMs, isSuccess });
-    const totalLabel = parsed.kind === "tunnel-load-balance-summary" ? "最大延迟" : "总延迟";
-
-    if (visibleDetails.length === 1 && successfulLatencyDetails.length === 1) {
-      return <span className="text-sm font-semibold">{renderLatencyValue(visibleDetails[0].latencyMs)}</span>;
-    }
-
-    return (
-      <div className="flex min-w-0 flex-1 flex-col items-end gap-1 text-right text-sm font-semibold">
-        <div className="flex max-w-full flex-col items-end gap-1">
-          {visibleDetails.map((detail, index) => (
-            <div
-              key={`${detail.hopLabel || detail.routeLabel || index}`}
-              className={detail.success
-                ? "flex max-w-full flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 break-words"
-                : "flex max-w-full flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 break-words text-destructive"}
-            >
-              <span className="min-w-0 break-words">{formatLinkTestRoute(detail)}</span>
-              {detail.pending ? (
-                <span className="font-normal text-primary">诊断中</span>
-              ) : detail.success && hasLatencyValue(detail) ? (
-                renderLatencyValue(detail.latencyMs)
-              ) : (
-                <>
-                  <span>失败</span>
-                  {detail.message ? <span className="font-normal">: {detail.message}</span> : null}
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-        {totalLatency !== null ? (
-          <span className="inline-flex max-w-full flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5">
-            <span>{totalLabel}</span>
-            {renderLatencyValue(totalLatency)}
-          </span>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (isSuccess && fallbackLatencyMs !== null && fallbackLatencyMs !== undefined) {
-    return <span className="text-sm font-semibold">{renderLatencyValue(fallbackLatencyMs)}</span>;
-  }
-
-  if (!isSuccess && parsed.message) {
-    return <span className="min-w-0 flex-1 break-words text-right text-sm font-medium text-destructive">{parsed.message}</span>;
-  }
-
-  if (fallbackLatencyMs !== null && fallbackLatencyMs !== undefined) {
-    return <span className="text-sm font-semibold">{renderLatencyValue(fallbackLatencyMs)}</span>;
-  }
-
-  return <span className="text-sm font-semibold tabular-nums">--</span>;
 }

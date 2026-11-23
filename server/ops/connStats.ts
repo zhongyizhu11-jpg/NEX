@@ -34,7 +34,7 @@ function count(value: unknown, max = INT32_MAX) {
   return Number.isFinite(n) && n > 0 ? Math.min(max, n) : 0;
 }
 
-export type ConnStatsIngestRow = {
+type ConnStatsIngestRow = {
   tunnelId: number;
   ruleId: number;
   role: string;
@@ -53,7 +53,7 @@ export type ConnStatsIngestRow = {
 };
 
 /** 规整 FXP 报上来的一行；认不出来的返回 null。 */
-export function normalizeConnStatsRow(raw: unknown): ConnStatsIngestRow | null {
+function normalizeConnStatsRow(raw: unknown): ConnStatsIngestRow | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as Record<string, unknown>;
   const tunnelId = count(row.tunnelId);
@@ -136,7 +136,7 @@ export async function recordConnStatsReport(
   return accepted.length;
 }
 
-export type ConnStatsGroup = {
+type ConnStatsGroup = {
   hostId: number;
   role: string;
   stage: string;
@@ -146,7 +146,7 @@ export type ConnStatsGroup = {
 };
 
 /** 单连接叠加的一路：拨号成功率 / 耗时，外加这段时间和最近几分钟实际跑了多少。 */
-export type ConnStatsLeg = {
+type ConnStatsLeg = {
   hostId: number;
   endpoint: string;
   /** relay#主机 ID / stream#N；老数据是空。 */
@@ -163,9 +163,9 @@ export type ConnStatsLeg = {
 };
 
 /** 「每一路实时跑多少」按最近 5 分钟平均：FXP 一分钟报一次，再短就只剩一两个点，跳得厉害。 */
-export const CONN_LEG_RECENT_SECONDS = 300;
+const CONN_LEG_RECENT_SECONDS = 300;
 
-export type ConnStatsHourly = {
+type ConnStatsHourly = {
   /** 这一小时的开始（Unix 秒）。 */
   hourAt: number;
   stage: string;

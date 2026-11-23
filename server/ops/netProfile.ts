@@ -110,7 +110,7 @@ async function writeHostNetProfile(hostId: number, profile: NetProfileReport, hi
 }
 
 /** 存一次 Agent 的检测结果；返回存下来的那份。 */
-export async function saveAgentNetProfile(hostId: number, report: NetProfileReport) {
+async function saveAgentNetProfile(hostId: number, report: NetProfileReport) {
   const previous = await getHostNetProfile(hostId);
   // Agent 这次没查 DNSBL（没有公网 IPv4 之类），沿用上一次的 DNSBL 结果，别让它从界面上消失
   const merged: NetProfileReport = report.dnsbl.length === 0 && previous.profile?.dnsbl.length

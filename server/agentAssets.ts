@@ -51,7 +51,7 @@ export const AGENT_ASSET_NAMES = [
   assertAgentReleaseAssetsReady、装机脚本的校验和），mita 只在开了 Mieru 落地的机器上按需取，
   缺了它不该挡住所有人升级。Agent 装之前按 shared/mitaAssets.ts 钉死的哈希再校验一遍。
 */
-export const AGENT_RELAY_ONLY_ASSET_NAMES: readonly string[] = MITA_AGENT_ASSET_NAMES;
+const AGENT_RELAY_ONLY_ASSET_NAMES: readonly string[] = MITA_AGENT_ASSET_NAMES;
 
 export const AGENT_ASSET_NAME_SET = new Set<string>([...AGENT_ASSET_NAMES, ...AGENT_RELAY_ONLY_ASSET_NAMES]);
 

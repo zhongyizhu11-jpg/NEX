@@ -11,7 +11,7 @@ import {
 import { PATTERNS } from "./patterns";
 import { createTranslator, interpolate, type Dictionary, type TranslateValues, type Translator } from "./translate";
 
-export { LANGUAGE_PREFERENCES, LANGUAGE_STORAGE_KEY, type Language, type LanguagePreference } from "./language";
+export {   type Language, type LanguagePreference } from "./language";
 
 /*
   界面语言的运行时状态。

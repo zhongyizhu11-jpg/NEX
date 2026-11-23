@@ -42,7 +42,7 @@ export type ForwardRateInput = {
   hostLimitMbps?: unknown;
 };
 
-export function normalizeMbps(value: unknown) {
+function normalizeMbps(value: unknown) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return 0;
   return Math.min(1_000_000, Math.floor(num));
@@ -54,13 +54,13 @@ function positiveId(value: unknown) {
 }
 
 /** 突发秒数：0 关；1–3600。 */
-export function normalizeBurstSeconds(value: unknown) {
+function normalizeBurstSeconds(value: unknown) {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.min(3600, n);
 }
 
-export function userRateScope(userId: number, hostId: number) {
+function userRateScope(userId: number, hostId: number) {
   return `user-${Math.max(0, userId)}-host-${Math.max(0, hostId)}`;
 }
 

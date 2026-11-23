@@ -1,6 +1,6 @@
-export type AiSkillToolMode = "read" | "write";
+type AiSkillToolMode = "read" | "write";
 
-export type AiSkillTool = {
+type AiSkillTool = {
   name: string;
   mode: AiSkillToolMode;
   description: string;
@@ -18,7 +18,7 @@ export type AiSkillDefinition = {
   tools: readonly AiSkillTool[];
 };
 
-export class AiSkillRegistry {
+class AiSkillRegistry {
   private readonly skills = new Map<string, AiSkillDefinition>();
 
   register(skill: AiSkillDefinition) {

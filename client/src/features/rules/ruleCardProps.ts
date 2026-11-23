@@ -132,7 +132,7 @@ export type RuleCardDerivedSources = {
   probeAgeText: (at: unknown) => string;
 };
 
-export const EMPTY_SPARK: number[] = [];
+const EMPTY_SPARK: number[] = [];
 
 export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDerivedSources, nowMs = Date.now()): RuleCardDerivedProps {
   const ruleId = Number(rule.id);

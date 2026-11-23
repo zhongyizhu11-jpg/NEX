@@ -2,7 +2,7 @@ import { classifyAuthCaptchaInput, normalizeAuthCaptchaMode, type AuthCaptchaInp
 import { getSetting } from "./repositories/settingsRepository";
 import type { AuthCaptchaService, CaptchaPurpose } from "./authCaptcha";
 
-export const AUTH_CAPTCHA_MODE_SETTING = "authCaptchaMode";
+const AUTH_CAPTCHA_MODE_SETTING = "authCaptchaMode";
 
 /** 系统设置里选的验证方式（shared/authCaptchaMode.ts）。没设过、存坏了都按点击验证。 */
 export async function readAuthCaptchaMode(): Promise<AuthCaptchaMode> {

@@ -7,7 +7,7 @@ function getExistingOverlayRoot() {
   return document.getElementById(OVERLAY_ROOT_ID) as HTMLElement | null
 }
 
-export function ensureOverlayRoot() {
+function ensureOverlayRoot() {
   if (typeof document === "undefined") return null
   const existing = getExistingOverlayRoot()
   if (existing) return existing

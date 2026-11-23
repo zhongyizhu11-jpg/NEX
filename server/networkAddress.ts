@@ -5,7 +5,7 @@ type HostOrIpValidationOptions = {
   allowLooseIpLiteral?: boolean;
 };
 
-export function unwrapBracketedHost(value: unknown) {
+function unwrapBracketedHost(value: unknown) {
   const text = String(value || "").trim();
   return text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1).trim() : text;
 }

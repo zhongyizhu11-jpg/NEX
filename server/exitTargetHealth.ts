@@ -551,7 +551,7 @@ export async function ingestExitTargetReports(input: {
  * 一条链路每台出口到目标的情况（链路卡上点「负载均衡 ×N」的弹窗用）：每台出口取它在各条规则上最差的那次，
  * 再数一数几条规则连不上 / 不稳。
  */
-export type ExitTargetExitSummary = {
+type ExitTargetExitSummary = {
   hostId: number;
   /** 有数据的规则条数 */
   rules: number;
@@ -1165,7 +1165,7 @@ function activeExitFromLive(live: LiveRuleReport) {
  * 规则卡整链的两段（都是面板探的，server/ruleLatencyView.ts）：在用的那台出口、入口到它、它到目标、分到多少。
  * 悬停那句由界面拼：「整链 9 ms = 入口到 hep ix 6 ms + hep ix 到目标 3 ms（面板探测，18:48）」。
  */
-export type RuleChainLatencyView = {
+type RuleChainLatencyView = {
   exitHostId: number;
   exitName: string;
   exitMs: number;
@@ -1224,7 +1224,7 @@ export function exitTargetExcludedHostIds(ruleId: number, exitHostIds: readonly 
   return remainingKnownGood ? new Set(down.map(Number)) : new Set();
 }
 
-export type RuleExitTargetSummary = {
+type RuleExitTargetSummary = {
   total: number;
   reporting: number;
   bad: Array<{ hostId: number; hostName: string; reason: "down" | "unstable"; medianMs: number | null; jitterMs: number | null; lossPct: number | null; exitUnreachable?: boolean }>;

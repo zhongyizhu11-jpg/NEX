@@ -57,7 +57,7 @@ export const MAX_MEMBER_BANDWIDTH_MBPS = 100_000;
 /** Upper bound for the emitted weighted record slot count. */
 export const MAX_AGGREGATION_RECORD_SLOTS = 32;
 /** Default slot budget used when a group does not pin one. */
-export const DEFAULT_AGGREGATION_RECORD_SLOTS = 8;
+const DEFAULT_AGGREGATION_RECORD_SLOTS = 8;
 
 export function normalizeBandwidthAggregationStrategy(value: unknown): BandwidthAggregationStrategy {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -107,7 +107,7 @@ export type BandwidthAggregationMemberInput = {
   label?: string | null;
 };
 
-export type BandwidthAggregationMemberPlan = {
+type BandwidthAggregationMemberPlan = {
   memberId: number;
   value: string;
   label: string;

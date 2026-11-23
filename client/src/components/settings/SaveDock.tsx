@@ -88,7 +88,7 @@ export function useSaveDockActive() {
 }
 
 /** 存完之后那句「改动都已保存」在屏幕上留多久（毫秒）。 */
-export const SAVE_DOCK_SAVED_FLASH_MS = 1200;
+const SAVE_DOCK_SAVED_FLASH_MS = 1200;
 
 /**
  * 这条栏此刻画不画。

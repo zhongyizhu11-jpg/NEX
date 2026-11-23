@@ -9,7 +9,7 @@
 */
 import { mobileAuth } from "@/lib/mobileAuth";
 
-export function base64urlToBuffer(value: string): ArrayBuffer {
+function base64urlToBuffer(value: string): ArrayBuffer {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -17,7 +17,7 @@ export function base64urlToBuffer(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export function bufferToBase64url(buffer: ArrayBuffer | ArrayBufferView): string {
+function bufferToBase64url(buffer: ArrayBuffer | ArrayBufferView): string {
   const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   let binary = "";
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);

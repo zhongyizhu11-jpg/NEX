@@ -41,7 +41,7 @@ export type JsonLogPageResult<T extends FileLogEntry = FileLogEntry> = {
   nextOffset: number;
 };
 
-export function getLogDir() {
+function getLogDir() {
   const configured = process.env.FORWARDX_LOG_DIR?.trim();
   if (configured) return configured;
   if (process.platform !== "win32" && fs.existsSync("/data")) return "/data/logs";

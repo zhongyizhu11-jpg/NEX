@@ -49,6 +49,6 @@ export async function saveProxySubSettings(partial: Partial<ProxySubSettings>): 
   return loadProxySubSettings();
 }
 
-export function invalidateProxySubSettingsCache() {
+function invalidateProxySubSettingsCache() {
   cached = null;
 }

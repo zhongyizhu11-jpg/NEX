@@ -4,8 +4,8 @@
   时间一律是 unix 秒；「一天」按北京时间（UTC+8，没有夏令时）切。
 */
 
-export const SHANGHAI_OFFSET_SECONDS = 8 * 3600;
-export const DAY_SECONDS = 86400;
+const SHANGHAI_OFFSET_SECONDS = 8 * 3600;
+const DAY_SECONDS = 86400;
 
 /** 北京时间的日期键 YYYY-MM-DD。 */
 export function shanghaiDayKey(epochSeconds: number): string {
@@ -78,7 +78,7 @@ export function intersectIntervals(a: readonly Interval[], b: readonly Interval[
 }
 
 /** 区间落在 [from, to) 里的秒数。 */
-export function overlapSeconds(interval: Interval, from: number, to: number): number {
+function overlapSeconds(interval: Interval, from: number, to: number): number {
   return Math.max(0, Math.min(interval[1], to) - Math.max(interval[0], from));
 }
 

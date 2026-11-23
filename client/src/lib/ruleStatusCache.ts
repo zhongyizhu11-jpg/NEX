@@ -7,10 +7,10 @@
  * stored by the server.
  */
 
-export const RULE_STATUS_CACHE_VERSION = 1;
-export const RULE_STATUS_CACHE_STORAGE_PREFIX = "forwardx.rules.visualStatus.v1.";
+const RULE_STATUS_CACHE_VERSION = 1;
+const RULE_STATUS_CACHE_STORAGE_PREFIX = "forwardx.rules.visualStatus.v1.";
 
-export type RuleVisualStatusState = "disabled" | "running" | "pending" | "error";
+type RuleVisualStatusState = "disabled" | "running" | "pending" | "error";
 
 export type RuleVisualStatusSnapshot = {
   state: RuleVisualStatusState;
@@ -73,7 +73,7 @@ function normalizeTimestamp(value: unknown, fallback = 0) {
   return fallback;
 }
 
-export function normalizeRuleStatusSnapshot(value: unknown, fallbackUpdatedAt = 0): RuleVisualStatusSnapshot | null {
+function normalizeRuleStatusSnapshot(value: unknown, fallbackUpdatedAt = 0): RuleVisualStatusSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const source = value as Record<string, unknown>;
   const state = String(source.state || "").trim().toLowerCase() as RuleVisualStatusState;

@@ -268,7 +268,7 @@ export function hostOfflineAgo(host: SummaryHost, now: number): string {
 }
 
 /** 底行的两段文字：左边速率 / 离线多久，右边挂了几条转发、几条线路经过。卡片和深空主机行共用一份。 */
-export function hostFootText(host: SummaryHost, vitals: HostVitals, now: number): {
+function hostFootText(host: SummaryHost, vitals: HostVitals, now: number): {
   left: string;
   tone: "warn" | "down" | undefined;
   right: string | null;

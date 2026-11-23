@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 export type Severity = "low" | "medium" | "high" | "critical";
 
-export const SEVERITY_LABEL: Record<Severity, string> = { low: "低", medium: "中", high: "高", critical: "严重" };
+const SEVERITY_LABEL: Record<Severity, string> = { low: "低", medium: "中", high: "高", critical: "严重" };
 
 /** 颜色只用现有的状态色：严重 / 高 走红，中走黄，低走描边灰。 */
 export function SeverityBadge({ severity, className }: { severity: Severity; className?: string }) {
@@ -22,7 +22,7 @@ export function SeverityBadge({ severity, className }: { severity: Severity; cla
   );
 }
 
-export const EVIDENCE_LABELS: Record<string, string> = {
+const EVIDENCE_LABELS: Record<string, string> = {
   pid: "进程号",
   comm: "进程名",
   exe: "程序",

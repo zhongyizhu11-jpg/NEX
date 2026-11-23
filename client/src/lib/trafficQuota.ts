@@ -1,6 +1,6 @@
-export type TrafficQuotaSourceKind = "manual" | "plan" | "addon" | "grant";
+type TrafficQuotaSourceKind = "manual" | "plan" | "addon" | "grant";
 
-export type TrafficQuotaSource = {
+type TrafficQuotaSource = {
   kind: TrafficQuotaSourceKind;
   bytes: number;
   unlimited: boolean;

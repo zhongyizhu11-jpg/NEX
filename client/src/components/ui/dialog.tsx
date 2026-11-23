@@ -94,13 +94,11 @@ const Dialog = ({ open, defaultOpen, onOpenChange, modal = true, ...props }: Rea
   return <DialogPrimitive.Root open={open} defaultOpen={defaultOpen} onOpenChange={handleOpenChange} modal={modal} {...props} />
 }
 Dialog.displayName = DialogPrimitive.Root.displayName
-const DialogTrigger = DialogPrimitive.Trigger
 const DialogPortal = ({ container, ...props }: React.ComponentProps<typeof DialogPrimitive.Portal>) => {
   const overlayContainer = useOverlayContainer()
   return <DialogPrimitive.Portal container={container ?? overlayContainer} {...props} />
 }
 DialogPortal.displayName = DialogPrimitive.Portal.displayName
-const DialogClose = DialogPrimitive.Close
 
 const DialogOverlay = React.forwardRef<React.ComponentRef<typeof DialogPrimitive.Overlay>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>>(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay ref={ref} className={cn("dialog-overlay fixed inset-0 z-[var(--fx-z-in-overlay-base)] overflow-hidden", className)} {...props} />
@@ -177,4 +175,4 @@ const DialogDescription = React.forwardRef<React.ComponentRef<typeof DialogPrimi
 ))
 DialogDescription.displayName = DialogPrimitive.Description.displayName
 
-export { Dialog, DialogPortal, DialogOverlay, DialogClose, DialogTrigger, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription }
+export { Dialog, DialogPortal, DialogOverlay,   DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription }

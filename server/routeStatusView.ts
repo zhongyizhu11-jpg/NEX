@@ -23,7 +23,7 @@ import { routeSchedulerHostIds } from "./routers/rules.crud";
 import { expectedRouteAgentSpec, routeSpecDriftFields, routeSpecReportUsable, type RouteAgentSpec, type RouteSpecDrift } from "../shared/routeSpecDrift";
 import { timestampMillis } from "../shared/timestamp";
 import { dbBool } from "./repositories/repositoryUtils";
-import { getRuleLiveRate, type RuleLiveRate } from "./ruleLiveRates";
+import { getRuleLiveRate } from "./ruleLiveRates";
 import { routeDrillView, withRouteDrillHints, type RouteDrillSubject } from "./routeDrill";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 
@@ -35,7 +35,7 @@ import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 const DEST_NAME_TTL_MS = 60_000;
 const destNameCache = new Map<string, { name: string | null; at: number }>();
 
-export async function routeDestNames(rule: any, paths: readonly RoutePath[]): Promise<Map<string, string>> {
+async function routeDestNames(rule: any, paths: readonly RoutePath[]): Promise<Map<string, string>> {
   const names = new Map<string, string>();
   const now = Date.now();
   const userId = Number(rule.userId || 0);
@@ -94,17 +94,6 @@ export async function routeDestNames(rule: any, paths: readonly RoutePath[]): Pr
   }
   return names;
 }
-
-/*
-  线路组此刻的样子：每条路径走哪几跳、拨哪个地址、评分几分、哪一跳断了、现在走的是哪条，
-  再加每一跳此刻的速率和最近切了几次。rules.routeStatus（一条）和 rules.routeBoard（全部）
-  都从这里出，界面上规则卡的线路面板和链路管理页的线路板画的是同一份东西。
-
-  评分和逐跳探测都是内存里的（routeGroupStats）：入口 Agent 每次心跳带评分，中转机的
-  Agent 一分钟报一次它那一跳。
-*/
-
-export type RouteStatusRate = RuleLiveRate | null;
 
 /** 切换记录只留最近的，够数一天的就行。 */
 const SWITCH_EVENT_LIMIT = 60;
@@ -472,7 +461,7 @@ export async function buildRouteStatus(rule: any) {
   };
 }
 
-export type RouteStatusView = NonNullable<Awaited<ReturnType<typeof buildRouteStatus>>>;
+type RouteStatusView = NonNullable<Awaited<ReturnType<typeof buildRouteStatus>>>;
 
 const BOARD_MAX_RULES = 120;
 const BOARD_CONCURRENCY = 6;

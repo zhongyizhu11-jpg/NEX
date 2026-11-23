@@ -78,7 +78,7 @@ export type LinePlanReason =
   | "nothing-to-hold"
   | "unassigned";
 
-export type LinePlanEntry = {
+type LinePlanEntry = {
   line: DdnsLineRef;
   action: "publish" | "delete";
   /** publish 时要发布的值（非空）；delete 时为空。 */
@@ -99,11 +99,11 @@ export type LinePlan = {
 };
 
 /** 两条线路是不是同一条：两边都有 id 就比 id（服务商的线路 ID），否则比名字。 */
-export function sameDdnsLine(a: DdnsLineRef, b: DdnsLineRef) {
+function sameDdnsLine(a: DdnsLineRef, b: DdnsLineRef) {
   return a.id && b.id ? a.id === b.id : a.name === b.name;
 }
 
-export function memberOnDefaultLine(member: Pick<LinePlannerMember, "lines">, defaultLine: DdnsLineRef) {
+function memberOnDefaultLine(member: Pick<LinePlannerMember, "lines">, defaultLine: DdnsLineRef) {
   return member.lines.length === 0 || member.lines.some((line) => sameDdnsLine(line, defaultLine));
 }
 

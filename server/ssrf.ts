@@ -22,7 +22,7 @@ function isRestrictedIp(value: string, allowPrivate: boolean) {
   return isRestrictedOutboundAddress(value, { allowPrivate });
 }
 
-export async function assertSafeOutboundHost(rawHost: string, options: SafeOutboundOptions = {}) {
+async function assertSafeOutboundHost(rawHost: string, options: SafeOutboundOptions = {}) {
   const purpose = options.purpose || "此请求";
   const host = normalizeHost(rawHost);
   if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {

@@ -117,7 +117,7 @@ export function formatCidrShort(cidr: ParsedCidr): string {
   return cidr.prefix === BITS[cidr.family] ? formatIp(cidr.family, cidr.start) : formatCidr(cidr);
 }
 
-export function cidrRange(cidr: ParsedCidr): [bigint, bigint] {
+function cidrRange(cidr: ParsedCidr): [bigint, bigint] {
   const size = 1n << BigInt(BITS[cidr.family] - cidr.prefix);
   return [cidr.start, cidr.start + size - 1n];
 }

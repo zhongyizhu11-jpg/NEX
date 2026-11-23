@@ -206,7 +206,7 @@ async function panelTargetFor(dependents: Array<{ id: number }>): Promise<string
   return "";
 }
 
-export async function relayDirectiveFor(hostId: number) {
+async function relayDirectiveFor(hostId: number) {
   const configs = await loadRelayConfigs();
   const own = configs.get(hostId);
   const directive: { via?: string; listen?: { port: number; target: string; allow: string[] } } = {};
@@ -244,7 +244,7 @@ registerAgentExtModule({
 const sampler = new OfflineSampler();
 let samplerTimer: ReturnType<typeof setInterval> | null = null;
 
-export function ensureAutoSwitchSampler() {
+function ensureAutoSwitchSampler() {
   if (samplerTimer) return;
   samplerTimer = setInterval(() => {
     void runAutoSwitchRound().catch((error) => {

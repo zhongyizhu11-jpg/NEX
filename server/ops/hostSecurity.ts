@@ -32,7 +32,7 @@ const FINDINGS = "host_security_findings";
 const EXPECTED = "host_security_expected";
 const ACTIONS = "host_security_actions";
 
-export const SECURITY_INTERVAL_SETTING = "ops.hostSecurity.intervalMinutes";
+const SECURITY_INTERVAL_SETTING = "ops.hostSecurity.intervalMinutes";
 const STATUS_SETTING_PREFIX = "ops.hostSecurity.status.";
 const BASELINE_TOKEN_PREFIX = "ops.hostSecurity.baselineToken.";
 const MANAGED_PORTS_CACHE_MS = 60_000;
@@ -99,7 +99,7 @@ async function noteHostStatus(hostId: number, next: Omit<HostSecurityStatus, "pe
 const managedPortCache = new Map<number, { at: number; ports: number[] }>();
 
 /** 面板给这台主机配的所有端口（转发入口、隧道监听、入站……）：Agent 开着它们不算「新端口」。 */
-export async function managedPortsForHost(hostId: number): Promise<number[]> {
+async function managedPortsForHost(hostId: number): Promise<number[]> {
   const cached = managedPortCache.get(hostId);
   if (cached && Date.now() - cached.at < MANAGED_PORTS_CACHE_MS) return cached.ports;
   const ports = new Set<number>();
@@ -127,7 +127,7 @@ export async function managedPortsForHost(hostId: number): Promise<number[]> {
   return list;
 }
 
-export async function securityIntervalMinutes() {
+async function securityIntervalMinutes() {
   const raw = Number(await getSetting(SECURITY_INTERVAL_SETTING).catch(() => null));
   return Number.isInteger(raw) && raw >= 1 && raw <= 60 ? raw : 5;
 }
@@ -398,7 +398,7 @@ function latestQuarantineId(actions: any[]) {
   return id;
 }
 
-export async function getFinding(id: number) {
+async function getFinding(id: number) {
   const rows = await queryRaw<any>(`SELECT * FROM ${q(FINDINGS)} WHERE ${q("id")} = ? LIMIT 1`, [id]);
   return rows[0] || null;
 }
@@ -477,7 +477,7 @@ export async function requestSecurityAction(id: number, action: SecurityActionKi
 }
 
 /** Agent 一直没来取（离线了）的动作，过一天标成失败，界面上不会一直转圈。 */
-export async function expireStaleSecurityActions() {
+async function expireStaleSecurityActions() {
   const cutoff = nowSec() - 86400;
   await executeRaw(
     `UPDATE ${q(ACTIONS)} SET ${q("status")} = ?, ${q("message")} = ?, ${q("finishedAt")} = ? WHERE ${q("status")} = ? AND ${q("createdAt")} < ?`,

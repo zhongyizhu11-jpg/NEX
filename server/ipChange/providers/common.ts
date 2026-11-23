@@ -16,12 +16,11 @@ import {
   type IpChangeCredentials,
   type IpChangeFieldDef,
   type IpChangeProvider,
-  type IpChangeTarget,
 } from "./types";
 
-export const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
-export const DEFAULT_POLL_INTERVAL_MS = 5_000;
-export const DEFAULT_POLL_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_POLL_TIMEOUT_MS = 5 * 60_000;
 
 // ---------------------------------------------------------------------------
 // 脱敏
@@ -398,4 +397,4 @@ export function formEncode(params: Record<string, string>, encode: (value: strin
     .join("&");
 }
 
-export type { IpChangeTarget, IpChangeCredentials };
+export type {  IpChangeCredentials };

@@ -34,3 +34,12 @@
 ## 下一批候选
 
 按依赖少到多：`mimic*`（12 个文件，脚本 dry-run 只改 17 处导入）、`ddns*` / `dnspod*`、`proxySub*`、`forwardGroup*`，然后是最大的 `agent*`（53 个文件）、`rule*`、`host*`、`tunnel*`。
+
+## 死代码清理（knip）
+
+`pnpm knip` 以前报 860 个没人用的导出、251 个没人用的导出类型。2026-11-23 用 `knip --fix --fix-type exports,types` 一次去掉 `export`，再让 `tsc`（noUnusedLocals）说话：真正没人用的 69 个声明删掉，其余只是过度导出。几条规矩：
+
+- `shared/ssEgress.ts`、`gostRuntimeApi.ts`、`mitaAssets.ts`、`fxpRuntime.ts` 的 `export const` 被 `scripts/check-versions.mjs` 和 `build-agent-release.sh` 用正则读，knip 配置里 `ignore` 了它们；别手动去掉那里的 `export`。
+- `scripts/bench/**/*.mjs` 是手跑的压测脚本，列为 knip 入口，不算无用文件。
+- 删掉的 `*ForTests` 复位函数没有测试在用；以后给测试加复位入口时顺手写测试，否则下一轮又会被清掉。
+

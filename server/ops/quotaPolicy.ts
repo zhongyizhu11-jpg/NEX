@@ -29,8 +29,8 @@ import { getSetting, setSetting } from "../repositories/settingsRepository";
 
 export const QUOTA_MODES = ["cut", "drain"] as const;
 export type QuotaMode = (typeof QUOTA_MODES)[number];
-export const QUOTA_MODE_SETTING = "ops.quota.mode";
-export const DEFAULT_QUOTA_MODE: QuotaMode = "drain";
+const QUOTA_MODE_SETTING = "ops.quota.mode";
+const DEFAULT_QUOTA_MODE: QuotaMode = "drain";
 
 export function normalizeQuotaMode(value: unknown): QuotaMode {
   return value === "drain" ? "drain" : value === "cut" ? "cut" : DEFAULT_QUOTA_MODE;

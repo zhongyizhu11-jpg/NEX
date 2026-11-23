@@ -29,7 +29,7 @@ export type TunnelExitPortEntry = {
 
 type RecordedPort = { port: number; entryHostIds: number[] };
 
-export const TUNNEL_EXIT_PORTS_SETTING_PREFIX = `${RUNTIME_CACHE_SETTING_PREFIX}tunnelExitPorts:`;
+const TUNNEL_EXIT_PORTS_SETTING_PREFIX = `${RUNTIME_CACHE_SETTING_PREFIX}tunnelExitPorts:`;
 
 const reportsByHost = new Map<number, Map<string, RecordedPort>>();
 /** 每台出口存进库里的那一份（序列化后），没存过当作空表。 */

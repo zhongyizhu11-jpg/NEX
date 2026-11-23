@@ -27,7 +27,7 @@ export function realmTomlString(value: unknown) {
   return JSON.stringify(String(value ?? ""));
 }
 
-export function serviceProtocolSuffix(protocol: unknown) {
+function serviceProtocolSuffix(protocol: unknown) {
   return normalizeForwardRuleProtocol(protocol, "both");
 }
 
@@ -69,7 +69,7 @@ export type RealmConfigInput = {
 };
 
 /** 入口监听地址：有 IPv6 的机器一个双栈套接字收 v4 + v6，内核关了 IPv6 的只听 IPv4。 */
-export function realmListenAddress(sourcePort: unknown, ipv6Listen = true) {
+function realmListenAddress(sourcePort: unknown, ipv6Listen = true) {
   const port = Number(sourcePort) || 0;
   return ipv6Listen === false ? `0.0.0.0:${port}` : `[::0]:${port}`;
 }
@@ -220,7 +220,7 @@ export type SocatUnitInput = {
  * socat 的监听端：`TCP6-LISTEN:端口,fork,reuseaddr,ipv6only=0`；内核关了 IPv6 时是
  * `TCP4-LISTEN:端口,fork,reuseaddr`（ipv6only 是 IPv6 套接字的选项，加在 TCP4 上 socat 会拒绝）。
  */
-export function socatListenAddress(protocol: "TCP" | "UDP", sourcePort: unknown, ipv6Listen = true) {
+function socatListenAddress(protocol: "TCP" | "UDP", sourcePort: unknown, ipv6Listen = true) {
   return ipv6Listen === false
     ? `${protocol}4-LISTEN:${sourcePort},fork,reuseaddr`
     : `${protocol}6-LISTEN:${sourcePort},fork,reuseaddr,ipv6only=0`;

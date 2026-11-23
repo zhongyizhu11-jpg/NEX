@@ -17,7 +17,7 @@ import { MIMIC_DEFAULT_VERSION, isShellSafeUrl, normalizeMimicDownloadProxy } fr
 
 /** 面板这一版装的 mimic（hack3ric/mimic）版本，装 Agent 的脚本和面板一键安装都用它。 */
 export const MIMIC_TARGET_VERSION = MIMIC_DEFAULT_VERSION;
-export const MIMIC_INSTALLER_URL = "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh";
+const MIMIC_INSTALLER_URL = "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh";
 
 export type MimicInstallMode = "install" | "repair";
 export type MimicInstallStatus = "queued" | "running" | "success" | "error" | "timeout";

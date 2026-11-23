@@ -15,7 +15,7 @@
 export const DEFAULT_EXPIRY_REMINDER_DAYS = [7, 3, 1];
 
 /** 最远提前多少天 —— 再远就不是提醒，是骚扰。 */
-export const MAX_EXPIRY_REMINDER_DAY = 365;
+const MAX_EXPIRY_REMINDER_DAY = 365;
 
 /**
  * 解析「7,3,1」这种配置。

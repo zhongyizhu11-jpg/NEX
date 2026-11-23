@@ -34,7 +34,7 @@ const reportHealth: Record<ReturnType<typeof describeRoutePolicyReport>["tone"],
 };
 
 /** 选择用的小块：选中是整块反白，和主机分组、分段控件同一套 —— 选择不是状态，不染状态色。 */
-export function choiceClass(active: boolean) {
+function choiceClass(active: boolean) {
   return cn(
     "inline-flex h-9 min-w-0 items-center justify-center rounded-[var(--fx-radius-control)] px-3 text-sm transition-colors",
     active

@@ -49,7 +49,7 @@ export const DEFAULT_API_RATE_LIMIT: ApiRateLimitConfig = {
 };
 
 /** 设置里能填的上下限：再低就会误伤正常使用，再高就等于没限。 */
-export const API_RATE_LIMIT_MIN = 10;
+const API_RATE_LIMIT_MIN = 10;
 export const API_RATE_LIMIT_MAX = 100_000;
 
 const WINDOW_MS = 60_000;
@@ -167,9 +167,4 @@ export function apiRateLimitMessage(decision: Pick<ApiRateLimitDecision, "subjec
 /** 测试用：清空计数。 */
 export function resetApiRateLimitForTests() {
   buckets.clear();
-}
-
-/** 测试 / 调试用：现在占着几个键。 */
-export function apiRateLimitKeyCount() {
-  return buckets.size;
 }

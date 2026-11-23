@@ -1,9 +1,9 @@
 import crypto from "crypto";
 
 export type Iperf3TaskOp = "start" | "stop";
-export type Iperf3ServerState = "idle" | "queued" | "starting" | "running" | "stopping" | "stopped" | "error";
+type Iperf3ServerState = "idle" | "queued" | "starting" | "running" | "stopping" | "stopped" | "error";
 
-export type Iperf3AgentTask = {
+type Iperf3AgentTask = {
   taskId: string;
   op: Iperf3TaskOp;
   port: number;

@@ -29,7 +29,7 @@ export type PlaceInput = {
 };
 
 /** 坐标离城市多近才算「就是这个城市」：机房常在城郊、IP 服务的坐标也只到城市级 */
-export const PLACE_NEAREST_CITY_KM = 150;
+const PLACE_NEAREST_CITY_KM = 150;
 
 /**
  * 常被 IP 定位写进 region 的省 / 州 → 中文。键是 normalizeRegionKey 之后的样子（小写、去掉

@@ -82,7 +82,7 @@ export const PROXY_INBOUND_SECURITY_LABELS: Record<ProxyInboundSecurity, string>
  * 域名和邮箱。用的是 1.14 引入的 certificate.providers，不是 tls.acme：后者在
  * 1.14 已标记废弃、1.16 移除，建在上面等于给自己埋一个到点必炸的雷。
  */
-export const PROXY_INBOUND_ACME_DATA_DIR = "/var/lib/forwardx-singbox/acme";
+const PROXY_INBOUND_ACME_DATA_DIR = "/var/lib/forwardx-singbox/acme";
 
 /**
  * REALITY 只能架在 TCP 上的 TLS 之上。
@@ -91,7 +91,7 @@ export const PROXY_INBOUND_ACME_DATA_DIR = "/var/lib/forwardx-singbox/acme";
  * 压根没有 TLS 层。AnyTLS 的服务端虽然能开 REALITY，但主流客户端（mihomo / Clash /
  * sing-box）都明说不会支持，开出来是一个没人连得上的节点，所以这里也不放行。
  */
-export const PROXY_INBOUND_REALITY_PROTOCOLS: readonly ProxyInboundProtocol[] = ["vless", "vmess", "trojan"];
+const PROXY_INBOUND_REALITY_PROTOCOLS: readonly ProxyInboundProtocol[] = ["vless", "vmess", "trojan"];
 
 /** 协议自带 TLS，安全层不能选「无」。 */
 const ALWAYS_TLS_PROTOCOLS: readonly ProxyInboundProtocol[] = ["trojan", "hysteria2", "tuic", "anytls"];
@@ -140,7 +140,7 @@ export type ProxyInboundShadowsocksMethod = (typeof PROXY_INBOUND_SHADOWSOCKS_ME
  * 定长密钥的算法及其字节数。只有 SS2022 在这里 —— 老 AEAD 的密码是口令不是密钥，
  * 给它按长度生成没有意义。查不到就表示「随便给个随机口令即可」。
  */
-export const PROXY_INBOUND_SHADOWSOCKS_KEY_BYTES: Partial<Record<ProxyInboundShadowsocksMethod, number>> = {
+const PROXY_INBOUND_SHADOWSOCKS_KEY_BYTES: Partial<Record<ProxyInboundShadowsocksMethod, number>> = {
   "2022-blake3-aes-128-gcm": 16,
   "2022-blake3-aes-256-gcm": 32,
   "2022-blake3-chacha20-poly1305": 32,
@@ -196,7 +196,7 @@ export function proxyInboundSecurities(protocol: ProxyInboundProtocol): ProxyInb
  *
  * 与其给出一个「能保存、能下发、就是连不上」的功能，不如这两个明确只支持单用户。
  */
-export const PROXY_INBOUND_MULTI_USER_PROTOCOLS: readonly ProxyInboundProtocol[] = [
+const PROXY_INBOUND_MULTI_USER_PROTOCOLS: readonly ProxyInboundProtocol[] = [
   "vless",
   "vmess",
   "trojan",
@@ -392,11 +392,11 @@ export function isValidRealityShortId(value: unknown): boolean {
  * 这些字段原样写进 sing-box 配置，sing-box 对不认识的取值是拒绝加载**整份**配置 ——
  * 同一台落地机上别人的入站跟着一起停。所以只收下面这些已知取值（空串表示不设置）。
  */
-export const PROXY_INBOUND_VLESS_FLOWS = ["xtls-rprx-vision"] as const;
-export const PROXY_INBOUND_HYSTERIA2_OBFS = ["salamander"] as const;
-export const PROXY_INBOUND_SNELL_OBFS = ["none", "http", "tls"] as const;
-export const PROXY_INBOUND_TUIC_CONGESTION_CONTROLS = ["cubic", "new_reno", "bbr"] as const;
-export const PROXY_INBOUND_SNELL_V6_MODES = ["default", "unshaped", "unsafe-raw"] as const;
+const PROXY_INBOUND_VLESS_FLOWS = ["xtls-rprx-vision"] as const;
+const PROXY_INBOUND_HYSTERIA2_OBFS = ["salamander"] as const;
+const PROXY_INBOUND_SNELL_OBFS = ["none", "http", "tls"] as const;
+const PROXY_INBOUND_TUIC_CONGESTION_CONTROLS = ["cubic", "new_reno", "bbr"] as const;
+const PROXY_INBOUND_SNELL_V6_MODES = ["default", "unshaped", "unsafe-raw"] as const;
 
 function enumFieldError(value: unknown, allowed: readonly string[], field: string): string {
   const raw = text(value);
@@ -547,7 +547,7 @@ export function proxyInboundRealityDest(inbound: ProxyInbound): { server: string
  * 按域名去重：同一个域名上的多个入站共用一张证书，既省一次签发，也避开
  * Let's Encrypt 按域名算的签发频率限制 —— 每个入站各签一次很容易撞上。
  */
-export function proxyInboundAcmeTag(inbound: ProxyInbound): string {
+function proxyInboundAcmeTag(inbound: ProxyInbound): string {
   return `acme-${text(inbound.serverName).toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
 }
 
@@ -698,7 +698,7 @@ export function buildSingboxInbound(inbound: ProxyInbound, tag: string): Record<
  * 不存在的 provider」——sing-box 的 check 查不出那种悬空引用，配置照样通过、服务
  * 照样起来，只在客户端握手时失败，又是一次看不出原因的连接失败。
  */
-export function buildSingboxCertificateProviders(
+function buildSingboxCertificateProviders(
   inbounds: readonly { inbound: ProxyInbound }[],
 ): Record<string, unknown>[] {
   const byTag = new Map<string, Record<string, unknown>>();
@@ -746,7 +746,7 @@ export function buildSingboxConfig(
  * 只有一个用户时不加后缀 —— 「HK 落地 · 默认」这种噪音没有信息量。用户有名字才拼，
  * 因为订阅里的节点名是用户唯一能分辨「这条是谁的」的东西。
  */
-export function proxyInboundNodeName(inbound: ProxyInbound, user?: ProxyInboundUser): string {
+function proxyInboundNodeName(inbound: ProxyInbound, user?: ProxyInboundUser): string {
   const base = text(inbound.name);
   const label = text(user?.name);
   if (!label || inbound.users.length <= 1) return base;

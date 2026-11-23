@@ -68,7 +68,7 @@ function timeMs(value: unknown): number | null {
  * 开了「周期顺延」的机器，过了 stoppedAt 之后由定时任务（extendDueHostBillingPeriods）往后推；
  * 推之前的那一小会儿，账本上不该显示「已过期」—— 照同一个算法往后推到未来那一期，只用来展示。
  */
-export function hostLedgerExpiryMs(host: Record<string, unknown>, nowMs: number): number | null {
+function hostLedgerExpiryMs(host: Record<string, unknown>, nowMs: number): number | null {
   const stoppedAtMs = timeMs(host.stoppedAt);
   if (stoppedAtMs === null) return null;
   if (host.expiryHandling !== "extend_cycle" || stoppedAtMs > nowMs) return stoppedAtMs;
@@ -79,7 +79,7 @@ export function hostLedgerExpiryMs(host: Record<string, unknown>, nowMs: number)
   return next.getTime();
 }
 
-export async function loadHostLedger(nowMs = Date.now()) {
+async function loadHostLedger(nowMs = Date.now()) {
   const hosts = await getHosts() as Array<Record<string, unknown> & { id: number; name: string }>;
   const ids = hosts.map((host) => Number(host.id));
   const counters = await getHostTrafficSummary(ids);

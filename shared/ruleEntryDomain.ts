@@ -15,7 +15,7 @@ import { getEntryAddressFamily } from "./hostEntryAddress";
 export type RuleEntryDomainRecordType = "A" | "AAAA" | "CNAME";
 
 /** 规则域名的第一段：r + 规则 ID。只用小写字母和数字，任何 DNS 服务商都收。 */
-export function ruleEntryDomainLabel(ruleId: unknown): string {
+function ruleEntryDomainLabel(ruleId: unknown): string {
   const id = Number(ruleId);
   return Number.isInteger(id) && id > 0 ? `r${id}` : "";
 }
@@ -94,7 +94,7 @@ export type RuleEntryDomainRuleFields = {
 };
 
 /** 规则上的「专属域名」开关：没查这一列、列为空都算开着。 */
-export function ruleEntryDomainEnabled(rule: { entryDomainEnabled?: unknown } | null | undefined): boolean {
+function ruleEntryDomainEnabled(rule: { entryDomainEnabled?: unknown } | null | undefined): boolean {
   const value = rule?.entryDomainEnabled;
   return value === undefined || value === null || flag(value);
 }

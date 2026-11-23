@@ -16,10 +16,10 @@
 /** 从这个 Agent 版本起认 config.json 里的 proxyUrl（agent/management_proxy.go 里是同一个数）。 */
 export const AGENT_MANAGEMENT_PROXY_VERSION = "2.2.229";
 
-export const FWXM_PATH = "/usr/local/bin/fwxm";
+const FWXM_PATH = "/usr/local/bin/fwxm";
 /** 面板安装脚本放的面板管理脚本（scripts/fwxm-panel.sh）。同机装了面板时，Agent 的 fwxm panel … 交给它。 */
-export const PANEL_MANAGER_PATH = "/usr/local/lib/nex/fwxm-panel";
-export const AGENT_MANAGE_DIR = "/etc/forwardx/manage";
+const PANEL_MANAGER_PATH = "/usr/local/lib/nex/fwxm-panel";
+const AGENT_MANAGE_DIR = "/etc/forwardx/manage";
 
 /** 安装脚本和 fwxm 共用的 bash 函数。依赖 CONFIG_DIR / LEGACY_CONFIG_DIR / GO_AGENT_BIN 三个变量。 */
 export function agentProxyShellFunctions(): string[] {

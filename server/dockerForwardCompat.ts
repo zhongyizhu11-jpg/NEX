@@ -26,7 +26,7 @@ import { ruleSourcePortEnd, ruleTargetPortEnd } from "@shared/portRange";
   一次事务删，不按行号：Docker 或管理员随时可能改这条链，行号会指到别人的规则上。
 */
 
-export const DOCKER_COMPAT_CHAIN = "DOCKER-USER";
+const DOCKER_COMPAT_CHAIN = "DOCKER-USER";
 const dockerCompatLabel = "[docker-compat]";
 
 /** 构造器只读规则的这几个字段（数据库行、隧道 / 孤儿快照都传得进来）。 */

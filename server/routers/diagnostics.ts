@@ -19,7 +19,7 @@ import type { DiagnosticSubjectKind } from "@shared/linkDiagnostics";
   测带宽测的是线路此刻在走的那条（或者 pathKey 指定的那条）。
 */
 
-export const DIAGNOSTICS_KINDS = ["rule", "line", "tunnel", "forwardGroup"] as const;
+const DIAGNOSTICS_KINDS = ["rule", "line", "tunnel", "forwardGroup"] as const;
 export type DiagnosticsKind = (typeof DIAGNOSTICS_KINDS)[number];
 
 /** 清单（一键诊断）和故障包按哪种对象算：线路就是那条规则。 */

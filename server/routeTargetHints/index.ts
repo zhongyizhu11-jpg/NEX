@@ -20,10 +20,10 @@ import { tierHint } from "./tier";
 import { weightHint } from "./weight";
 import type { RouteFailoverTarget, RouteTargetHint, RouteTargetHintContext } from "./types";
 
-export type { RouteFailoverTarget, RouteTargetHint, RouteTargetHintContext } from "./types";
+export type { RouteFailoverTarget,  RouteTargetHintContext } from "./types";
 
 /** 注册表：按这个顺序拼。dial、weight 是每条都有的核心字段，其余是提示。 */
-export const ROUTE_TARGET_HINTS: readonly RouteTargetHint[] = [
+const ROUTE_TARGET_HINTS: readonly RouteTargetHint[] = [
   dialHint,
   probeHint,
   probeUdpEchoHint,
@@ -37,7 +37,7 @@ export const ROUTE_TARGET_HINTS: readonly RouteTargetHint[] = [
 ];
 
 /** 一条路径 → 一条目标。 */
-export function buildRouteFailoverTarget(path: RoutePath, context: RouteTargetHintContext): RouteFailoverTarget {
+function buildRouteFailoverTarget(path: RoutePath, context: RouteTargetHintContext): RouteFailoverTarget {
   const dial = routePathDial(path, context.routeRule);
   const target: Partial<RouteFailoverTarget> = {};
   for (const hint of ROUTE_TARGET_HINTS) Object.assign(target, hint.fields({ path, dial, context }));

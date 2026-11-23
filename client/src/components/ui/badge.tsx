@@ -53,10 +53,10 @@ const badgeVariants = cva("inline-flex shrink-0 items-center whitespace-nowrap r
 
 export type BadgeTone = NonNullable<VariantProps<typeof badgeVariants>["tone"]>
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof badgeVariants> {}
+interface BadgeProps extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof badgeVariants> {}
 
 function Badge({ className, variant, tone, size, ...props }: BadgeProps) {
   return <div data-slot="badge" data-variant={variant ?? "default"} data-tone={tone ?? undefined} className={cn(badgeVariants({ variant, tone, size }), className)} {...props} />
 }
 
-export { Badge, badgeVariants }
+export { Badge,  }

@@ -37,7 +37,7 @@ export const EVENT_WEBHOOK_TIMEOUT_MS = 5_000;
 export const EVENT_WEBHOOK_RETRY_DELAYS_MS: readonly number[] = [5_000, 30_000, 120_000, 600_000];
 export const EVENT_WEBHOOK_QUEUE_MAX = 500;
 /** 每个地址留最近多少次投递结果给界面看。 */
-export const EVENT_WEBHOOK_RECENT_MAX = 20;
+const EVENT_WEBHOOK_RECENT_MAX = 20;
 const DEFAULT_CONCURRENCY = 4;
 const ERROR_SNIPPET_BYTES = 2048;
 const ERROR_SNIPPET_CHARS = 200;

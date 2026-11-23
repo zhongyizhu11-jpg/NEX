@@ -19,7 +19,7 @@ export type FaultEventInput = {
 
 export type FaultCategoryKey = "offline" | "resource" | "oom" | "crash" | "loss" | "rule" | "route" | "traffic" | "security" | "other";
 
-export const FAULT_CATEGORIES: ReadonlyArray<{ key: FaultCategoryKey; label: string }> = [
+const FAULT_CATEGORIES: ReadonlyArray<{ key: FaultCategoryKey; label: string }> = [
   { key: "offline", label: "主机断线" },
   { key: "resource", label: "资源超限" },
   { key: "oom", label: "内存耗尽" },
@@ -88,7 +88,7 @@ export function isRecoveryEvent(event: Pick<FaultEventInput, "kind" | "data">) {
   return true;
 }
 
-export function recoveryDurationSeconds(event: Pick<FaultEventInput, "kind" | "data">): number | null {
+function recoveryDurationSeconds(event: Pick<FaultEventInput, "kind" | "data">): number | null {
   const field = RECOVERY_KINDS[event.kind];
   if (!field) return null;
   const value = Number(event.data?.[field]);
@@ -99,11 +99,11 @@ export function recoveryDurationSeconds(event: Pick<FaultEventInput, "kind" | "d
   线路类告警的口径（一处定义，两处用）：故障看板「线路切换 / 异常」这一类的条数，
   和线路工作台头上的「告警 / 已自动恢复」都按这两个判断数，同一时段数字一致。
 */
-export function isRouteFaultEvent(event: Pick<FaultEventInput, "kind" | "level" | "data">) {
+function isRouteFaultEvent(event: Pick<FaultEventInput, "kind" | "level" | "data">) {
   return !isRecoveryEvent(event) && faultCategoryOf(event.kind, event.level) === "route";
 }
 
-export function isRouteRecoveryEvent(event: Pick<FaultEventInput, "kind" | "data">) {
+function isRouteRecoveryEvent(event: Pick<FaultEventInput, "kind" | "data">) {
   return event.kind.startsWith("route.") && isRecoveryEvent(event);
 }
 

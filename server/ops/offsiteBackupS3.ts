@@ -92,7 +92,7 @@ export function signV4(input: SigV4Input) {
   };
 }
 
-export function amzDateOf(date: Date): string {
+function amzDateOf(date: Date): string {
   return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
 }
 

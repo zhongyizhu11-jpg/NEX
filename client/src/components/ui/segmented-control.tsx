@@ -12,7 +12,7 @@ import { segmentedControlClassName, segmentedOptionClassName } from "./segmented
   （比如线路工作台那组小号的），传 getOptionClassName 自己给格子的样子，键盘行为照旧。
 */
 
-export type SegmentedControlOption<T extends string | number> = {
+type SegmentedControlOption<T extends string | number> = {
   value: T;
   label: ReactNode;
   /** 格子里文字前面的图标 */

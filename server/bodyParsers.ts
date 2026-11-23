@@ -18,12 +18,12 @@ import { COOKIE_NAME } from "../shared/const";
   tRPC 的批量请求路径是 /api/trpc/a.b,c.d：只要其中一个过程在名单里就按大上限解析。
   大上限的解析器挂在全局那个前面，body-parser 解析过一次就不会再解析第二次。
 */
-export const DEFAULT_JSON_BODY_LIMIT = "1mb";
-export const LARGE_JSON_BODY_LIMIT = "10mb";
+const DEFAULT_JSON_BODY_LIMIT = "1mb";
+const LARGE_JSON_BODY_LIMIT = "10mb";
 
 const LARGE_BODY_PATH_PREFIXES = ["/api/agent/", "/api/sync"];
 
-export const LARGE_BODY_TRPC_PROCEDURES = new Set([
+const LARGE_BODY_TRPC_PROCEDURES = new Set([
   "plugins.installFromUpload",
   "plugins.saveSetting",
   "plugins.saveSettings",

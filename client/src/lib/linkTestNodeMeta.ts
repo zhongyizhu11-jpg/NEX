@@ -14,7 +14,7 @@ export function countryCodeToEmoji(countryCode: unknown) {
   return String.fromCodePoint(...[...code].map((char) => 127397 + char.charCodeAt(0)));
 }
 
-export function normalizeLinkTestNodeKey(value: unknown) {
+function normalizeLinkTestNodeKey(value: unknown) {
   return String(value || "")
     .replace(/^第\s*\d+\s*跳\s*/i, "")
     .replace(/^\d+\s*\/\s*\d+\s*/, "")
@@ -33,7 +33,7 @@ export function hostAddressCandidates(host: any | null | undefined) {
     .filter(Boolean);
 }
 
-export function hostRegionText(host: any | null | undefined) {
+function hostRegionText(host: any | null | undefined) {
   return [host?.geoCountryName || host?.geoCountryCode, host?.geoRegion]
     .map((value) => String(value || "").trim())
     .filter(Boolean)

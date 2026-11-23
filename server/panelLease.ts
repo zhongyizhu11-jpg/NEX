@@ -53,9 +53,9 @@ import { quoteIdentifier } from "./dbCompat";
 export const PANEL_LEASE_TTL_MS = 30_000;
 export const PANEL_LEASE_RENEW_INTERVAL_MS = 10_000;
 /** 持有者只信到「续约开始 + TTL − 这么多」：留出时钟误差和慢请求的余量，别人接手前自己先停。 */
-export const PANEL_LEASE_FENCE_MS = 5_000;
-export const PANEL_BACKGROUND_LEASE = "background";
-export const PANEL_INSTANCE_LEASE_PREFIX = "instance:";
+const PANEL_LEASE_FENCE_MS = 5_000;
+const PANEL_BACKGROUND_LEASE = "background";
+const PANEL_INSTANCE_LEASE_PREFIX = "instance:";
 /** 跨实例按 key 串行的锁行（server/panelKeyedLock.ts）；过期没放的由持有者顺手删掉。 */
 export const PANEL_KEYED_LOCK_ROW_PREFIX = "lock:";
 /** 实例登记过期多久后由持有者删掉（留着几分钟方便排查）。 */
@@ -186,7 +186,7 @@ export class SqlPanelLeaseStore implements PanelLeaseStore {
   }
 }
 
-export type PanelLeaseRole = "starting" | "holder" | "standby" | "stopped";
+type PanelLeaseRole = "starting" | "holder" | "standby" | "stopped";
 
 export type PanelLeaseStatus = {
   instanceId: string;
@@ -217,7 +217,7 @@ export type PanelLeaseOptions = {
   logger?: Pick<typeof console, "info" | "warn">;
 };
 
-export function generatePanelInstanceId() {
+function generatePanelInstanceId() {
   return crypto.randomBytes(6).toString("hex");
 }
 

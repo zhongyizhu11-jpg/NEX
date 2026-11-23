@@ -33,8 +33,6 @@ import {
   timingSafeEqualText,
   verifyJwsSignature,
   type FetchLike,
-  type OAuthStateEntry,
-  type OAuthStateInput,
 } from "./oauthPrimitives";
 
 // 这几样原来就定义在这里，后来抽到 server/oauthPrimitives.ts 和通用 OIDC 共用；原名照旧导出，旧的 import 不用改。
@@ -42,21 +40,20 @@ export {
   createPkcePair,
   jwksMaxAgeMs,
   randomUrlToken,
-  readCappedResponseText,
+  
   sha256Base64Url,
   timingSafeEqualText,
   type FetchLike,
 } from "./oauthPrimitives";
 
-export const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
-export const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
-export const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
-export const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"] as const;
-export const GOOGLE_SCOPE = "openid email profile";
+const GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"] as const;
+const GOOGLE_SCOPE = "openid email profile";
 
 export const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
-export const GOOGLE_STATE_MAX_ENTRIES = 10_000;
-export const GOOGLE_CLOCK_SKEW_SECONDS = 60;
+const GOOGLE_CLOCK_SKEW_SECONDS = 60;
 const GOOGLE_HTTP_TIMEOUT_MS = 10_000;
 /** Google 的 token / JWKS 响应只有几 KB；多出来的不读，免得被一个异常的大响应拖住。 */
 export const GOOGLE_RESPONSE_MAX_BYTES = OAUTH_RESPONSE_MAX_BYTES;
@@ -84,12 +81,6 @@ export function googleConfigFingerprint(config: { clientId: string; clientSecret
 async function readCappedJson(response: Response) {
   return parseJsonObject(await readCappedResponseText(response, GOOGLE_RESPONSE_MAX_BYTES));
 }
-
-// ---------- state 存储 ----------
-
-// 规则见 server/oauthPrimitives.ts 的 OAuthStateStore（和通用 OIDC 登录共用）。
-export type GoogleAuthStateEntry = OAuthStateEntry<GoogleLoginMode>;
-export type GoogleAuthStateInput = OAuthStateInput<GoogleLoginMode>;
 
 export class GoogleAuthStateStore extends OAuthStateStore<GoogleLoginMode> {}
 

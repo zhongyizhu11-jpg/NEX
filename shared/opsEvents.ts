@@ -27,7 +27,7 @@ function startOfLocalDay(value: Date) {
 }
 
 /** 这一天的分组键（本地日期 YYYY-MM-DD）。 */
-export function eventDayKey(value: Date | number): string {
+function eventDayKey(value: Date | number): string {
   const date = new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }

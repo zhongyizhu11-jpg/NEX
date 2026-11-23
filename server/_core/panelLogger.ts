@@ -46,7 +46,7 @@ export function appendPanelLog(level: PanelLogLevel, ...args: unknown[]) {
   });
 }
 
-export async function getPanelLogs() {
+async function getPanelLogs() {
   return await readRecentJsonLogsAsync(PANEL_LOG_FILE) as PanelLogEntry[];
 }
 

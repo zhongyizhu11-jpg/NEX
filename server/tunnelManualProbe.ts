@@ -34,11 +34,11 @@ function tunnelSeriesLabel(value: unknown, fallback: string) {
   return (label || fallback).slice(0, 96);
 }
 
-export function tunnelHopSuccessMode(latencyMode: TunnelHopLatencyMode) {
+function tunnelHopSuccessMode(latencyMode: TunnelHopLatencyMode) {
   return latencyMode === "max" ? "any" : latencyMode === "multi-source" ? "multi-source" : "all";
 }
 
-export function tunnelHopResultFromRow(row: any, request = parseRequest(row)): HopTestResult {
+function tunnelHopResultFromRow(row: any, request = parseRequest(row)): HopTestResult {
   const hopLabel = String(request.hopLabel || "hop");
   const success = row.status === "success" && Number(row.latencyMs) > 0;
   const modeText = tunnelHopModeText(tunnelHopLatencyMode(request));
@@ -56,7 +56,7 @@ export function tunnelHopResultFromRow(row: any, request = parseRequest(row)): H
 }
 
 /** Publish an aggregated manual tunnel test: tunnel status, branch series and the total sample. */
-export async function applyTunnelHopAggregate(tunnelId: number, aggregate: Pick<HopTestAggregate, "success" | "latencyMs" | "message" | "details">, latencyMode: TunnelHopLatencyMode) {
+async function applyTunnelHopAggregate(tunnelId: number, aggregate: Pick<HopTestAggregate, "success" | "latencyMs" | "message" | "details">, latencyMode: TunnelHopLatencyMode) {
   const modeText = tunnelHopModeText(latencyMode);
   const aggregateMessage = structuredLinkTestMessage({
     kind: modeText.kind,

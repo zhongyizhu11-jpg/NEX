@@ -52,7 +52,7 @@ export type OpenApiProcedure = {
 
 export type OpenApiAccess = "public" | "user" | "admin";
 
-export type OpenApiTokenAccess = {
+type OpenApiTokenAccess = {
   /** 令牌能不能调（不管哪种令牌）。false = 只能在网页上操作。 */
   allowed: boolean;
   /** 最低要哪种令牌：read = 只读令牌就行；full = 要「完全」令牌；null = 令牌调不了。 */
@@ -72,8 +72,8 @@ export type OpenApiBuildResult = {
   degraded: Record<string, string[]>;
 };
 
-export const OPENAPI_VERSION = "3.1.0";
-export const OPENAPI_JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
+const OPENAPI_VERSION = "3.1.0";
+const OPENAPI_JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
 export const OPENAPI_TRPC_PREFIX = "/api/trpc";
 
 const ACCESS_LABELS: Record<OpenApiAccess, string> = {
@@ -110,7 +110,7 @@ export function openApiAccessOf(procedure: OpenApiProcedure): OpenApiAccess {
 }
 
 /** 令牌能不能调这个过程 —— 直接问线上拦请求的那个函数，不另抄一份名单。 */
-export function openApiTokenAccessOf(path: string, type: string): OpenApiTokenAccess {
+function openApiTokenAccessOf(path: string, type: string): OpenApiTokenAccess {
   const module = apiTokenModuleOfPath(path);
   const alwaysAllowed = API_TOKEN_ALWAYS_ALLOWED_PREFIXES.some((prefix) => path.startsWith(prefix));
   const base = { module, moduleLabel: module ? API_TOKEN_MODULE_LABELS[module] : null, alwaysAllowed };

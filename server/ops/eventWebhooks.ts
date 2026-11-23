@@ -50,8 +50,8 @@ import {
 } from "./eventWebhookDelivery";
 import { onPanelEvent, type PanelEvent } from "./panelEvents";
 
-export const EVENT_WEBHOOKS_ENABLED_SETTING_KEY = "ops.eventWebhooks.enabled";
-export const EVENT_WEBHOOKS_ENDPOINTS_SETTING_KEY = "ops.eventWebhooks.endpoints";
+const EVENT_WEBHOOKS_ENABLED_SETTING_KEY = "ops.eventWebhooks.enabled";
+const EVENT_WEBHOOKS_ENDPOINTS_SETTING_KEY = "ops.eventWebhooks.endpoints";
 
 const SNAPSHOT_TTL_MS = 60_000;
 const LOG_THROTTLE_MS = 60_000;
@@ -211,11 +211,11 @@ export function installEventWebhookDispatch() {
 // ---------- 配置 ----------
 
 /** 给界面看的密钥：只留末四位（密钥至少 16 位，露四位不够猜）。 */
-export function maskEventWebhookSecret(secret: string): string {
+function maskEventWebhookSecret(secret: string): string {
   return `••••${secret.slice(-4)}`;
 }
 
-export type EventWebhookEndpointView = {
+type EventWebhookEndpointView = {
   id: string;
   url: string;
   urlLabel: string;
@@ -376,9 +376,4 @@ export async function sendEventWebhookTest(id: string): Promise<EventWebhookAtte
     willRetry: false,
   });
   return result;
-}
-
-/** 测试用：队列里没有在排、在发的了。 */
-export function eventWebhookQueueIdleForTests() {
-  return queue.idle();
 }

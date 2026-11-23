@@ -29,7 +29,6 @@ import { sameNullableStringArray } from "@/lib/multiHopAddress";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
-import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import EmptyState from "@/components/EmptyState";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
@@ -3434,13 +3433,5 @@ export function ForwardGroupsContent({
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-export default function ForwardGroupsPage() {
-  return (
-    <DashboardLayout>
-      <ForwardGroupsContent />
-    </DashboardLayout>
   );
 }

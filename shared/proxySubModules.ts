@@ -35,7 +35,7 @@ export const PROXY_SUB_TEMPLATE_MODULE_LIMITS = {
 
 const CONTROL = new RegExp("[\\u0000-\\u001f\\u007f\\u2028\\u2029]");
 
-export function proxySubModuleUrlProblem(url: string): string | null {
+function proxySubModuleUrlProblem(url: string): string | null {
   const value = String(url || "").trim();
   if (!value) return "要填地址";
   if (value.length > PROXY_SUB_TEMPLATE_MODULE_LIMITS.url) return `地址太长（上限 ${PROXY_SUB_TEMPLATE_MODULE_LIMITS.url} 字符）`;

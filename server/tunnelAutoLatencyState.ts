@@ -1,6 +1,6 @@
 import { normalizeProbeCounts, type ProbeCounts } from "../shared/latencyProbe";
 
-export type TunnelAutoHopDetail = {
+type TunnelAutoHopDetail = {
   hopIndex: number;
   hopCount: number;
   fromHostId: number | null;

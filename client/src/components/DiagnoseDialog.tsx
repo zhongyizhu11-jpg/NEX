@@ -201,7 +201,7 @@ export function DiagnoseDialog({
 const TOPOLOGY_FOCUS_KEY: Record<FaultBundleKind, string> = { rule: "rule", tunnel: "tunnel", forwardGroup: "group" };
 
 /** 网络测试页「iperf3 对拉」，先选好这条隧道（Iperf3PairPanel 的 initialTunnelId）。 */
-export function tunnelSpeedTestHref(tunnelId: number) {
+function tunnelSpeedTestHref(tunnelId: number) {
   return `/looking-glass?method=iperf3-pair&tunnel=${Math.trunc(Number(tunnelId))}`;
 }
 

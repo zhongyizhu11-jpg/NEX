@@ -13,7 +13,7 @@ export { formatUpgradeDuration };
   目标版本 == 当前版本 → 升级成功、面板已经重启；不等且已经过去很久 → 升级没生效。
 */
 
-export type UpgradeJobStatus = "idle" | "running" | "success" | "error" | "waiting_assets";
+type UpgradeJobStatus = "idle" | "running" | "success" | "error" | "waiting_assets";
 
 export type UpgradeJob = {
   status: UpgradeJobStatus;
@@ -28,10 +28,10 @@ export type UpgradeJob = {
   restartedAt?: string | null;
 };
 
-export const UPGRADE_JOB_STATE_FILE = "panel-upgrade-job.json";
+const UPGRADE_JOB_STATE_FILE = "panel-upgrade-job.json";
 export const UPGRADE_JOB_MAX_LOG_LINES = 300;
 /** 重启回来版本还没变，超过这么久就当作升级没生效。 */
-export const UPGRADE_JOB_STALE_MS = 15 * 60 * 1000;
+const UPGRADE_JOB_STALE_MS = 15 * 60 * 1000;
 /** 重启成功后没有客户端来确认，这么久之后自动清掉，免得一直占着侧栏。 */
 export const UPGRADE_JOB_RESTARTED_TTL_MS = 30 * 60 * 1000;
 

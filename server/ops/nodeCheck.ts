@@ -29,8 +29,8 @@ import { domesticSpeedTestHints, type SpeedTestHints } from "./speedTestDomestic
 const q = quoteDbIdentifier;
 const TABLE = "host_speed_tests";
 
-export const SPEED_TEST_HISTORY_KEEP = 10;
-export const NODE_CHECK_RUN_TIMEOUT_MS = 6 * 60_000;
+const SPEED_TEST_HISTORY_KEEP = 10;
+const NODE_CHECK_RUN_TIMEOUT_MS = 6 * 60_000;
 const EXIT_RESULT_TTL_MS = 60 * 60_000;
 
 function nowSec() {
@@ -84,7 +84,7 @@ const latestResults = new Map<string, FinishedRun>();
 
 type SubjectRef = Pick<NodeCheckSubject, "kind" | "hostId" | "nodeId">;
 
-export function nodeCheckSubjectKey(subject: SubjectRef) {
+function nodeCheckSubjectKey(subject: SubjectRef) {
   return subject.nodeId > 0 ? `${subject.kind}:n${subject.nodeId}` : `${subject.kind}:h${subject.hostId}`;
 }
 
@@ -310,7 +310,7 @@ function rowView(row: any) {
   };
 }
 
-export async function recordSpeedTest(record: SpeedTestRecord) {
+async function recordSpeedTest(record: SpeedTestRecord) {
   const existing = await queryRaw<any>(`SELECT ${q("id")} FROM ${q(TABLE)} WHERE ${q("runId")} = ? LIMIT 1`, [record.runId]);
   if (existing.length > 0) return;
   await insertAndGetId(TABLE, {
@@ -337,7 +337,7 @@ function subjectWhere(subject: Pick<NodeCheckSubject, "hostId" | "nodeId">) {
     : { sql: `${q("hostId")} = ? AND ${q("nodeId")} = ? AND (${q("entryKey")} IS NULL OR ${q("entryKey")} = '')`, params: [subject.hostId, 0] };
 }
 
-export async function trimSpeedTestHistory(subject: Pick<NodeCheckSubject, "hostId" | "nodeId">, keep = SPEED_TEST_HISTORY_KEEP) {
+async function trimSpeedTestHistory(subject: Pick<NodeCheckSubject, "hostId" | "nodeId">, keep = SPEED_TEST_HISTORY_KEEP) {
   const where = subjectWhere(subject);
   const rows = await queryRaw<any>(`SELECT ${q("id")} FROM ${q(TABLE)} WHERE ${where.sql} ORDER BY ${q("checkedAt")} DESC, ${q("id")} DESC`, where.params);
   const drop = rows.slice(keep).map((row) => Number(row.id));
