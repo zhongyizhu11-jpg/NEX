@@ -72,6 +72,8 @@ export type ProxySubTokenOptions = {
   regionGroups: TriState;
   /** 地区组怎么选节点；default = 跟随全局。 */
   regionGroupType: "default" | ProxySubRegionGroupType;
+  /** 某个地区单独选（国家码 → 类型），没写的地区跟 regionGroupType。2.3.549，用户：「我想每个地区可以单独选择模式」。 */
+  regionGroupTypes: Record<string, ProxySubRegionGroupType>;
   sortMode: ProxySubSortMode;
   /** 正则改名：按顺序应用。 */
   renames: ProxySubRenameRule[];
@@ -100,6 +102,7 @@ export const PROXY_SUB_DEFAULT_TOKEN_OPTIONS: ProxySubTokenOptions = {
   infoNodes: "default",
   regionGroups: "default",
   regionGroupType: "default",
+  regionGroupTypes: {},
   sortMode: "manual",
   renames: [],
   dedupe: false,
@@ -190,6 +193,19 @@ function regionGroupTypeOption(value: unknown): "default" | ProxySubRegionGroupT
   return (PROXY_SUB_REGION_GROUP_TYPES as readonly string[]).includes(raw) ? raw as ProxySubRegionGroupType : "default";
 }
 
+/** 按地区单独选：键是两位国家码，值只认三种；别的丢掉（丢掉 = 这个地区跟上面）。 */
+function regionGroupTypesOption(value: unknown): Record<string, ProxySubRegionGroupType> {
+  const out: Record<string, ProxySubRegionGroupType> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 100)) {
+    const code = String(key).trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) continue;
+    const type = String(raw ?? "").trim().toLowerCase();
+    if ((PROXY_SUB_REGION_GROUP_TYPES as readonly string[]).includes(type)) out[code] = type as ProxySubRegionGroupType;
+  }
+  return Object.fromEntries(Object.entries(out).sort((a, b) => a[0].localeCompare(b[0])));
+}
+
 export function normalizeProxySubTokenOptions(input: unknown): ProxySubTokenOptions {
   const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const sortMode = String(raw.sortMode ?? "").trim().toLowerCase();
@@ -216,6 +232,7 @@ export function normalizeProxySubTokenOptions(input: unknown): ProxySubTokenOpti
     infoNodes: triState(raw.infoNodes),
     regionGroups: triState(raw.regionGroups),
     regionGroupType: regionGroupTypeOption(raw.regionGroupType),
+    regionGroupTypes: regionGroupTypesOption(raw.regionGroupTypes),
     sortMode: (PROXY_SUB_SORT_MODES as readonly string[]).includes(sortMode) ? sortMode as ProxySubSortMode : "manual",
     renames,
     dedupe: raw.dedupe === true,

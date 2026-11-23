@@ -928,3 +928,30 @@ test("地区组：默认自动选最快，可改成手动选择 / 主备切换�
   assert.equal(regionGroup("fallback")?.type, "fallback");
   assert.equal(regionGroup("load-balance")?.type, "url-test");
 });
+
+test("地区组：某个地区单独选（2.3.549，用户：「我想每个地区可以单独选择模式」）——香港手动、日本跟上面", () => {
+  const templates = [HKT_TEMPLATE];
+  const plan = planFor(
+    [rule({ id: 1, hostId: 1, sourcePort: 20001 }), rule({ id: 2, hostId: 2, sourcePort: 20002 }), rule({ id: 3, hostId: 1, sourcePort: 20003 })],
+    templates,
+  );
+  plan.entries[0]!.node.regionCode = "HK";
+  plan.entries[1]!.node.regionCode = "HK";
+  plan.entries[2]!.node.regionCode = "JP";
+  const groups = (regionGroupTypes: Record<string, any>, regionGroupType?: any) => {
+    const document = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX", regionGroups: true, regionGroupType, regionGroupTypes });
+    return { hk: document.groups.find((group) => group.name.includes("香港")), jp: document.groups.find((group) => group.name.includes("日本")) };
+  };
+  let got = groups({ HK: "select" });
+  assert.equal(got.hk?.type, "select");
+  assert.equal(got.jp?.type, "url-test", "没单独选的地区跟上面");
+  got = groups({ HK: "select", JP: "fallback" }, "url-test");
+  assert.equal(got.hk?.type, "select");
+  assert.equal(got.jp?.type, "fallback");
+  got = groups({ JP: "nope" }, "select");
+  assert.equal(got.hk?.type, "select");
+  assert.equal(got.jp?.type, "url-test", "单独选的值认不出退回自动，不跟上面（令牌层已经把这种值丢掉，这里只是兜底）");
+  got = groups({}, "fallback");
+  assert.equal(got.hk?.type, "fallback");
+  assert.equal(got.jp?.type, "fallback");
+});

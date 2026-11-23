@@ -36,7 +36,7 @@ import {
   type ProxySubTokenScope,
   type TriState,
 } from "@shared/proxySubTokenScope";
-import { PROXY_SUB_DEFAULT_REGION_GROUP_TYPE, PROXY_SUB_REGION_GROUP_TYPE_LABELS, PROXY_SUB_REGION_GROUP_TYPES, proxySubRegionLabel, type ProxySubRegionGroupType } from "@shared/proxySubRegion";
+import { PROXY_SUB_DEFAULT_REGION_GROUP_TYPE, PROXY_SUB_REGION_CODES, PROXY_SUB_REGION_GROUP_TYPE_LABELS, PROXY_SUB_REGION_GROUP_TYPES, proxySubRegionLabel, type ProxySubRegionGroupType } from "@shared/proxySubRegion";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -238,6 +238,23 @@ export function ProxySubTokenEditDialog({
   const ownNodes = useMemo(() => nodes.filter((node) => !node.sharedFrom), [nodes]);
   const protocolSet = new Set<string>(scope.protocols);
   const regions = useMemo(() => parseRegionsText(regionsText), [regionsText]);
+  // 某个地区单独选：已经单独选了的地区各一行；候选先列作用域里限定的地区，再列关键字表认得的
+  const regionOverrideCodes = useMemo(() => Object.keys(options.regionGroupTypes).sort(), [options.regionGroupTypes]);
+  const regionOverrideCandidates = useMemo(
+    () => Array.from(new Set([...regions, ...PROXY_SUB_REGION_CODES])).filter((code) => !(code in options.regionGroupTypes) && proxySubRegionLabel(code)),
+    [regions, options.regionGroupTypes],
+  );
+  const effectiveRegionGroupType: ProxySubRegionGroupType = options.regionGroupType !== "default"
+    ? options.regionGroupType
+    : settings?.regionGroupTypeDefault || PROXY_SUB_DEFAULT_REGION_GROUP_TYPE;
+  const setRegionOverride = (code: string, type: ProxySubRegionGroupType | null) => {
+    setOptions((prev) => {
+      const next = { ...prev.regionGroupTypes };
+      if (type) next[code] = type;
+      else delete next[code];
+      return { ...prev, regionGroupTypes: next };
+    });
+  };
   const scopeParts = useMemo(() => describeProxySubScope(scope, regions), [scope, regions]);
 
   const toggleTemplate = (id: number, list: "templateIds" | "excludeTemplateIds") => {
@@ -520,15 +537,40 @@ export function ProxySubTokenEditDialog({
                   <TriStateSelect label="节点名加协议前缀" hint="像 [VLESS] 香港 01" value={options.protocolPrefix} fallback={!!settings?.protocolPrefixDefault} onChange={(value) => setOptions((prev) => ({ ...prev, protocolPrefix: value }))} />
                   <TriStateSelect label="按地区生成策略组" value={options.regionGroups} fallback={!!settings?.regionGroupsDefault} onChange={(value) => setOptions((prev) => ({ ...prev, regionGroups: value }))} />
                   {(options.regionGroups === "on" || (options.regionGroups === "default" && !!settings?.regionGroupsDefault)) ? (
-                    <OptionRow label="地区组怎么选" hint="手动选择：客户端里点开「🇭🇰 香港」这类组自己挑节点，不再按延迟自动换。">
-                      <Select value={options.regionGroupType} onValueChange={(next) => setOptions((prev) => ({ ...prev, regionGroupType: next as ProxySubTokenOptions["regionGroupType"] }))}>
-                        <SelectTrigger aria-label="地区组怎么选" className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="default">跟随默认（{PROXY_SUB_REGION_GROUP_TYPE_LABELS[settings?.regionGroupTypeDefault || PROXY_SUB_DEFAULT_REGION_GROUP_TYPE]}）</SelectItem>
-                          {PROXY_SUB_REGION_GROUP_TYPES.map((type) => <SelectItem key={type} value={type}>{PROXY_SUB_REGION_GROUP_TYPE_LABELS[type]}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </OptionRow>
+                    <>
+                      <OptionRow label="地区组怎么选" hint="手动选择：客户端里点开「🇭🇰 香港」这类组自己挑节点，不再按延迟自动换。">
+                        <Select value={options.regionGroupType} onValueChange={(next) => setOptions((prev) => ({ ...prev, regionGroupType: next as ProxySubTokenOptions["regionGroupType"] }))}>
+                          <SelectTrigger aria-label="地区组怎么选" className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="default">跟随默认（{PROXY_SUB_REGION_GROUP_TYPE_LABELS[settings?.regionGroupTypeDefault || PROXY_SUB_DEFAULT_REGION_GROUP_TYPE]}）</SelectItem>
+                            {PROXY_SUB_REGION_GROUP_TYPES.map((type) => <SelectItem key={type} value={type}>{PROXY_SUB_REGION_GROUP_TYPE_LABELS[type]}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </OptionRow>
+                      {regionOverrideCodes.map((code) => (
+                        <OptionRow key={code} label={proxySubRegionLabel(code) || code} hint="只这个地区的组按这里选。">
+                          <div className="flex items-center gap-1.5">
+                            <Select value={options.regionGroupTypes[code]} onValueChange={(next) => setRegionOverride(code, next as ProxySubRegionGroupType)}>
+                              <SelectTrigger aria-label={`${proxySubRegionLabel(code) || code} 怎么选`} className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {PROXY_SUB_REGION_GROUP_TYPES.map((type) => <SelectItem key={type} value={type}>{PROXY_SUB_REGION_GROUP_TYPE_LABELS[type]}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                            <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setRegionOverride(code, null)}>跟上面</Button>
+                          </div>
+                        </OptionRow>
+                      ))}
+                      {regionOverrideCandidates.length > 0 ? (
+                        <OptionRow label="某个地区单独选" hint="比如香港手动选、其他地区照旧自动选最快。没列出来的地区跟上面。">
+                          <Select value="" onValueChange={(code) => setRegionOverride(code, effectiveRegionGroupType)}>
+                            <SelectTrigger aria-label="某个地区单独选" className="h-8 w-36 text-xs"><SelectValue placeholder="添加地区…" /></SelectTrigger>
+                            <SelectContent>
+                              {regionOverrideCandidates.map((code) => <SelectItem key={code} value={code}>{proxySubRegionLabel(code) || code}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </OptionRow>
+                      ) : null}
+                    </>
                   ) : null}
                   <TriStateSelect label="插入信息节点" hint="剩余流量 / 到期 / 公告。它们指向本机、永远连不上，客户端测速会标红。" value={options.infoNodes} fallback={!!settings?.infoNodesDefault} onChange={(value) => setOptions((prev) => ({ ...prev, infoNodes: value }))} />
                 </OptionGroup>
