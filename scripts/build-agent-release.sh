@@ -120,7 +120,11 @@ download_gost_runtime() {
 # gost runtime 优先用 NEX 自编版（gost-runtime/build.sh：普通 TCP 转发走 splice），
 # 编不出来（Go 太老、拉不到源码）就退回官方成品，装机脚本两种都认。
 # NEX_GOST_SOURCE=upstream 可以强制用官方成品。
-if [ "${NEX_GOST_SOURCE:-nex}" != "upstream" ] && "$ROOT_DIR/gost-runtime/build.sh" "$OUT_DIR"; then
+# NEX_SKIP_RUNTIME=1：不打 gost 运行时（面板镜像用：运行时和 mita 由面板按需从发布页下，见 server/agentAssets.ts）。
+# 正式的 Agent 发布（release-agent.yml）不要设，发布页上必须有这两个文件。
+if [ "${NEX_SKIP_RUNTIME:-0}" = "1" ]; then
+  echo "[runtime] NEX_SKIP_RUNTIME=1: gost runtime not bundled"
+elif [ "${NEX_GOST_SOURCE:-nex}" != "upstream" ] && "$ROOT_DIR/gost-runtime/build.sh" "$OUT_DIR"; then
   echo "[runtime] using NEX-built gost runtime"
 else
   echo "[runtime] NEX gost build unavailable, falling back to official go-gost v${GOST_VERSION}" >&2

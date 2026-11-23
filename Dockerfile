@@ -19,7 +19,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git patch \
   && rm -rf /var/lib/apt/lists/*
 COPY . .
-RUN bash scripts/build-agent-release.sh
+# 镜像只带 Agent 和 FXP；gost 运行时和 mita（约 90 MB）由面板第一次需要时按 SHA256SUMS 从发布页下到
+# /data/agent-assets 缓存（server/agentAssets.ts），启动后也会先在后台预取。
+RUN NEX_SKIP_RUNTIME=1 NEX_SKIP_MITA=1 bash scripts/build-agent-release.sh
 
 # ---------- 2. Production dependencies ----------
 FROM node:22-alpine AS prod-deps

@@ -7,6 +7,8 @@ SERVICE_NAME="${FORWARDX_SERVICE_NAME:-forwardx-panel}"
 PORT="${PORT:-9810}"
 REPO_SLUG="${FORWARDX_GITHUB_REPO:-zhongyizhu11-jpg/NEX}"
 PANEL_BUNDLE_PREFIX="${FORWARDX_PANEL_BUNDLE_PREFIX:-forwardx-panel-v}"
+# -full：完整包，带 gost 运行时和 mita（离线、连不上 GitHub 的机器用）；默认包这两样由面板按需下。
+PANEL_BUNDLE_SUFFIX="${FORWARDX_PANEL_BUNDLE_SUFFIX:-}"
 PNPM_VERSION="${FORWARDX_PNPM_VERSION:-10.28.1}"
 ASSETS_PENDING_EXIT_CODE=12
 # 面板端靠这些 "[NEX] step N/M …" / "progress download …" 行画进度条，改动格式要连 client/src/lib/panelUpgrade.ts 一起改。
@@ -735,7 +737,7 @@ resolve_release_version() {
 
 panel_bundle_url() {
   local version="$1"
-  local filename="${PANEL_BUNDLE_PREFIX}${version}.tar.gz"
+  local filename="${PANEL_BUNDLE_PREFIX}${version}${PANEL_BUNDLE_SUFFIX}.tar.gz"
   printf "https://github.com/%s/releases/download/v%s/%s\n" "$REPO_SLUG" "$version" "$filename"
 }
 

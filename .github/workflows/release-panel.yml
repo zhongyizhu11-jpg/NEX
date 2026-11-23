@@ -118,23 +118,32 @@ jobs:
           VERSION_NO_V: ${{ steps.release.outputs.version_no_v }}
         run: |
           mkdir -p .release dist/panel
+          # 两份包：默认包不带 gost 运行时和 mita（面板按需从发布页下，server/agentAssets.ts），
+          # -full 完整包给连不上 GitHub 的离线部署（装机脚本 FORWARDX_PANEL_BUNDLE_SUFFIX=-full）。
+          CONTENTS=(
+            dist
+            client/dist
+            drizzle
+            patches
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            scripts/install-panel-local.sh
+            scripts/install-panel-docker.sh
+            scripts/fwxm-panel.sh
+            scripts/migrate-agent-legacy.sh
+            scripts/fetch-client-logos.mjs
+            scripts/install-mimic.sh
+          )
           BUNDLE="forwardx-panel-v${VERSION_NO_V}.tar.gz"
           tar -czf ".release/${BUNDLE}" \
-            dist \
-            client/dist \
-            drizzle \
-            patches \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            scripts/install-panel-local.sh \
-            scripts/install-panel-docker.sh \
-            scripts/fwxm-panel.sh \
-            scripts/migrate-agent-legacy.sh \
-            scripts/fetch-client-logos.mjs \
-            scripts/install-mimic.sh
-          cp ".release/${BUNDLE}" "dist/panel/${BUNDLE}"
-          ls -lh "dist/panel/${BUNDLE}"
+            --exclude='dist/agent/forwardx-runtime-linux-*' \
+            --exclude='dist/agent/forwardx-mita-linux-*' \
+            "${CONTENTS[@]}"
+          FULL_BUNDLE="forwardx-panel-v${VERSION_NO_V}-full.tar.gz"
+          tar -czf ".release/${FULL_BUNDLE}" "${CONTENTS[@]}"
+          cp ".release/${BUNDLE}" ".release/${FULL_BUNDLE}" dist/panel/
+          ls -lh dist/panel/
 
       - name: Upload panel bundle artifact
         uses: actions/upload-artifact@v4

@@ -5,6 +5,7 @@ import * as db from "./db";
 import { APP_VERSION } from "../shared/versions";
 import { githubDownloadCandidates } from "../shared/githubAccelerator";
 import { appendPanelLog } from "./_core/panelLogger";
+import { panelDataDir } from "./env";
 
 /*
   面板替连不上 GitHub 的主机转发第三方发布包（mimic 的 deb、realm 的 tar.gz）。
@@ -32,7 +33,8 @@ export function createPinnedReleaseAssetStore(options: {
   sha256(version: string, asset: string): string | null;
 }): PinnedReleaseAssetStore {
   const fetchLocks = new Map<string, Promise<string | null>>();
-  const cachePathOf = (version: string, asset: string) => path.resolve(process.cwd(), "data", options.cacheDir, `v${version}`, asset);
+  // 放数据目录（Docker 里是 /data 数据卷）：以前写在 process.cwd()/data，容器一重建就得重新下。
+  const cachePathOf = (version: string, asset: string) => path.resolve(panelDataDir(), options.cacheDir, `v${version}`, asset);
   const log = (message: string) => appendPanelLog("warn", `[${options.label}] ${message}`);
 
   async function cachedIfValid(version: string, asset: string, expected: string) {

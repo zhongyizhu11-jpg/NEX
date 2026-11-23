@@ -58,7 +58,7 @@
 
 ## 五、还能做、要拍板的
 
-1. gost 运行时（69 MB）和 mita（24 MB）不进面板包，首次需要时按钉死的 SHA-256 从 Release 下载并缓存：包约 75 MB → 35 MB；离线部署要另发完整包。
+1. ~~gost 运行时和 mita 不进面板包~~ 已做：默认包和镜像只带 Agent / FXP，面板按 SHA256SUMS 从发布页按需下载到数据目录缓存并在启动后预取（`server/agentAssets.ts`，带测试）；另出 `-full` 完整包给离线部署（`FORWARDX_PANEL_BUNDLE_SUFFIX=-full`）。顺手修了缓存写在 `process.cwd()/data` 而不是数据卷、容器重建就丢的问题（mimic / realm 的转发缓存同样）。
 2. 继续拆大文件：telegramBot.ts 已按层拆成 7 个文件（见 `server-layout.md`）；Rules.tsx 10089 行（一个 8019 行的组件）和 agentHeartbeatRoute.ts 5791 行（一个 5458 行的函数）要按「每次抽一小块、带测试、单独提交」推进，另开一轮。
 3. 多主机 / 多规则下的后端压测（心跳、列表），仓库里有 `scripts/bench/heartbeat-load.mjs`，这一轮没有带数据的环境。
 
