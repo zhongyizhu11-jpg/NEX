@@ -30,7 +30,14 @@ await build({
   packages: "external",
   // Also mark node built-in modules as external
   external: [],
-  sourcemap: true,
+  // 四个入口共用的代码（数据库、仓储、迁移……）只打一份：以前 migrate-forwardx.js 和
+  // reset-admin-password.js 各自把整个服务端带了一遍（各 6.5 MB）。公共块就放在 dist/ 根目录，
+  // 和入口同一层，代码里的 __dirname（找 client/dist、dist/geo、dist/agent）才和以前一样。
+  splitting: true,
+  chunkNames: "chunk-[hash]",
+  // source map 默认不出：Node 不加 --enable-source-maps 根本不读它们，但三份 .map 有 49 MB，
+  // 以前一直被打进发布包和镜像。要本地排错就 FORWARDX_SERVER_SOURCEMAP=1 pnpm build。
+  sourcemap: process.env.FORWARDX_SERVER_SOURCEMAP === "1",
   // Resolve path aliases
   alias: {
     "@shared": "./shared",

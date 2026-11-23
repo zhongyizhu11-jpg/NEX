@@ -133,7 +133,7 @@ The panel serves a few static map assets from `client/public/globe/`:
 
 - `earth-night.jpg` — NASA Black Marble (Earth at night), 2048 × 1024
   equirectangular. Used as the base layer of the dashboard network map.
-- `earth-dark.jpg`, `earth-topology.png`, `night-sky.png` — textures for the
+- `earth-dark.jpg`, `earth-topology.webp`, `night-sky.webp` — textures for the
   3D globes on the hosts / rules / tunnels pages.
 
 The textures above are NASA imagery (public domain, courtesy NASA Earth

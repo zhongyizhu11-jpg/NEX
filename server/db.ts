@@ -24,7 +24,7 @@ import { backfillManualEntitlementsFromEffectiveUsers, repairSubscriptionBilling
 import { backfillTrafficBillingRuleUsageFromStats } from "./repositories/trafficBillingRepository";
 import { purgeSettledPendingForwardRuleDeletes, repairConflictingProtocolPortRules } from "./repositories/forwardRuleRepository";
 import { markLocalSetupComplete } from "./setupState";
-import { seedDevPanelData } from "./devPanel";
+import { isDevPanelMode } from "./devPanelMode";
 import { loadSlowQueryThresholdSetting } from "./slowQueryThresholdSetting";
 import { repairPortForwardRuleHostReferences } from "./portForwardRuleHosts";
 import { backfillTunnelExitGroupReferences } from "./repositories/tunnelRepository";
@@ -584,9 +584,12 @@ export async function initDatabase() {
     await runInitializationStep("backfill-manual-entitlements", () => backfillManualEntitlementsFromEffectiveUsers().catch((error) => {
       console.warn("[Database] Manual entitlement backfill skipped:", error instanceof Error ? error.message : String(error));
     }));
-    await runInitializationStep("seed-dev-panel", () => seedDevPanelData().catch((error) => {
-      console.warn("[DevPanel] Seed data skipped:", error instanceof Error ? error.message : String(error));
-    }));
+    // 演示数据种子只在开发面板下才有，生产包里不加载那几千行（动态导入，打包时自成一块）。
+    if (isDevPanelMode()) {
+      await runInitializationStep("seed-dev-panel", () => import("./devPanel").then((m) => m.seedDevPanelData()).catch((error) => {
+        console.warn("[DevPanel] Seed data skipped:", error instanceof Error ? error.message : String(error));
+      }));
+    }
     await runInitializationStep("repair-subscription-billing", () => repairSubscriptionBillingStateOnce().then((result) => {
       if (result.users > 0) {
         console.log(`[Database] Reconciled subscription billing users=${result.users} resets=${result.resets}`);
