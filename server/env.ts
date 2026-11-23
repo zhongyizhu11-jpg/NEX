@@ -76,8 +76,28 @@ function readIntEnv(names: string[], fallback: number, min: number, max: number)
  */
 export function panelDataDir(env: NodeJS.ProcessEnv = process.env) {
   const sqlitePath = String(env.SQLITE_PATH || "").trim();
-  if (sqlitePath) return path.dirname(path.resolve(sqlitePath));
-  return process.platform === "win32" ? path.resolve(process.cwd(), "data") : "/data";
+  const dir = sqlitePath ? path.dirname(path.resolve(sqlitePath)) : process.platform === "win32" ? path.resolve(process.cwd(), "data") : "/data";
+  return canonicalPath(dir);
+}
+
+/**
+ * 把路径里的符号链接解掉（macOS 的 /var/folders 其实是 /private/var/folders）：目录还不存在时解到最近的
+ * 已存在祖先，再把剩下的接回去。缓存路径和 process.cwd() 之类的真实路径比对时才不会一个带 /private 一个不带。
+ */
+export function canonicalPath(target: string) {
+  const resolved = path.resolve(target);
+  const pending: string[] = [];
+  let current = resolved;
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(current), ...pending.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return resolved;
+      pending.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 export const ENV = {
