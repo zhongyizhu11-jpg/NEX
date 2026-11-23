@@ -31,8 +31,6 @@ export const HOST_REPLACE_CATEGORY_LABELS: Record<HostReplaceCategory, string> =
   access: "分组和授权",
 };
 
-export type HostReplaceUnitKind = "rule" | "tunnel" | "member" | "route" | "pool" | "access";
-
 /** 预览里的一项（一个单元）。 */
 export type HostReplaceItem = {
   unit: string;
@@ -64,7 +62,7 @@ export type HostReplaceManualItem = {
   detail: string;
 };
 
-export type HostReplaceCategorySummary = {
+type HostReplaceCategorySummary = {
   category: HostReplaceCategory;
   label: string;
   count: number;

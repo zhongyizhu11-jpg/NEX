@@ -33,7 +33,7 @@ import { flushPendingWrites } from "./dbWriteBatcher";
 import { APP_VERSION } from "../shared/versions";
 import { maintainPostgresqlDatabase } from "./postgresqlMaintenance";
 
-export type DatabaseSwitchJobStatus = "pending" | "running" | "success" | "failed";
+type DatabaseSwitchJobStatus = "pending" | "running" | "success" | "failed";
 export type DatabaseSwitchStage =
   | "connection"
   | "permissions"
@@ -622,6 +622,7 @@ async function syncTargetPostgresqlSequences(session: TargetSession) {
 }
 
 /** 从源库一批读多少行。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const DATABASE_SWITCH_COPY_BATCH_ROWS = 1000;
 /** 打开写冻结之后等多久再开始读：让已经在路上的写请求落完。 */
 const DATABASE_SWITCH_WRITE_DRAIN_MS = 2_000;

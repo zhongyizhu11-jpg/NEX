@@ -141,8 +141,8 @@ import { DEFAULT_EXPIRY_REMINDER_DAYS, parseExpiryReminderDays } from "../../sha
 
 export {
   AGENT_VERSION,
-  ANDROID_APK_RELEASE_VERSION,
-  ANDROID_APP_VERSION,
+  
+  
   APP_VERSION,
 } from "../../shared/versions";
 
@@ -158,7 +158,7 @@ export const REPO_URL = "https://github.com/zhongyizhu11-jpg/NEX";
  * Telegram 双向消息机器人：用户可通过此反馈问题、接收补充信息。
  * 本构建不自带机器人，配置后面板才会展示入口。
  */
-export const TELEGRAM_BOT_URL = "";
+const TELEGRAM_BOT_URL = "";
 const ANDROID_APK_DOWNLOAD_URL =
   `${REPO_URL}/releases/download/v${ANDROID_APK_RELEASE_VERSION}/forwardx-android-v${ANDROID_APP_VERSION}.apk`;
 // iOS 安装包随面板同一个 Release 发布（ios-ipa.yml 在标签上构建后挂到这个 Release）。
@@ -1358,7 +1358,7 @@ export async function startPanelUpgradeTask(targetVersionInput?: string | null) 
   return startPanelVersionTask(targetVersionInput, "upgrade");
 }
 
-export async function startPanelRollbackTask(targetVersionInput: string) {
+async function startPanelRollbackTask(targetVersionInput: string) {
   return startPanelVersionTask(targetVersionInput, "rollback");
 }
 

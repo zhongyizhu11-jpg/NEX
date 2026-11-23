@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
  * props 刻意和 `Switch` 对齐（`checked` / `onCheckedChange`），
  * 所以现场替换就是把标签名改掉，其余一个字不动。
  */
-export type CheckboxProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "onChange" | "size"> & {
+type CheckboxProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "onChange" | "size"> & {
   onCheckedChange?: (checked: boolean) => void;
 };
 

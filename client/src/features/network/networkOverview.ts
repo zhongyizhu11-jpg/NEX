@@ -21,7 +21,7 @@ export type OverviewNode = {
   unlocated: boolean;
 };
 
-export type OverviewEdgeKind = "tunnel" | "forward";
+type OverviewEdgeKind = "tunnel" | "forward";
 /** 线的颜色：正常 / 降级 / 中断 / 停用（或还没结论） */
 export type OverviewEdgeTone = "ok" | "warn" | "down" | "off";
 
@@ -67,9 +67,9 @@ export type OverviewViewport = {
 
 /** 两边给标签胶囊留的位置（胶囊可以伸出主机点 100px 左右） */
 export const OVERVIEW_PAD_X = 56;
-export const OVERVIEW_PAD_TOP = 28;
+const OVERVIEW_PAD_TOP = 28;
 /** 下面留出名字和地名两行字 */
-export const OVERVIEW_PAD_BOTTOM = 44;
+const OVERVIEW_PAD_BOTTOM = 44;
 /** 至少取这么大的经纬度范围：三台同城的机器不会被放大成一个省，周围还看得到海岸线和邻国 */
 const MIN_LNG_SPAN = 28;
 const MIN_LAT_SPAN = 14;

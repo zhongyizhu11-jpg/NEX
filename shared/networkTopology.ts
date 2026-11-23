@@ -34,7 +34,7 @@ export type TopologyEdgeKind = "rule" | "tunnel" | "chain" | "routePath" | "subs
 export type TopologyStatus = "running" | "stopped" | "degraded" | "failed";
 export type TopologyRole = "entry" | "relay" | "exit" | "landing";
 
-export type TopologyRoles = Record<TopologyRole, boolean>;
+type TopologyRoles = Record<TopologyRole, boolean>;
 
 export type TopologyNode = {
   id: string;
@@ -81,7 +81,7 @@ export type TopologyEdge = {
   rateBps: number | null;
 };
 
-export type TopologyRuleKind = "direct" | "tunnel" | "chain" | "group" | "route";
+type TopologyRuleKind = "direct" | "tunnel" | "chain" | "group" | "route";
 
 export type TopologyRuleRef = {
   id: number;
@@ -110,7 +110,7 @@ export type TopologyGraph = {
   groups: TopologyGroupRef[];
 };
 
-export type TopologyHostRow = ForwardMapHost & {
+type TopologyHostRow = ForwardMapHost & {
   name?: unknown;
   userId?: unknown;
   isOnline?: unknown;
@@ -159,7 +159,7 @@ export type TopologyTunnelRow = {
   exitNodes?: Array<{ seq?: unknown; hostId?: unknown; isEnabled?: unknown }>;
 };
 
-export type TopologyGroupMemberRow = {
+type TopologyGroupMemberRow = {
   id: number;
   hostId?: unknown;
   tunnelId?: unknown;
@@ -181,7 +181,7 @@ export type TopologyGroupRow = {
   members?: TopologyGroupMemberRow[];
 };
 
-export type TopologyInboundRow = {
+type TopologyInboundRow = {
   id: number;
   name?: unknown;
   userId?: unknown;
@@ -288,13 +288,13 @@ export function topologyRuleStatus(rule: { isEnabled?: unknown; isRunning?: unkn
 
 const FAILED_TEST_STATUSES = new Set(["failed", "fail", "timeout", "error", "unreachable"]);
 
-export function topologyTunnelStatus(tunnel: { isEnabled?: unknown; isRunning?: unknown; lastTestStatus?: unknown }): TopologyStatus {
+function topologyTunnelStatus(tunnel: { isEnabled?: unknown; isRunning?: unknown; lastTestStatus?: unknown }): TopologyStatus {
   if (!truthy(tunnel.isEnabled, true)) return "stopped";
   if (!truthy(tunnel.isRunning)) return "failed";
   return FAILED_TEST_STATUSES.has(text(tunnel.lastTestStatus).toLowerCase()) ? "degraded" : "running";
 }
 
-export function topologyGroupStatus(group: { isEnabled?: unknown; lastStatus?: unknown }): TopologyStatus {
+function topologyGroupStatus(group: { isEnabled?: unknown; lastStatus?: unknown }): TopologyStatus {
   if (!truthy(group.isEnabled, true)) return "stopped";
   const status = text(group.lastStatus).toLowerCase();
   if (status === "down" || status === "failed" || status === "unhealthy" || status === "error") return "failed";

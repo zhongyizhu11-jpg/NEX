@@ -22,7 +22,7 @@ const MAX_ENTRIES = 200;
 const MAX_RECENT = 50;
 const LOG_INTERVAL_MS = 5 * 60 * 1000;
 
-export type SlowQueryEntry = {
+type SlowQueryEntry = {
   fingerprint: string;
   dbKind: string;
   kind: string;
@@ -36,7 +36,7 @@ export type SlowQueryEntry = {
   caller: string;
 };
 
-export type SlowQueryEvent = {
+type SlowQueryEvent = {
   at: number;
   durationMs: number;
   fingerprint: string;
@@ -64,7 +64,7 @@ export function normalizeSlowQueryThresholdMs(value: unknown) {
 }
 
 /** 生效的阈值：环境变量 > 设置 > 默认。 */
-export function effectiveSlowQueryThresholdMs() {
+function effectiveSlowQueryThresholdMs() {
   return envThresholdMs() ?? savedThresholdMs;
 }
 

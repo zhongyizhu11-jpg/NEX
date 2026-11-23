@@ -12,7 +12,7 @@ import { directFamilyEntryAddresses, hostFamilyEntryAddresses, type ProxySubEntr
 import { coordinatesFromMicro } from "./proxySubGeo";
 import { compileProxySubGroupFilter, type ProxySubGroupMatch } from "./proxySubGroupFilter";
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
-import { expandWeightedMembers, hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights } from "./linkWeights";
+import { expandWeightedMembers, hostBandwidthHintMbps, proxyLoadBalanceWeights } from "./linkWeights";
 import { proxyNodeBindingTruth } from "./proxyNodeAutoBind";
 import { normalizeProxySubRegionGroupType, proxySubRegionLabel, type ProxySubRegionGroupType } from "./proxySubRegion";
 import { buildProxySubUnlockGroups, type ProxySubUnlockStatusMap } from "./proxySubUnlock";
@@ -206,7 +206,7 @@ export type ProxySubscriptionEntry = {
 };
 
 /** 和 shared/proxySubProcessors.ts 里的同名类型一致；放这儿是为了不让两个文件互相 import。 */
-export type ProxySubEntryMeta = {
+type ProxySubEntryMeta = {
   hostName: string;
   templateName: string;
   ruleName: string;
@@ -248,7 +248,7 @@ export const PROXY_SUBSCRIPTION_WARNING_LABELS: Record<ProxySubscriptionWarningR
   "host-never-online": "这台机器的 Agent 还没连上过，配置下发不下去",
 };
 
-export type ProxySubscriptionWarning = {
+type ProxySubscriptionWarning = {
   /** target-mismatch 是某条转发的问题；node-unused 跟转发无关，这里是 0。 */
   ruleId: number;
   ruleName: string;
@@ -855,7 +855,6 @@ export function dedupeProxyNodeNames(nodes: readonly ProxyNode[]): ProxyNode[] {
   });
 }
 
-
 // ==================== 中转自动选路分组 ====================
 
 /**
@@ -903,7 +902,7 @@ export function normalizeProxyNodeAutoGroup(value: unknown): ProxyNodeAutoGroup 
     : PROXY_NODE_DEFAULT_AUTO_GROUP;
 }
 
-export type ProxySubscriptionGroupType = "select" | "url-test" | "fallback" | "load-balance";
+type ProxySubscriptionGroupType = "select" | "url-test" | "fallback" | "load-balance";
 
 export type ProxySubscriptionGroup = {
   name: string;
@@ -925,7 +924,7 @@ export type ProxySubscriptionGroup = {
 };
 
 /** 透传给客户端的外部订阅（shared/proxySubSource.ts 的 provider 模式）。 */
-export type ProxySubProvider = {
+type ProxySubProvider = {
   name: string;
   url: string;
   intervalSec: number;
@@ -948,7 +947,7 @@ export function autoGroupNameForTemplate(templateName: string, mode: ProxyNodeAu
 }
 
 /** 一台中转不构成选路，低于这个数量不生成自动组。 */
-export const PROXY_AUTO_GROUP_MIN_MEMBERS = 2;
+const PROXY_AUTO_GROUP_MIN_MEMBERS = 2;
 
 /**
  * 组装订阅文档。
@@ -1100,7 +1099,6 @@ export function customGroupsFor(custom: readonly ProxySubCustomGroup[], nodeName
   return out;
 }
 
-
 export function buildProxySubscriptionDocument(
   plan: ProxySubscriptionPlan,
   templates: readonly ProxyNodeTemplateRow[],
@@ -1246,4 +1244,4 @@ export function buildProxySubscriptionDocument(
 /* ── 负载均衡组的加权 ─────────────────────────────────────────────────── */
 
 // 算法在 shared/linkWeights.ts，出口组的「按权重」也用它。
-export { hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights, expandWeightedMembers };
+export { hostBandwidthHintMbps,  proxyLoadBalanceWeights, expandWeightedMembers };

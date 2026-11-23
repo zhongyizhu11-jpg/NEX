@@ -21,7 +21,7 @@ import {
   一台主机的数据：四个站点的握手走势 + 汇总（shared/siteLatency），解锁检测最近一次的摘要。
 */
 
-export type ExitQualitySite = SiteLatencySummary & { key: string; values: number[] };
+type ExitQualitySite = SiteLatencySummary & { key: string; values: number[] };
 
 export type ExitQualityHost = {
   id: number;
@@ -78,7 +78,7 @@ function normalizeAddress(value: unknown) {
 }
 
 /** 主机能被认出来的所有地址：上报的 IP、自动探测的 v4 / v6、入口地址、DDNS 域名。 */
-export function hostAddressSet(host: any): Set<string> {
+function hostAddressSet(host: any): Set<string> {
   const out = new Set<string>();
   for (const value of [host?.ip, host?.ipv4, host?.ipv6, host?.entryIp]) {
     const text = normalizeAddress(value);
@@ -91,7 +91,7 @@ export function hostAddressSet(host: any): Set<string> {
   return out;
 }
 
-export function matchHostByAddress(hosts: readonly any[], address: unknown): any | null {
+function matchHostByAddress(hosts: readonly any[], address: unknown): any | null {
   const wanted = normalizeAddress(address);
   if (!wanted) return null;
   return hosts.find((host) => hostAddressSet(host).has(wanted)) || null;

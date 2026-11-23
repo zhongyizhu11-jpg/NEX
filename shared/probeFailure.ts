@@ -8,7 +8,7 @@
   Agent 2.2.236 起随 /api/agent/tcping 带 failure；更老的 Agent 没有，面板照旧说「超时」。
 */
 
-export const PROBE_FAILURE_KINDS = ["dns", "refused", "unreachable", "timeout", "resource", "error"] as const;
+const PROBE_FAILURE_KINDS = ["dns", "refused", "unreachable", "timeout", "resource", "error"] as const;
 export type ProbeFailureKind = (typeof PROBE_FAILURE_KINDS)[number];
 
 export const PROBE_FAILURE_LABELS: Record<ProbeFailureKind, string> = {

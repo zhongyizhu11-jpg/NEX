@@ -3,10 +3,10 @@ import * as db from "../db";
 export type AiProvider = "deepseek" | "siliconflow" | "custom";
 
 export const DEFAULT_AI_PROVIDER: AiProvider = "deepseek";
-export const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-export const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
-export const DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1";
-export const DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
+const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+const DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1";
+const DEFAULT_SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B";
 export const DEFAULT_DEEPSEEK_MAX_TOKENS = 1024;
 export const DEFAULT_DEEPSEEK_TEMPERATURE = 0.2;
 
@@ -30,7 +30,7 @@ export type ForwardxAiSettings = AiProviderConfigRuntime & {
   discountEnabled: boolean;
 };
 
-export const AI_PROVIDER_SETTING_KEYS: Record<AiProvider, { apiKey: string; baseUrl: string; model: string }> = {
+const AI_PROVIDER_SETTING_KEYS: Record<AiProvider, { apiKey: string; baseUrl: string; model: string }> = {
   deepseek: {
     apiKey: "deepseekApiKeyDeepseek",
     baseUrl: "deepseekBaseUrlDeepseek",
@@ -110,7 +110,7 @@ export function buildAiChatCompletionsUrl(baseUrl: string) {
   return `${normalized}/chat/completions`;
 }
 
-export function normalizeTelegramAiAutoRecallSeconds(value: unknown) {
+function normalizeTelegramAiAutoRecallSeconds(value: unknown) {
   return Math.floor(normalizeDeepSeekNumber(value, 60, 30, 1200));
 }
 

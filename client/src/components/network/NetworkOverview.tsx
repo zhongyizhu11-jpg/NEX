@@ -95,7 +95,7 @@ function useMeasuredWidth(fallback: number) {
 
 /** 画布高度：手机上接近 3:2，桌面封顶，和 NetworkMapCardPlaceholder 的占位一致 */
 /** 画布高度随宽度走；精简布局（dense）下矮一档：首页第一屏多放下一截状态卡和列表 */
-export function overviewHeight(width: number, dense = false, short = false) {
+function overviewHeight(width: number, dense = false, short = false) {
   if (dense) return Math.round(Math.min(220, Math.max(150, width * 0.42)));
   // 首页把地图放到数字和「需要关注」下面之后（2026-11），它不再是第一屏的主角：矮一截，桌面封顶 240
   if (short) return Math.round(Math.min(240, Math.max(180, width * 0.42)));

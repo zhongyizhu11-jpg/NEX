@@ -14,7 +14,7 @@ export const DISCORD_APP_CONFIRM_PATH = "/api/auth/discord/app-confirm";
 
 export type DiscordLoginMode = "login" | "link" | "app";
 
-export const DISCORD_LOGIN_ERROR_MESSAGES = {
+const DISCORD_LOGIN_ERROR_MESSAGES = {
   disabled: "管理员没有开启 Discord 登录",
   not_configured: "Discord 登录还没有配置完整，请联系管理员",
   cancelled: "已取消 Discord 登录",
@@ -39,7 +39,7 @@ export const DISCORD_LOGIN_ERROR_MESSAGES = {
 
 export type DiscordLoginErrorCode = keyof typeof DISCORD_LOGIN_ERROR_MESSAGES;
 
-export function isDiscordLoginErrorCode(value: unknown): value is DiscordLoginErrorCode {
+function isDiscordLoginErrorCode(value: unknown): value is DiscordLoginErrorCode {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(DISCORD_LOGIN_ERROR_MESSAGES, value);
 }
 

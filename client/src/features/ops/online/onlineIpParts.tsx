@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 */
 
 /** 「连了多久」：12 秒 / 8 分钟 / 3 小时 20 分 / 2 天 4 小时。 */
-export function formatConnectedFor(sinceSeconds: number, nowMs = Date.now()) {
+function formatConnectedFor(sinceSeconds: number, nowMs = Date.now()) {
   const seconds = Math.max(0, Math.floor(nowMs / 1000) - Number(sinceSeconds || 0));
   if (seconds < 60) return "刚连上";
   const minutes = Math.floor(seconds / 60);

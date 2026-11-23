@@ -930,7 +930,7 @@ async function revertUnit(unit: UnitRecord, ctx: { oldHost: Row; newHost: Row; h
 // ==================== 记录列表 / 清理 ====================
 
 /** 过了保留期的记录删掉（没有定时任务：执行、撤回、列表时顺手清）。 */
-export async function pruneExpiredHostReplacements() {
+async function pruneExpiredHostReplacements() {
   await executeRaw(`DELETE FROM ${q("host_replacements")} WHERE ${q("expiresAt")} < ?`, [nowSeconds()]).catch(() => undefined);
 }
 

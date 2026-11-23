@@ -19,7 +19,7 @@ import type { RouteLandingPoolInfo } from "../shared/routeLines";
       做不成的（iptables / nftables、普通用户的普通端口转发）只能指向一台：池节点的首选那台，坏了跟着换。
 */
 
-export type LandingMemberEndpoint = {
+type LandingMemberEndpoint = {
   hostId: number;
   dest: RouteEndpoint | null;
   /** 成员入站开出来了、没报错、那台有对外地址。 */
@@ -27,10 +27,10 @@ export type LandingMemberEndpoint = {
   issue: string | null;
 };
 
-export type LandingPoolEndpoints = { poolId: number; name: string; members: LandingMemberEndpoint[] };
+type LandingPoolEndpoints = { poolId: number; name: string; members: LandingMemberEndpoint[] };
 
 /** 池节点 → 它的落地池和每台成员的落地地址（不是池节点返回 null）。 */
-export async function landingEndpointsForNode(nodeId: number): Promise<LandingPoolEndpoints | null> {
+async function landingEndpointsForNode(nodeId: number): Promise<LandingPoolEndpoints | null> {
   const node = await db.getProxyNodeById(Number(nodeId)) as any;
   const poolId = Number(node?.nodePoolId || 0);
   if (!node || !(poolId > 0)) return null;

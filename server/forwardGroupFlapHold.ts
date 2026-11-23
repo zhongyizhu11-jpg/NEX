@@ -13,10 +13,10 @@ import { queryRaw, rawEpochToDate } from "./dbRuntime";
   （调顺序、设为首选、强制同步）不受限制，也不计数、不清零。
 */
 
-export const FORWARD_GROUP_FLAP_WINDOW_MS = 60 * 60 * 1000;
-export const FORWARD_GROUP_FLAP_SWITCHES = 3;
-export const FORWARD_GROUP_FLAP_HOLD_BASE_MS = 5 * 60 * 1000;
-export const FORWARD_GROUP_FLAP_HOLD_MAX_MS = 60 * 60 * 1000;
+const FORWARD_GROUP_FLAP_WINDOW_MS = 60 * 60 * 1000;
+const FORWARD_GROUP_FLAP_SWITCHES = 3;
+const FORWARD_GROUP_FLAP_HOLD_BASE_MS = 5 * 60 * 1000;
+const FORWARD_GROUP_FLAP_HOLD_MAX_MS = 60 * 60 * 1000;
 
 /** 自动切换写进 forward_group_events 的类型：计数从这里读，面板重启后不丢。 */
 export const FORWARD_GROUP_AUTO_SWITCH_EVENT = "auto-switch";
@@ -95,9 +95,5 @@ export async function forwardGroupAutoSwitchTimesByMember(groupId: number, nowMs
 export async function forwardGroupFlapHoldForGroup(groupId: number, nowMs = Date.now()) {
   const byMember = await forwardGroupAutoSwitchTimesByMember(groupId, nowMs);
   return forwardGroupFlapHoldAt(Array.from(byMember.values()).flat(), nowMs);
-}
-
-export function resetForwardGroupFlapStateForTests() {
-  lastSwitchTimesByGroup.clear();
 }
 

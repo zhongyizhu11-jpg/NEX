@@ -11,7 +11,7 @@ import { z } from "zod";
   批量不开后门。
 */
 
-export const RULE_BATCH_JOB_OPERATIONS = ["enable", "pause", "restart", "delete", "copy"] as const;
+const RULE_BATCH_JOB_OPERATIONS = ["enable", "pause", "restart", "delete", "copy"] as const;
 export type RuleBatchJobOperation = (typeof RULE_BATCH_JOB_OPERATIONS)[number];
 
 export const RULE_BATCH_JOB_OPERATION_LABELS: Record<RuleBatchJobOperation, string> = {
@@ -37,7 +37,7 @@ export const RULE_BATCH_JOB_LIMITS = {
   maxCopyItemBytes: 16 * 1024,
 } as const;
 
-export const RULE_BATCH_CONFLICT_STRATEGIES = ["error", "auto", "skip"] as const;
+const RULE_BATCH_CONFLICT_STRATEGIES = ["error", "auto", "skip"] as const;
 
 const copyItemSchema = z.object({
   label: z.string().trim().max(160).default(""),

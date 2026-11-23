@@ -23,7 +23,7 @@ import { clientIp } from "./clientIp";
 import { buildOpenApiDocument, type OpenApiProcedure } from "./openApi";
 import { getSetting } from "./repositories/settingsRepository";
 
-export const OPENAPI_ROUTE_PATH = "/api/openapi.json";
+const OPENAPI_ROUTE_PATH = "/api/openapi.json";
 
 /** 生成好的文档去掉开头的 "{" —— 发的时候前面拼上 {"servers": […], 就是完整的 JSON，不用每次重新序列化几百 KB。 */
 let cachedTail: Promise<string> | null = null;
@@ -38,7 +38,7 @@ async function documentTail(): Promise<string> {
 }
 
 /** 完整的文档 JSON 文本。origin 是面板对外的地址（写进 servers）。 */
-export async function openApiJson(origin: string): Promise<string> {
+async function openApiJson(origin: string): Promise<string> {
   cachedTail ||= documentTail().catch((error) => {
     // 生成失败不缓存：下次请求再试，别让一次偶发的错把文档永久弄没
     cachedTail = null;
@@ -47,11 +47,6 @@ export async function openApiJson(origin: string): Promise<string> {
   const tail = await cachedTail;
   const servers = [{ url: origin || "/", description: "这个面板" }];
   return `{"servers":${JSON.stringify(servers)},${tail}`;
-}
-
-/** 测试用：进程启动以来真正生成过几次（缓存生效时一直是 1）。 */
-export function openApiBuildCountForTests() {
-  return buildCount;
 }
 
 function panelOrigin(req: Request, configured: string | null) {
@@ -105,3 +100,8 @@ export const openApiRouter = express.Router();
 openApiRouter.get(OPENAPI_ROUTE_PATH, (req, res) => {
   void handleGet(req, res);
 });
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function openApiBuildCountForTests() {
+  return buildCount;
+}

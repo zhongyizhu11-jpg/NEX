@@ -31,11 +31,11 @@ import {
   type AsymmetricJwsAlg,
 } from "./oauthPrimitives";
 
-export const OIDC_HTTP_TIMEOUT_MS = 10_000;
-export const OIDC_CLOCK_SKEW_SECONDS = 60;
-export const OIDC_DISCOVERY_TTL_MS = 60 * 60 * 1000;
+const OIDC_HTTP_TIMEOUT_MS = 10_000;
+const OIDC_CLOCK_SKEW_SECONDS = 60;
+const OIDC_DISCOVERY_TTL_MS = 60 * 60 * 1000;
 /** 同时在换票的回调数上限：到了就直接拒绝，不排队。 */
-export const OIDC_MAX_CONCURRENT_EXCHANGES = 32;
+const OIDC_MAX_CONCURRENT_EXCHANGES = 32;
 
 export type OidcProtocolErrorCode =
   | "discovery_failed"
@@ -249,7 +249,7 @@ export class OidcProviderCache {
   }
 }
 
-export function createOidcJwksStore(jwksUri: string, http: OidcHttp, now?: () => number) {
+function createOidcJwksStore(jwksUri: string, http: OidcHttp, now?: () => number) {
   return new JwksKeyStore({
     allowedAlgs: ASYMMETRIC_JWS_ALGS,
     now,

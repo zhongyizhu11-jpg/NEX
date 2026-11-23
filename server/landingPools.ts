@@ -60,7 +60,7 @@ import { isPanelBackgroundLeaseHolder } from "./panelLease";
   （scheduler：首选换没换、DNS 该不该改）。同一个池同一时间只跑一个（keyed lock）。
 */
 
-export type LandingActor = { id: number; role: string };
+type LandingActor = { id: number; role: string };
 
 export type LandingSyncResult = {
   poolId: number;
@@ -156,7 +156,7 @@ function hostIpv4(host: any): string {
 }
 
 /** 每台成员现在的样子：开出来没有、在不在线、对外地址、端口。 */
-export async function landingMemberHealth(pool: NodePool, rows?: any[], states?: LandingMemberState[]): Promise<LandingMemberHealth[]> {
+async function landingMemberHealth(pool: NodePool, rows?: any[], states?: LandingMemberState[]): Promise<LandingMemberHealth[]> {
   const memberRows = rows ?? await getLandingMemberInbounds(pool.id);
   const memberStates = states ?? parseLandingState(pool.landingStateJson);
   const hostIds = pool.hostIds.slice(0, MAX_LANDING_POOL_MEMBERS);
@@ -439,10 +439,11 @@ async function refreshLandingDependents(pool: NodePool, nodeIds: number[], moved
   健康检查每分钟跑一遍，所以第一次失败后下一分钟就会再试。
 */
 const dnsFailures = new Map<number, { values: string; at: number; attempts: number; message: string }>();
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const LANDING_DNS_RETRY_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000] as const;
 
 /** 第 attempts 次失败之后要等多久才再试。 */
-export function landingDnsRetryDelayMs(attempts: number): number {
+function landingDnsRetryDelayMs(attempts: number): number {
   const index = Math.min(LANDING_DNS_RETRY_DELAYS_MS.length, Math.max(1, Math.floor(attempts))) - 1;
   return LANDING_DNS_RETRY_DELAYS_MS[index];
 }
@@ -455,7 +456,7 @@ export function landingDnsRetryDelayMs(attempts: number): number {
   面板看到过它不能用（或者快速在线检测记着它刚从离线回来）才算「刚回来」；从没见它坏过的机器直接算稳
   （新建的池、面板刚重启时不用白等一分钟）。按主机记，几个池共用一台时结论一样。
 */
-export const LANDING_DNS_READD_STABLE_MS = 60_000;
+const LANDING_DNS_READD_STABLE_MS = 60_000;
 const landingHostSettling = new Map<number, { healthySince: number | null }>();
 
 function noteLandingHostHealth(hostId: number, healthy: boolean, now: number) {
@@ -476,12 +477,6 @@ function landingHostSettled(hostId: number, now: number) {
   if (now - entry.healthySince < LANDING_DNS_READD_STABLE_MS) return false;
   landingHostSettling.delete(hostId);
   return true;
-}
-
-/** 测试用：清掉进程里记的失败退避和迟滞状态。 */
-export function resetLandingDnsStateForTests() {
-  dnsFailures.clear();
-  landingHostSettling.clear();
 }
 
 /**
@@ -653,6 +648,7 @@ async function syncLandingPoolLocked(poolId: number, options: { reason: string; 
  * 不改成员入站，只看健康：首选换没换（换了池节点地址跟着换、普通转发跟着走）、DNS 该不该改。
  * scheduler 每分钟跑一遍；成员机换了地址时也走它。
  */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function refreshLandingPoolHealth(poolId: number, reason: string): Promise<void> {
   await withKeyedTaskLock(`landing-pool:${Number(poolId)}`, async () => {
     const pool = await getNodePool(poolId);
@@ -692,7 +688,7 @@ export async function refreshLandingPoolsForHost(hostId: number, reason: string)
 // ---------------------------------------------------------------- 配置的改动
 
 /** 写进新配置（凭据补齐）并同步。config 为 null = 落地池不再有配置（收掉成员入站和池节点）。 */
-export async function saveLandingConfig(poolId: number, config: LandingConfig | null, options: { reason: string; domainChanged?: boolean }) {
+async function saveLandingConfig(poolId: number, config: LandingConfig | null, options: { reason: string; domainChanged?: boolean }) {
   await updateNodePool(poolId, { landingJson: config ? serializeLandingConfig(fillLandingCredentials(config)) : null });
   return syncLandingPool(poolId, options);
 }

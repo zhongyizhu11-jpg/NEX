@@ -26,8 +26,8 @@ export function agentSupportsPortOccupancy(agentVersion: string | null | undefin
   return isAgentVersionAtLeast(agentVersion, AGENT_PORT_OCCUPANCY_VERSION);
 }
 
-export type PortOccupancyListener = { address: string; process?: string; pid?: number };
-export type PortOccupancyConflict = {
+type PortOccupancyListener = { address: string; process?: string; pid?: number };
+type PortOccupancyConflict = {
   ruleId: number;
   port: number;
   protocol: "tcp" | "udp";

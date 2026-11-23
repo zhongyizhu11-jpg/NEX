@@ -32,15 +32,16 @@ import type { ImpersonationContext } from "./impersonationPolicy";
 export * from "./impersonationPolicy";
 
 /** 本机开发面板（FORWARDX_DEV_PANEL）里管理员没有真的登录会话，sid 固定是这个。 */
-export const DEV_PANEL_SESSION_SID = "dev-panel";
+const DEV_PANEL_SESSION_SID = "dev-panel";
 
 const TOKEN_PATTERN = new RegExp(`^${IMPERSONATION_TOKEN_PREFIX}[A-Za-z0-9_-]{43}$`);
 
-export function generateImpersonationToken(): { token: string; hash: string } {
+function generateImpersonationToken(): { token: string; hash: string } {
   const token = `${IMPERSONATION_TOKEN_PREFIX}${crypto.randomBytes(32).toString("base64url")}`;
   return { token, hash: hashImpersonationToken(token) };
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function hashImpersonationToken(token: string) {
   return crypto.createHash("sha256").update(String(token), "utf8").digest("hex");
 }

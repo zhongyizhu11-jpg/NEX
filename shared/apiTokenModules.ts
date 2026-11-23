@@ -89,7 +89,7 @@ const PREFIX_TABLE: Array<{ prefix: string; module: ApiTokenModule }> = (Object.
   .flatMap((module) => API_TOKEN_MODULE_PREFIXES[module].map((prefix) => ({ prefix, module })))
   .sort((a, b) => b.prefix.length - a.prefix.length);
 
-export function isApiTokenModule(value: unknown): value is ApiTokenModule {
+function isApiTokenModule(value: unknown): value is ApiTokenModule {
   return typeof value === "string" && (API_TOKEN_MODULES as readonly string[]).includes(value);
 }
 

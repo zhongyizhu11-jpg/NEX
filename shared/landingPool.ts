@@ -48,7 +48,7 @@ export const MAX_LANDING_POOL_MEMBERS = 8;
 /** 一个池最多几份凭据（手工加的 + 分享时单独发的）。 */
 export const MAX_LANDING_POOL_USERS = 64;
 
-export type LandingPoolUser = {
+type LandingPoolUser = {
   /** 池里的编号，从 1 起、删了不复用：池节点按它对齐（proxy_nodes.inboundUserId）。 */
   id: number;
   name: string;
@@ -109,7 +109,7 @@ export function landingPoolTransports(protocol: LandingPoolProtocol, security: L
   return ["tcp"];
 }
 
-export function isLandingPoolProtocol(value: unknown): value is LandingPoolProtocol {
+function isLandingPoolProtocol(value: unknown): value is LandingPoolProtocol {
   return (LANDING_POOL_PROTOCOLS as readonly string[]).includes(String(value ?? ""));
 }
 

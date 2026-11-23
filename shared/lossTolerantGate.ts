@@ -6,8 +6,8 @@ import { isAgentVersionAtLeast } from "./version";
   所以保存时就拦下，写清是哪台、差在哪，而不是等用户发现流量断了再去翻 FXP 日志。
   这两个版本是第一版带这个功能的 Agent / FXP，以后升版本号不用跟着改。
 */
-export const LOSS_TOLERANT_MIN_AGENT_VERSION = "2.2.254";
-export const LOSS_TOLERANT_MIN_FXP_VERSION = "2.2.140";
+const LOSS_TOLERANT_MIN_AGENT_VERSION = "2.2.254";
+const LOSS_TOLERANT_MIN_FXP_VERSION = "2.2.140";
 
 export type LossTolerantHost = {
   id: number;

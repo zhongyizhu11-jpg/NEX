@@ -1,7 +1,7 @@
-export const TRAFFIC_MULTIPLIER_SCALE = 100;
+const TRAFFIC_MULTIPLIER_SCALE = 100;
 export const TRAFFIC_MULTIPLIER_DEFAULT = 100;
-export const TRAFFIC_MULTIPLIER_MIN = 1;
-export const TRAFFIC_MULTIPLIER_MAX = 5000;
+const TRAFFIC_MULTIPLIER_MIN = 1;
+const TRAFFIC_MULTIPLIER_MAX = 5000;
 
 export function normalizeTrafficMultiplier(value: unknown, fallback = TRAFFIC_MULTIPLIER_DEFAULT) {
   const n = Math.round(Number(value));

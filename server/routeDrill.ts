@@ -25,13 +25,13 @@ export const ROUTE_DRILL_MIN_SECONDS = 10;
 export const ROUTE_DRILL_MAX_SECONDS = 600;
 export const ROUTE_DRILL_DEFAULT_SECONDS = 60;
 /** 撤掉提示之后等它切回多久；过了就按「没切回」收尾（最短驻留、人工指定都可能压着不切）。 */
-export const ROUTE_DRILL_RESTORE_WAIT_MS = 90_000;
+const ROUTE_DRILL_RESTORE_WAIT_MS = 90_000;
 /** 报告留给界面看多久。 */
-export const ROUTE_DRILL_REPORT_TTL_MS = 60 * 60 * 1000;
+const ROUTE_DRILL_REPORT_TTL_MS = 60 * 60 * 1000;
 /** 下发给 Agent 的提示原因（Agent 报事件时会写成 relay down: drill；界面用 describeRouteIssue 翻）。 */
 export const ROUTE_DRILL_HINT_REASON = "drill";
 
-export type RouteDrillPhase = "down" | "restoring";
+type RouteDrillPhase = "down" | "restoring";
 
 export type RouteDrillActiveView = {
   subjectRuleId: number;

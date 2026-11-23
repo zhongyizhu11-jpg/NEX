@@ -20,8 +20,8 @@ import { setBoundedMapValue } from "../boundedCache";
 import type { FetchLike } from "../oauth/googleOidc";
 import { splitDiscordText } from "./discordText";
 
-export const DISCORD_API_BASE = "https://discord.com/api/v10";
-export const DISCORD_RETRY_AFTER_MAX_MS = 30_000;
+const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DISCORD_RETRY_AFTER_MAX_MS = 30_000;
 const DISCORD_HTTP_TIMEOUT_MS = 15_000;
 const DISCORD_DM_CHANNEL_CACHE_MAX = 10_000;
 /** 消息 flags：SUPPRESS_EMBEDS（1 << 2），通知里的链接不展开预览卡片。 */

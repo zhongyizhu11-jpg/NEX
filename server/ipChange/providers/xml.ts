@@ -49,12 +49,12 @@ export function parseXml(xml: string): XmlNode {
   return root;
 }
 
-export function xmlChild(node: XmlNode | undefined, name: string): XmlNode | undefined {
+function xmlChild(node: XmlNode | undefined, name: string): XmlNode | undefined {
   return node?.children.find((child) => child.name === name);
 }
 
 /** 按路径取节点，例如 "reservationSet/item/instancesSet/item"（每段取第一个同名子节点）。 */
-export function xmlPath(node: XmlNode | undefined, path: string): XmlNode | undefined {
+function xmlPath(node: XmlNode | undefined, path: string): XmlNode | undefined {
   let current = node;
   for (const part of path.split("/")) {
     if (!part) continue;

@@ -5,20 +5,18 @@ import {
   getAvatarDataUrlByteLength,
   isAvataaarsValue,
   isMultiavatarValue,
-  isValidAvatarValue,
   migrateLegacyAvatarValue,
-  multiavatarValue,
 } from "@shared/avatar";
 
 export {
-  AVATAR_MAX_BYTES,
+  
   avataaarsValue,
-  getAvatarDataUrlByteLength,
-  isAvataaarsValue,
-  isMultiavatarValue,
-  isValidAvatarValue,
+  
+  
+  
+  
   migrateLegacyAvatarValue,
-  multiavatarValue,
+  
 };
 
 export const DEFAULT_AVATAR_SEEDS = [

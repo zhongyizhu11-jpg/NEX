@@ -15,7 +15,7 @@ import { PROXY_SUB_DEFAULT_TOKEN_OPTIONS, PROXY_SUB_EMPTY_SCOPE } from "./proxyS
 import type { ProxySubTemplate, ProxySubTemplateTarget } from "./proxySubTemplates";
 
 /** 示例节点：直连条目（不经中转），地址用文档保留段，不会被当成真地址。 */
-export const PROXY_SUB_PREVIEW_SAMPLE_NODES = [
+const PROXY_SUB_PREVIEW_SAMPLE_NODES = [
   { name: "香港 IPLC 01", countryCode: "HK", protocol: "vless" },
   { name: "香港 BGP 02", countryCode: "HK", protocol: "trojan" },
   { name: "日本 IEPL 01", countryCode: "JP", protocol: "shadowsocks" },

@@ -6,7 +6,7 @@
 */
 export const SINGBOX_RELEASE_REPO = "SagerNet/sing-box";
 
-export const SINGBOX_RELEASE_SHA256: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+const SINGBOX_RELEASE_SHA256: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "1.14.0": {
     "sing-box-1.14.0-linux-amd64.tar.gz": "2375de6999f4f56ab46b4fc5ddf26a6aba1d3e61a0f4e7ddec2f4690457d5f63",
     "sing-box-1.14.0-linux-arm64.tar.gz": "04d9b40bc98dc55b6f509ce3292145c65478f65866bea64826ebb2f382385088",

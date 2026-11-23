@@ -21,7 +21,7 @@ export const MAX_ROUTE_HOPS = 5;
  * 「收下连接」这一步，调度器插不进去：它们要切只能改 DNAT 规则，按连接分、旧连接留在原
  * 线路、按路径评分都做不到。
  */
-export const ROUTE_GROUP_FORWARD_TYPES = ["gost", "realm", "socat", "nginx"] as const;
+const ROUTE_GROUP_FORWARD_TYPES = ["gost", "realm", "socat", "nginx"] as const;
 
 export function routeGroupForwardTypeSupported(forwardType: unknown): boolean {
   const normalized = String(forwardType ?? "").trim().toLowerCase();
@@ -32,21 +32,11 @@ export function routeGroupForwardTypeSupported(forwardType: unknown): boolean {
  * 能挂线路组的隧道：GOST 隧道、Nginx 隧道和 NEX 隧道。调度器都在隧道出口机上：出口的
  * gost / nginx / FXP 把流量交给它。
  */
-export const ROUTE_GROUP_TUNNEL_MODES = ["tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream", "forwardx"] as const;
+const ROUTE_GROUP_TUNNEL_MODES = ["tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream", "forwardx"] as const;
 
 export function routeGroupTunnelModeSupported(mode: unknown): boolean {
   const normalized = String(mode ?? "").trim().toLowerCase();
   return (ROUTE_GROUP_TUNNEL_MODES as readonly string[]).includes(normalized);
-}
-
-/**
- * NEX 隧道的线路组：FXP 的出口是整条隧道共用的一个进程，按入口给的目标拨出去（UDP 按面板给出口的
- * udpTargets），出口机上没有这条规则自己的进程可以挂调度器。所以出口机收到一条「只跑调度器」的运行规则
- * （runningRules[].schedulerOnly）：只开调度器，不占规则端口、不写端口状态、不装计数链 —— 流量照旧在
- * 入口计。入口让出口拨出口本机的调度器。
- */
-export function routeGroupIsForwardXTunnel(mode: unknown): boolean {
-  return String(mode ?? "").trim().toLowerCase() === "forwardx";
 }
 
 export type RouteEndpoint = { ip: string; port: number };
@@ -258,7 +248,7 @@ export type RouteGroupRule = {
   routeLines?: unknown;
 };
 
-export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold", "slow_dial", "drill"] as const;
+const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold", "slow_dial", "drill"] as const;
 
 export type RouteEventKind = (typeof ROUTE_EVENT_KINDS)[number];
 

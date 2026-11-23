@@ -1,10 +1,10 @@
 import { formatBytes } from "@shared/formatBytes";
 import { formatUpgradeDuration } from "@shared/upgradeDuration";
 
-export { formatUpgradeDuration };
+;
 
 export const PANEL_UPGRADE_REFRESH_DELAY_SECONDS = 8;
-export const PANEL_UPGRADE_REFRESH_DELAY_MS = PANEL_UPGRADE_REFRESH_DELAY_SECONDS * 1000;
+const PANEL_UPGRADE_REFRESH_DELAY_MS = PANEL_UPGRADE_REFRESH_DELAY_SECONDS * 1000;
 
 /*
   升级完成后的「几秒后刷新」要跨页面记住（上游 2.3.285）。
@@ -13,7 +13,7 @@ export const PANEL_UPGRADE_REFRESH_DELAY_MS = PANEL_UPGRADE_REFRESH_DELAY_SECOND
   刷新之后同一个任务还是「success」，又排一次刷新。这里把（任务、截止时刻、刷过没有）记在
   sessionStorage：换页接着原来的截止时刻数，同一个任务刷过一次就不再刷。
 */
-export const PANEL_UPGRADE_REFRESH_KEY = "forwardx.panel.upgradeRefresh";
+const PANEL_UPGRADE_REFRESH_KEY = "forwardx.panel.upgradeRefresh";
 export type PanelUpgradeRefresh = { jobKey: string; deadline: number; completed?: boolean };
 
 export function panelUpgradeJobKey(job: { targetVersion?: string | null; startedAt?: unknown; mode?: string | null } | null | undefined) {
@@ -93,7 +93,7 @@ export function markPanelUpgradeRefreshed(storage: Pick<Storage, "getItem" | "se
   下载、解压、装依赖这几分钟条一动不动；第 4 步的特征本地脚本从来不打，92% 永远看不到。
 */
 
-export type PanelUpgradeStep = { label: string; done: boolean; active: boolean };
+type PanelUpgradeStep = { label: string; done: boolean; active: boolean };
 export type PanelUpgradeProgress = {
   percent: number;
   label: string;
@@ -131,7 +131,7 @@ const DEFAULT_STEP_LABELS: Record<number, string[]> = {
 
 const MARKER_BASE_PERCENT = 10;
 const MARKER_SPAN_PERCENT = 90;
-export const PANEL_UPGRADE_RESTARTING_LABEL = "面板正在重启，等待恢复…";
+const PANEL_UPGRADE_RESTARTING_LABEL = "面板正在重启，等待恢复…";
 
 type MarkerState = {
   total: number;

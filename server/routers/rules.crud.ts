@@ -338,7 +338,7 @@ export type NormalizeFailoverContext = {
  * 建中继（forwardGroups/ruleSync.ts 的 ensureMemberRuleForTemplate → routeGroups）。所以只要成员都是
  * 直连主机（端口转发、主备组）就行；转发链的中转就是成员本身，隧道成员的调度在隧道出口上，都不带。
  */
-export function routeHopsAllowedForGroup(group: any): boolean {
+function routeHopsAllowedForGroup(group: any): boolean {
   const mode = forwardGroupModeOf(group);
   if (mode === "chain") return false;
   const members = Array.isArray(group?.members) ? group.members : [];
@@ -745,7 +745,7 @@ async function recordRoutePinChange(rule: any, data: Record<string, unknown>) {
   }).catch(() => undefined);
 }
 
-export function normalizeProxyProtocolInput(input: {
+function normalizeProxyProtocolInput(input: {
   proxyProtocolReceive?: boolean;
   proxyProtocolSend?: boolean;
   proxyProtocolExitReceive?: boolean;
@@ -1047,6 +1047,7 @@ async function requireForwardAccessForEnabledRule(userId: number, isTrafficBilli
  *
  * 只在这次要**多开**中继时才拦：已经超额的老规则改个名字不该被卡住。
  */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function assertRouteRelayPortQuota(
   actor: { id: number; role: string },
   routePaths: unknown,
@@ -2175,7 +2176,7 @@ async function requireSniRuleOwnerReady(
   return currentUser;
 }
 
-export async function createSniForwardRuleForActor(
+async function createSniForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   input: any,
   options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> } = {},
@@ -2417,7 +2418,7 @@ async function createSniForwardGroupRuleForActor(
   });
 }
 
-export async function updateSniForwardRuleForActor(
+async function updateSniForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   rule: any,
   input: any,

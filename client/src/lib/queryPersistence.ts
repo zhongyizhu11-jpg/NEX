@@ -21,7 +21,7 @@ const MAX_TOTAL_BYTES = 2_500_000;
 // 第一次有新结果后稍等一下就存（刚登录、刚打开时尽快留一份）；之后最多 30 秒存一次。
 // 切到后台、关页面时不等，立刻存。以前每 1.5 秒存一次，主机页概览 3 秒一刷，主线程一直在序列化。
 const SAVE_DELAY_MS = 1_500;
-export const SAVE_MIN_INTERVAL_MS = 30_000;
+const SAVE_MIN_INTERVAL_MS = 30_000;
 
 const PERSISTED_ROUTERS = new Set([
   "setup",
@@ -76,7 +76,7 @@ const LIVE_PATHS = new Set([
 const LOG_PATH = /(^|\.)(logs?|\w+Logs?)(\.|$)/;
 const SENSITIVE_FIELD = /token|secret|password|passwd|private.?key|api.?key|credential/i;
 
-export function queryPathOf(queryKey: readonly unknown[]) {
+function queryPathOf(queryKey: readonly unknown[]) {
   const head = queryKey?.[0];
   return Array.isArray(head) ? head.map(String).join(".") : "";
 }

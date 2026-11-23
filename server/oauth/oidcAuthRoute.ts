@@ -51,14 +51,15 @@ import {
   withQuery,
 } from "./oauthRouteHelpers";
 
-export const OIDC_BINDING_COOKIE = "nex_oidc_oauth";
+const OIDC_BINDING_COOKIE = "nex_oidc_oauth";
 const OIDC_COOKIE_PATH = "/api/auth/oidc";
 
-export const oidcAuthStates = new OAuthStateStore<OidcLoginMode>();
+const oidcAuthStates = new OAuthStateStore<OidcLoginMode>();
 /** discovery + JWKS 缓存。设置页「测试发现」和保存设置时会清空它。 */
 export const oidcProviders = new OidcProviderCache();
 
 /** 每个来源一分钟最多发起 20 次。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const oidcStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
 
 const requestIp = (req: Request) => oauthRequestIp(req);

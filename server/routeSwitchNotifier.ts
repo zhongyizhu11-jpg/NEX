@@ -47,7 +47,7 @@ function hostName(host: any, rule: any) {
 }
 
 /** 同一条规则同一种事件一分钟只响一次：来回切三次，第一次就够了。 */
-export function shouldNotifyRouteSwitch(ruleId: number, kind: string, now = Date.now()) {
+function shouldNotifyRouteSwitch(ruleId: number, kind: string, now = Date.now()) {
   const key = `${ruleId}:${kind}`;
   const last = lastNotifyAt.get(key) || 0;
   if (now - last < NOTIFY_COOLDOWN_MS) return false;
@@ -60,7 +60,7 @@ export function shouldNotifyRouteSwitch(ruleId: number, kind: string, now = Date
   return true;
 }
 
-export function routeSwitchMessage(payload: RouteSwitchNotifyPayload) {
+function routeSwitchMessage(payload: RouteSwitchNotifyPayload) {
   const { rule, host } = payload;
   const isPrecheck = payload.kind === "precheck_failed";
   const title = isPrecheck ? "NEX 线路组计划切换未执行" : "NEX 线路组切换提醒";

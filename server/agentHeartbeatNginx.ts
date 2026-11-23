@@ -66,7 +66,7 @@ const nginxListenLine = (port: number, proto: "tcp" | "udp", loopbackOnly = fals
 };
 
 /** 多出口 upstream 的 TCP 连接超时（秒）。和 FXP 多出口的拨号超时、gost 多出口的 dialTimeout 一致。 */
-export const NGINX_MULTI_EXIT_CONNECT_TIMEOUT_SECONDS = 3;
+const NGINX_MULTI_EXIT_CONNECT_TIMEOUT_SECONDS = 3;
 
 export function buildNginxStreamServerBlock(options: NginxStreamServerOptions) {
   const target = nginxListenTarget(options.loopbackOnly, options.ipv6Listen);

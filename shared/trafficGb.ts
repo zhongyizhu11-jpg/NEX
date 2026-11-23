@@ -8,7 +8,7 @@
  * 两处各写一份的话，同一个字节数会在两个弹窗里显示成不同的 GB —— 而人只会以为
  * 面板算错了。
  */
-export const GB_IN_BYTES = 1e9;
+const GB_IN_BYTES = 1e9;
 
 /** 输入框里的 GB 字符串 → 字节。空、非数字、非正数一律当「没填」。 */
 export function bytesFromGb(value: unknown): number {

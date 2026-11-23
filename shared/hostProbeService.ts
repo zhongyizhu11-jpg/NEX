@@ -99,7 +99,7 @@ export function hostProbeHttpUrlHostname(value: unknown) {
   return checked.ok ? checked.hostname : "";
 }
 
-export type HttpStatusRange = { from: number; to: number };
+type HttpStatusRange = { from: number; to: number };
 
 export type HostProbeHttpExpectedStatusCheck =
   | { ok: true; ranges: HttpStatusRange[]; normalized: string }
@@ -179,8 +179,7 @@ export function normalizeHostProbeHttpStatus(value: unknown): number | null {
     tls          HTTPS 握手或证书校验没过（证书过期、域名对不上、自签名）。
   其余沿用 shared/probeFailure 的那几种（dns / refused / unreachable / timeout / resource / error）。
 */
-export const HOST_PROBE_HTTP_FAILURE_KINDS = ["http_status", "tls"] as const;
-export type HostProbeHttpFailureKind = (typeof HOST_PROBE_HTTP_FAILURE_KINDS)[number];
+const HOST_PROBE_HTTP_FAILURE_KINDS = ["http_status", "tls"] as const;
 
 /** 存库前归一：认识的失败种类原样留下，不认识的（含老 Agent 没报）是 null。 */
 export function normalizeHostProbeFailure(value: unknown): string | null {

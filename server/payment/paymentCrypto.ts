@@ -14,7 +14,7 @@ import { PAYMENT_ERRORS } from "../../shared/paymentErrors";
 export type PaymentSigningProvider = "alipay" | "wxpay";
 
 // 文案和 shared/paymentErrors.ts 共用一份：下单失败归类（server/paymentFailureMessage.ts）只放行那里的固定说明。
-export const PAYMENT_KEY_ERRORS = {
+const PAYMENT_KEY_ERRORS = {
   alipayPrivateKey: PAYMENT_ERRORS.alipayPrivateKey,
   alipayPublicKey: PAYMENT_ERRORS.alipayPublicKey,
   wxpayPrivateKey: PAYMENT_ERRORS.wxpayPrivateKey,

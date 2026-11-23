@@ -70,7 +70,7 @@ export function formatUptime(seconds: number | null | undefined): string {
   return `${m}分钟`;
 }
 
-export { compareVersions, isAgentVersionBehind, normalizeVersion } from "@shared/version";
+export { compareVersions, isAgentVersionBehind,  } from "@shared/version";
 
 export function isAgentUpgradeTimedOut(host: any) {
   if (!host?.agentUpgradeRequested || !host.agentUpgradeRequestedAt) return false;

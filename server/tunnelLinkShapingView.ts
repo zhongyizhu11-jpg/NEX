@@ -16,7 +16,7 @@ import { tunnelLinkShaping as tunnelLinkShapingConfig, hostEgressShaping } from 
 /** 超过这么久没上报就不算实时状态了（FXP 60 s 一报，留五倍余量）。 */
 export const LINK_SHAPING_STALE_MS = 5 * 60_000;
 
-export function linkShapingReportedAtMs(value: unknown): number {
+function linkShapingReportedAtMs(value: unknown): number {
   if (value instanceof Date) {
     const ms = value.getTime();
     return Number.isFinite(ms) ? ms : 0;

@@ -130,6 +130,7 @@ async function refreshUserRuleAgents(userId: number, reason: string) {
  * 该有事情发生」—— 而落地端口那一路上个版本就是漏接了调度，开关存得下设置却
  * 永远不触发。只测「算不算到期」测不出这种漏接，必须真的把这个函数跑起来。
  */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function runMonthlyTrafficReset() {
   try {
     const now = new Date();
@@ -205,7 +206,7 @@ export async function runMonthlyTrafficReset() {
   }
 }
 
-export async function runSubscriptionExpirationCheck() {
+async function runSubscriptionExpirationCheck() {
   try {
     /**
      * 先试自动续费，再做到期清扫。
@@ -226,7 +227,7 @@ export async function runSubscriptionExpirationCheck() {
   }
 }
 
-export async function runExpirationCheck() {
+async function runExpirationCheck() {
   try {
     const expiredUsers = await db.getExpiredUsers();
     for (const user of expiredUsers) {
@@ -303,6 +304,7 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
   }
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function runSelfTestTimeoutSweep() {
   if (!selfTestSweepActivity.shouldSweep()) return;
   try {
@@ -344,6 +346,7 @@ export async function runSelfTestTimeoutSweep() {
   }
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function recoverPendingSelfTestSweep() {
   try {
     // Batches whose last report arrived just before the panel exited.
@@ -357,7 +360,7 @@ export async function recoverPendingSelfTestSweep() {
 }
 
 /** 线路组事件（forward_rule_route_events）保留多久：7 天。 */
-export const FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS = 7 * 24;
+const FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS = 7 * 24;
 
 /**
  * 每小时一次的历史清理。
@@ -367,7 +370,7 @@ export const FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS = 7 * 24;
  * SQLite 本来就只有一条写连接，并发也只是排队。某一张表失败只记日志，不影响后面的表
  * （原来 Promise.all 里一张失败，其余的也照样在后台跑完）。
  */
-export async function runTcpingCleanup() {
+async function runTcpingCleanup() {
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["host_metrics", () => db.cleanOldHostMetrics(72)],
     // 95 计费的 5 分钟桶留 40 天（server/hostRateBuckets.ts）。
@@ -478,6 +481,7 @@ function planUserEmailReminders(
   return pending;
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function runEmailReminders() {
   try {
     const config = await getEmailConfig();
@@ -611,6 +615,7 @@ async function planProxyTrafficEmailReminders(users: any[]): Promise<PendingRemi
   return pending;
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function runTelegramReminders() {
   try {
     const settings = await db.getAllSettings();
@@ -791,7 +796,7 @@ export async function runTelegramReminders() {
  * 剩余百分比阈值和提前天数沿用 Telegram 那边的设置；主机上的「流量告警」「续费提醒」开关两边共用。
  * 去重键前缀是 discordReminder:，和 Telegram、邮件各发各的。
  */
-export async function runDiscordReminders() {
+async function runDiscordReminders() {
   try {
     const settings = await db.getAllSettings();
     if (!isDiscordBotReadyFromSettings(settings)) return;
@@ -930,7 +935,7 @@ async function runForwardGroupFailover() {
  * 就一直「地区获取中」，直到下次有人翻列表还得碰巧不限流。这里定时把没定到位
  * 的再试一遍，退避和三家服务的兜底都在 hostGeo 里。
  */
-export async function runHostGeoRetrySweep() {
+async function runHostGeoRetrySweep() {
   try {
     await runHostGeoSweep();
   } catch (error) {
@@ -938,7 +943,7 @@ export async function runHostGeoRetrySweep() {
   }
 }
 
-export async function runHostDdnsReconcile() {
+async function runHostDdnsReconcile() {
   try {
     const queued = await reconcileHostDdnsRecords();
     if (queued > 0) console.log(`[Scheduler] Host DDNS reconcile queued ${queued} update(s)`);
@@ -947,7 +952,7 @@ export async function runHostDdnsReconcile() {
   }
 }
 
-export async function runRuleEntryDomainReconcile() {
+async function runRuleEntryDomainReconcile() {
   try {
     const result = await reconcileRuleEntryDomains();
     if (result.synced > 0 || result.deleted > 0 || result.failed > 0) {
@@ -967,7 +972,7 @@ async function runHostStatusSweep() {
   }
 }
 
-export async function runHostBillingCycleExtension() {
+async function runHostBillingCycleExtension() {
   try {
     const extendedHosts = await db.extendDueHostBillingPeriods();
     if (extendedHosts > 0) {

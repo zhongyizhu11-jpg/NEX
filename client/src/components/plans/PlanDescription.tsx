@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { describeContentFormat, looksLikeHtml, looksLikeMarkdown, renderMixedHtml } from "@/lib/htmlContent";
 
 /** 说明是不是写了排版（Markdown / HTML）。纯文本照旧按一段灰字显示。 */
-export function isRichPlanDescription(text: string) {
+function isRichPlanDescription(text: string) {
   return looksLikeHtml(text) || looksLikeMarkdown(text);
 }
 

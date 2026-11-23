@@ -77,7 +77,7 @@ export type InboundRoute = {
 export type InboundRouting = { routes: InboundRoute[] };
 
 export const MAX_INBOUND_ROUTES = 10;
-export const MAX_INBOUND_ROUTE_DOMAINS = 200;
+const MAX_INBOUND_ROUTE_DOMAINS = 200;
 
 /**
  * 自定义域名的规整：去掉协议、路径、端口、开头的 *. 和点，小写。
@@ -185,7 +185,7 @@ export function describeInboundRoute(route: InboundRoute, landingName?: string) 
 
 /* ── 解析好的路由 → sing-box 配置片段 ──────────────────────────────── */
 
-export type ResolvedShadowsocksEgress = {
+type ResolvedShadowsocksEgress = {
   server: string;
   port: number;
   method: string;

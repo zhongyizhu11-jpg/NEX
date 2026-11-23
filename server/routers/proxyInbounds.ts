@@ -518,7 +518,7 @@ function mergeInbound(base: ProxyInbound, input: Partial<InboundInput>): ProxyIn
  * 新建落地入站。「新建节点」和「一键创建落地 SS 入站」（转发规则的出口）都走这一条：
  * 权限、额度、端口冲突、凭据生成一处都不少。landingEgress 只多打一个标记（派生节点默认不进订阅）。
  */
-export async function createProxyInboundForActor(ctx: any, input: InboundInput, options: { landingEgress?: boolean } = {}) {
+async function createProxyInboundForActor(ctx: any, input: InboundInput, options: { landingEgress?: boolean } = {}) {
   await assertAllowed(ctx);
   const host = await assertUsableHost(input.hostId, ctx);
   const ports = inboundPortsOf(input.port, input.protocol, input.portRangeEnd);

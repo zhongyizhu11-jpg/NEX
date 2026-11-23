@@ -15,7 +15,7 @@ import {
   shouldRefreshSessionLease,
   type SessionKind,
 } from "../session";
-import { DEV_ADMIN_USERNAME, isDevPanelMode } from "../devPanel";
+import { DEV_ADMIN_USERNAME, isDevPanelMode } from "../devPanelMode";
 import { getActiveAuthSession, revokeAuthSession, touchAuthSession } from "../repositories/sessionRepository";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { neutralizeCookies, resolveApiTokenRequest } from "../ops/apiTokens";
@@ -28,7 +28,7 @@ import { TRPCError } from "@trpc/server";
 import { databaseHealth, describeDatabaseError } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
 
-export interface AuthSession {
+interface AuthSession {
   kind: SessionKind;
   sid: string | null;
   token: string;

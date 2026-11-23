@@ -5,7 +5,7 @@ import { GOST_API_DIR } from "@shared/gostRuntimeApi";
 import { isIP } from "net";
 import { buildDockerForwardCompatCleanupCmds, buildDockerForwardCompatCmds, type DockerCompatRule } from "./dockerForwardCompat";
 
-export { buildDockerForwardCompatCleanupCmds, buildDockerForwardCompatCmds } from "./dockerForwardCompat";
+;
 
 type IptablesBinary = "iptables" | "ip6tables";
 
@@ -190,7 +190,7 @@ function iptablesDnatTargetForRule(rule: KernelPortRangeRule) {
 }
 
 /** nft 平移用的端口映射表名。段规则一定有正整数 id；协议分开放，不共用。 */
-export function nftPortRangeMapName(ruleId: unknown, proto: string) {
+function nftPortRangeMapName(ruleId: unknown, proto: string) {
   return `fwx_pr_${Number(ruleId) || 0}_${proto}`;
 }
 
@@ -923,7 +923,7 @@ function gostApiRuntimeConfigPath(service: string) {
   return configPath;
 }
 
-export function gostRuntimeApiSocketPath(service: string) {
+function gostRuntimeApiSocketPath(service: string) {
   gostApiRuntimeConfigPath(service);
   return `${GOST_API_DIR}/${service}.sock`;
 }

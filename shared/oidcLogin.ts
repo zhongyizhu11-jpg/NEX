@@ -10,14 +10,14 @@ import { normalizePanelBaseUrl } from "./googleLogin";
 export const OIDC_CALLBACK_PATH = "/api/auth/oidc/callback";
 export const OIDC_START_PATH = "/api/auth/oidc/start";
 export const OIDC_DEFAULT_SCOPES = "openid email profile";
-export const OIDC_DEFAULT_PROVIDER_NAME = "OIDC";
+const OIDC_DEFAULT_PROVIDER_NAME = "OIDC";
 /** 库里 oidcIssuer 是 varchar(191)（和 oidcSub 一起建唯一索引，MySQL 索引长度有上限）。 */
-export const OIDC_ISSUER_MAX_LENGTH = 191;
+const OIDC_ISSUER_MAX_LENGTH = 191;
 
 /** 通用 OIDC 只有网页登录和绑定：App 里的系统浏览器流程没有接（见 docs/guide/oidc-login.md）。 */
 export type OidcLoginMode = "login" | "link";
 
-export const OIDC_LOGIN_ERROR_MESSAGES = {
+const OIDC_LOGIN_ERROR_MESSAGES = {
   disabled: "管理员没有开启 OIDC 登录",
   not_configured: "OIDC 登录还没有配置完整，请联系管理员",
   cancelled: "已取消登录",
@@ -44,7 +44,7 @@ export const OIDC_LOGIN_ERROR_MESSAGES = {
 
 export type OidcLoginErrorCode = keyof typeof OIDC_LOGIN_ERROR_MESSAGES;
 
-export function isOidcLoginErrorCode(value: unknown): value is OidcLoginErrorCode {
+function isOidcLoginErrorCode(value: unknown): value is OidcLoginErrorCode {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(OIDC_LOGIN_ERROR_MESSAGES, value);
 }
 

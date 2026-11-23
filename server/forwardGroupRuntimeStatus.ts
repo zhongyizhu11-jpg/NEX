@@ -1,6 +1,6 @@
-export type ForwardGroupRuntimeStatus = "disabled" | "idle" | "pending" | "degraded" | "running";
+type ForwardGroupRuntimeStatus = "disabled" | "idle" | "pending" | "degraded" | "running";
 
-export type ForwardGroupRuleRuntimeStatus = {
+type ForwardGroupRuleRuntimeStatus = {
   templateRuleId: number;
   status: ForwardGroupRuntimeStatus;
   expectedRuleCount: number;

@@ -23,7 +23,7 @@ import { classifyIpAddress, expandIpv6 } from "../shared/ipAddress";
   内存：IPv4 库解压后约 11MB，IPv6 约 37MB；都是第一次用到才加载（没有 IPv6 用户就不会加载那一份）。
 */
 
-export const IP2REGION_DATA_VERSION = "1bf6cabfb63c1a14";
+const IP2REGION_DATA_VERSION = "1bf6cabfb63c1a14";
 
 const ASSETS = {
   4: { file: "ip2region_v4.xdb.gz", bytes: 11_122_642, sha256: "27ecba8c9a6d5e3b280aedbe7ee15c65372b179fbd0dad3845d8c608f2fcace1", indexSize: 14, ipBytes: 4 },
@@ -107,7 +107,7 @@ function database(family: Family) {
 }
 
 /** 公网地址 → 查询用的字节（IPv4 4 字节、IPv6 16 字节，都按大端）。IPv4 映射的 IPv6 按 IPv4 查。 */
-export function offlineLookupKey(address: string): { family: Family; bytes: Buffer } | null {
+function offlineLookupKey(address: string): { family: Family; bytes: Buffer } | null {
   const text = String(address || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
   if (!text || classifyIpAddress(text) !== "public") return null;
   const v4 = text.match(/^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -160,7 +160,7 @@ function searchRegion(family: Family, content: Buffer, ip: Buffer): string {
 }
 
 /** 「国家|省份|城市|运营商|国家代码」；0 表示没有。 */
-export function parseOfflineIpRegion(region: string): OfflineIpRegion | null {
+function parseOfflineIpRegion(region: string): OfflineIpRegion | null {
   const parts = String(region || "").split("|");
   const code = String(parts[4] || "").trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(code) || code === "ZZ") return null;

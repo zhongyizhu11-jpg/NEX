@@ -26,7 +26,7 @@ import { getAllSettings } from "./repositories/settingsRepository";
   记录和默认线路的同名，一样只读 —— 手改一条线路的记录，下一轮同步同样会被改回去。
 */
 
-export type DnsManagedOwnerKind = "host" | "forwardGroup" | "ruleDomain" | "ruleDomainPending" | "ruleDomainSuffix" | "landingPool";
+type DnsManagedOwnerKind = "host" | "forwardGroup" | "ruleDomain" | "ruleDomainPending" | "ruleDomainSuffix" | "landingPool";
 
 export type DnsManagedOwner = {
   kind: DnsManagedOwnerKind;

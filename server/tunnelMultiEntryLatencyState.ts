@@ -1,6 +1,6 @@
 import { normalizeProbeCounts } from "../shared/latencyProbe";
 
-export type TunnelEntryLatencyDetail = {
+type TunnelEntryLatencyDetail = {
   hostId: number;
   label: string;
   latencyMs: number | null;
@@ -9,7 +9,7 @@ export type TunnelEntryLatencyDetail = {
   probeSuccesses?: number;
 };
 
-export type TunnelMultiEntryHopDetail = {
+type TunnelMultiEntryHopDetail = {
   hopIndex: number;
   hopCount: number;
   fromHostId: number | null;

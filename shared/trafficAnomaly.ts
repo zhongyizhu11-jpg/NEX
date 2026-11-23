@@ -66,14 +66,14 @@ export const DEFAULT_TRAFFIC_ANOMALY_CONFIG: TrafficAnomalyConfig = {
 };
 
 /** 规则 / 用户的基线：建起来、攒数据都要满这么久。 */
-export const TRAFFIC_BASELINE_MIN_HISTORY_HOURS = 24;
+const TRAFFIC_BASELINE_MIN_HISTORY_HOURS = 24;
 /** 分桶表只留 72 小时（server/repositories/metricsRepository.ts 的 TRAFFIC_BUCKET_RETENTION_HOURS）。 */
 export const TRAFFIC_BASELINE_LOOKBACK_HOURS = 72;
 /** 最近这一小时不进基线：正在冲高的那一段把基线一起拉高，就永远报不出来了。 */
-export const TRAFFIC_BASELINE_EXCLUDE_RECENT_SECONDS = 3600;
+const TRAFFIC_BASELINE_EXCLUDE_RECENT_SECONDS = 3600;
 export const TRAFFIC_BUCKET_SECONDS = 30 * 60;
 /** 恢复线：异常线的 70%。 */
-export const TRAFFIC_RECOVER_RATIO = 0.7;
+const TRAFFIC_RECOVER_RATIO = 0.7;
 
 function clampInt(value: unknown, min: number, max: number, fallback: number) {
   const n = Math.round(Number(value));
@@ -87,7 +87,7 @@ function bool(value: unknown, fallback: boolean) {
   return fallback;
 }
 
-export function normalizeTrafficAnomalySensitivity(value: unknown): TrafficAnomalySensitivity {
+function normalizeTrafficAnomalySensitivity(value: unknown): TrafficAnomalySensitivity {
   return value === "high" || value === "low" || value === "custom" ? value : "normal";
 }
 
@@ -114,7 +114,7 @@ export function normalizeTrafficAnomalyConfig(raw: Partial<Record<keyof TrafficA
 // ---------------- 速率 ----------------
 
 /** 字节 / 秒 → Mbps（保留一位小数）。 */
-export function bytesPerSecondToMbps(bps: number) {
+function bytesPerSecondToMbps(bps: number) {
   const value = Math.max(0, Number(bps) || 0) * 8 / 1_000_000;
   return Math.round(value * 10) / 10;
 }

@@ -55,7 +55,7 @@ export function normalizeForwardXV3Transport(value: unknown): ForwardXV3Transpor
 }
 
 /** 数据库里布尔值可能是 true / 1 / "1" / "true"；没存过（null）按默认。 */
-export function normalizeForwardXV3Multiplex(value: unknown): boolean {
+function normalizeForwardXV3Multiplex(value: unknown): boolean {
   if (value === undefined || value === null || value === "") return FORWARDX_V3_DEFAULT_MULTIPLEX;
   if (value === true || value === 1) return true;
   if (value === false || value === 0) return false;

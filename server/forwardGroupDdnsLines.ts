@@ -121,10 +121,6 @@ export type ForwardGroupLineSyncInput = {
 // 进程里已经和服务商核对过的线路：重启后每条线路先完整对账一次，之后只在值变了时才写。
 const reconciledLines = new Map<string, string>();
 
-export function resetForwardGroupDdnsLinesForTests() {
-  reconciledLines.clear();
-}
-
 function lineSignature(domain: string, recordType: string, values: string[]) {
   return `${domain}|${recordType}|${[...values].sort().join(",")}`;
 }

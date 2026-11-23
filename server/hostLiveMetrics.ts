@@ -15,7 +15,7 @@ import { parseAgentLoadAverage } from "../shared/hostLoadAverage";
   前端 hosts.liveVitals 每 1~2 秒读这里，读不到新样本（旧 Agent、事件流没连上）就用心跳那份。
 */
 
-export const LIVE_METRICS_FOCUS_INTERVAL_MS = 1000;
+const LIVE_METRICS_FOCUS_INTERVAL_MS = 1000;
 /** 详情关掉以后多久停（前端每秒续一次，留几秒余量给网络抖动） */
 const FOCUS_TTL_MS = 6_000;
 /** 样本多久算「还新鲜」：超过就不当实时值用 */

@@ -29,6 +29,7 @@ export type TunnelExitPortEntry = {
 
 type RecordedPort = { port: number; entryHostIds: number[] };
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const TUNNEL_EXIT_PORTS_SETTING_PREFIX = `${RUNTIME_CACHE_SETTING_PREFIX}tunnelExitPorts:`;
 
 const reportsByHost = new Map<number, Map<string, RecordedPort>>();

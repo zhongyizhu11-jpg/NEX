@@ -52,7 +52,7 @@ export const VLESS_EGRESS_AGENT_VERSION = "2.2.255";
 export const VLESS_EGRESS_FLOW = "xtls-rprx-vision";
 
 /** sing-box 1.14 的 uTLS 和 Xray 都认得的指纹；链接里不带 fp 时按 chrome（和面板派生的 REALITY 节点一致）。 */
-export const VLESS_EGRESS_FINGERPRINTS = ["chrome", "firefox", "safari", "edge", "ios", "android", "360", "qq", "random", "randomized"] as const;
+const VLESS_EGRESS_FINGERPRINTS = ["chrome", "firefox", "safari", "edge", "ios", "android", "360", "qq", "random", "randomized"] as const;
 export const VLESS_EGRESS_DEFAULT_FINGERPRINT = "chrome";
 
 export type VlessEgressEndpoint = {

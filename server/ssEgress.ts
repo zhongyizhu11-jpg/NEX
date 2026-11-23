@@ -66,7 +66,7 @@ import {
   type VlessEgressBridgePortAllocator,
 } from "./vlessEgress";
 
-export { NO_EGRESS_COLUMNS, ruleEgressColumnsOf, type RuleEgressColumns };
+export {  ruleEgressColumnsOf, type RuleEgressColumns };
 import * as db from "./db";
 import { getDb } from "./dbRuntime";
 import { ENV } from "./env";
@@ -190,7 +190,7 @@ function addressTokens(host: any) {
  * 管理员：都行。普通用户：自己的入站；或者管理员开的「落地出口」入站、而他有那台主机的使用权限
  * （和直连规则同一套主机授权）。别人的普通落地节点不行 —— 那个端口的流量记在入站主人头上。
  */
-export async function assertEgressInboundUsable(actor: Actor, inbound: any) {
+async function assertEgressInboundUsable(actor: Actor, inbound: any) {
   if (actor.role === "admin") return;
   if (Number(inbound?.userId) === Number(actor.id)) return;
   if (!dbBool(inbound?.landingEgress)) throw new Error("只能使用自己的落地入站，或管理员开放的落地出口入站");
@@ -603,7 +603,7 @@ export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonl
 
 /* ── 下发：运行视图和 gost 出口链 ────────────────────────────────────── */
 
-export type SsEgressRuntime = {
+type SsEgressRuntime = {
   /** 老代码里没有这个字段：缺省就是 Shadowsocks。 */
   kind?: "ss";
   server: string;
@@ -617,7 +617,7 @@ export type SsEgressRuntime = {
  * VLESS Reality 出口：gost 链上是本机 127.0.0.1:bridgePort 的 socks5（带凭据），sing-box 桥接再经 vless 出去
  * （server/vlessEgress.ts）。udp：这条规则的 UDP 也经桥接出去（socks5 UDP ASSOCIATE → xudp）。
  */
-export type VlessEgressRuntime = {
+type VlessEgressRuntime = {
   kind: "vless";
   server: string;
   port: number;

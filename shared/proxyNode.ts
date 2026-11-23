@@ -50,7 +50,7 @@ export const PROXY_NODE_PROTOCOL_LABELS: Record<ProxyNodeProtocol, string> = {
  * 客户端能导入、能识别协议，握手时却永远收不到回包 —— 报出来只是一句超时，
  * 跟「转发没放 UDP」毫无字面关联。所以要在绑定时就拦住。
  */
-export const PROXY_NODE_QUIC_PROTOCOLS: readonly ProxyNodeProtocol[] = ["hysteria2", "tuic"];
+const PROXY_NODE_QUIC_PROTOCOLS: readonly ProxyNodeProtocol[] = ["hysteria2", "tuic"];
 
 export function proxyNodeRequiresUdp(protocol: unknown): boolean {
   return PROXY_NODE_QUIC_PROTOCOLS.includes(String(protocol ?? "") as ProxyNodeProtocol);
@@ -71,7 +71,7 @@ export function proxyNodeOnlyUdp(node: { protocol?: unknown; mieruTransport?: un
  * 这几个协议自带 TLS（Hysteria2 / TUIC 是 QUIC-TLS，AnyTLS 顾名思义），
  * 链接里不会写 security=tls，解析和渲染时都按「一定有 TLS」处理。
  */
-export const PROXY_NODE_ALWAYS_TLS_PROTOCOLS: readonly ProxyNodeProtocol[] = [
+const PROXY_NODE_ALWAYS_TLS_PROTOCOLS: readonly ProxyNodeProtocol[] = [
   "trojan",
   "hysteria2",
   "tuic",
@@ -954,7 +954,7 @@ export function formatProxyNodeLink(node: ProxyNode): string {
  * Mieru 的简单分享链接（格式见 parseMierusLink）。名字放在 profile 里 —— 官方格式没有 # 片段，
  * 多写一段 # 有的解析器会把它当成密码的一部分。两个承载都开时写两对 port / protocol。
  */
-export function formatMierusLink(node: ProxyNode): string {
+function formatMierusLink(node: ProxyNode): string {
   const host = formatHostForUri(node.address);
   const end = Number(node.portRangeEnd || 0);
   const portText = end > node.port ? `${node.port}-${end}` : String(node.port);

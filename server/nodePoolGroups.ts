@@ -21,7 +21,7 @@ const q = quoteDbIdentifier;
 */
 
 /** 能跟着节点池的组：成员就是一堆机器的那几种。 */
-export const POOL_FOLLOWING_GROUP_MODES = ["entry", "exit", "failover"] as const;
+const POOL_FOLLOWING_GROUP_MODES = ["entry", "exit", "failover"] as const;
 
 export type PoolGroupSyncResult = { groupId: number; added: number; removed: number; kept: number; skipped?: string };
 
@@ -99,7 +99,7 @@ export async function assertPoolFitsFollowingGroups(poolId: number, hostIds: rea
 }
 
 /** 一个组按它跟着的池同步一遍成员；没跟、池没了、成员没变化都直接返回。 */
-export async function syncGroupMembersFromPool(groupId: number, reason: string): Promise<PoolGroupSyncResult> {
+async function syncGroupMembersFromPool(groupId: number, reason: string): Promise<PoolGroupSyncResult> {
   const group = await db.getForwardGroupById(Number(groupId)) as any;
   if (!group) return { groupId, added: 0, removed: 0, kept: 0, skipped: "组不在了" };
   const poolId = Number(group.poolId || 0);

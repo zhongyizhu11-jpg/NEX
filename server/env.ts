@@ -70,6 +70,16 @@ function readIntEnv(names: string[], fallback: number, min: number, max: number)
   return fallback;
 }
 
+/**
+ * 面板的数据目录：Docker 里是数据卷 /data，本地安装是 $APP_DIR/data（装机脚本把 SQLITE_PATH 指到那里）。
+ * 以 SQLITE_PATH 所在目录为准 —— jwt.secret、日志、Agent 二进制缓存都该和数据库放一起，容器重建不丢。
+ */
+export function panelDataDir(env: NodeJS.ProcessEnv = process.env) {
+  const sqlitePath = String(env.SQLITE_PATH || "").trim();
+  if (sqlitePath) return path.dirname(path.resolve(sqlitePath));
+  return process.platform === "win32" ? path.resolve(process.cwd(), "data") : "/data";
+}
+
 export const ENV = {
   cookieSecret: readOrCreateCookieSecret(),
   mysqlUrl: process.env.MYSQL_URL ?? "",

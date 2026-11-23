@@ -10,7 +10,7 @@ export type LatencyStabilitySample = {
   atMs?: number | null;
 };
 
-export type LatencyStabilityRating = {
+type LatencyStabilityRating = {
   label: string;
   className: string;
 };
@@ -45,7 +45,7 @@ export type LatencyStabilityStats = {
 };
 
 /** 累计计数能不能用：有上报、数字自洽。拿不到时退回按状态样本统计（旧 Agent）。 */
-export function usableProbeCounters(actual: ProbeStatistics | null | undefined): actual is ProbeStatistics {
+function usableProbeCounters(actual: ProbeStatistics | null | undefined): actual is ProbeStatistics {
   return !!actual?.available
     && Number.isSafeInteger(actual.total) && actual.total > 0
     && Number.isSafeInteger(actual.successes) && actual.successes >= 0 && actual.successes <= actual.total;
@@ -445,7 +445,7 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[], actu
   };
 }
 
-export function getLatencyStabilityRating(score: number | null): LatencyStabilityRating {
+function getLatencyStabilityRating(score: number | null): LatencyStabilityRating {
   if (score === null) return { label: "暂无", className: "text-muted-foreground" };
   if (score >= 90) return { label: "优秀", className: "text-[var(--fx-healthy-text)]" };
   if (score >= 80) return { label: "良好", className: "text-[var(--fx-healthy-text)]" };

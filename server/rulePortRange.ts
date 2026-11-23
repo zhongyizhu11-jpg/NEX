@@ -61,7 +61,7 @@ export type PortRangeSaveInput = PortRangeRuleContext & {
 /**
  * 不查库的那部分：形状、能不能用端口段。批量预览逐行先过这一步。
  */
-export function portRangeStaticError(rule: PortRangeSaveInput): string | null {
+function portRangeStaticError(rule: PortRangeSaveInput): string | null {
   return portRangeShapeError(rule) || portRangeUnsupportedReason(rule);
 }
 

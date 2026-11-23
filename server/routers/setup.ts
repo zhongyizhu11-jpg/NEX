@@ -31,7 +31,7 @@ import {
   markLocalSetupComplete,
 } from "../setupState";
 import { startBackgroundServices } from "../backgroundServices";
-import { isDevPanelMode } from "../devPanel";
+import { isDevPanelMode } from "../devPanelMode";
 import { PANEL_MIGRATION_SCOPES } from "../../shared/panelMigration";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { revokeAllUserApiTokens } from "../ops/apiTokens";

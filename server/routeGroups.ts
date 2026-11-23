@@ -691,7 +691,7 @@ export async function refreshRulesThroughHost(hostId: number, reason: string) {
 }
 
 /** 这条中继规则探的「下一个」是哪台机器（落地返回 null）。 */
-export function relayNextHostId(path: RoutePath, hopIndex: number): number | null {
+function relayNextHostId(path: RoutePath, hopIndex: number): number | null {
   const layout = routePathRelayPlan(path);
   const slot = layout.slots.find((item) => item.hopIndex === hopIndex);
   if (!slot) return null;
@@ -861,7 +861,7 @@ export function routeHopProberHostId(rule: RelayRuleLike | null | undefined, tun
   return Number(rule.hostId || 0);
 }
 
-export type RouteHopGostProbe = { ruleId: number; tunnelId: number; targetIp: string; targetPort: number; method: string; probeKey: string; routeHop: RouteHopProbeSpec };
+type RouteHopGostProbe = { ruleId: number; tunnelId: number; targetIp: string; targetPort: number; method: string; probeKey: string; routeHop: RouteHopProbeSpec };
 
 /**
  * 给一台机器的快速探测：按 ruleId 返回规格（隧道段的已经在 ruleLatencyProbes 里了，只挂上规格），

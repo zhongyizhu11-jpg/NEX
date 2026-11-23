@@ -28,7 +28,7 @@ export type ParseProxyNodeJsonResult =
   | { ok: true; node: ProxyNode; needsAddress: boolean; source: ProxyNodeJsonSource }
   | { ok: false; error: string };
 
-export type ProxyNodeJsonSource = "singbox-outbound" | "clash-proxy" | "vmess-v2rayn" | "server-inbound";
+type ProxyNodeJsonSource = "singbox-outbound" | "clash-proxy" | "vmess-v2rayn" | "server-inbound";
 
 const PROTOCOL_ALIASES: Record<string, ProxyNodeProtocol> = {
   vless: "vless",
@@ -65,7 +65,7 @@ function toPort(value: unknown): number {
  * 裸数字（按 Mbps）或 "30 Mbps"、"1 Gbps" 这样的带单位字符串；Stash 的 up-speed /
  * down-speed 是裸数字（Mbps）。
  */
-export function bandwidthMbps(value: unknown): number {
+function bandwidthMbps(value: unknown): number {
   if (typeof value === "number") return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
   const raw = text(value).toLowerCase();
   if (!raw) return 0;

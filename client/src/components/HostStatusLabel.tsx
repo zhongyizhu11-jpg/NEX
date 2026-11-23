@@ -5,7 +5,7 @@ type HostLike = {
   isOnline?: boolean | null;
 };
 
-export function HostStatusDot({ host, className }: { host?: HostLike | null; className?: string }) {
+function HostStatusDot({ host, className }: { host?: HostLike | null; className?: string }) {
   const online = !!host?.isOnline;
   return (
     <span

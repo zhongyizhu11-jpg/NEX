@@ -36,7 +36,7 @@ import { invalidateForwardGroupProbeTopologyAfterChange } from "./probeTopology"
 import { afterForwardGroupSyncCommit, syncChainsUsingEntryGroup, syncForwardGroupRules } from "./ruleSync";
 
 /** 一个组里的主机成员（按优先级，含停用的）。 */
-export function groupHostIds(groupId: unknown) {
+function groupHostIds(groupId: unknown) {
   return getTunnelEntryHostIds({ entryGroupId: groupId });
 }
 

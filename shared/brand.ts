@@ -1,5 +1,5 @@
 /** Public product identity. Technical IDs stay unchanged for existing installs. */
-export const PRODUCT_NAME = "NEX";
+const PRODUCT_NAME = "NEX";
 
 /** Upgrade the old default without overwriting a site's custom name. */
 export function resolveSiteTitle(value?: string | null): string {

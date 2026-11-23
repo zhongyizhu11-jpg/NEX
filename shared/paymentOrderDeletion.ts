@@ -7,7 +7,7 @@
   已完成的一律不能删 —— 那是收过钱的凭证。
 */
 
-export const DELETABLE_PAYMENT_ORDER_STATUSES = ["pending", "expired", "cancelled", "failed"] as const;
+const DELETABLE_PAYMENT_ORDER_STATUSES = ["pending", "expired", "cancelled", "failed"] as const;
 
 /** 一次最多删多少笔：和其它批量删除一个量级。 */
 export const MAX_PAYMENT_ORDER_DELETE_BATCH = 500;

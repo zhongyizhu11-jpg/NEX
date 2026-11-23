@@ -31,7 +31,7 @@ const STATUS_COLORS = { failed: "var(--fx-down)", degraded: "var(--fx-warn)" } a
 /** 没接上 / 被遮住的节点：比「目标」那种灰再淡一档 */
 const FADED_GRAY = "color-mix(in srgb, var(--fx-standby) 60%, transparent)";
 
-export const TOPOLOGY_TONE_COLORS: Record<ReturnType<typeof topologyNodeTone>, string> = {
+const TOPOLOGY_TONE_COLORS: Record<ReturnType<typeof topologyNodeTone>, string> = {
   entry: "var(--fx-chart-1)",
   relay: "var(--fx-chart-3)",
   exit: "var(--fx-cat-orange)",
@@ -44,7 +44,7 @@ export const TOPOLOGY_TONE_COLORS: Record<ReturnType<typeof topologyNodeTone>, s
   idle: FADED_GRAY,
 };
 
-export function topologyEdgeColor(edge: Pick<TopologyEdge, "kind" | "status">) {
+function topologyEdgeColor(edge: Pick<TopologyEdge, "kind" | "status">) {
   if (edge.status === "failed") return STATUS_COLORS.failed;
   if (edge.status === "degraded") return STATUS_COLORS.degraded;
   return TOPOLOGY_KIND_COLORS[edge.kind];

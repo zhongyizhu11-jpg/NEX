@@ -158,7 +158,7 @@ async function tunnelExitHostIds(tunnel: any): Promise<number[]> {
  * - 转发组模板：组里每个成员（主机成员本身；隧道成员的出口）
  * - 线路组的中转：每一跳的中转机（最后一跳拨落地）
  */
-export async function ruleTargetDialHostIds(route: {
+async function ruleTargetDialHostIds(route: {
   hostId?: number | null;
   tunnel?: any | null;
   forwardGroupId?: number | null;

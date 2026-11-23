@@ -24,7 +24,8 @@ import {
   保留期）开始，升级后马上就有三天的历史。
 */
 
-export const LATENCY_DAILY_TABLE = "latency_daily_stats";
+const LATENCY_DAILY_TABLE = "latency_daily_stats";
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const LATENCY_DAILY_WATERMARK_KEY = "latencyDailyRollupThrough";
 const ROLLUP_LAG_SECONDS = 5 * 60;
 const ROLLUP_MAX_WINDOW_SECONDS = 6 * 3600;
@@ -38,7 +39,7 @@ type SourceTable = {
   extraWhere?: string;
 };
 
-export const LATENCY_DAILY_SOURCES: SourceTable[] = [
+const LATENCY_DAILY_SOURCES: SourceTable[] = [
   { targetType: "rule", table: "tcping_stats", idColumn: "ruleId" },
   { targetType: "tunnel", table: "tunnel_latency_stats", idColumn: "tunnelId", extraWhere: `(s.${q("seriesKey")} IS NULL OR s.${q("seriesKey")} = '' OR s.${q("seriesKey")} = 'total')` },
   { targetType: "group", table: "forward_group_latency_stats", idColumn: "groupId" },
@@ -52,7 +53,7 @@ function integerDivision(expr: string, divisor: number) {
 }
 
 /** 面板时区的「那一天 0 点」（epoch 秒），和 shared/latencyHistory.ts 的 latencyDayStart 同一个算式。 */
-export function latencyDayStartSql(columnSql: string) {
+function latencyDayStartSql(columnSql: string) {
   return `(${integerDivision(`${columnSql} + ${LATENCY_DAY_OFFSET_SECONDS}`, LATENCY_DAY_SECONDS)} * ${LATENCY_DAY_SECONDS} - ${LATENCY_DAY_OFFSET_SECONDS})`;
 }
 

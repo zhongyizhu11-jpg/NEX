@@ -20,8 +20,8 @@ import {
 } from "../../shared/realityDestCheck";
 import { wakeAgentExt, type AgentExtHost } from "./agentExt";
 
-export const REALITY_CHECK_PENDING_TIMEOUT_MS = 3 * 60_000;
-export const REALITY_CHECK_RESULT_TTL_MS = 10 * 60_000;
+const REALITY_CHECK_PENDING_TIMEOUT_MS = 3 * 60_000;
+const REALITY_CHECK_RESULT_TTL_MS = 10 * 60_000;
 
 export class RealityCheckError extends Error {}
 

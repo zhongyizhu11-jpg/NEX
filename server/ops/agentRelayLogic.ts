@@ -9,7 +9,7 @@ export const AUTO_SWITCH_WINDOW_MINUTES = 240;
 /** 至少看了这么多分钟才判断，免得面板刚重启、样本太少时误切。 */
 export const AUTO_SWITCH_MIN_SAMPLES = 10;
 export const AUTO_SWITCH_THRESHOLD_CHOICES = [3, 10, 30] as const;
-export const AUTO_SWITCH_DEFAULT_THRESHOLD = 3;
+const AUTO_SWITCH_DEFAULT_THRESHOLD = 3;
 
 export type RelayConfigRow = {
   hostId: number;

@@ -23,7 +23,7 @@ import v8 from "node:v8";
 import { getSetting, setSetting } from "./repositories/settingsRepository";
 
 const ENABLED_UNTIL_KEY = "panelProfiling.enabledUntil";
-export const PANEL_PROFILING_ENABLE_MINUTES = 60;
+const PANEL_PROFILING_ENABLE_MINUTES = 60;
 export const PANEL_PROFILING_CPU_MIN_SECONDS = 5;
 export const PANEL_PROFILING_CPU_MAX_SECONDS = 120;
 const RETENTION_MS = 30 * 60_000;
@@ -94,7 +94,7 @@ function removeCapture(record: CaptureRecord) {
 }
 
 /** 过期的、超出份数的删掉（最老的先走；正在采的不动）。 */
-export function prunePanelProfilingCaptures(now = Date.now()) {
+function prunePanelProfilingCaptures(now = Date.now()) {
   for (const record of captures.values()) {
     if (record.status !== "running" && now - (record.finishedAt ?? record.startedAt) > RETENTION_MS) removeCapture(record);
   }
@@ -265,6 +265,7 @@ export function panelProfilingDownload(id: string): { file: string; filename: st
   return { file: record.file, filename: record.filename, bytes: record.bytes, kind: record.kind };
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function resetPanelProfilingForTests() {
   for (const record of [...captures.values()]) fs.rmSync(record.file, { force: true });
   captures.clear();

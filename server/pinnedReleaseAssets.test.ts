@@ -17,10 +17,14 @@ function inTempDir<T>(fn: (dir: string) => Promise<T>) {
     const cwd = process.cwd();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nex-pinned-"));
     process.chdir(dir);
+    // 缓存现在放数据目录（按 SQLITE_PATH 所在目录找），测试里把它指到临时目录的 data/ 下。
+    const previousSqlitePath = process.env.SQLITE_PATH;
+    process.env.SQLITE_PATH = path.join(dir, "data", "forwardx.db");
     try {
       return await fn(dir);
     } finally {
       process.chdir(cwd);
+      if (previousSqlitePath === undefined) delete process.env.SQLITE_PATH; else process.env.SQLITE_PATH = previousSqlitePath;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   };

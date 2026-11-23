@@ -55,7 +55,7 @@ function nowSec() {
 
 export type IpIntelKeys = Partial<Record<IpIntelKeyProvider, string>>;
 
-export async function getIpIntelKeys(): Promise<IpIntelKeys> {
+async function getIpIntelKeys(): Promise<IpIntelKeys> {
   const out: IpIntelKeys = {};
   for (const provider of IP_INTEL_KEY_PROVIDERS) {
     const value = String((await getSetting(IP_INTEL_KEY_SETTINGS[provider]).catch(() => null)) || "").trim();
@@ -188,12 +188,13 @@ function rowToResult(row: Record<string, unknown>): IpIntelProviderResult | null
   };
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function listHostIpIntel(hostId: number): Promise<IpIntelProviderResult[]> {
   const rows = await queryRaw<Record<string, unknown>>(`SELECT * FROM ${q(TABLE)} WHERE ${q("hostId")} = ?`, [hostId]).catch(() => []);
   return rows.map(rowToResult).filter((item): item is IpIntelProviderResult => !!item);
 }
 
-export async function saveHostIpIntel(hostId: number, result: IpIntelProviderResult) {
+async function saveHostIpIntel(hostId: number, result: IpIntelProviderResult) {
   const values = {
     via: result.via,
     address: result.address ? result.address.slice(0, 64) : null,
@@ -214,10 +215,6 @@ export async function saveHostIpIntel(hostId: number, result: IpIntelProviderRes
   } catch {
     await update();
   }
-}
-
-export async function deleteHostIpIntel(hostId: number) {
-  await executeRaw(`DELETE FROM ${q(TABLE)} WHERE ${q("hostId")} = ?`, [hostId]).catch(() => undefined);
 }
 
 /** 这条缓存还新不新：成功的一天，失败的半小时。 */
@@ -249,7 +246,7 @@ export function ipIntelAddresses(host: IntelHost | null | undefined, profile?: P
 
 const refreshing = new Map<number, Promise<void>>();
 
-export function ipIntelRefreshing(hostId: number) {
+function ipIntelRefreshing(hostId: number) {
   return refreshing.has(hostId);
 }
 
@@ -257,6 +254,7 @@ export function ipIntelRefreshing(hostId: number) {
  * 面板这头查一遍（只查过期的，force 时全查）。同一台主机同时只跑一份；各家各协议族并发，
  * 一家失败不影响别家。调用方不等它：用 scheduleHostIpIntelRefresh。
  */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function refreshHostIpIntelFromPanel(host: IntelHost, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
   const hostId = Number(host?.id);
   if (!(hostId > 0)) return;
@@ -371,7 +369,7 @@ export async function hostIpIntelView(host: IntelHost, profile: Pick<NetProfileR
   };
 }
 
-/** 只给测试用。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function resetIpIntelStateForTest() {
   refreshing.clear();
   agentIntelCheckedAt.clear();

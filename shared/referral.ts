@@ -23,7 +23,7 @@ export function normalizeReferralMode(value: unknown): ReferralMode {
 }
 
 /** 返利来源：在线支付的套餐订单 / 余额买套餐（含自动续费）。 */
-export const REFERRAL_SOURCE_TYPES = ["payment_order", "balance_purchase"] as const;
+const REFERRAL_SOURCE_TYPES = ["payment_order", "balance_purchase"] as const;
 export type ReferralSourceType = typeof REFERRAL_SOURCE_TYPES[number];
 
 /**
@@ -31,7 +31,7 @@ export type ReferralSourceType = typeof REFERRAL_SOURCE_TYPES[number];
  * 邀请码常被人念出来、抄在截图里，认错一个字就绑不上。
  */
 export const INVITE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-export const INVITE_CODE_LENGTH = 8;
+const INVITE_CODE_LENGTH = 8;
 
 const INVITE_CODE_PATTERN = new RegExp(`^[${INVITE_CODE_ALPHABET}]{${INVITE_CODE_LENGTH}}$`);
 

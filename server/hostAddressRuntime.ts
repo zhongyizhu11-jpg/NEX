@@ -10,7 +10,7 @@ export function hostIngressAddress(hostLike: any) {
   return String(hostLike?.entryIp || hostLike?.ipv4 || hostLike?.ipv6 || hostLike?.ip || "").trim();
 }
 
-export function hostUsesAutomaticIngress(hostLike: any) {
+function hostUsesAutomaticIngress(hostLike: any) {
   return !String(hostLike?.entryIp || "").trim();
 }
 

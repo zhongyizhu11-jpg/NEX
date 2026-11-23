@@ -10,7 +10,7 @@ function normalizeTunnelId(tunnelId: unknown) {
   return Number.isFinite(id) && id > 0 ? id : 0;
 }
 
-export function bumpTunnelRuntimeGeneration(tunnelId: number) {
+function bumpTunnelRuntimeGeneration(tunnelId: number) {
   const tid = normalizeTunnelId(tunnelId);
   if (!tid) return 0;
   const current = tunnelRuntimeGeneration.get(tid) || 0;

@@ -5,7 +5,7 @@ export type LatencyTimeRangeHours = 720 | 168 | 72 | 24 | 12 | 6 | 3 | 1 | 0.5;
 
 export const DEFAULT_LATENCY_TIME_RANGE_HOURS: LatencyTimeRangeHours = 24;
 
-export const LATENCY_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTimeRangeHours; label: string }> = [
+const LATENCY_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTimeRangeHours; label: string }> = [
   { value: "24", hours: 24, label: "24H" },
   { value: "12", hours: 12, label: "12H" },
   { value: "6", hours: 6, label: "6H" },
@@ -18,7 +18,7 @@ export const LATENCY_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTi
  * 更长的几档：只有存了按小时汇总的图表能用（主机的服务延迟，见 server/repositories/hostProbeHourlyRepository.ts）；
  * 规则、隧道、线路组的原始样本只留 72 小时，还用上面那组。
  */
-export const LATENCY_LONG_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTimeRangeHours; label: string }> = [
+const LATENCY_LONG_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTimeRangeHours; label: string }> = [
   { value: "720", hours: 720, label: "30天" },
   { value: "168", hours: 168, label: "7天" },
   { value: "72", hours: 72, label: "3天" },

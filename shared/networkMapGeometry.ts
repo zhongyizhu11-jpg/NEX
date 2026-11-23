@@ -46,14 +46,14 @@ export function greatCircleArc(a: LngLat, b: LngLat, n = 40): LngLat[] {
 
 export type LayoutPoint = { key: string; lngLat: LngLat };
 
-export type LayoutPosition = {
+type LayoutPosition = {
   /** marker 要放的经纬度：单独的点是自己，并进组的是组的中心 */
   lngLat: LngLat;
   /** 并在哪一组里（组里不止一个点时才有值） */
   clusterId: number | null;
 };
 
-export type LayoutGroup = { id: number; keys: string[]; center: LngLat; cx: number; cy: number };
+type LayoutGroup = { id: number; keys: string[]; center: LngLat; cx: number; cy: number };
 
 export type MapLayout = {
   /** 不止一个点的组 —— 这些画成一枚带数量的环 */

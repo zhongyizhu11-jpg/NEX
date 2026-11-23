@@ -81,7 +81,7 @@ export function hostLoadPctOf(hostId: number, now = Date.now()): number | null {
 }
 
 /** 下发给 Agent 用的负载（带回差，见 nextHostLoadHint）；不知道是 null。 */
-export function hostLoadHintPctOf(hostId: number, now = Date.now()): number | null {
+function hostLoadHintPctOf(hostId: number, now = Date.now()): number | null {
   const state = states.get(Math.floor(Number(hostId)));
   if (!state || now - state.latest.at > LOAD_STALE_MS) return null;
   return state.hint?.pct ?? null;

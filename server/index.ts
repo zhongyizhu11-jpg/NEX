@@ -15,6 +15,7 @@ import { paymentCallbackRouter } from "./payment/payment";
 import { migrationRouter } from "./migration";
 import { clientLogoRouter } from "./clientLogoRoute";
 import { uiThemeRouter } from "./uiThemeRoute";
+import { legacyImageRedirectTarget } from "./staticAssets";
 import { proxySubscriptionRouter } from "./proxySubscriptionRoute";
 import { panelProfilingRouter } from "./panelProfilingRoute";
 import { xboardCompatRouter } from "./xboardCompatRoute";
@@ -86,6 +87,15 @@ function serveStatic(app: express.Express) {
     "/assets",
     express.static(path.join(clientDist, "assets"), { immutable: true, maxAge: "1y", index: false, fallthrough: true }),
   );
+  /*
+    2.3.550 起壁纸和地球贴图改成 WebP（体积少六成多）。老版本的手机 App / 浏览器缓存里的页面还会按
+    旧文件名要 .jpg / .png：301 到同名 .webp，不让它们 404 成一片黑背景。
+  */
+  app.get(/^\/(wallpapers|globe)\/[A-Za-z0-9_-]+\.(jpg|jpeg|png)$/, (req, res, next) => {
+    const target = legacyImageRedirectTarget(req.path);
+    if (!target) return next();
+    res.redirect(301, target);
+  });
   for (const directory of ["globe", "wallpapers"]) {
     app.use(
       `/${directory}`,

@@ -31,7 +31,7 @@ export function selectResolvedTargetIp(
 }
 
 /** 心跳里解析规则目标域名的总超时：DNS 卡住时不能拖住这台主机的心跳。 */
-export const TARGET_DNS_RESOLVE_TIMEOUT_MS = 2500;
+const TARGET_DNS_RESOLVE_TIMEOUT_MS = 2500;
 
 export type TargetDnsResolvers = {
   resolve4: (host: string) => Promise<string[]>;

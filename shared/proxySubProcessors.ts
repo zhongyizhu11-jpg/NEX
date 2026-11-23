@@ -27,7 +27,7 @@ import {
 } from "./proxySubTokenScope";
 
 /** 每条条目带的元信息；plan 构建时填，处理器按它改名。 */
-export type ProxySubEntryMeta = {
+type ProxySubEntryMeta = {
   hostName: string;
   templateName: string;
   ruleName: string;
@@ -47,7 +47,7 @@ export type ProxySubEntryMeta = {
   entryLng?: number | null;
 };
 
-export function entryMeta(entry: ProxySubscriptionEntry): ProxySubEntryMeta {
+function entryMeta(entry: ProxySubscriptionEntry): ProxySubEntryMeta {
   return entry.meta || { hostName: "", templateName: "", ruleName: "", customName: false, regionCode: "" };
 }
 
@@ -100,10 +100,10 @@ function tidyName(value: string): string {
 }
 
 /** 默认的节点命名模板：原样用生成时起好的名字。 */
-export const PROXY_SUB_DEFAULT_NAME_TEMPLATE = "{name}";
+const PROXY_SUB_DEFAULT_NAME_TEMPLATE = "{name}";
 
 /** 这个模板是不是「默认」：空、{name}，或者以前的默认值「{host} → {node}」。 */
-export function isProxySubDefaultNameTemplate(template: string): boolean {
+function isProxySubDefaultNameTemplate(template: string): boolean {
   const value = String(template || "").trim();
   return !value || value === PROXY_SUB_DEFAULT_NAME_TEMPLATE || value === "{host} → {node}";
 }
@@ -248,7 +248,7 @@ export function sortProxySubEntries(plan: ProxySubscriptionPlan, mode: ProxySubS
 
 // ==================== 字段覆盖 ====================
 
-export function applyProxySubNodeOverrides(plan: ProxySubscriptionPlan, options: ProxySubTokenOptions): ProxySubscriptionPlan {
+function applyProxySubNodeOverrides(plan: ProxySubscriptionPlan, options: ProxySubTokenOptions): ProxySubscriptionPlan {
   if (options.udp === "default" && options.skipCertVerify === "default") return plan;
   const entries = plan.entries.map((entry) => {
     const node = { ...entry.node };

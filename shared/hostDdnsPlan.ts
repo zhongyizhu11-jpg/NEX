@@ -44,7 +44,7 @@ export function ddnsProviderSupportsMultipleValues(provider: unknown): boolean {
   return text === "cloudflare" || text === "huaweicloud" || text === "aliyun" || text === "tencentcloud";
 }
 
-export const DDNS_PROVIDER_LABELS: Record<string, string> = {
+const DDNS_PROVIDER_LABELS: Record<string, string> = {
   cloudflare: "Cloudflare",
   huaweicloud: "华为云",
   aliyun: "阿里云",
@@ -60,7 +60,7 @@ export function hostDdnsProviderValueModeNote(provider: unknown): string {
   return `${label} 一个名字只按单个地址推送，「全部 IP」会退回主 IP。`;
 }
 
-export type HostDdnsRecordPlan = {
+type HostDdnsRecordPlan = {
   recordType: HostDdnsRecordType;
   values: string[];
   /** true 走多值接口（updateDdnsRecordValues，会删掉多余的同类型记录）；false 走原来的单值接口 */

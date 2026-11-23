@@ -46,9 +46,9 @@ import {
     不按权重了：合回一个记录集（weight 设回 1）。
 */
 
-export type WeightedTencentTransport = (action: string, payload: Record<string, unknown>) => Promise<unknown>;
-export type WeightedAliyunTransport = (action: string, params: Record<string, string | number | undefined>) => Promise<unknown>;
-export type WeightedHuaweiTransport = (
+type WeightedTencentTransport = (action: string, payload: Record<string, unknown>) => Promise<unknown>;
+type WeightedAliyunTransport = (action: string, params: Record<string, string | number | undefined>) => Promise<unknown>;
+type WeightedHuaweiTransport = (
   method: string,
   path: string,
   query: Record<string, string | number | undefined>,

@@ -29,7 +29,7 @@ export const IP_INTEL_TTL_SECONDS = 24 * 60 * 60;
 /** 失败的结果多久后可以重试（不然一次限流就要等一整天）。 */
 export const IP_INTEL_FAILURE_RETRY_SECONDS = 30 * 60;
 
-export const IP_INTEL_PROVIDERS = ["ipapi_is", "ipinfo", "proxycheck", "abuseipdb", "ripestat"] as const;
+const IP_INTEL_PROVIDERS = ["ipapi_is", "ipinfo", "proxycheck", "abuseipdb", "ripestat"] as const;
 export type IpIntelProvider = (typeof IP_INTEL_PROVIDERS)[number];
 
 export type IpIntelFamily = 4 | 6;
@@ -63,7 +63,7 @@ export const IP_INTEL_AGENT_SOURCES: ReadonlyArray<{ id: IpIntelProvider; url: s
   { id: "proxycheck", url: "https://proxycheck.io/v2/{ip}?vpn=1&asn=1&risk=1" },
 ];
 
-export const IP_TYPES = ["residential", "datacenter", "business", "mobile", "education", "government", "cdn", "other"] as const;
+const IP_TYPES = ["residential", "datacenter", "business", "mobile", "education", "government", "cdn", "other"] as const;
 export type IpType = (typeof IP_TYPES)[number];
 
 export const IP_TYPE_LABELS: Record<IpType, string> = {
@@ -115,7 +115,7 @@ export type IpIntelProviderResult = {
   info: IpIntelInfo | null;
 };
 
-export function emptyIpIntelInfo(): IpIntelInfo {
+function emptyIpIntelInfo(): IpIntelInfo {
   return {
     ip: null, asn: null, org: null, countryCode: null, region: null, city: null, timezone: null,
     regCountryCode: null, regLevel: null, ipType: null, ipTypeRaw: null, riskScore: null, riskRaw: null,
@@ -153,7 +153,7 @@ function score(value: unknown): number | null {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
-export function normalizeIntelAsn(value: unknown): string | null {
+function normalizeIntelAsn(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const match = String(value).trim().match(/^(?:AS)?\s*(\d{1,10})\b/i);
   if (!match) return null;
@@ -378,7 +378,7 @@ export function parseIpIntelResponse(provider: IpIntelProvider, raw: unknown, ad
 
 // ---------------------------------------------------------------- 汇总
 
-export type IpIntelEvidence = {
+type IpIntelEvidence = {
   provider: IpIntelProvider;
   kind: "usage" | "registration";
   countryCode: string;
@@ -442,7 +442,7 @@ export function judgeNativeIp(results: readonly Pick<IpIntelProviderResult, "pro
   return { verdict: "broadcast", usageCountry, registrationCountry, evidence, reason: `使用地 ${usageCountry}，注册地 ${registrationCountry}${weak}` };
 }
 
-export type IpIntelBasic = {
+type IpIntelBasic = {
   ip: string | null;
   asn: string | null;
   org: string | null;
@@ -455,7 +455,7 @@ export type IpIntelBasic = {
 };
 
 /** 基础信息：按 ipapi.is → IPinfo → proxycheck → AbuseIPDB 的顺序，每个字段取第一家给了的。 */
-export function pickIpIntelBasic(results: readonly Pick<IpIntelProviderResult, "provider" | "ok" | "info">[]): IpIntelBasic {
+function pickIpIntelBasic(results: readonly Pick<IpIntelProviderResult, "provider" | "ok" | "info">[]): IpIntelBasic {
   const usable = USAGE_ORDER.map((provider) => results.find((item) => item.provider === provider && item.ok && item.info)).filter(Boolean) as IpIntelProviderResult[];
   const pick = <K extends keyof IpIntelInfo>(key: K) => (usable.find((item) => item.info?.[key])?.info?.[key] ?? null) as IpIntelInfo[K] | null;
   return {

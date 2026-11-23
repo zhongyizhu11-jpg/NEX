@@ -51,16 +51,16 @@ import {
   normalizeIperf3ClientOptions,
 } from "./lookingGlassAgentTasks";
 
-export const SEGMENT_SPEED_SECONDS = 8;
-export const SEGMENT_SPEED_STREAMS = 4;
+const SEGMENT_SPEED_SECONDS = 8;
+const SEGMENT_SPEED_STREAMS = 4;
 const SERVER_START_TIMEOUT_MS = 45_000;
 const SERVER_STOP_TIMEOUT_MS = 20_000;
 const POLL_INTERVAL_MS = 1_000;
 const RUN_RETENTION_MS = 30 * 60 * 1000;
 const MAX_RUNS = 200;
 
-export type SegmentStatus = "pending" | "running" | "done" | "skipped" | "error";
-export type RunStatus = "running" | "done" | "error";
+type SegmentStatus = "pending" | "running" | "done" | "skipped" | "error";
+type RunStatus = "running" | "done" | "error";
 
 export type SegmentSpeedSegment = {
   from: { hostId: number | null; name: string };
@@ -167,7 +167,7 @@ async function resolveIperf3Target(target: string, allowPrivate: boolean) {
   return { host: value, address: addresses[0].address, family: addresses[0].family, addresses: addresses.map((entry) => entry.address) };
 }
 
-export const defaultSegmentSpeedDeps: SegmentSpeedDeps = {
+const defaultSegmentSpeedDeps: SegmentSpeedDeps = {
   async startServer(hostId) {
     if (hasActiveLookingGlassTask(hostId)) throw new Error("下游机器上正有网络测试在跑，等它结束再测");
     if (hasActiveIperf3Task(hostId)) throw new Error("下游机器上已经开着 iperf3 服务端（可能是网络测试页开的），先停掉再测");

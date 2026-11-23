@@ -1,11 +1,12 @@
 import { startScheduler } from "./scheduler";
 import { startTelegramBot } from "./telegram/telegramBot";
-import { isDevPanelMode } from "./devPanel";
+import { isDevPanelMode } from "./devPanelMode";
 import { onPanelBackgroundLeaseChange, startPanelBackgroundLease, stopPanelBackgroundLease } from "./panelLease";
 import { startPanelWorkPoller } from "./panelWorkRequests";
 import { startAgentPresenceElsewhere } from "./agentPresenceElsewhere";
 import { addShutdownTask } from "./dbWriteBatcher";
 import { noteForwardGroupDatabaseRecovered, runForwardGroupFailoverSweep } from "./forwardGroups/evaluateDriver";
+import { startAgentAssetPrefetchLoop } from "./agentAssets";
 
 let backgroundServicesStarted = false;
 
@@ -46,6 +47,8 @@ export function startBackgroundServices() {
   }
   backgroundServicesStarted = true;
   void startLeaseThenScheduler();
+  // 发布包里没带的 Agent 二进制（gost 运行时、mita）先在后台取好，主机装的时候不用等。
+  startAgentAssetPrefetchLoop();
   startTelegramBot().catch((error) => {
     console.warn(`[Telegram] Failed to start bot: ${error instanceof Error ? error.message : String(error)}`);
   });

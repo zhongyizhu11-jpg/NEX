@@ -80,7 +80,7 @@ export function HostTlsInboundSection({ hostId }: { hostId: number }) {
   );
 }
 
-export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { hostId: number; open: boolean; onOpenChange: (open: boolean) => void }) {
+function HostTlsInboundManager({ hostId, open, onOpenChange }: { hostId: number; open: boolean; onOpenChange: (open: boolean) => void }) {
   const utils = trpc.useUtils();
   const confirmDialog = useConfirmDialog();
   const { data, isLoading } = trpc.tlsInbounds.listByHost.useQuery({ hostId }, { enabled: open && hostId > 0 });

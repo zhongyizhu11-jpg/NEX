@@ -25,7 +25,7 @@ export function recordHostObservedAddress(hostId: number, address: string, nowMs
   setBoundedMapValue(byHost, id, { address: value, at: nowMs }, MAX_HOSTS);
 }
 
-export function getHostObservedAddress(hostId: number, nowMs = Date.now()): string | null {
+function getHostObservedAddress(hostId: number, nowMs = Date.now()): string | null {
   const entry = byHost.get(Math.floor(Number(hostId)));
   if (!entry || nowMs - entry.at > STALE_MS) return null;
   return entry.address;

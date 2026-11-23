@@ -98,7 +98,7 @@ export function Row({ label, value }: { label: ReactNode; value: ReactNode }) {
 }
 
 /** 「TCP 1,284 · UDP 96」；两个都没有就是一个「—」，只有一个时另一个单独画「—」。 */
-export function connectionsText(tcp: number | null, udp: number | null) {
+function connectionsText(tcp: number | null, udp: number | null) {
   if (tcp === null && udp === null) return "—";
   const n = (value: number | null) => (value === null ? "—" : value.toLocaleString(getFormatLocale()));
   return `TCP ${n(tcp)} · UDP ${n(udp)}`;

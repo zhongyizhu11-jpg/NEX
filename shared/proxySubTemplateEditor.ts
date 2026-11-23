@@ -77,7 +77,7 @@ export function parseProxySubRuleRows(text: unknown): ProxySubRuleRow[] {
 }
 
 /** 按字段拼一行（不看 raw）。 */
-export function proxySubRuleRowLine(row: Extract<ProxySubRuleRow, { kind: "rule" }>): string {
+function proxySubRuleRowLine(row: Extract<ProxySubRuleRow, { kind: "rule" }>): string {
   const noResolve = row.noResolve && PROXY_CUSTOM_RULE_TYPE_INFO[row.type].noResolve;
   const line = `${row.type},${row.value.trim()},${row.target.trim()}${noResolve ? ",no-resolve" : ""}`;
   return row.enabled ? line : `# ${line}`;

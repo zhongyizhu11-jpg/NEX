@@ -9,8 +9,7 @@
   这里放参数表、给人看的名字和「达标」的判断，界面和面板都用。
 */
 
-
-export type NetTuneRuleKind = "atLeast" | "atMost" | "bitsSet" | "equals" | "rmemAtLeast";
+type NetTuneRuleKind = "atLeast" | "atMost" | "bitsSet" | "equals" | "rmemAtLeast";
 export type NetTuneGroup = "forwarding" | "congestion" | "buffers" | "conntrack" | "queues" | "tcp";
 
 export const NETTUNE_GROUP_LABELS: Record<NetTuneGroup, string> = {
@@ -42,7 +41,7 @@ export type NetTuneRule = {
  * forwardx-fxp/internal/v3/BENCHMARKS.md「tcp_rmem 起点」（4 MB 起步更快，但 50 ms 丢包线路上多条新连接
  * 同时下载反而更慢，所以取 1 MB）。
  */
-export const NETTUNE_TCP_RMEM_DEFAULT = 1048576;
+const NETTUNE_TCP_RMEM_DEFAULT = 1048576;
 
 /** 和 agent/ext_nettune.go 的 netTuneRules 一一对应（哈希桶和拥塞控制另算，见下面）。 */
 export const NETTUNE_RULES: readonly NetTuneRule[] = [
@@ -70,19 +69,18 @@ export const NETTUNE_RULES: readonly NetTuneRule[] = [
 
 export const NETTUNE_KEY_CC = "net.ipv4.tcp_congestion_control";
 export const NETTUNE_KEY_QDISC = "net.core.default_qdisc";
-export const NETTUNE_KEY_AVAILABLE_CC = "net.ipv4.tcp_available_congestion_control";
-export const NETTUNE_KEY_BUCKETS = "net.netfilter.nf_conntrack_buckets";
-export const NETTUNE_KEY_COUNT = "net.netfilter.nf_conntrack_count";
-export const NETTUNE_KEY_CONNTRACK_MAX = "net.netfilter.nf_conntrack_max";
-export const NETTUNE_KEY_OS_RELEASE = "kernel.osrelease";
+const NETTUNE_KEY_BUCKETS = "net.netfilter.nf_conntrack_buckets";
+const NETTUNE_KEY_COUNT = "net.netfilter.nf_conntrack_count";
+const NETTUNE_KEY_CONNTRACK_MAX = "net.netfilter.nf_conntrack_max";
+const NETTUNE_KEY_OS_RELEASE = "kernel.osrelease";
 const NETTUNE_MIN_BUCKETS = 262144;
 /** 安装脚本和 Agent 只在这几种拥塞控制时改成 bbr；别的算是用户自选。 */
 const NETTUNE_DEFAULT_CC = new Set(["cubic", "reno", "bbr"]);
 
 /* ---------- Agent 上报的形状（agent/ext_nettune.go 的 netTuneResult） ---------- */
 
-export type NetTuneChange = { key: string; from: string; to: string };
-export type NetTuneFailure = { key: string; error: string };
+type NetTuneChange = { key: string; from: string; to: string };
+type NetTuneFailure = { key: string; error: string };
 
 /*
   2.2.255 起除了「检查 / 一键调优」还有两种（老 Agent 不认，只当一次检查，不会误改）：
@@ -195,7 +193,7 @@ export type NetTuneEvaluation = {
   kernel: string | null;
 };
 
-export function formatNetTuneBytes(value: number): string {
+function formatNetTuneBytes(value: number): string {
   if (value >= 1048576 && value % 1048576 === 0) return `${value / 1048576} MB`;
   if (value >= 1024 && value % 1024 === 0) return `${value / 1024} KB`;
   return `${value} B`;

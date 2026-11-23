@@ -10,7 +10,7 @@ import { isPaymentCryptoError } from "@shared/paymentErrors";
   换成一句人话；其它报错（含前端要解析的错误码、Agent / 插件的输出）一个字都不动。
 */
 
-export const ERROR_NOTIFICATION_TEXT = {
+const ERROR_NOTIFICATION_TEXT = {
   crypto: "密钥或证书无法解析，请检查格式或联系管理员查看日志。",
   network: "网络请求失败，请检查连接后重试。",
   internal: "操作失败，请稍后重试或联系管理员查看日志。",

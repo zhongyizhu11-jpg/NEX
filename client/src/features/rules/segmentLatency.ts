@@ -6,7 +6,7 @@ import { createContext, useContext } from "react";
   单测里没有它，编辑器照样画出来，只是没有数。
 */
 
-export type SegmentTestRequest = {
+type SegmentTestRequest = {
   entryHostId: number;
   hops: number[];
   hopVia: Array<number | null>;

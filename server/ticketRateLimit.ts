@@ -12,11 +12,11 @@
 import { getDb, queryRaw, quoteDbIdentifier } from "./dbRuntime";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 
-export const TICKET_CREATE_LIMIT = 5;
-export const TICKET_CREATE_WINDOW_MS = 60 * 60 * 1000;
-export const TICKET_REPLY_LIMIT = 30;
-export const TICKET_REPLY_WINDOW_MS = 10 * 60 * 1000;
-export const TICKET_OPEN_LIMIT = 10;
+const TICKET_CREATE_LIMIT = 5;
+const TICKET_CREATE_WINDOW_MS = 60 * 60 * 1000;
+const TICKET_REPLY_LIMIT = 30;
+const TICKET_REPLY_WINDOW_MS = 10 * 60 * 1000;
+const TICKET_OPEN_LIMIT = 10;
 
 const q = quoteDbIdentifier;
 

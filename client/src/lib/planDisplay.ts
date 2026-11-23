@@ -4,7 +4,7 @@ type PlanResourceSummary = {
   forwardGroupIds?: unknown[];
 };
 
-export function planResourceParts(plan: PlanResourceSummary) {
+function planResourceParts(plan: PlanResourceSummary) {
   return [
     { label: "历史主机", count: plan.hostIds?.length || 0 },
     { label: "隧道", count: plan.tunnelIds?.length || 0 },

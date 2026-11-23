@@ -18,7 +18,7 @@ export const AGENT_STATE_SECTION_NAMES = [
   // 共享 TLS 入站（SNI 分流）的路由表，见 server/tlsInboundRuntime.ts。老 Agent 不认这个键，照样回签名也无妨。
   "sniInbounds",
 ] as const;
-export const AGENT_STATE_SIGNATURE_SCHEMA = "v2";
+const AGENT_STATE_SIGNATURE_SCHEMA = "v2";
 
 export type AgentStateSectionName = typeof AGENT_STATE_SECTION_NAMES[number];
 export type AgentStateSignatures = Partial<Record<AgentStateSectionName, string>>;
@@ -43,7 +43,7 @@ export type AgentLocalRuntimeTunnelState = {
 };
 // Agent 2.2.220 起单独上报每条跑着的 V2 隧道数据面（入口机上没有隧道监听端口，
 // 以前只有出口通过 tunnels[] 报得出来）。
-export type AgentLocalRuntimeWireGuardPlaneState = {
+type AgentLocalRuntimeWireGuardPlaneState = {
   tunnelId: number;
   plane: "kernel" | "netstack";
 };
@@ -63,7 +63,7 @@ export type AgentLocalRuntimeState = {
   wireGuardPlanes?: AgentLocalRuntimeWireGuardPlaneState[];
 };
 
-export function canonicalizeStateSection(value: any): any {
+function canonicalizeStateSection(value: any): any {
   if (Array.isArray(value)) {
     return value
       .map((item) => {

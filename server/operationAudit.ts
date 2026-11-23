@@ -57,6 +57,7 @@ export function currentOperationAuditRequestId(): string | undefined {
     · 预览 / 解析 / 盯着看（watchMetrics、onlineIps.watch 每几秒续一次）、已读、用量上报。
   过程改名或删掉时 operationAudit.sqlite.test.ts 会报出这里的旧名字。
 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
   // 登录流程
   "auth.createCaptcha", "auth.sendEmailCode", "auth.login", "auth.verifyTwoFactorLogin", "auth.register",
@@ -86,7 +87,7 @@ export const OPERATION_AUDIT_SKIPPED_PATHS: ReadonlySet<string> = new Set([
   "ops.faultBoard.export", "ops.connStats.export",
 ]);
 
-export function shouldSkipOperationAudit(path: string): boolean {
+function shouldSkipOperationAudit(path: string): boolean {
   return OPERATION_AUDIT_SKIPPED_PATHS.has(String(path || ""));
 }
 
@@ -108,7 +109,7 @@ type AuditCtx = {
 };
 
 /** 这次调用从哪儿来。MCP 也带令牌，按请求路径分开；Telegram 机器人的上下文 IP 写的是 "telegram"。 */
-export function operationAuditChannel(ctx: AuditCtx): OperationAuditChannel {
+function operationAuditChannel(ctx: AuditCtx): OperationAuditChannel {
   if (ctx.impersonation) return "impersonation";
   const req: AuditRequest = ctx.req || {};
   const url = String(req.originalUrl || req.url || "");
@@ -119,7 +120,7 @@ export function operationAuditChannel(ctx: AuditCtx): OperationAuditChannel {
 }
 
 /** tRPC 错误码 → 审计结果。权限类是「被拒绝」，其余（参数不对、找不到、内部错误）是「失败」。 */
-export function operationAuditResultOf(ok: boolean, code?: string | null): OperationAuditResult {
+function operationAuditResultOf(ok: boolean, code?: string | null): OperationAuditResult {
   if (ok) return "ok";
   return code === "FORBIDDEN" || code === "UNAUTHORIZED" || code === "TOO_MANY_REQUESTS" ? "denied" : "error";
 }
@@ -148,11 +149,6 @@ export type OperationAuditRow = {
 };
 
 const pendingWrites = new Set<Promise<unknown>>();
-
-/** 测试用：等排队中的审计写完。 */
-export async function drainOperationAuditWrites() {
-  while (pendingWrites.size > 0) await Promise.allSettled([...pendingWrites]);
-}
 
 function positiveId(value: unknown): number | null {
   const id = Math.floor(Number(value));
@@ -251,7 +247,7 @@ export async function auditMutationCall<R extends MiddlewareResultLike>(opts: {
 
 // ── 保留天数 ────────────────────────────────────────────────────────────
 
-export const OPERATION_AUDIT_RETENTION_SETTING = "operationAuditRetentionDays";
+const OPERATION_AUDIT_RETENTION_SETTING = "operationAuditRetentionDays";
 
 export async function getOperationAuditRetentionDays() {
   return normalizeOperationAuditRetentionDays(await getSetting(OPERATION_AUDIT_RETENTION_SETTING).catch(() => null));
@@ -424,4 +420,9 @@ export async function getOperationAuditFacets(): Promise<OperationAuditFacets> {
     modules: modules.map((row) => ({ module: String(row.m || ""), count: Number(row.n) || 0 })).filter((row) => row.module),
     actors: actors.map((row) => ({ userId: Number(row.u) || 0, name: String(row.name || `#${row.u}`), count: Number(row.n) || 0 })).filter((row) => row.userId > 0),
   };
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function drainOperationAuditWrites() {
+  while (pendingWrites.size > 0) await Promise.allSettled([...pendingWrites]);
 }

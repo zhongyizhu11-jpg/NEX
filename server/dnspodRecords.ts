@@ -77,7 +77,7 @@ export type DnspodDomain = {
 
 export type DnspodRecordLine = { id: string; name: string };
 
-export type DnspodRecord = {
+type DnspodRecord = {
   id: string;
   /** 主机记录（@ / www / a.b / *）。 */
   subdomain: string;

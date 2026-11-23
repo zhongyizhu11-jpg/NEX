@@ -12,7 +12,7 @@
 import { maskSecret } from "../ddns";
 import { buildGoogleRedirectUri, isGoogleAcceptableRedirectBase, normalizePanelBaseUrl, parseEmailDomainList } from "../../shared/googleLogin";
 
-export const GOOGLE_SETTING_KEYS = {
+const GOOGLE_SETTING_KEYS = {
   enabled: "googleLoginEnabled",
   clientId: "googleClientId",
   clientSecret: "googleClientSecret",

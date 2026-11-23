@@ -15,9 +15,10 @@ import { deleteExpiredHistoryRows } from "./historyRetention";
   72 小时以内图表还是读原始样本（更细）；更长的才读这张表。
 */
 
-export const HOST_PROBE_HOURLY_TABLE = "host_probe_service_hourly";
+const HOST_PROBE_HOURLY_TABLE = "host_probe_service_hourly";
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const HOST_PROBE_HOURLY_WATERMARK_KEY = "hostProbeHourlyRollupThrough";
-export const HOST_PROBE_HISTORY_DAYS = 30;
+const HOST_PROBE_HISTORY_DAYS = 30;
 /** 超过这么多小时的图表读小时表（原始样本的保留期）。 */
 export const HOST_PROBE_RAW_MAX_HOURS = 72;
 const HOUR_SECONDS = 3600;

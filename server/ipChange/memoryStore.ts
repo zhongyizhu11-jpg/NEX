@@ -13,7 +13,7 @@ import type {
   IpChangeStore,
 } from "./model";
 
-export function defaultIpChangeConfig(id: number, hostId: number, now: Date): IpChangeConfigRecord {
+function defaultIpChangeConfig(id: number, hostId: number, now: Date): IpChangeConfigRecord {
   return {
     id,
     hostId,
@@ -39,7 +39,7 @@ export function defaultIpChangeConfig(id: number, hostId: number, now: Date): Ip
   };
 }
 
-export function isRealAttempt(event: Pick<IpChangeEventRecord, "trigger">) {
+function isRealAttempt(event: Pick<IpChangeEventRecord, "trigger">) {
   return event.trigger === "manual" || event.trigger === "auto";
 }
 

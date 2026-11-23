@@ -18,7 +18,7 @@ const TABLE = "user_traffic_daily";
 const BUCKET_MINUTES = 30;
 /** 每轮重算最近几天（今天 + 前两天）：桶留 72 小时，正好整天盖得住。 */
 const RECOMPUTE_DAYS = 3;
-export const USER_TRAFFIC_DAILY_RETENTION_DAYS = 100;
+const USER_TRAFFIC_DAILY_RETENTION_DAYS = 100;
 const ROLLUP_INTERVAL_MS = 10 * 60_000;
 const INSERT_CHUNK = 200;
 const DAY_MS = 24 * 3600 * 1000;
@@ -72,6 +72,7 @@ export function aggregateBucketsByDay(rows: ReadonlyArray<{ userId: unknown; rul
 }
 
 /** 重算最近 3 天（幂等）。返回写了几行。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function rollupUserTrafficDaily(now = new Date()) {
   const firstDay = billingDayStarts(RECOMPUTE_DAYS, now)[0];
   // 转发组成员的子规则记到模板规则上（和仪表盘按用户算流量是同一个口径）

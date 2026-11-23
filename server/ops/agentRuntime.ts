@@ -12,7 +12,7 @@
 */
 import { wakeAgentExt, type AgentExtHost } from "./agentExt";
 
-export type AgentRuntimeUdpSessions = { active: number; cap: number; evicted: number; rejected: number };
+type AgentRuntimeUdpSessions = { active: number; cap: number; evicted: number; rejected: number };
 
 export type AgentRuntimePprof = { running: boolean; addr: string; until: number; error: string };
 

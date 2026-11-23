@@ -10,7 +10,7 @@ import { mobileAuth } from "@/lib/mobileAuth";
 export const DATABASE_HEALTH_QUERY_KEY = "database-health";
 
 /** 故障期间多久查一次恢复。正常时不轮询：业务请求一旦拿到 503，main.tsx 会马上触发一次检查。 */
-export const DATABASE_HEALTH_RETRY_MS = 5_000;
+const DATABASE_HEALTH_RETRY_MS = 5_000;
 
 const DATABASE_LABELS: Record<NonNullable<DatabaseHealth["databaseType"]>, string> = {
   postgresql: "PostgreSQL",

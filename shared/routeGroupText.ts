@@ -22,7 +22,7 @@ export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; 
 };
 
 /** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
-export const ROUTE_REASON_SAME_EXIT_SUFFIX = "; same exit ip";
+const ROUTE_REASON_SAME_EXIT_SUFFIX = "; same exit ip";
 
 /** 把切换原因拆成本来的原因和「换到了同出口 IP」这个标记；老 Agent 的原因没有标记，原样过。 */
 export function splitRouteReason(reason: unknown): { base: string; sameExitIp: boolean } {
@@ -68,7 +68,7 @@ export function routeModeHint(mode: RouteMode, perSession = false): string {
 }
 
 /** 主备时「首选哪条」（编辑框里那几格同一套说法）。 */
-export const ROUTE_PREFER_LABELS: Record<RouteMode, string> = {
+const ROUTE_PREFER_LABELS: Record<RouteMode, string> = {
   failover: "按顺序",
   smart: "最快的",
   scheduled: "按时段",
@@ -89,16 +89,6 @@ export function routeStrategyLabel(policy: { mode: RouteMode; spread?: string | 
   const main = BALANCE_STRATEGY_LABELS.fallback.label;
   return short || policy.mode === "failover" ? main : `${main} · ${ROUTE_PREFER_LABELS[policy.mode]}`;
 }
-
-/** 徽标上的两个字：「主备 · 主线路」「定时 · 晚高峰线路」。 */
-export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
-  failover: "主备",
-  scheduled: "定时",
-  manual: "手动",
-  smart: "择优",
-  hybrid: "混合",
-  weighted: "负载",
-};
 
 // 名字和出口组的分配方式同一套（shared/loadBalance.ts），算法也是同一份（lbcore），只是这里说的是「路径」。
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {

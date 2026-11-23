@@ -9,8 +9,8 @@ import { appendPanelLog } from "../_core/panelLogger";
   名字和角色是闭合的名单：认不出的行丢掉 —— 这是 Agent 令牌就能写的表，不能让它变成任意标签的注入口。
 */
 
-export const FXP_RUNTIME_METRIC_ROLES = new Set(["entry", "relay", "exit", "process"]);
-export const FXP_RUNTIME_COUNTERS = new Set([
+const FXP_RUNTIME_METRIC_ROLES = new Set(["entry", "relay", "exit", "process"]);
+const FXP_RUNTIME_COUNTERS = new Set([
   "udp_queue_drop",
   "udp_expired_drop",
   "udp_session_rejected",
@@ -21,7 +21,7 @@ export const FXP_RUNTIME_COUNTERS = new Set([
   "half_close_reaped",
   "linger_expired",
 ]);
-export const FXP_RUNTIME_GAUGES = new Set(["udp_sessions", "tcp_sessions"]);
+const FXP_RUNTIME_GAUGES = new Set(["udp_sessions", "tcp_sessions"]);
 
 const RETENTION_HOURS = 24 * 7;
 const MAX_ROWS_PER_REPORT = 2000;

@@ -1,10 +1,10 @@
 export const AVATAR_MAX_BYTES = 50 * 1024;
-export const AVATAR_MAX_DATA_URL_LENGTH = 90 * 1024;
+const AVATAR_MAX_DATA_URL_LENGTH = 90 * 1024;
 export const BRAND_LOGO_MAX_BYTES = 100 * 1024;
-export const BRAND_LOGO_MAX_DATA_URL_LENGTH = 150 * 1024;
-export const AVATAAARS_PREFIX = "avataaars:";
-export const MULTIAVATAR_PREFIX = "multiavatar:";
-export const LEGACY_AVATAR_PRESET_PREFIX = "preset:";
+const BRAND_LOGO_MAX_DATA_URL_LENGTH = 150 * 1024;
+const AVATAAARS_PREFIX = "avataaars:";
+const MULTIAVATAR_PREFIX = "multiavatar:";
+const LEGACY_AVATAR_PRESET_PREFIX = "preset:";
 export const AVATAR_DAILY_CHANGE_LIMIT = 3;
 export const AVATAR_RANDOM_WINDOW_MS = 60 * 1000;
 export const AVATAR_RANDOM_WINDOW_LIMIT = 10;
@@ -21,10 +21,6 @@ function normalizeSeed(seed: string) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
-}
-
-export function multiavatarValue(seed: string) {
-  return `${MULTIAVATAR_PREFIX}${normalizeSeed(seed) || "forwardx"}`;
 }
 
 export function avataaarsValue(seed: string) {
@@ -48,7 +44,7 @@ export function isMultiavatarValue(value?: string | null) {
   return MULTIAVATAR_RE.test(String(value || ""));
 }
 
-export function isLegacyAvatarPreset(value?: string | null) {
+function isLegacyAvatarPreset(value?: string | null) {
   return LEGACY_PRESET_RE.test(String(value || ""));
 }
 

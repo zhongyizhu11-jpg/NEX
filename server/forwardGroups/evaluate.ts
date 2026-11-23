@@ -24,7 +24,7 @@ export type PeerObserverView = {
   crossCheckOk: boolean;
 };
 
-export type ExternalHealthState =
+type ExternalHealthState =
   /** 没有可用的观察点（单成员组、Agent 太旧、观察点都离线）：和以前一样只看成员自己的报告。 */
   | "none"
   /** 有观察点连得上，没有凑够「连不上」的票。 */
@@ -155,7 +155,7 @@ export function readinessGrace(input: { readyAt: number; now: number; hosts: rea
 }
 
 /** 单台主机是不是还在就绪宽限里说不准。 */
-export function readinessHostWaiting(readyAt: number, now: number, host: Pick<ReadinessHost, "lastSeenAt" | "offlineThresholdMs">) {
+function readinessHostWaiting(readyAt: number, now: number, host: Pick<ReadinessHost, "lastSeenAt" | "offlineThresholdMs">) {
   if (!(readyAt > 0)) return false;
   const seenAt = Number(host.lastSeenAt || 0);
   if (seenAt >= readyAt) return false;

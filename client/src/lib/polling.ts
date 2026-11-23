@@ -3,7 +3,7 @@
   页面切到后台时 react-query 自己会停掉 refetchInterval（refetchIntervalInBackground 默认 false），
   不用每处再接 usePageVisible；只有明确写了 refetchIntervalInBackground: true 的才会在后台继续。
 */
-export const POLLING_INTERVALS = {
+const POLLING_INTERVALS = {
   realtime: 1_000,
   interactive: 1_500,
   live: 2_000,

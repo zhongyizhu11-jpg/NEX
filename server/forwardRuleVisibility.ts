@@ -8,11 +8,11 @@ export function isManagedForwardGroupChildRule(rule: any) {
 }
 
 /** 线路组在中转机上生成的中继规则：面板维护，用户界面不列、不算配额（server/routeGroups.ts）。 */
-export function isRouteRelayRule(rule: any) {
+function isRouteRelayRule(rule: any) {
   return positiveId(rule?.routeParentRuleId) > 0;
 }
 
-export function filterForwardRulesForUserSurface<T>(rules: T[]) {
+function filterForwardRulesForUserSurface<T>(rules: T[]) {
   return rules.filter((rule) => !isManagedForwardGroupChildRule(rule));
 }
 

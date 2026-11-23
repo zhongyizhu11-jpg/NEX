@@ -150,7 +150,7 @@ export type ProxySubRenderInput = {
   shadowrocketClient: boolean;
 };
 
-export function renderSettingsFrom(settings: ProxySubSettings): ProxySubRenderSettings {
+function renderSettingsFrom(settings: ProxySubSettings): ProxySubRenderSettings {
   return {
     testUrl: settings.testUrl,
     testIntervalSec: settings.testIntervalSec,
@@ -202,7 +202,7 @@ export function renderProxySubPipeline(input: ProxySubRenderInput): string {
 }
 
 /** plan.skipped 里因为地址族跳过的那几条，变成文件头的注释行。 */
-export function proxySubAddressFamilyNotices(plan: Pick<ProxySubscriptionPlan, "skipped">): string[] {
+function proxySubAddressFamilyNotices(plan: Pick<ProxySubscriptionPlan, "skipped">): string[] {
   const lines = plan.skipped
     .filter((item) => item.reason === "no-ipv4-address" || item.reason === "no-ipv6-address")
     .map((item) => `# 已跳过节点「${item.nodeName || item.ruleName}」：${PROXY_SUBSCRIPTION_SKIP_LABELS[item.reason]}`);

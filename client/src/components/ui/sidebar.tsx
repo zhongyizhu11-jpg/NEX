@@ -333,6 +333,6 @@ export {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarTrigger,
+  
   useSidebar,
 }

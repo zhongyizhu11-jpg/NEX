@@ -15,9 +15,10 @@ import { routeDrillInternals } from "./routeDrill";
 import { insertRoutePathQualityStats, type RoutePathQualityRow } from "./repositories/routePathQualityRepository";
 import { AGENT_VERSION } from "../shared/versions";
 
-export const DEV_PANEL_FLAG = "FORWARDX_DEV_PANEL";
-export const DEV_ADMIN_USERNAME = "dev.admin@forwardx.local";
-export const DEV_ADMIN_PASSWORD = "forwardx-dev";
+import { DEV_ADMIN_PASSWORD, DEV_ADMIN_USERNAME, isDevPanelMode } from "./devPanelMode";
+
+/** @public 开关和固定账号搬到了 devPanelMode.ts；测试经 import(url("server/devPanel.ts")) 还从这里拿，knip 看不见 */
+export { DEV_ADMIN_PASSWORD, DEV_ADMIN_USERNAME, DEV_PANEL_FLAG, isDevPanelMode } from "./devPanelMode";
 
 type DevUsers = {
   adminId: number;
@@ -81,11 +82,6 @@ type DevPlanSnapshot = {
   tunnelIds?: number[];
   forwardGroupIds?: number[];
 };
-
-export function isDevPanelMode() {
-  if (process.env.NODE_ENV === "production") return false;
-  return process.env[DEV_PANEL_FLAG] === "1" || process.env[DEV_PANEL_FLAG] === "true";
-}
 
 function daysFromNow(days: number) {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000);

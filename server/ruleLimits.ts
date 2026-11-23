@@ -30,7 +30,7 @@ function isDerivedRule(rule: any) {
 }
 
 /** 根规则（不是转发组成员）里的限额策略。不给 ids 时只取设过额度 / 到期 / 记过原因的。 */
-export async function getRuleLimitPolicies(ids?: number[]): Promise<any[]> {
+async function getRuleLimitPolicies(ids?: number[]): Promise<any[]> {
   const connection = await getDb();
   const uniqueIds = ids ? Array.from(new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))) : undefined;
   if (!connection || (uniqueIds && uniqueIds.length === 0)) return [];

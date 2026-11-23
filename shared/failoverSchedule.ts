@@ -47,7 +47,7 @@ export function parseScheduleMinutes(value: unknown): number | null {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
-export function formatScheduleMinutes(minutes: number): string {
+function formatScheduleMinutes(minutes: number): string {
   const total = ((Math.floor(minutes) % 1440) + 1440) % 1440;
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }

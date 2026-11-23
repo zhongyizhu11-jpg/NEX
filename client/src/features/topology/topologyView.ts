@@ -19,7 +19,7 @@ export type TopologyFilters = {
   showTargets: boolean;
 };
 
-export type TopologyFocusType = "rule" | "tunnel" | "group";
+type TopologyFocusType = "rule" | "tunnel" | "group";
 export type TopologyFocus = { type: TopologyFocusType; id: number } | null;
 
 /** 地址栏 ?rule=12 / ?tunnel=3 / ?group=5 → 聚焦。同时给了几个时按 rule、tunnel、group 的顺序取第一个。 */

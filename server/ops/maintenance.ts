@@ -13,8 +13,8 @@
 import { TRPCError } from "@trpc/server";
 import { getAllSettings, setSettings } from "../repositories/settingsRepository";
 
-export const MAINTENANCE_ENABLED_KEY = "ops.maintenance.enabled";
-export const MAINTENANCE_MESSAGE_KEY = "ops.maintenance.message";
+const MAINTENANCE_ENABLED_KEY = "ops.maintenance.enabled";
+const MAINTENANCE_MESSAGE_KEY = "ops.maintenance.message";
 export const MAINTENANCE_BASE_MESSAGE = "面板维护中，请稍后再来";
 export const MAINTENANCE_MESSAGE_MAX_LENGTH = 200;
 const CACHE_TTL_MS = 5_000;

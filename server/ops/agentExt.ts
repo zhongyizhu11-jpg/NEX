@@ -16,8 +16,8 @@
 */
 import { sendAgentEvent } from "../agentEvents";
 
-export const AGENT_EXT_DEFAULT_INTERVAL_SECONDS = 60;
-export const AGENT_EXT_MIN_INTERVAL_SECONDS = 5;
+const AGENT_EXT_DEFAULT_INTERVAL_SECONDS = 60;
+const AGENT_EXT_MIN_INTERVAL_SECONDS = 5;
 
 export type AgentExtHost = {
   id: number;

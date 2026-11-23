@@ -11,7 +11,7 @@
 
 export const AUTH_CAPTCHA_MODES = ["click", "image"] as const;
 export type AuthCaptchaMode = (typeof AUTH_CAPTCHA_MODES)[number];
-export const DEFAULT_AUTH_CAPTCHA_MODE: AuthCaptchaMode = "click";
+const DEFAULT_AUTH_CAPTCHA_MODE: AuthCaptchaMode = "click";
 
 /** 库里存的值认不出来（空、旧版本没有、被手改坏）一律按点击验证。 */
 export function normalizeAuthCaptchaMode(value: unknown): AuthCaptchaMode {

@@ -20,7 +20,7 @@ import type { ProxyNodeTransport } from "@shared/proxyNode";
   凭据、密钥都是服务端生成的，这里只填形状（协议、端口、安全层、传输）和用户的名字。
 */
 
-export type LandingDraftUser = { id: number; name: string; shared?: boolean };
+type LandingDraftUser = { id: number; name: string; shared?: boolean };
 
 export type LandingDraft = {
   protocol: LandingPoolProtocol;

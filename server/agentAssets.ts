@@ -7,6 +7,8 @@ import { fileURLToPath } from "url";
 import { AGENT_VERSION, APP_VERSION } from "../shared/versions";
 import { MITA_AGENT_ASSET_NAMES } from "../shared/mitaAssets";
 import { setBoundedMapValue } from "./boundedCache";
+import { panelDataDir } from "./env";
+import { githubDownloadCandidates, type GithubAcceleratorConfig } from "../shared/githubAccelerator";
 
 const REPO_URL = "https://github.com/zhongyizhu11-jpg/NEX";
 const MAX_AGENT_ASSET_BYTES = 80 * 1024 * 1024;
@@ -51,9 +53,38 @@ export const AGENT_ASSET_NAMES = [
   assertAgentReleaseAssetsReady、装机脚本的校验和），mita 只在开了 Mieru 落地的机器上按需取，
   缺了它不该挡住所有人升级。Agent 装之前按 shared/mitaAssets.ts 钉死的哈希再校验一遍。
 */
-export const AGENT_RELAY_ONLY_ASSET_NAMES: readonly string[] = MITA_AGENT_ASSET_NAMES;
+const AGENT_RELAY_ONLY_ASSET_NAMES: readonly string[] = MITA_AGENT_ASSET_NAMES;
 
 export const AGENT_ASSET_NAME_SET = new Set<string>([...AGENT_ASSET_NAMES, ...AGENT_RELAY_ONLY_ASSET_NAMES]);
+
+/*
+  2.3.550 起面板发布包和镜像默认不再带 gost 运行时（两个架构 69 MB）和 mita（24 MB），只带 Agent 和 FXP：
+  面板包从 88 MB 降到约 35 MB。这四个文件主机第一次要的时候，面板按 SHA256SUMS 从发布页（开了 GitHub
+  加速先走加速）下到数据目录缓存起来，之后照旧从 /api/agent/assets 给；启动后也会先在后台把它们取好
+  （startAgentAssetPrefetchLoop），一般主机装到那一步时早就有了。离线部署用 -full 完整包，里面都带着。
+*/
+export const AGENT_OPTIONAL_BUNDLE_ASSET_NAMES = [
+  "forwardx-runtime-linux-amd64",
+  "forwardx-runtime-linux-arm64",
+  ...MITA_AGENT_ASSET_NAMES,
+] as const;
+
+/** Agent 二进制缓存目录：数据目录下的 agent-assets（FORWARDX_AGENT_ASSET_CACHE_DIR 可改，测试也靠它）。 */
+export function agentAssetCacheRoot() {
+  const configured = String(process.env.FORWARDX_AGENT_ASSET_CACHE_DIR || "").trim();
+  return configured ? path.resolve(configured) : path.resolve(panelDataDir(), "agent-assets");
+}
+
+/** 面板后台设置里的 GitHub 加速站；读不到（库没起来、测试里没有库）就只走直连。 */
+async function githubAcceleratorConfig(): Promise<GithubAcceleratorConfig | null> {
+  try {
+    const { getAllSettings } = await import("./db");
+    const settings = await getAllSettings();
+    return { enabled: settings.githubAcceleratorEnabled === "true", url: String(settings.githubAcceleratorUrl || "") };
+  } catch {
+    return null;
+  }
+}
 
 const serverDir = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
@@ -108,7 +139,7 @@ function githubAssetUrl(version: string, asset: string) {
 }
 
 function agentAssetCachePath(version: string, asset: string) {
-  return path.resolve(process.cwd(), "data", "agent-assets", `v${normalizeVersion(version)}`, asset);
+  return path.resolve(agentAssetCacheRoot(), `v${normalizeVersion(version)}`, asset);
 }
 
 function getAgentAssetReleaseCandidates(version: string) {
@@ -138,6 +169,7 @@ function getAgentAssetCandidates(version: string, asset: string) {
   }
   const assetRoots = [
     path.resolve(process.cwd(), "dist", "agent"),
+    agentAssetCacheRoot(),
     path.resolve(process.cwd(), "data", "agent-assets"),
     path.resolve(process.cwd(), "agent-assets"),
     path.resolve(serverDir, "agent"),
@@ -187,19 +219,24 @@ export function isAgentAssetVersionFetchable(version: string) {
  * 取不到（网络问题、上游 5xx）返回 null —— 这种情况不缓存二进制，过一会儿再试。
  */
 async function releaseAssetSha256(releaseVersion: string, asset: string, fetchImpl: AgentAssetFetch): Promise<string | "unpublished" | null> {
-  try {
-    const res = await fetchImpl(`${REPO_URL}/releases/download/v${normalizeVersion(releaseVersion)}/SHA256SUMS`, {
-      redirect: "follow",
-      headers: { "User-Agent": `NEX/${APP_VERSION}` },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (res.status === 404) return "unpublished";
-    if (!res.ok) return null;
-    const sums = parseSha256Sums(await res.text());
-    return sums[asset] || "unpublished";
-  } catch {
-    return null;
+  const sourceUrl = `${REPO_URL}/releases/download/v${normalizeVersion(releaseVersion)}/SHA256SUMS`;
+  let outcome: string | "unpublished" | null = null;
+  for (const url of githubDownloadCandidates(sourceUrl, await githubAcceleratorConfig())) {
+    try {
+      const res = await fetchImpl(url, {
+        redirect: "follow",
+        headers: { "User-Agent": `NEX/${APP_VERSION}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.status === 404) { outcome = "unpublished"; continue; }
+      if (!res.ok) continue;
+      const sums = parseSha256Sums(await res.text());
+      return sums[asset] || "unpublished";
+    } catch {
+      // 换下一个来源
+    }
   }
+  return outcome;
 }
 
 async function fileSha256(filePath: string) {
@@ -212,7 +249,7 @@ async function fileSha256(filePath: string) {
  * 缓存目录里的版本多于上限时删最旧的（按目录修改时间）。当前 Agent / 面板版本和刚写进去的那个不删。
  */
 export async function pruneAgentAssetCache(keepVersion: string, maxVersions = AGENT_ASSET_CACHE_MAX_VERSIONS) {
-  const root = path.resolve(process.cwd(), "data", "agent-assets");
+  const root = agentAssetCacheRoot();
   let entries: fs.Dirent[];
   try {
     entries = await fsp.readdir(root, { withFileTypes: true });
@@ -251,19 +288,24 @@ async function downloadAgentAssetToCache(version: string, asset: string, fetchIm
     await fsp.mkdir(path.dirname(cachePath), { recursive: true });
     const tmpPath = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
     try {
-      const res = await fetchImpl(githubAssetUrl(releaseVersion, asset), {
-        cache: "no-store",
-        redirect: "follow",
-        headers: {
-          "Cache-Control": "no-cache",
-          Pragma: "no-cache",
-          "User-Agent": `NEX/${APP_VERSION}`,
-        },
-      });
-      if (!res.ok || !res.body) {
-        console.warn(`[AgentAssets] Release asset unavailable ${asset} v${releaseVersion}: ${res.status} ${res.statusText}`);
-        continue;
+      let res: Awaited<ReturnType<AgentAssetFetch>> | null = null;
+      for (const url of githubDownloadCandidates(githubAssetUrl(releaseVersion, asset), await githubAcceleratorConfig())) {
+        const attempt = await fetchImpl(url, {
+          cache: "no-store",
+          redirect: "follow",
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+            "User-Agent": `NEX/${APP_VERSION}`,
+          },
+        }).catch((error) => {
+          console.warn(`[AgentAssets] ${asset} v${releaseVersion} from ${url}: ${error instanceof Error ? error.message : String(error)}`);
+          return null;
+        });
+        if (attempt && attempt.ok && attempt.body) { res = attempt; break; }
+        if (attempt) console.warn(`[AgentAssets] Release asset unavailable ${asset} v${releaseVersion} from ${url}: ${attempt.status} ${attempt.statusText}`);
       }
+      if (!res) continue;
 
       const contentLength = Number(res.headers.get("content-length") || 0);
       if (contentLength > MAX_AGENT_ASSET_BYTES) {
@@ -409,4 +451,45 @@ export async function getAgentReleaseChecksums(version: string): Promise<Record<
   const result = Object.keys(sums).length > 0 ? sums : null;
   releaseChecksumCache.set(normalized, { at: Date.now(), sums: result, complete: githubOk });
   return result;
+}
+
+/**
+ * 启动后把当前版本缺的二进制（发布包里没打进来的 gost 运行时 / mita，或者什么都没带的开发环境）先下好：
+ * 主机装到那一步时直接从面板拿，不用等面板现下几十 MB。一个一个下，不抢带宽。
+ * 返回取到的和没取到的；没取到的下一轮再试（getOrFetchAgentAssetPath 自带 5 分钟负缓存）。
+ */
+export async function prefetchAgentReleaseAssets(options: { version?: string; fetchImpl?: AgentAssetFetch; names?: readonly string[] } = {}) {
+  const version = normalizeVersion(options.version || APP_VERSION);
+  const names = options.names || [...AGENT_ASSET_NAMES, ...AGENT_RELAY_ONLY_ASSET_NAMES];
+  const fetched: string[] = [];
+  const failed: string[] = [];
+  for (const asset of names) {
+    if (getBundledAgentAssetPath(version, asset)) continue;
+    const filePath = await getOrFetchAgentAssetPath(version, asset, options.fetchImpl).catch(() => null);
+    (filePath ? fetched : failed).push(asset);
+  }
+  return { version, fetched, failed };
+}
+
+let prefetchTimer: NodeJS.Timeout | null = null;
+
+/** 启动 20 秒后预取一次，之后每 6 小时补一次（取齐了就什么都不做）。 */
+export function startAgentAssetPrefetchLoop(options: { initialDelayMs?: number; intervalMs?: number } = {}) {
+  if (prefetchTimer) return;
+  const run = async () => {
+    const result = await prefetchAgentReleaseAssets().catch((error) => {
+      console.warn(`[AgentAssets] prefetch failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    if (result && (result.fetched.length || result.failed.length)) {
+      console.info(`[AgentAssets] v${result.version} prefetch: fetched ${result.fetched.length ? result.fetched.join(", ") : "none"}${result.failed.length ? `; still missing ${result.failed.join(", ")}` : ""}`);
+    }
+  };
+  const interval = options.intervalMs ?? 6 * 60 * 60 * 1000;
+  prefetchTimer = setTimeout(() => {
+    void run();
+    prefetchTimer = setInterval(() => void run(), interval);
+    prefetchTimer.unref?.();
+  }, options.initialDelayMs ?? 20_000);
+  prefetchTimer.unref?.();
 }

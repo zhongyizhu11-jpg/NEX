@@ -290,7 +290,7 @@ function sanitizeConfig(config: PaymentConfig) {
   };
 }
 
-export async function getPaymentConfig(): Promise<PaymentConfig> {
+async function getPaymentConfig(): Promise<PaymentConfig> {
   const raw = await db.getSetting(PAYMENT_CONFIG_KEY);
   if (!raw) return defaultPaymentConfig;
   try {
@@ -974,6 +974,7 @@ async function creditPaidOrderToBalance(
 }
 
 /** 导出给测试用：同一笔订单结算两次只能发一次货、返一次利。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function finalizePaidOrder(outTradeNo: string) {
   let order = await db.claimPaidPaymentOrder(outTradeNo);
   if (!order) {
@@ -1264,7 +1265,7 @@ const userTriggeredQueryAt = new Map<string, number>();
  * 这里不看「太新」，但同一单 15 秒内只问一次，并且和维护任务、回调走同一把锁、同一条入账路径，
  * 不会因为几处同时确认「已付」而发两次货。
  */
-export async function checkPaymentOrderNow(outTradeNo: string) {
+async function checkPaymentOrderNow(outTradeNo: string) {
   const now = Date.now();
   const last = userTriggeredQueryAt.get(outTradeNo) || 0;
   if (now - last < USER_TRIGGERED_QUERY_INTERVAL_MS) return;
@@ -1359,6 +1360,7 @@ async function creditDeletedPaymentOrder(outTradeNo: string, notification: PaidN
 }
 
 /** 导出给测试用：模拟一次验签通过的付款通知。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function processPaidNotification(outTradeNo: string, notification: PaidNotification) {
   const order = await db.getPaymentOrderByOutTradeNo(outTradeNo);
   if (!order) {

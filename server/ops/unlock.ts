@@ -32,10 +32,10 @@ import { getHostNetProfile } from "./netProfile";
 const q = quoteDbIdentifier;
 const TABLE = "host_unlock_checks";
 
-export const UNLOCK_HISTORY_KEEP = 10;
+const UNLOCK_HISTORY_KEEP = 10;
 // Agent 一轮最多 2 分钟，几次检测在 Agent 上排队一个一个跑，所以多留一点。
-export const UNLOCK_RUN_TIMEOUT_MS = 5 * 60_000;
-export const UNLOCK_SCHEDULE_SETTING = "ops.unlock.schedule";
+const UNLOCK_RUN_TIMEOUT_MS = 5 * 60_000;
+const UNLOCK_SCHEDULE_SETTING = "ops.unlock.schedule";
 const UNLOCK_SCHEDULE_TICK_MS = 30 * 60_000;
 const UNLOCK_SCHEDULE_BATCH = 20;
 
@@ -227,7 +227,7 @@ export async function recordUnlockRun(record: UnlockRunRecord) {
 }
 
 /** 每台主机只留最近 UNLOCK_HISTORY_KEEP 次；各 family 最新的那一行不删（不然 IPv6 的结果会被几次 IPv4 挤掉）。 */
-export async function trimUnlockHistory(hostId: number, keep = UNLOCK_HISTORY_KEEP) {
+async function trimUnlockHistory(hostId: number, keep = UNLOCK_HISTORY_KEEP) {
   const rows = await queryRaw<any>(
     `SELECT ${q("id")}, ${q("latest")} FROM ${q(TABLE)} WHERE ${q("hostId")} = ? ORDER BY ${q("checkedAt")} DESC, ${q("id")} DESC`,
     [hostId],

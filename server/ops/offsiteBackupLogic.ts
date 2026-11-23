@@ -14,8 +14,8 @@ const DAY_MS = 24 * HOUR_MS;
 export const OFFSITE_BACKUP_DEFAULT_KEEP = 14;
 
 /** 与设置 › 备份恢复手动导出的文件同一种格式（server/migration.ts 的 encryptMigrationSnapshot）。 */
-export const OFFSITE_BACKUP_EXTENSION = ".fwxbak";
-export const OFFSITE_BACKUP_NAME_PATTERN = /^nex-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\.fwxbak$/;
+const OFFSITE_BACKUP_EXTENSION = ".fwxbak";
+const OFFSITE_BACKUP_NAME_PATTERN = /^nex-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\.fwxbak$/;
 
 function pad(value: number) {
   return String(value).padStart(2, "0");

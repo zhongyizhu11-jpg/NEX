@@ -8,7 +8,7 @@
 */
 
 
-export const UNLOCK_STATUSES = ["ok", "partial", "blocked", "unknown"] as const;
+const UNLOCK_STATUSES = ["ok", "partial", "blocked", "unknown"] as const;
 export type UnlockStatus = (typeof UNLOCK_STATUSES)[number];
 
 export const UNLOCK_FAMILIES = ["auto", "ipv4", "ipv6"] as const;

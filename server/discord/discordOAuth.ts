@@ -19,14 +19,14 @@ import { pruneMapEntries, setBoundedMapValue } from "../boundedCache";
 import { createPkcePair, randomUrlToken, sha256Base64Url, timingSafeEqualText, type FetchLike } from "../oauth/googleOidc";
 import { isDiscordSnowflake, type DiscordLoginMode } from "../../shared/discordLogin";
 
-export const DISCORD_AUTHORIZATION_ENDPOINT = "https://discord.com/oauth2/authorize";
-export const DISCORD_TOKEN_ENDPOINT = "https://discord.com/api/oauth2/token";
-export const DISCORD_REVOKE_ENDPOINT = "https://discord.com/api/oauth2/token/revoke";
-export const DISCORD_USER_ENDPOINT = "https://discord.com/api/users/@me";
-export const DISCORD_SCOPE = "identify email";
+const DISCORD_AUTHORIZATION_ENDPOINT = "https://discord.com/oauth2/authorize";
+const DISCORD_TOKEN_ENDPOINT = "https://discord.com/api/oauth2/token";
+const DISCORD_REVOKE_ENDPOINT = "https://discord.com/api/oauth2/token/revoke";
+const DISCORD_USER_ENDPOINT = "https://discord.com/api/users/@me";
+const DISCORD_SCOPE = "identify email";
 
 export const DISCORD_STATE_TTL_MS = 10 * 60 * 1000;
-export const DISCORD_STATE_MAX_ENTRIES = 10_000;
+const DISCORD_STATE_MAX_ENTRIES = 10_000;
 const DISCORD_HTTP_TIMEOUT_MS = 10_000;
 
 export type DiscordOAuthErrorCode = "state_invalid" | "exchange_failed" | "profile_invalid" | "email_unverified";

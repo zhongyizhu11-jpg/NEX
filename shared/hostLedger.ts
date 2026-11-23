@@ -40,11 +40,6 @@ export function normalizeHostCostCents(value: unknown): number {
 
 export type HostBandwidthBilling = "fixed" | "p95";
 
-export const HOST_BANDWIDTH_BILLING_LABELS: Record<HostBandwidthBilling, string> = {
-  fixed: "固定费用",
-  p95: "按 95 值计费",
-};
-
 export function normalizeHostBandwidthBilling(value: unknown): HostBandwidthBilling {
   return value === "p95" ? "p95" : "fixed";
 }
@@ -99,7 +94,7 @@ export type HostExpiryView = {
 };
 
 /** 账本上「快到期」的最少天数：提醒天数默认才 3 天，账本上看一周更有用。 */
-export const HOST_LEDGER_EXPIRY_HIGHLIGHT_DAYS = 7;
+const HOST_LEDGER_EXPIRY_HIGHLIGHT_DAYS = 7;
 
 export function hostExpiryView(
   host: { renewalReminderDays?: unknown },
@@ -154,7 +149,7 @@ export function hostTrafficPeriod(
 }
 
 /** 周期过去不到一天时，速度是拿几个小时外推一个月 —— 照算，但要说清只是粗估。 */
-export const HOST_PROJECTION_MIN_ELAPSED_MS = DAY_MS;
+const HOST_PROJECTION_MIN_ELAPSED_MS = DAY_MS;
 
 export type HostTrafficProjection = {
   /** 按这个周期到目前的平均速度，到周期末一共会用多少；算不出是 null。 */
@@ -211,11 +206,11 @@ export const P95_BUCKET_SECONDS = 300;
  * Agent 掉线半个桶、面板重启丢了半个桶的累加 —— 这种桶的速度按实际覆盖的秒数算，
  * 但覆盖不到一半的不要：拿 30 秒的数代表 5 分钟，抖一下就是一个假峰值。
  */
-export const P95_MIN_BUCKET_COVERAGE_SECONDS = 150;
+const P95_MIN_BUCKET_COVERAGE_SECONDS = 150;
 /** 至少一天的样本（288 个 5 分钟）才敢说这是个 95 值。 */
-export const P95_MIN_SAMPLES = 288;
+const P95_MIN_SAMPLES = 288;
 /** 覆盖率低于九成就标样本不足：缺掉的那些点里可能正好有峰值。 */
-export const P95_MIN_COVERAGE_RATIO = 0.9;
+const P95_MIN_COVERAGE_RATIO = 0.9;
 
 export type HostRateBucket = {
   /** 桶起点（epoch 秒，按 300 秒对齐）。 */
@@ -227,7 +222,7 @@ export type HostRateBucket = {
 };
 
 /** 一个桶出入两个方向里较大的那个速率（Mbps）；覆盖不够返回 null。 */
-export function bucketPeakMbps(bucket: HostRateBucket): number | null {
+function bucketPeakMbps(bucket: HostRateBucket): number | null {
   const covered = Math.min(P95_BUCKET_SECONDS, Math.max(0, Number(bucket.coveredSeconds) || 0));
   if (covered < P95_MIN_BUCKET_COVERAGE_SECONDS) return null;
   const bytes = Math.max(Math.max(0, Number(bucket.bytesIn) || 0), Math.max(0, Number(bucket.bytesOut) || 0));
@@ -297,7 +292,7 @@ export function hostP95Period(billingDay: unknown, nowMs: number): { startMs: nu
 }
 
 /** 单价（分 / Mbps / 月）× 95 值。95 值不到 1 Mbps 也按实际小数算，不向上取整 —— 各家规则不一，宁可少说。 */
-export function hostP95CostCents(mbps: number | null, priceCentsPerMbps: unknown): number | null {
+function hostP95CostCents(mbps: number | null, priceCentsPerMbps: unknown): number | null {
   const price = normalizeHostCostCents(priceCentsPerMbps);
   if (mbps === null || !Number.isFinite(mbps) || price <= 0) return null;
   return mbps * price;

@@ -11,7 +11,7 @@
 
 export type ResourceAlertMetric = "cpu" | "memory" | "disk";
 
-export const RESOURCE_ALERT_METRICS: ReadonlyArray<{ key: ResourceAlertMetric; label: string }> = [
+const RESOURCE_ALERT_METRICS: ReadonlyArray<{ key: ResourceAlertMetric; label: string }> = [
   { key: "cpu", label: "CPU" },
   { key: "memory", label: "内存" },
   { key: "disk", label: "磁盘" },
@@ -109,12 +109,12 @@ export function normalizeResourceAlertConfig(raw: Partial<Record<keyof ResourceA
   };
 }
 
-export function normalizeResourceAlertScope(value: unknown): ResourceAlertScope {
+function normalizeResourceAlertScope(value: unknown): ResourceAlertScope {
   return value === "include" || value === "exclude" ? value : "all";
 }
 
 /** 主机 id 列表：数组或设置里存的 JSON 字符串都认；去重、只留正整数。 */
-export function normalizeResourceAlertHostIds(value: unknown): number[] {
+function normalizeResourceAlertHostIds(value: unknown): number[] {
   let raw: unknown = value;
   if (typeof value === "string") {
     try {
@@ -219,11 +219,11 @@ export function resolveHostResourceAlertConfig(
   };
 }
 
-export function resourceAlertThreshold(config: ResourceAlertConfig, metric: ResourceAlertMetric) {
+function resourceAlertThreshold(config: ResourceAlertConfig, metric: ResourceAlertMetric) {
   return metric === "cpu" ? config.cpuPercent : metric === "memory" ? config.memoryPercent : config.diskPercent;
 }
 
-export type ResourceAlertMetricState = {
+type ResourceAlertMetricState = {
   /** 从什么时候起连续超过阈值（毫秒）；没超过是 null。 */
   aboveSince: number | null;
   /** 已经报过「超过」、还没恢复。 */
@@ -365,9 +365,9 @@ export function serviceRestartIncreases(
 
 // ---------------- 丢包（隧道探测） ----------------
 
-export const LOSS_WINDOW_MS = 10 * 60_000;
+const LOSS_WINDOW_MS = 10 * 60_000;
 /** 窗口里至少这么多次探测才判定，几个包的偶然失败不算。 */
-export const LOSS_MIN_PROBES = 10;
+const LOSS_MIN_PROBES = 10;
 
 export type LossWindowState = {
   samples: Array<{ at: number; count: number; ok: number }>;

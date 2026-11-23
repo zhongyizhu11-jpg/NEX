@@ -187,7 +187,7 @@ function enabledAccount(value: unknown) {
  * 发给主机的所属用户（「同时通知主机所属用户」打开时）。所属用户本身是管理员的已经在 sendAdminAlert 里收过，
  * 不重复发；账号停用的不发。Telegram 按他自己在机器人菜单里的「资源告警」开关；邮件跟全局「同时发邮件」。永远不抛。
  */
-export async function sendHostOwnerAlert(hostId: number, message: AdminAlertMessage, options: { email: boolean }) {
+async function sendHostOwnerAlert(hostId: number, message: AdminAlertMessage, options: { email: boolean }) {
   const q = quoteDbIdentifier;
   try {
     const rows = await queryRaw<{ id: number; role?: string; email?: string | null; telegramId?: string | number | null; accountEnabled?: unknown }>(
@@ -259,7 +259,7 @@ async function loadHostResourceAlertOverrides() {
   return overrides;
 }
 
-export async function getHostResourceAlertOverride(hostId: number): Promise<HostResourceAlertOverride | null> {
+async function getHostResourceAlertOverride(hostId: number): Promise<HostResourceAlertOverride | null> {
   const now = Date.now();
   if (!overrideCache || now - overrideCache.loadedAt >= OVERRIDE_CACHE_TTL_MS) {
     if (!overrideLoad) {
@@ -279,6 +279,7 @@ export async function getHostResourceAlertOverride(hostId: number): Promise<Host
 }
 
 /** 这台主机实际用的设置（范围、覆盖都算进去）。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function readHostResourceAlertConfig(hostId: number): Promise<ResourceAlertConfig> {
   const config = await readResourceAlertConfig();
   if (!config.enabled) return config;
@@ -319,7 +320,7 @@ function spacedLabel(label: string) {
   return { before: latin ? `${label} ` : label, around: latin ? ` ${label} ` : label };
 }
 
-export function describeResourceTransition(host: any, transition: ResourceAlertTransition, config: ResourceAlertConfig) {
+function describeResourceTransition(host: any, transition: ResourceAlertTransition, config: ResourceAlertConfig) {
   const name = hostLabel(host);
   const label = resourceAlertMetricLabel(transition.metric);
   const spaced = spacedLabel(label);
@@ -418,7 +419,7 @@ function boundedPut<K, V>(map: Map<K, V>, key: K, value: V) {
 }
 
 /** 服务名 → 人话：「forwardx-realm-12.service」→「realm 规则 #12」。 */
-export function describeServiceUnit(unit: string) {
+function describeServiceUnit(unit: string) {
   const name = unit.replace(/\.service$/, "");
   const rule = /^forwardx-(realm|socat|gost|singbox)-(\d+)$/.exec(name);
   if (rule) return `${rule[1]} 规则 #${rule[2]}`;

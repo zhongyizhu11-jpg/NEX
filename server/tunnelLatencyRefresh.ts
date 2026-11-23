@@ -54,7 +54,7 @@ export class TunnelLatencyRefreshSignals {
   }
 }
 
-export const tunnelLatencyRefreshSignals = new TunnelLatencyRefreshSignals();
+const tunnelLatencyRefreshSignals = new TunnelLatencyRefreshSignals();
 
 export function notifyTunnelLatencyRefresh(tunnelId: unknown) {
   tunnelLatencyRefreshSignals.notify(tunnelId);

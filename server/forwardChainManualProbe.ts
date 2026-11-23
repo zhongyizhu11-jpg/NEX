@@ -27,7 +27,7 @@ export function newForwardChainBatchId() {
   return `${FORWARD_CHAIN_BATCH_PREFIX}${randomUUID()}`;
 }
 
-export function forwardChainLatencyMode(meta: any) {
+function forwardChainLatencyMode(meta: any) {
   const value = String(meta?.latencyMode || "");
   return value === "multi-source-remaining-path" || value === "remaining-path" ? value : "sum";
 }
@@ -38,7 +38,7 @@ function parseRequest(row: any): any {
 }
 
 /** One stored row → the hop result the in-memory aggregator used to receive. */
-export function forwardChainHopResultFromRow(row: any, request = parseRequest(row)): HopTestResult {
+function forwardChainHopResultFromRow(row: any, request = parseRequest(row)): HopTestResult {
   const hopLabel = String(request.hopLabel || "hop");
   const success = row.status === "success" && Number(row.latencyMs) > 0;
   const timedOut = row.status === "timeout";

@@ -54,20 +54,22 @@ import {
 } from "../../shared/passwordReset";
 
 /** 系统设置里的开关：默认开，只有明确存成 "false" 才关（和 authCaptchaEnabled 一个写法）。 */
-export const PASSWORD_RESET_ENABLED_SETTING = "passwordResetEnabled";
+const PASSWORD_RESET_ENABLED_SETTING = "passwordResetEnabled";
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function isPasswordResetEnabled(): Promise<boolean> {
   return (await getSetting(PASSWORD_RESET_ENABLED_SETTING)) !== "false";
 }
 
 // 申请：同一个来源半小时 6 次；同一个账号一分钟 1 次、一小时 3 次。重置：同一个来源 15 分钟 20 次。
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const PASSWORD_RESET_REQUEST_IP_MAX = 6;
-export const PASSWORD_RESET_REQUEST_IP_WINDOW_MS = 30 * 60 * 1000;
-export const PASSWORD_RESET_ACCOUNT_COOLDOWN_MS = 60 * 1000;
-export const PASSWORD_RESET_ACCOUNT_MAX = 3;
-export const PASSWORD_RESET_ACCOUNT_WINDOW_MS = 60 * 60 * 1000;
-export const PASSWORD_RESET_SUBMIT_IP_MAX = 20;
-export const PASSWORD_RESET_SUBMIT_IP_WINDOW_MS = 15 * 60 * 1000;
+const PASSWORD_RESET_REQUEST_IP_WINDOW_MS = 30 * 60 * 1000;
+const PASSWORD_RESET_ACCOUNT_COOLDOWN_MS = 60 * 1000;
+const PASSWORD_RESET_ACCOUNT_MAX = 3;
+const PASSWORD_RESET_ACCOUNT_WINDOW_MS = 60 * 60 * 1000;
+const PASSWORD_RESET_SUBMIT_IP_MAX = 20;
+const PASSWORD_RESET_SUBMIT_IP_WINDOW_MS = 15 * 60 * 1000;
 
 /** 给人看的错误（页面原样显示）。code 对应 tRPC 的错误码，路由里转成 TRPCError。 */
 export class PasswordResetError extends Error {
@@ -78,7 +80,7 @@ export class PasswordResetError extends Error {
 }
 
 /** 找回密码只用到用户行上的这几列。 */
-export type PasswordResetAccount = {
+type PasswordResetAccount = {
   id: number;
   username: string;
   name?: string | null;
@@ -92,18 +94,19 @@ export type PasswordResetAccount = {
   discordDmBlockedAt?: Date | string | number | null;
 };
 
-export type PasswordResetAvailability = Record<PasswordResetChannel, boolean> & {
+type PasswordResetAvailability = Record<PasswordResetChannel, boolean> & {
   /** 设置里的面板公开访问地址；空 = 没配，发不了链接。 */
   panelUrl: string;
 };
 
 const TOKEN_PATTERN = new RegExp(`^${PASSWORD_RESET_TOKEN_PREFIX}[A-Za-z0-9_-]{43}$`);
 
-export function generatePasswordResetToken(): { token: string; hash: string } {
+function generatePasswordResetToken(): { token: string; hash: string } {
   const token = `${PASSWORD_RESET_TOKEN_PREFIX}${crypto.randomBytes(32).toString("base64url")}`;
   return { token, hash: hashPasswordResetToken(token) };
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function hashPasswordResetToken(token: string) {
   return crypto.createHash("sha256").update(String(token), "utf8").digest("hex");
 }
@@ -112,7 +115,7 @@ export function hashPasswordResetToken(token: string) {
  * 签发那一刻这个账号的密码哈希的指纹。密码一变（本人改了、管理员重置了、这条链接已经用过），
  * 或者这个 id 换了主人，所有没用掉的旧链接就都对不上了。
  */
-export function passwordResetCredentialMark(user: Pick<PasswordResetAccount, "id" | "password">) {
+function passwordResetCredentialMark(user: Pick<PasswordResetAccount, "id" | "password">) {
   return crypto.createHash("sha256").update(`password-reset-v1:${user.id}:${user.password}`, "utf8").digest("hex");
 }
 
@@ -121,7 +124,7 @@ function accountEnabled(user: Pick<PasswordResetAccount, "accountEnabled"> | nul
 }
 
 /** 这个账号的链接能发到哪几个渠道：停用的账号一个都没有；邮箱必须是验证过的。 */
-export function passwordResetDestinations(user: PasswordResetAccount, availability: Record<PasswordResetChannel, boolean>): PasswordResetChannel[] {
+function passwordResetDestinations(user: PasswordResetAccount, availability: Record<PasswordResetChannel, boolean>): PasswordResetChannel[] {
   if (!accountEnabled(user)) return [];
   const destinations: PasswordResetChannel[] = [];
   const email = String(user.email || "").trim();
@@ -133,7 +136,7 @@ export function passwordResetDestinations(user: PasswordResetAccount, availabili
 }
 
 /** 重置链接。panelUrl 只能是设置里配的公开地址（调用方保证），不是请求头里来的。 */
-export function passwordResetLink(panelUrl: string, token: string) {
+function passwordResetLink(panelUrl: string, token: string) {
   const base = normalizePanelUrl(panelUrl);
   if (!base) throw new Error("找回密码需要先在系统设置里配置面板公开访问地址");
   return `${base}/login#${PASSWORD_RESET_HASH_PARAM}=${encodeURIComponent(token)}`;
@@ -142,6 +145,7 @@ export function passwordResetLink(panelUrl: string, token: string) {
 // ---------- 库操作 ----------
 
 /** 给这个用户签一枚新令牌；他之前没用掉的全部作废。返回明文（只此一次）。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function issuePasswordResetToken(
   user: Pick<PasswordResetAccount, "id" | "password">,
   options: { ip?: string | null; channels?: readonly PasswordResetChannel[]; now?: number } = {},
@@ -168,10 +172,10 @@ export async function issuePasswordResetToken(
   return token;
 }
 
-export type UsablePasswordResetToken = { id: number; userId: number; credentialMark: string; channels: PasswordResetChannel[] };
+type UsablePasswordResetToken = { id: number; userId: number; credentialMark: string; channels: PasswordResetChannel[] };
 
 /** 令牌 → 还能用的那一行（没用过、没作废、没过期）；否则 null。 */
-export async function findUsablePasswordResetToken(token: string, now = Date.now()): Promise<UsablePasswordResetToken | null> {
+async function findUsablePasswordResetToken(token: string, now = Date.now()): Promise<UsablePasswordResetToken | null> {
   if (!TOKEN_PATTERN.test(String(token || ""))) return null;
   const q = quoteDbIdentifier;
   const rows = await queryRaw(`SELECT * FROM ${q("password_reset_tokens")} WHERE ${q("tokenHash")} = ? LIMIT 1`, [hashPasswordResetToken(token)]);
@@ -189,7 +193,7 @@ class PasswordResetRaceError extends Error {}
  * 用掉令牌、换密码、踢掉所有登录，三件事在一个事务里：要么都成，要么都不成。
  * 两个条件更新各自只认「还没被别人抢先」的状态 —— 同一条链接并发提交两次，只有一次返回 true。
  */
-export async function consumePasswordResetToken(
+async function consumePasswordResetToken(
   tokenId: number,
   user: Pick<PasswordResetAccount, "id" | "password">,
   newPasswordHash: string,
@@ -231,7 +235,7 @@ export async function prunePasswordResetTokens(retainDays = 7) {
 
 // ---------- 流程 ----------
 
-export type PasswordResetAuditEvent = {
+type PasswordResetAuditEvent = {
   kind: "requested" | "completed";
   user: PasswordResetAccount;
   channels: PasswordResetChannel[];
@@ -257,12 +261,13 @@ export type PasswordResetDeps = {
   log(level: "info" | "warn", message: string): void;
 };
 
-export type PasswordResetRequester = { ip: string; userAgent?: string };
+type PasswordResetRequester = { ip: string; userAgent?: string };
 
 function ipKey(prefix: string, ip: string) {
   return `${prefix}:${ipRateLimitScope(ip)}`;
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function createPasswordResetService(deps: PasswordResetDeps) {
   /** 登录页据此决定「忘记密码」里显示什么：开没开、面板这边有没有配好至少一个能发的渠道。不带任何账号的信息。 */
   async function options() {

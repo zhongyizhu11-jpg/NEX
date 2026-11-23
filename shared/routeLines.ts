@@ -36,12 +36,12 @@ import {
       隧道出口机。没对上就记 issue，不硬接。
 */
 
-export const ROUTE_LAYER_KINDS = ["hosts", "pool", "tunnel"] as const;
-export type RouteLayerKind = (typeof ROUTE_LAYER_KINDS)[number];
+const ROUTE_LAYER_KINDS = ["hosts", "pool", "tunnel"] as const;
+type RouteLayerKind = (typeof ROUTE_LAYER_KINDS)[number];
 
 /** 一层里怎么挑：best = 按整条链估的延迟挑，order = 按写的顺序（前面的优先）。 */
-export const ROUTE_LAYER_PICKS = ["best", "order"] as const;
-export type RouteLayerPick = (typeof ROUTE_LAYER_PICKS)[number];
+const ROUTE_LAYER_PICKS = ["best", "order"] as const;
+type RouteLayerPick = (typeof ROUTE_LAYER_PICKS)[number];
 
 export type RouteLayer = {
   /**
@@ -61,7 +61,7 @@ export type RouteLayer = {
   skippable: boolean;
 };
 
-export type RouteDestCandidate = {
+type RouteDestCandidate = {
   /** null = 规则自己的目标。 */
   dest: RouteEndpoint | null;
   destNodeId: number | null;
@@ -82,7 +82,7 @@ export type RouteLine = {
   destSpread?: RouteDestSpread;
 };
 
-export const MAX_ROUTE_LINES = MAX_ROUTE_PATHS;
+const MAX_ROUTE_LINES = MAX_ROUTE_PATHS;
 export const MAX_LAYER_CANDIDATES = 8;
 export const MAX_LINE_DESTS = 4;
 
@@ -256,7 +256,7 @@ function sameEndpoint(a: RouteEndpoint | null, b: RouteEndpoint | null) {
 
 // ---------------------------------------------------------------- 展开
 
-export type RouteTunnelInfo = { id: number; entryHostId: number; exitHostId: number; name: string; usable: boolean; issue?: string | null };
+type RouteTunnelInfo = { id: number; entryHostId: number; exitHostId: number; name: string; usable: boolean; issue?: string | null };
 
 export type RouteExpandContext = {
   entryHostId: number | null;
@@ -545,7 +545,7 @@ export const ROUTE_ENTRY_RELAY_INDEX = 99;
 
 export type RouteRelayTarget = { kind: "landing" } | { kind: "relay"; node: number; loopback: boolean };
 
-export type RouteRelaySlot = {
+type RouteRelaySlot = {
   /** 节点序号：0 = 入口机，k = hops[k-1]。 */
   node: number;
   /** 中继规则的 routeHopIndex：k-1；入口机上的是 ROUTE_ENTRY_RELAY_INDEX。 */

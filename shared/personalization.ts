@@ -1,9 +1,9 @@
 export const BUILTIN_WALLPAPERS = [
-  { id: "anime-1", name: "插画 1", url: "/wallpapers/anime-1.jpg" },
-  { id: "anime-2", name: "二次元 2", url: "/wallpapers/anime-2.jpg" },
-  { id: "anime-3", name: "二次元 3", url: "/wallpapers/anime-3.jpg" },
-  { id: "anime-4", name: "二次元 4", url: "/wallpapers/anime-4.jpg" },
-  { id: "illustration-1", name: "二次元 1", url: "/wallpapers/illustration-1.jpg" },
+  { id: "anime-1", name: "插画 1", url: "/wallpapers/anime-1.webp" },
+  { id: "anime-2", name: "二次元 2", url: "/wallpapers/anime-2.webp" },
+  { id: "anime-3", name: "二次元 3", url: "/wallpapers/anime-3.webp" },
+  { id: "anime-4", name: "二次元 4", url: "/wallpapers/anime-4.webp" },
+  { id: "illustration-1", name: "二次元 1", url: "/wallpapers/illustration-1.webp" },
 ] as const;
 
 export type BuiltinWallpaperId = typeof BUILTIN_WALLPAPERS[number]["id"];
@@ -469,7 +469,7 @@ export function getPersonalizationThemePreset(value: unknown) {
   return PERSONALIZATION_THEME_PRESETS.find((preset) => preset.id === id) || PERSONALIZATION_THEME_PRESETS[0];
 }
 
-export type PersonalizationBackgroundSource = "none" | "builtin" | "upload" | "url";
+type PersonalizationBackgroundSource = "none" | "builtin" | "upload" | "url";
 export type PersonalizationBackgroundUrlType = "image" | "video";
 
 export type PersonalizationBackgroundImage = {
@@ -631,8 +631,6 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
 ] as const;
 
-export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
-
 /**
  * 存着的界面主题 id 现在该按哪一套画。内置的三套一直能用；主题包要在 installedIds 里才算数
  * （服务端传库里装着的，浏览器传 publicInfo 给的那份名单），不在的回到 classic。
@@ -726,7 +724,7 @@ export const LIQUID_GLASS_LAYOUTS = [
   { id: "wings", name: "左右错落", description: "两张圆角照片一左一右错落（预览站的样子）。" },
 ] as const;
 
-export type LiquidGlassLayout = typeof LIQUID_GLASS_LAYOUTS[number]["id"];
+type LiquidGlassLayout = typeof LIQUID_GLASS_LAYOUTS[number]["id"];
 
 export type LiquidGlassConfig = {
   photoSource: LiquidGlassPhotoSource;

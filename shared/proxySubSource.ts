@@ -15,7 +15,7 @@ import { parseMiniYaml } from "./miniYaml";
 import { decodeBase64Utf8, parseProxyNodeLink, type ProxyNode } from "./proxyNode";
 import { parseProxyNodeJson } from "./proxyNodeJson";
 
-export type ProxySubSourceFormat = "links" | "base64" | "clash" | "singbox" | "json" | "unknown";
+type ProxySubSourceFormat = "links" | "base64" | "clash" | "singbox" | "json" | "unknown";
 
 export type ProxySubSourceParseResult = {
   format: ProxySubSourceFormat;

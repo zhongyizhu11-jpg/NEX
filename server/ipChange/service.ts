@@ -24,7 +24,7 @@ import {
   type IpChangeTrigger,
 } from "../../shared/ipChange";
 import { cooldownUntil, decideAutoChange, evaluateProbeRound, nextDetectionState, type AutoChangeBlockCode } from "./detection";
-import type { IpChangeConfigRecord, IpChangeEventRecord, IpChangeStore } from "./model";
+import type { IpChangeConfigRecord, IpChangeStore } from "./model";
 import type {
   IpChangeContext,
   IpChangeCredentials,
@@ -42,7 +42,7 @@ import {
 } from "./secrets";
 
 export const IP_CHANGE_PLUGIN_INACTIVE_MESSAGE = "请先在「插件管理」里打开插件功能，并安装、启用「自动换 IP」插件";
-export const IP_CHANGE_RESTART_MESSAGE = "面板在更换过程中重启，云厂商那边是否已经生效未知。请到云控制台确认实例和 IP 的实际情况后点「重置状态」";
+const IP_CHANGE_RESTART_MESSAGE = "面板在更换过程中重启，云厂商那边是否已经生效未知。请到云控制台确认实例和 IP 的实际情况后点「重置状态」";
 
 export type IpChangeHost = {
   id: number;
@@ -176,7 +176,7 @@ function isAbortError(error: unknown) {
 }
 
 /** 错误信息里出现凭据原文的，一律换成 ***（云厂商的报错偶尔会把请求参数原样带回来）。 */
-export function redactSecrets(message: string, credentials: IpChangeCredentials | null | undefined) {
+function redactSecrets(message: string, credentials: IpChangeCredentials | null | undefined) {
   let text = String(message || "");
   for (const value of Object.values(credentials || {})) {
     if (value && value.length >= 6) text = text.split(value).join("***");
@@ -1082,4 +1082,4 @@ export class IpChangeService {
   }
 }
 
-export type { IpChangeEventRecord };
+;

@@ -63,7 +63,7 @@ type PublicHomeViewProps = {
   onToggleTheme: () => void;
 };
 
-export function PublicHomeView({ siteTitle, logoSrc, version, repoUrl, registrationEnabled, dark, onToggleTheme }: PublicHomeViewProps) {
+function PublicHomeView({ siteTitle, logoSrc, version, repoUrl, registrationEnabled, dark, onToggleTheme }: PublicHomeViewProps) {
   const [journey, setJourney] = useState<"user" | "admin">("user");
   const primaryHref = registrationEnabled === true ? "/login?mode=register" : "/login";
   const primaryLabel = registrationEnabled === true ? "创建账号，开始使用" : "登录工作空间";

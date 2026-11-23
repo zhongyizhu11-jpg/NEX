@@ -99,7 +99,7 @@ export const VLESS_EGRESS_BRIDGE_SERVICE_NAME = "forwardx-singbox-egress";
 export const VLESS_EGRESS_BRIDGE_CONFIG_PATH = `${SINGBOX_CONFIG_DIR}/egress.json`;
 /** 桥接端口挑在这一段里：和协议守卫、隧道出口本机服务那几段（45000 + 规则号起）错开，冲突时往后顺延。 */
 export const VLESS_EGRESS_BRIDGE_PORT_MIN = 36000;
-export const VLESS_EGRESS_BRIDGE_PORT_MAX = 39999;
+const VLESS_EGRESS_BRIDGE_PORT_MAX = 39999;
 
 /**
  * socks 入站的凭据。桥接只听 127.0.0.1，但同一台机器上别的进程（别的租户的 socat、用户自己跑的程序）
@@ -191,7 +191,7 @@ export type VlessEgressBridge = {
  * 带 UDP 的规则写明 packet_encoding=xudp：sing-box 1.14 不写时默认也是 xudp，但写死不随默认值变，而且 Agent 只收这一种
  * （agent/singbox_egress_bridge.go）。只 TCP 的规则不写这一项，生成的配置和以前一字不差。
  */
-export function buildVlessEgressOutbound(tag: string, endpoint: VlessEgressEndpoint, options: { udp?: boolean } = {}): Record<string, unknown> {
+function buildVlessEgressOutbound(tag: string, endpoint: VlessEgressEndpoint, options: { udp?: boolean } = {}): Record<string, unknown> {
   return {
     type: "vless",
     tag,
@@ -239,7 +239,7 @@ export function buildVlessEgressBridgeConfig(bridges: readonly VlessEgressBridge
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
-export function buildVlessEgressBridgeServiceUnit(): string {
+function buildVlessEgressBridgeServiceUnit(): string {
   return [
     "[Unit]",
     "Description=ForwardX sing-box egress bridge (VLESS Reality)",

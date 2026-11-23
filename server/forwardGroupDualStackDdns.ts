@@ -1,18 +1,4 @@
-/*
-  转发组 / 入口组的双栈 DDNS（上游 2.3.294「入口组、转发组 DDNS 支持 IPv4 + IPv6」）。
 
-  原来一个组只发一种记录（A、AAAA 或 CNAME）。双栈打开后（forward_groups.ddnsDualStack），A 组同时发
-  AAAA、AAAA 组同时发 A —— 但**成员挑选、健康判定、故障切换、带宽聚合一律还按主记录类型来**，
-  另一族只是「跟着同一批成员走」：主记录选中了哪些成员，副记录就发这些成员的另一族地址。
-
-  为什么不让两族各挑各的：故障转移组切走一台坏机器时，A 换到了 B，AAAA 要是还指着 A，
-  双栈客户端优先连 IPv6，照样连到坏机器上 —— 切换等于没切。所以副记录必须严格跟随，选中的成员没有
-  另一族地址时就少一条，一条都没有时把副记录清空（不是保留旧值，理由同上）。
-
-  CNAME 组没有「另一族」，不支持双栈。
-*/
-
-export type ForwardGroupDdnsRecordType = "A" | "AAAA" | "CNAME";
 
 /** 双栈组的副记录类型；没开双栈或者是 CNAME 组返回 null。 */
 export function forwardGroupMirrorRecordType(group: { recordType?: unknown; ddnsDualStack?: unknown } | null | undefined): "A" | "AAAA" | null {

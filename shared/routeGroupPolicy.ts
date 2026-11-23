@@ -96,7 +96,7 @@ export function routeTemplateGuards(mode: RouteMode): RouteGuards {
 }
 
 /** 定时 / 混合模式默认的时段：工作日晚高峰走第二条路径。 */
-export function defaultRouteSchedule(timezone: string, pathCount: number): FailoverSchedule {
+function defaultRouteSchedule(timezone: string, pathCount: number): FailoverSchedule {
   return { timezone, windows: [{ days: [1, 2, 3, 4, 5], from: "18:00", to: "01:00", targetIndex: Math.min(1, Math.max(0, pathCount - 1)) }] };
 }
 

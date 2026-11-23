@@ -68,7 +68,7 @@ export function proxySubUnlockQualifies(
 
 export type ProxySubUnlockNode = { name: string; exitHostId?: number | null };
 
-export type ProxySubUnlockGroup = { name: string; type: "fallback"; members: string[] };
+type ProxySubUnlockGroup = { name: string; type: "fallback"; members: string[] };
 
 export type ProxySubUnlockGroupsResult = {
   groups: ProxySubUnlockGroup[];

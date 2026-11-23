@@ -40,7 +40,7 @@ import { isLegacyShadowsocksMethod, type ProxyInboundProtocol } from "./proxyInb
 import { proxyNodeUnsupportedReasonForFormat, type ProxySubscriptionFormat } from "./proxySubscription";
 
 /** true = 能用，false = 用不了，null = 没核实。 */
-export type CompatVerdict = true | false | null;
+type CompatVerdict = true | false | null;
 
 type Fact = CompatVerdict;
 

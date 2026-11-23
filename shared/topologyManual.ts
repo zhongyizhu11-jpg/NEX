@@ -28,7 +28,7 @@ export function manualNodeId(id: number) {
   return `manual:${id}`;
 }
 
-export function manualLinkEdgeId(id: number) {
+function manualLinkEdgeId(id: number) {
   return `manual-link:${id}`;
 }
 
@@ -127,10 +127,6 @@ export function mergeTopologyManual(
     });
   }
   return { ...graph, nodes, edges };
-}
-
-export function isManualTopologyNode(node: Pick<TopologyNode, "id" | "kind">) {
-  return node.kind === "external" || node.id.startsWith("manual:");
 }
 
 export function manualIdOf(value: string, prefix: "manual:" | "manual-link:"): number | null {

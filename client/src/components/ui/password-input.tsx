@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
  *
  * id 仍然由 `FormField` 的 context 发给里面的 `Input`，多套一层 div 不影响。
  */
-export type PasswordInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">;
+type PasswordInputProps = Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">;
 
 const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(({ className, ...props }, ref) => {
   const [revealed, setRevealed] = React.useState(false);

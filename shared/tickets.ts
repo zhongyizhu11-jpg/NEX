@@ -7,7 +7,7 @@
   - closed：任意一方关掉了；关掉的工单不能直接回复，得先重新打开
 */
 
-export const TICKET_STATUSES = ["waiting_staff", "waiting_user", "closed"] as const;
+const TICKET_STATUSES = ["waiting_staff", "waiting_user", "closed"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 
 export const TICKET_PRIORITIES = ["low", "medium", "high"] as const;
@@ -37,11 +37,11 @@ export const TICKET_MESSAGE_PAGE_SIZE = 100;
 /** 用户被删之后，工单和消息还在，名字统一显示成这个。 */
 export const DELETED_USER_LABEL = "已删除用户";
 
-export function isTicketStatus(value: unknown): value is TicketStatus {
+function isTicketStatus(value: unknown): value is TicketStatus {
   return (TICKET_STATUSES as readonly string[]).includes(String(value));
 }
 
-export function isTicketPriority(value: unknown): value is TicketPriority {
+function isTicketPriority(value: unknown): value is TicketPriority {
   return (TICKET_PRIORITIES as readonly string[]).includes(String(value));
 }
 

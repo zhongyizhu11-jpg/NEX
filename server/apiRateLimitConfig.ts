@@ -6,7 +6,7 @@
 */
 import { DEFAULT_API_RATE_LIMIT, normalizeApiRateLimitConfig, type ApiRateLimitConfig, type ApiRateLimitDecision } from "./apiRateLimit";
 
-export const API_RATE_LIMIT_SETTING_KEY = "apiRateLimit";
+const API_RATE_LIMIT_SETTING_KEY = "apiRateLimit";
 const REFRESH_MS = 30_000;
 
 let cached: ApiRateLimitConfig = DEFAULT_API_RATE_LIMIT;

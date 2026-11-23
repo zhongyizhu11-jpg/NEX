@@ -13,7 +13,7 @@ import { RULE_CONNECTIONS_MAX_ROWS, type RuleConnectionRow, type RuleConnections
   hasQueuedRuleConnectionsTasks），否则配置没变的主机永远拿不到任务。
 */
 
-export type RuleConnectionsAgentTask = {
+type RuleConnectionsAgentTask = {
   taskId: string;
   ruleId: number;
   port: number;
@@ -28,7 +28,7 @@ export type RuleConnectionsAgentTask = {
   createdAt: string;
 };
 
-export type RuleConnectionsTaskState = "queued" | "running" | "done" | "timeout";
+type RuleConnectionsTaskState = "queued" | "running" | "done" | "timeout";
 
 export type RuleConnectionsTaskStatus = {
   taskId: string;
@@ -42,8 +42,8 @@ export type RuleConnectionsTaskStatus = {
 
 type TaskState = RuleConnectionsTaskStatus & { task: RuleConnectionsAgentTask; timer: NodeJS.Timeout };
 
-export const RULE_CONNECTIONS_AGENT_TIMEOUT_MS = 8_000;
-export const RULE_CONNECTIONS_PANEL_TIMEOUT_MS = 40_000;
+const RULE_CONNECTIONS_AGENT_TIMEOUT_MS = 8_000;
+const RULE_CONNECTIONS_PANEL_TIMEOUT_MS = 40_000;
 const MAX_ACTIVE_PER_HOST = 3;
 const TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 
@@ -90,7 +90,7 @@ function markTimeout(taskId: string) {
   scheduleRemoval(taskId);
 }
 
-export function countActiveRuleConnectionsTasks(hostId: number) {
+function countActiveRuleConnectionsTasks(hostId: number) {
   let count = 0;
   for (const state of states.values()) {
     if (state.hostId === hostId && (state.status === "queued" || state.status === "running")) count += 1;

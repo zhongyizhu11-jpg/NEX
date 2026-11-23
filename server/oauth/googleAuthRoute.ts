@@ -64,16 +64,17 @@ import {
 } from "./oauthRouteHelpers";
 
 // 这几样和 Discord 登录共用（server/oauthRouteHelpers.ts），这里保留原来的名字。
-export { requestMatchesPanelHost };
+;
 
-export const GOOGLE_BINDING_COOKIE = "nex_google_oauth";
+const GOOGLE_BINDING_COOKIE = "nex_google_oauth";
 const GOOGLE_COOKIE_PATH = "/api/auth/google";
 
-export const googleAuthStates = new GoogleAuthStateStore();
-export const googleJwks = new GoogleJwksCache();
+const googleAuthStates = new GoogleAuthStateStore();
+const googleJwks = new GoogleJwksCache();
 export const googleAppFlows = new GoogleAppFlowStore();
 
 /** 每个来源一分钟最多发起 20 次（网页 + App 一起算）。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const googleStartLimiter = new SlidingWindowRateLimiter({ limit: 20, windowMs: 60_000, maxKeys: 50_000 });
 
 export function consumeGoogleStartQuota(ip: string) {
@@ -103,7 +104,7 @@ function failureRedirect(res: Response, mode: GoogleLoginMode | null, code: Goog
 }
 
 /** App 流程在系统浏览器里显示的那几页。没有脚本，样式内联（CSP 允许 inline style）。 */
-export function renderGoogleAppPage(input: OAuthAppPage) {
+function renderGoogleAppPage(input: OAuthAppPage) {
   return renderOAuthAppPage({ ...input, confirmAction: "/api/auth/google/app-confirm" });
 }
 

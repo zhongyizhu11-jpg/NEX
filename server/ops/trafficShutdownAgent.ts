@@ -18,7 +18,7 @@ import { setBoundedMapValue } from "../boundedCache";
   只在这一轮刚认领到名额时发一次。
 */
 
-export type TrafficShutdownAgentReport = { supported: boolean; lastMark: string; lastError: string; reportedAt: number };
+type TrafficShutdownAgentReport = { supported: boolean; lastMark: string; lastError: string; reportedAt: number };
 
 const reports = new Map<number, TrafficShutdownAgentReport>();
 

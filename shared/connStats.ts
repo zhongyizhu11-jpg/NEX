@@ -47,7 +47,7 @@ export function connRoleLabel(role: string) {
 }
 
 /** 分档上限（毫秒），和 FXP 一致；第六档是「1000 以上」。 */
-export const CONN_STATS_BUCKETS_MS = [50, 100, 200, 500, 1000] as const;
+const CONN_STATS_BUCKETS_MS = [50, 100, 200, 500, 1000] as const;
 
 export type ConnStatsAggregate = {
   attempts: number;

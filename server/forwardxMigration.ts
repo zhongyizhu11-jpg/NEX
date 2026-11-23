@@ -30,11 +30,11 @@ import { FORWARDX_V3_MIN_AGENT_VERSION, FORWARDX_V3_MIN_FXP_VERSION } from "../s
 import type { MigrationSnapshot } from "./migration";
 
 /** 从原版库里读出来的一行（列名 → 值）。 */
-export type SourceRow = Record<string, unknown>;
+type SourceRow = Record<string, unknown>;
 
-export type ForwardxSourceKind = "sqlite" | "mysql" | "postgresql";
+type ForwardxSourceKind = "sqlite" | "mysql" | "postgresql";
 
-export type ForwardxServerConfig = {
+type ForwardxServerConfig = {
   host: string;
   port: number;
   user: string;
@@ -60,7 +60,7 @@ export interface ForwardxSourceDatabase {
 /** NEX 目标库的表定义（dbSchema.getDatabaseTableDefs 的形状，只用到名字和列名）。 */
 export type TargetTableDef = { name: string; columns: ReadonlyArray<{ name: string }> };
 
-export type ForwardxTableReport = {
+type ForwardxTableReport = {
   table: string;
   rows: number;
   status: "migrated" | "converted" | "skipped";
@@ -69,7 +69,7 @@ export type ForwardxTableReport = {
   note?: string;
 };
 
-export type ForwardxDroppedColumn = { table: string; column: string; rowsWithValue: number; note?: string };
+type ForwardxDroppedColumn = { table: string; column: string; rowsWithValue: number; note?: string };
 
 export type ForwardxMigrationReport = {
   sourceKind: ForwardxSourceKind;
@@ -158,7 +158,7 @@ function serverConfigFromEnv(env: Record<string, string | undefined>, kind: "mys
 }
 
 /** 路径映射：备份目录 / 容器里挂载的位置和原配置里写的不一样（/data/forwardx.db → /source/forwardx.db）。 */
-export function mapSourcePath(filePath: string, pathMap: Array<[string, string]>) {
+function mapSourcePath(filePath: string, pathMap: Array<[string, string]>) {
   const resolved = path.posix.normalize(filePath);
   for (const [from, to] of pathMap) {
     const prefix = path.posix.normalize(from).replace(/\/+$/, "");
@@ -482,7 +482,7 @@ const SKIPPED_SETTING_PATTERNS: RegExp[] = [
   /^panelUpgrade/,
 ];
 
-export function isSkippedForwardxSetting(key: string) {
+function isSkippedForwardxSetting(key: string) {
   return SKIPPED_SETTING_PATTERNS.some((pattern) => pattern.test(key));
 }
 

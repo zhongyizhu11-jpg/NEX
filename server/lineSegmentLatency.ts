@@ -35,7 +35,7 @@ export type LineSegmentProbe = {
   issue: string | null;
 };
 
-export async function planLineSegmentProbes(draft: LineSegmentDraft): Promise<LineSegmentProbe[]> {
+async function planLineSegmentProbes(draft: LineSegmentDraft): Promise<LineSegmentProbe[]> {
   const hops = draft.hops.slice(0, MAX_ROUTE_HOPS);
   const nodes = [draft.entryHostId, ...hops];
   const hosts = await db.getHostsByIds(nodes) as any[];
@@ -75,7 +75,7 @@ export async function planLineSegmentProbes(draft: LineSegmentDraft): Promise<Li
 }
 
 /** 拨落地的是哪台：入口，或者最后一跳中转（和 planLineSegmentProbes 同一个口径）。 */
-export function segmentDestDialHostId(draft: Pick<LineSegmentDraft, "entryHostId" | "hops">): number {
+function segmentDestDialHostId(draft: Pick<LineSegmentDraft, "entryHostId" | "hops">): number {
   const hops = draft.hops.slice(0, MAX_ROUTE_HOPS);
   return hops.length > 0 ? hops[hops.length - 1] : draft.entryHostId;
 }

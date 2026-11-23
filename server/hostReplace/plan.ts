@@ -44,7 +44,7 @@ const q = (name: string) => quoteDbIdentifier(name);
 type Row = Record<string, unknown>;
 
 /** 搬到新机上要监听的一个端口（直连规则、隧道入口上的规则）。 */
-export type PlannedListener = {
+type PlannedListener = {
   ruleId: number;
   port: number;
   protocol: string;
@@ -53,7 +53,7 @@ export type PlannedListener = {
   conflictKey: string | null;
 };
 
-export type RuleUnit = { kind: "rule"; unit: string; rule: Row; listener: PlannedListener };
+type RuleUnit = { kind: "rule"; unit: string; rule: Row; listener: PlannedListener };
 
 export type TunnelUnit = {
   kind: "tunnel";
@@ -80,7 +80,7 @@ export type MemberUnit = {
   templateIds: number[];
 };
 
-export type RouteUnit = {
+type RouteUnit = {
   kind: "route";
   unit: string;
   rule: Row;
@@ -88,9 +88,9 @@ export type RouteUnit = {
   routeLines: string | null;
 };
 
-export type PoolUnit = { kind: "pool"; unit: string; pool: Row; hostIds: number[] };
+type PoolUnit = { kind: "pool"; unit: string; pool: Row; hostIds: number[] };
 
-export type AccessUnit = { kind: "access"; unit: string; hostGroupIds: number[]; userIds: number[]; planIds: number[] };
+type AccessUnit = { kind: "access"; unit: string; hostGroupIds: number[]; userIds: number[]; planIds: number[] };
 
 export type PlanUnit = RuleUnit | TunnelUnit | MemberUnit | RouteUnit | PoolUnit | AccessUnit;
 
@@ -118,7 +118,7 @@ function nameOf(row: Row | null | undefined, fallback: string) {
 }
 
 /** 旧机的所有地址：别处写死了这些的，搬完要人去改。 */
-export function hostAddresses(host: Row): string[] {
+function hostAddresses(host: Row): string[] {
   return Array.from(new Set(["ip", "ipv4", "ipv6", "entryIp", "tunnelEntryIp"]
     .map((key) => String(host?.[key] || "").trim().toLowerCase())
     .filter(Boolean)));

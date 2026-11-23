@@ -46,7 +46,7 @@ async function isLegacyAgentAuthRejected() {
   return legacyAuthRejectLoading;
 }
 
-export function usedLegacyAgentAuth(req: Request) {
+function usedLegacyAgentAuth(req: Request) {
   return (req as any).agentLegacyAuth === true;
 }
 
@@ -137,7 +137,7 @@ export async function getAgentPresenceHostFromRequest(req: Request) {
   return db.getHostAgentPresenceById(identity.id);
 }
 
-export async function getCandidateAgentTokens() {
+async function getCandidateAgentTokens() {
   return db.getAgentAuthTokenCandidates();
 }
 

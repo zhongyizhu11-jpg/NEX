@@ -462,6 +462,20 @@ journalctl -u forwardx-panel -n 100 --no-pager
 本地部署升级时不要删除 `/opt/forwardx-panel/data` 和 `/opt/forwardx-panel/.env`。前者保存数据库和数据库连接配置，后者保存端口、登录密钥等运行环境。
 :::
 
+## Agent 二进制：默认按需下载，离线用完整包
+
+2.3.550 起，面板安装包和 Docker 镜像只带 Agent 和 FXP 两种二进制，不再带 gost 运行时（两个架构约 69 MB）和 Mieru 服务端 mita（约 24 MB），安装包从 88 MB 降到约 35 MB。
+
+- 主机装 GOST 转发或 Mieru 落地、第一次向面板要这两个文件时，面板按发布页的 `SHA256SUMS` 从 GitHub Releases 下载（后台开了 GitHub 加速站就先走加速站），校验通过才缓存到数据目录 `agent-assets/`（Docker 是 `/data/agent-assets`，本地安装是 `$APP_DIR/data/agent-assets`），之后照旧从 `/api/agent/assets` 发给主机。
+- 面板启动 20 秒后会在后台先把缺的文件取好，之后每 6 小时补一次；一般主机装到那一步时早就有了。缓存最多留 6 个版本。
+- 面板连不上 GitHub 的环境用**完整包** `forwardx-panel-v<版本>-full.tar.gz`，里面带全部 8 个二进制，装机脚本加 `FORWARDX_PANEL_BUNDLE_SUFFIX=-full` 即可：
+
+```bash
+FORWARDX_PANEL_BUNDLE_SUFFIX=-full bash install-panel-local.sh install
+```
+
+Docker 镜像没有完整版：连不上 GitHub 的 Docker 部署，把发布页上的 `forwardx-runtime-linux-<架构>`、`forwardx-mita-linux-<架构>` 放进数据卷的 `/data/agent-assets/v<面板版本>/` 目录即可，面板会直接用。缓存目录可以用环境变量 `FORWARDX_AGENT_ASSET_CACHE_DIR` 改。
+
 ## 配置域名和 HTTPS
 
 建议使用 Nginx、Caddy 或宝塔反向代理到面板端口。完整的 Nginx / Caddy 配置、真实 IP（`FORWARDX_TRUST_PROXY`）和 Agent 地址怎么填见[反向代理](./reverse-proxy.md)；Docker 部署前面有宿主机上的反代时一定要看。

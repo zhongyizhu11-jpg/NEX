@@ -20,7 +20,7 @@ import { notifyUserDirect } from "../userNotify";
 import { recordNewDeviceLoginEvent } from "./eventHooks";
 import { describeSessionDevice } from "./sessionDevices";
 
-export const LOGIN_NEW_DEVICE_NOTIFY_SETTING = "loginNewDeviceNotify";
+const LOGIN_NEW_DEVICE_NOTIFY_SETTING = "loginNewDeviceNotify";
 const MAX_ALERTS_PER_DAY = 5;
 const GEO_TIMEOUT_MS = 3_000;
 const alertsToday = new Map<string, number>();
@@ -156,9 +156,4 @@ export async function noteLoginDevice(user: LoginDeviceUser | null | undefined, 
     console.warn("[LoginDevices] note failed:", error instanceof Error ? error.message : error);
     return null;
   }
-}
-
-/** 测试用。 */
-export function resetLoginDeviceMemory() {
-  alertsToday.clear();
 }

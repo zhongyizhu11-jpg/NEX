@@ -25,7 +25,7 @@ const ALERT_KINDS = new Set(["unhealthy", "issue", "precheck_failed", "slow_dial
 const FAILURE_SWITCH = /health check|dial failed|relay down|maintenance|breaker|node offline|paused/i;
 
 /** 线路序号：同一条线路展开的几条路径算一条，按 tier 排（0 = 主线路）。老数据每条路径一条线路。 */
-export function routePathLineIndex(paths: readonly RoutePath[]) {
+function routePathLineIndex(paths: readonly RoutePath[]) {
   const order: Array<{ key: string; tier: number }> = [];
   for (const [index, path] of paths.entries()) {
     const key = path.lineKey || path.key;
@@ -173,7 +173,7 @@ export type HostLineImpact = {
  * 离线）：说清楚每条线路是已经避开了、切到了哪条、还是根本不受影响；没在避开时说它在哪条线路里、
  * 在不在走。
  */
-export function describeHostLineImpact(input: {
+function describeHostLineImpact(input: {
   hostId: number;
   isEntry: boolean;
   paths: readonly RoutePath[];

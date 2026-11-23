@@ -50,7 +50,7 @@ export function priceInputFromMilliCents(milliCents: unknown): string {
   return String(Number(yuan.toFixed(5)));
 }
 
-export const MILLI_CENTS_PER_CENT = 1000;
+const MILLI_CENTS_PER_CENT = 1000;
 
 /**
  * 从一条计费配置里取出单价（毫分/GB），兼容老字段。

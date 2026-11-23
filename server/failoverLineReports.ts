@@ -61,6 +61,7 @@ const STORED_EVENT_KINDS: ReadonlySet<RouteEventKind> = new Set<RouteEventKind>(
  *
  * 秒和毫秒都认（按量级判断）。认不出来的、比面板时钟还晚一天以上的，按收到的时刻算。
  */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function agentReportedSeconds(value: unknown, nowMs = Date.now()) {
   const ms = timestampMillis(value);
   if (!(ms > 0) || ms > nowMs + 86_400_000) return Math.floor(nowMs / 1000);
@@ -285,7 +286,7 @@ export async function ingestFailoverLineReports(input: {
   return { written, events: storedEvents };
 }
 
-/** 测试用：模拟面板重启。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function resetFailoverLineReportMemory() {
   lastSnapshotByHost.clear();
   lastStatsAtByHost.clear();

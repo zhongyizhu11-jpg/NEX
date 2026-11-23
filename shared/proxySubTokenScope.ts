@@ -58,7 +58,7 @@ export const PROXY_SUB_SORT_MODE_HINTS: Partial<Record<ProxySubSortMode, string>
 /** 三态：跟随全局 / 开 / 关。 */
 export type TriState = "default" | "on" | "off";
 
-export type ProxySubRenameRule = { from: string; to: string };
+type ProxySubRenameRule = { from: string; to: string };
 
 export type ProxySubTokenOptions = {
   /** 命名模板；空 = 跟随全局。变量见 PROXY_SUB_NAME_TEMPLATE_VARIABLES。 */
@@ -170,7 +170,7 @@ export function parseProxySubTokenScope(json: unknown): ProxySubTokenScope {
   }
 }
 
-export function proxySubTokenScopeIsEmpty(scope: ProxySubTokenScope): boolean {
+function proxySubTokenScopeIsEmpty(scope: ProxySubTokenScope): boolean {
   return scope.templateIds.length === 0
     && scope.excludeTemplateIds.length === 0
     && !scope.include
@@ -253,7 +253,7 @@ export function parseProxySubTokenOptions(json: unknown): ProxySubTokenOptions {
   }
 }
 
-export function proxySubTokenOptionsAreDefault(options: ProxySubTokenOptions): boolean {
+function proxySubTokenOptionsAreDefault(options: ProxySubTokenOptions): boolean {
   return JSON.stringify(normalizeProxySubTokenOptions(options)) === JSON.stringify(PROXY_SUB_DEFAULT_TOKEN_OPTIONS);
 }
 

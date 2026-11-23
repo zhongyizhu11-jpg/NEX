@@ -171,8 +171,8 @@ const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
 // 探测延迟曲线（recharts）点开才下载，不跟着主机页一起。
 const HostProbeServiceLatencyDialog = lazy(() => import("@/components/hosts/HostProbeServiceLatencyDialog"));
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
-const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.png";
-const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.png";
+const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.webp";
+const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.webp";
 const GLOBE_COUNTRIES_URL = "/globe/ne_110m_admin_0_countries.geojson";
 const HOST_GLOBE_CLUSTER_DISTANCE_DEGREES = 2.4;
 const HOST_GLOBE_LABEL_PULL_DEGREES = 8.2;

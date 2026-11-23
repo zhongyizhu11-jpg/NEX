@@ -50,7 +50,7 @@ export function withQuery(path: string, params: Record<string, string>) {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export function escapeHtml(value: string) {
+function escapeHtml(value: string) {
   return escapeHtmlAttr(value);
 }
 
@@ -85,7 +85,7 @@ button{width:100%;padding:10px 14px;border:0;border-radius:10px;background:#2563
 <body><main><h1>${escapeHtml(input.title)}</h1><p>${escapeHtml(input.message)}</p>${form}</main></body></html>`;
 }
 
-export type OAuthTwoFactorRequired = {
+type OAuthTwoFactorRequired = {
   twoFactorRequired: true;
   username: string;
   challengeId: string;

@@ -33,11 +33,11 @@ type CacheMeta = { fetchedAt: number; etag: string; contentType: string; size: n
 
 const inflight = new Map<string, Promise<void>>();
 
-export function proxySubRulesetCacheDir(): string {
+function proxySubRulesetCacheDir(): string {
   return path.join(path.dirname(clientLogoDir()), "rulesetCache");
 }
 
-export function isAllowedRulesetPath(upstreamPath: string): boolean {
+function isAllowedRulesetPath(upstreamPath: string): boolean {
   return ALLOWED.some((pattern) => pattern.test(upstreamPath));
 }
 

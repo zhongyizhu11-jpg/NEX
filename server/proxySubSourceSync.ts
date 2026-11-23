@@ -30,7 +30,7 @@ const TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 3;
 const DEFAULT_UA = "NEX-Subscription-Sync/1.0 (+clash.meta; mihomo)";
 
-export class ProxySubSourceFetchError extends Error {}
+class ProxySubSourceFetchError extends Error {}
 
 /** 这个主机名解析出来的地址是不是全在公网上。 */
 /** 只给测试用：让子进程里起的本地「机场」能被拉到。生产环境没有这个变量。 */
@@ -38,6 +38,7 @@ function testAllowsPrivateSource() {
   return process.env.FORWARDX_TEST_ALLOW_PRIVATE_SUB_SOURCE === "1" && process.env.NODE_ENV !== "production";
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function assertPublicHost(hostname: string): Promise<void> {
   const host = String(hostname || "").replace(/^\[|\]$/g, "");
   if (!host) throw new ProxySubSourceFetchError("地址缺少主机名");
@@ -52,7 +53,7 @@ export async function assertPublicHost(hostname: string): Promise<void> {
   }
 }
 
-export type FetchedSubscription = {
+type FetchedSubscription = {
   body: string;
   userinfo: string;
   contentHash: string;
@@ -62,7 +63,7 @@ function headerText(value: string | string[] | undefined): string {
   return String(Array.isArray(value) ? value[0] : value || "");
 }
 
-export async function fetchExternalSubscription(url: string, userAgent: string): Promise<FetchedSubscription> {
+async function fetchExternalSubscription(url: string, userAgent: string): Promise<FetchedSubscription> {
   let current = new URL(url);
   if (current.protocol !== "http:" && current.protocol !== "https:") throw new ProxySubSourceFetchError("只支持 http(s) 地址");
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {

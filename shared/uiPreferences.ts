@@ -20,10 +20,10 @@ export type UiPreferenceTable = (typeof UI_PREFERENCE_TABLES)[number];
 /** 一张表最多记多少列、列 key 多长：防止一份偏好被塞得很大。 */
 const MAX_TABLE_COLUMNS = 48;
 const COLUMN_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,47}$/;
-export const TABLE_COLUMN_WIDTH_MIN = 48;
-export const TABLE_COLUMN_WIDTH_MAX = 1200;
+const TABLE_COLUMN_WIDTH_MIN = 48;
+const TABLE_COLUMN_WIDTH_MAX = 1200;
 /** 整段 JSON 的上限：上面的限制下正常用远远到不了。 */
-export const UI_PREFERENCES_MAX_LENGTH = 16_000;
+const UI_PREFERENCES_MAX_LENGTH = 16_000;
 
 export type TableColumnPreference = {
   /** 用户排过的顺序（只记可以挪的列）。 */
@@ -35,14 +35,14 @@ export type TableColumnPreference = {
 };
 
 /** 记得住视图的页面，和每一页认的取值（不在里面的值存不进去、读出来也当没有）。 */
-export const UI_PREFERENCE_VIEWS = {
+const UI_PREFERENCE_VIEWS = {
   hosts: ["card", "compact-card", "table", "map", "flat-map"],
 } as const;
 export type UiPreferenceView = keyof typeof UI_PREFERENCE_VIEWS;
 export const UI_PREFERENCE_VIEW_IDS = Object.keys(UI_PREFERENCE_VIEWS) as [UiPreferenceView, ...UiPreferenceView[]];
 export const UI_PREFERENCE_VIEW_DEVICES = ["desktop", "mobile"] as const;
 export type UiPreferenceViewDevice = (typeof UI_PREFERENCE_VIEW_DEVICES)[number];
-export type ViewModePreference = Partial<Record<UiPreferenceViewDevice, string>>;
+type ViewModePreference = Partial<Record<UiPreferenceViewDevice, string>>;
 
 export type UiPreferences = {
   motion?: boolean;
@@ -182,10 +182,6 @@ export function readViewModePreference(user: { uiPreferences?: unknown } | null 
 /** 这个账号开没开界面动画：没设过 = 开。 */
 export function isUiMotionEnabled(user: { uiPreferences?: unknown } | null | undefined) {
   return parseUiPreferences(user?.uiPreferences).motion !== false;
-}
-
-export function readTableColumnPreference(user: { uiPreferences?: unknown } | null | undefined, table: UiPreferenceTable) {
-  return parseUiPreferences(user?.uiPreferences).tables?.[table] ?? null;
 }
 
 // ==================== 按现在的列定义把偏好落成实际的列 ====================

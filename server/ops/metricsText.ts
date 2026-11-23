@@ -13,7 +13,7 @@ export type MetricType = "gauge" | "counter";
 
 export type MetricLabels = Record<string, string | number | null | undefined>;
 
-export type MetricSample = { labels?: MetricLabels; value: number };
+type MetricSample = { labels?: MetricLabels; value: number };
 
 export type MetricFamily = {
   name: string;

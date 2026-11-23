@@ -111,6 +111,7 @@ export async function withAnomalyThrottles<T>(value: T, nowMs = Date.now()): Pro
   return value;
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function resetAnomalyThrottlesForTest() {
   throttles.clear();
   loadPromise = null;

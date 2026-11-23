@@ -17,7 +17,7 @@ const MAX_BUFFER_LINES = 2_000;
 const MAX_WATCHES = 200;
 const SOURCE_PATTERN = /^(agent|runtime|tunnel|nginx|kernel|fxp:fxp-[A-Za-z0-9._-]{1,120}\.log)$/;
 
-export type HostLogLine = { seq: number; text: string };
+type HostLogLine = { seq: number; text: string };
 
 type LogWatch = {
   id: string;

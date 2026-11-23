@@ -40,11 +40,11 @@ export const SHANGHAI_PRESET_INTERVAL_SECONDS = 60;
 
 export const CARRIER_VIEW_HOURS = 24;
 /** 小走势一格多宽：30 分钟，24 小时 48 格。 */
-export const CARRIER_TREND_BUCKET_SECONDS = 30 * 60;
+const CARRIER_TREND_BUCKET_SECONDS = 30 * 60;
 /** 「当前」RTT 只认最近 15 分钟内的样本，再老的不算当前。 */
-export const CARRIER_CURRENT_MAX_AGE_SECONDS = 15 * 60;
+const CARRIER_CURRENT_MAX_AGE_SECONDS = 15 * 60;
 
-export type CarrierServiceRef = {
+type CarrierServiceRef = {
   id: number;
   name: string;
   carrier: ProbeCarrier;
@@ -65,7 +65,7 @@ export type CarrierSeriesRow = {
   at: number;
 };
 
-export type CarrierPoint = {
+type CarrierPoint = {
   /** 桶起点（秒） */
   t: number;
   latencyMs: number | null;
@@ -94,7 +94,7 @@ export type CarrierGroup = {
   hosts: CarrierHostSummary[];
 };
 
-export function carrierFailKind(method: string): "loss" | "tcpFail" {
+function carrierFailKind(method: string): "loss" | "tcpFail" {
   return method === "ping" ? "loss" : "tcpFail";
 }
 

@@ -33,11 +33,11 @@ export function ruleOwnerSummary(owners: HostRuleOwner[]) {
   return labels.join("、");
 }
 
-export const HOST_DELETE_PENDING_CLEANUP_ONLINE = "主机正在清理已删除的规则，已通知 Agent 停止监听，请稍后再删除主机（不需要重新保存规则）";
-export const HOST_DELETE_PENDING_CLEANUP_OFFLINE = "主机离线，面板无法确认已删除的规则已经在机器上停止";
+const HOST_DELETE_PENDING_CLEANUP_ONLINE = "主机正在清理已删除的规则，已通知 Agent 停止监听，请稍后再删除主机（不需要重新保存规则）";
+const HOST_DELETE_PENDING_CLEANUP_OFFLINE = "主机离线，面板无法确认已删除的规则已经在机器上停止";
 
 /** 修好删主机前能修的过期引用；在线且有待清理规则时催 Agent 刷新。事务开始前调用。 */
-export async function prepareHostDeletion(hostId: number) {
+async function prepareHostDeletion(hostId: number) {
   await db.repairForwardGroupTemplateHostReferencesForHost(hostId);
   // 顺带修端口转发模板和转发组子规则的残留（getHostRuleDeleteBlockers 里做）。
   const blockers = await db.getHostRuleDeleteBlockers(hostId);

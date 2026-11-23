@@ -240,11 +240,11 @@ export async function loadPanelSslRuntimeConfig(): Promise<PanelSslRuntimeConfig
 }
 
 /** 证书文件多久检查一次变动（只 stat，不读内容）。 */
-export const PANEL_SSL_RELOAD_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const PANEL_SSL_RELOAD_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 /** 文件没变也至少多久重读一次。 */
-export const PANEL_SSL_FORCE_RELOAD_INTERVAL_MS = 60 * 60 * 1000;
+const PANEL_SSL_FORCE_RELOAD_INTERVAL_MS = 60 * 60 * 1000;
 /** 证书剩这么多天就开始在日志里提醒。 */
-export const PANEL_SSL_EXPIRY_WARNING_DAYS = 14;
+const PANEL_SSL_EXPIRY_WARNING_DAYS = 14;
 const PANEL_SSL_EXPIRY_WARNING_REPEAT_MS = 24 * 60 * 60 * 1000;
 
 type SecureContextTarget = { setSecureContext(options: tls.SecureContextOptions): void };

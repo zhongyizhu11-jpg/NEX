@@ -171,7 +171,7 @@ const INT_RANGES: Partial<Record<keyof ProxySubSettings, [number, number]>> = {
   externalSourceMaxPerUser: [0, 100],
 };
 
-export const PROXY_SUB_SETTING_KEYS: readonly (keyof ProxySubSettings)[] = Object.keys(FIELD_KINDS) as (keyof ProxySubSettings)[];
+const PROXY_SUB_SETTING_KEYS: readonly (keyof ProxySubSettings)[] = Object.keys(FIELD_KINDS) as (keyof ProxySubSettings)[];
 
 export function proxySubSettingKey(field: keyof ProxySubSettings): string {
   return `${PROXY_SUB_SETTING_PREFIX}${field}`;

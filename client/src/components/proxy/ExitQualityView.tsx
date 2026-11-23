@@ -75,12 +75,12 @@ const UNLOCK_TONE: Record<string, string> = {
 };
 
 /** 出口探测的失败说法：poisoned / blocked 是它特有的，其余沿用 shared/probeFailure。 */
-export function exitFailureShort(kind: string | null | undefined) {
+function exitFailureShort(kind: string | null | undefined) {
   const own = kind ? SITE_FAILURE_LABELS[kind] : undefined;
   return own ? own.short : describeProbeFailureShort(kind || "timeout");
 }
 
-export function exitFailureLong(kind: string | null | undefined) {
+function exitFailureLong(kind: string | null | undefined) {
   const own = kind ? SITE_FAILURE_LABELS[kind] : undefined;
   return own ? own.long : describeProbeFailure(kind || "timeout");
 }
@@ -92,7 +92,7 @@ export function exitSiteHeadline(site: Pick<ExitQualitySiteView, "latestMs" | "l
   return `${site.latestMs} ms`;
 }
 
-export function exitSiteTitle(label: string, host: string, site: ExitQualitySiteView) {
+function exitSiteTitle(label: string, host: string, site: ExitQualitySiteView) {
   if (site.samples === 0) return `${label}（${host}）：还没有样本`;
   const parts = [`${label}（${host}:443）`];
   if (site.latestMs === null) parts.push(`最近一次没连上：${exitFailureLong(site.latestFail)}`);

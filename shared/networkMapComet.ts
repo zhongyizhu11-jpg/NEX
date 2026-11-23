@@ -77,9 +77,9 @@ export function advanceCometPhase(phase: number, dtMs: number, periodMs: number)
 }
 
 /** 一趟多久：按屏幕上的长度走，大约 90px/s，短线不快于 1.4s 一趟、长线不慢于 6s */
-export const COMET_SPEED_PX_PER_S = 90;
-export const COMET_MIN_PERIOD_MS = 1400;
-export const COMET_MAX_PERIOD_MS = 6000;
+const COMET_SPEED_PX_PER_S = 90;
+const COMET_MIN_PERIOD_MS = 1400;
+const COMET_MAX_PERIOD_MS = 6000;
 
 export function cometPeriodMs(screenLengthPx: number): number {
   const raw = (screenLengthPx / COMET_SPEED_PX_PER_S) * 1000;

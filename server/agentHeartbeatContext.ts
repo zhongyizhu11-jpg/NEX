@@ -12,7 +12,7 @@ import type { RuleEgressRuntime } from "./ssEgress";
   这些行在心跳里一直是 any；这里只是给它们起个名字，不收紧也不放宽。
 */
 
-export type HeartbeatHostRow = NonNullable<Awaited<ReturnType<typeof db.getHostByAgentToken>>>;
+type HeartbeatHostRow = NonNullable<Awaited<ReturnType<typeof db.getHostByAgentToken>>>;
 export type HeartbeatRuleRow = Awaited<ReturnType<typeof db.getForwardRulesForAgent>>[number];
 export type HeartbeatTunnelRow = Awaited<ReturnType<typeof db.getTunnelsByHost>>[number];
 /** 跳点、出口节点和别的没有行类型的值：同上，就是 db 层给的那个类型。 */

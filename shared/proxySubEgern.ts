@@ -138,7 +138,7 @@ export const EGERN_SCHEMA = {
 } as const;
 
 /** Shadowsocks 能用的加密方式（文档原样）。chacha20-ietf-poly1305 是 example 页里写的，同样收。 */
-export const EGERN_SHADOWSOCKS_METHODS: readonly string[] = [
+const EGERN_SHADOWSOCKS_METHODS: readonly string[] = [
   "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
   "chacha20-poly1305", "chacha20-ietf-poly1305", "aes-256-gcm", "aes-128-gcm",
   "none", "table", "rc4", "rc4-md5", "aes-128-cfb", "aes-192-cfb", "aes-256-cfb", "aes-128-ctr", "aes-192-ctr", "aes-256-ctr",
@@ -147,10 +147,10 @@ export const EGERN_SHADOWSOCKS_METHODS: readonly string[] = [
 ];
 
 /** VMess 的 security 取值（文档原样）。 */
-export const EGERN_VMESS_SECURITIES: readonly string[] = ["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"];
+const EGERN_VMESS_SECURITIES: readonly string[] = ["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"];
 
 /** Snell：文档写 1-5，v5 按 v4 实现。没有 v6。 */
-export const EGERN_SNELL_VERSIONS: readonly number[] = [1, 2, 3, 4, 5];
+const EGERN_SNELL_VERSIONS: readonly number[] = [1, 2, 3, 4, 5];
 
 const S = EGERN_SCHEMA;
 
@@ -194,7 +194,7 @@ export function egernUnsupportedReason(node: ProxyNode): string {
 
 // ==================== 渲染 ====================
 
-export type EgernRenderSettings = {
+type EgernRenderSettings = {
   testUrl: string;
   testIntervalSec: number;
   toleranceMs: number;
@@ -203,7 +203,7 @@ export type EgernRenderSettings = {
 };
 
 /** 和 proxySubscription.ts 的 ProfileRule 同形（那边按 Surge 的规则列表展开好、镜像也换好了再传进来）。 */
-export type EgernProfileRule =
+type EgernProfileRule =
   | { kind: "list"; url: string; tag: string; target: string }
   | { kind: "domain"; suffix: boolean; domain: string; target: string }
   | { kind: "keyword"; keyword: string; target: string }
@@ -275,7 +275,7 @@ function transportBlock(lines: Lines, indent: number, node: ProxyNode) {
 }
 
 /** 一个节点 → proxies 下的一项。调用前已经过 egernUnsupportedReason。 */
-export function egernProxyLines(node: ProxyNode): string[] {
+function egernProxyLines(node: ProxyNode): string[] {
   const lines = new Lines();
   const P = S.proxy;
   const tlsSocks = node.protocol === "socks5" && node.tls;
@@ -428,7 +428,7 @@ function ruleLines(rule: EgernProfileRule, settings: EgernRenderSettings): strin
  * 模板里挂的模块 → modules 下的一项。校验没过的（存进来之后规则又收紧了）整条不写，
  * 宁可少一个模块，也不要一份 Egern 读不懂的配置。
  */
-export function egernModuleLines(module: ProxySubTemplateModule): string[] {
+function egernModuleLines(module: ProxySubTemplateModule): string[] {
   if (proxySubModuleProblem(module, 0, "egern")) return [];
   const M = S.module;
   const lines = new Lines();

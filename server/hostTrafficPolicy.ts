@@ -71,7 +71,7 @@ export async function getTrafficExcludedHostIds(): Promise<ReadonlySet<number>> 
 }
 
 /** 重算一台主机的暂停状态的 SQL（单独导出给测试看算式）。 */
-export function hostTrafficPolicyDecisionSql() {
+function hostTrafficPolicyDecisionSql() {
   const h = (name: string) => `${q("hosts")}.${q(name)}`;
   const ti = `t.${q("bytesIn")}`;
   const to = `t.${q("bytesOut")}`;
@@ -117,7 +117,7 @@ export async function reconcileHostTrafficPolicy(hostId: number) {
 }
 
 /** 改了主机的这几个字段要重算一次（套餐流量、计量方式、开关、比例）。 */
-export const HOST_TRAFFIC_POLICY_FIELDS = ["trafficLimit", "trafficMeasureMode", "trafficFailoverEnabled", "trafficFailoverThresholdPercent"] as const;
+const HOST_TRAFFIC_POLICY_FIELDS = ["trafficLimit", "trafficMeasureMode", "trafficFailoverEnabled", "trafficFailoverThresholdPercent"] as const;
 
 export function touchesHostTrafficPolicy(data: Record<string, unknown>) {
   return HOST_TRAFFIC_POLICY_FIELDS.some((key) => Object.prototype.hasOwnProperty.call(data, key));

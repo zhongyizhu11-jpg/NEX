@@ -79,7 +79,7 @@ const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 /** 「10/12 09:31」（北京时间，和 Telegram 通知同一个时区）。 */
-export function formatWebhookTime(value: Date): string {
+function formatWebhookTime(value: Date): string {
   const time = value instanceof Date ? value : new Date(value);
   return Number.isFinite(time.getTime()) ? timeFormatter.format(time) : "";
 }

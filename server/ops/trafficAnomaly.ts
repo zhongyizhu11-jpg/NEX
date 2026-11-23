@@ -104,7 +104,7 @@ export async function saveTrafficAnomalyConfig(input: Partial<TrafficAnomalyConf
 
 // ---------------- 依赖（测试里换掉） ----------------
 
-export type TrafficAnomalyDeps = {
+type TrafficAnomalyDeps = {
   liveRates: (nowMs: number) => Map<number, Pick<RuleLiveRate, "inBps" | "outBps">>;
   onlineRows: (nowMs: number) => OnlineIpRow[];
   /** 规则限速变了：通知相关机器重算（成员、中转跳、隧道两头）。 */
@@ -126,10 +126,6 @@ const defaultDeps: TrafficAnomalyDeps = {
 
 let deps: TrafficAnomalyDeps = defaultDeps;
 
-export function setTrafficAnomalyDepsForTest(override: Partial<TrafficAnomalyDeps> | null) {
-  deps = override ? { ...defaultDeps, ...override } : defaultDeps;
-}
-
 // ---------------- 状态 ----------------
 
 type ObjectState = AnomalyState & {
@@ -149,16 +145,6 @@ function putState(key: string, state: ObjectState) {
     if (oldest === undefined) break;
     states.delete(oldest);
   }
-}
-
-export function resetTrafficAnomalyStateForTest() {
-  states.clear();
-  baselineCache.clear();
-  globalFirstBucket = null;
-}
-
-export function getTrafficAnomalyStateForTest(key: string) {
-  return states.get(key) ?? null;
 }
 
 // ---------------- 读库 ----------------
@@ -334,7 +320,7 @@ async function revokeThrottle(ruleId: number, reason: string) {
   });
 }
 
-export async function revokeAllAnomalyThrottles(reason: string) {
+async function revokeAllAnomalyThrottles(reason: string) {
   await loadAnomalyThrottles().catch(() => undefined);
   for (const throttle of listAnomalyThrottles()) await revokeThrottle(throttle.ruleId, reason);
 }
@@ -371,6 +357,7 @@ async function applyThrottle(meta: RuleMeta, threshold: number, baseline: number
  * 启动时收回：面板重启前加上的临时限速，功能还开着就接着管（按正在告警恢复状态），到点照样撤；
  * 已经过期、或者检测 / 自动限速已经关了，当场撤掉。由 startTrafficAnomalyJob 调用；开发面板不跑。
  */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function recoverAnomalyThrottlesOnStartup(nowMs = Date.now()) {
   await loadAnomalyThrottles(true);
   const pending = listAnomalyThrottles();
@@ -502,6 +489,7 @@ function addRate(map: Map<number, Rate>, id: number, rate: Rate) {
 }
 
 /** 由定时任务每分钟调一次；测试直接调。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function runTrafficAnomalyTick(nowMs = Date.now()) {
   const config = await readTrafficAnomalyConfig();
   if (!config.enabled) {
@@ -774,4 +762,21 @@ export function startTrafficAnomalyJob() {
     timer.unref?.();
   }, 2 * 60_000);
   startTimer.unref?.();
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function setTrafficAnomalyDepsForTest(override: Partial<TrafficAnomalyDeps> | null) {
+  deps = override ? { ...defaultDeps, ...override } : defaultDeps;
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function resetTrafficAnomalyStateForTest() {
+  states.clear();
+  baselineCache.clear();
+  globalFirstBucket = null;
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function getTrafficAnomalyStateForTest(key: string) {
+  return states.get(key) ?? null;
 }

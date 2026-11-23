@@ -17,7 +17,7 @@ export type OAuthTwoFactorChallenge = {
 type AppFlowCredentials = { flowId: string; pollToken: string };
 
 /** App 登录要的三个接口（各家 tRPC 路由里的 appStart / appStatus / appCancel）。 */
-export type OAuthAppMutations = {
+type OAuthAppMutations = {
   start: {
     mutateAsync: (input: { inviteCode?: string }) => Promise<AppFlowCredentials & { expiresInSeconds: number; startUrl: string }>;
     isPending: boolean;

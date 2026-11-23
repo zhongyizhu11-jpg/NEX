@@ -159,7 +159,7 @@ export async function sweepExpiredRuleEntryBridges(now = Date.now()) {
 // ==================== 心跳 ====================
 
 /** 心跳里合成出来的那一行带着它，下发流程里几处据此区别对待（见 isEntryBridgeRuntimeRule）。 */
-export type EntryBridgeRuntimeMarker = { bridgeId: number; ruleId: number; expiresAt: Date | null };
+type EntryBridgeRuntimeMarker = { bridgeId: number; ruleId: number; expiresAt: Date | null };
 
 export function isEntryBridgeRuntimeRule(rule: any): boolean {
   return !!rule?.entryBridge || isEntryBridgeRuleId(rule?.id);

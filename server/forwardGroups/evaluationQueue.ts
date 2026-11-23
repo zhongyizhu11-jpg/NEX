@@ -9,7 +9,7 @@
 
 import { ForwardGroupEvaluationQueue, ForwardGroupHealthRecheckScheduler } from "../forwardGroupHealthRecheck";
 
-export const FORWARD_GROUP_EVALUATION_DEBOUNCE_MS = 250;
+const FORWARD_GROUP_EVALUATION_DEBOUNCE_MS = 250;
 export const FORWARD_GROUP_EVALUATION_RETRY_BASE_MS = 1_000;
 export const FORWARD_GROUP_EVALUATION_RETRY_MAX_MS = 30_000;
 

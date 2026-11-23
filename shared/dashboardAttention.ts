@@ -22,7 +22,7 @@ export type DashboardAttentionReason =
   | "forward-stalled"
   | "forward-paused";
 
-export type DashboardAttentionKind = "host" | "tunnel" | "group" | "forward";
+type DashboardAttentionKind = "host" | "tunnel" | "group" | "forward";
 
 export type DashboardAttentionRow = {
   reason: DashboardAttentionReason;
@@ -152,7 +152,7 @@ export function formatAgo(elapsedMs: number): string {
  * 和 forwardAccessBlockedReasonText 不是一回事 —— 那句是写给管理员的（「先重置
  * 流量统计或调高额度」），租户做不了那些事。
  */
-export function tenantPauseReasonText(reason: string | null | undefined): string {
+function tenantPauseReasonText(reason: string | null | undefined): string {
   switch (reason) {
     case "expired":
       return "账户到期了，续期后自动恢复";

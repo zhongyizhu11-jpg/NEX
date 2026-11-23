@@ -11,10 +11,10 @@ export const RULE_TRANSFER_FILE_VERSION = 1;
 export const RULE_TRANSFER_MAX_IMPORT_COUNT = 500;
 export const RULE_TRANSFER_MAX_FILE_SIZE = 5 * 1024 * 1024;
 
-export type ProxyProtocolVersion = 1 | 2;
+type ProxyProtocolVersion = 1 | 2;
 export type FailoverStrategy = "fallback" | "round_robin" | "random" | "ip_hash";
 
-export const FAILOVER_STRATEGIES: FailoverStrategy[] = ["fallback", "round_robin", "random", "ip_hash"];
+const FAILOVER_STRATEGIES: FailoverStrategy[] = ["fallback", "round_robin", "random", "ip_hash"];
 
 /** 认不出的策略一律当主备 —— 那是唯一一个「出问题时会自己让开」的模式。 */
 export function normalizeFailoverStrategy(value: unknown): FailoverStrategy {

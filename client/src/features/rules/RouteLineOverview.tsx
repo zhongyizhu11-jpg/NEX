@@ -66,7 +66,7 @@ type Path = RouteStatusPath;
 
 // ---------------------------------------------------------------- 大数字
 
-export function RouteLineHero({ status }: { status: RouteStatus }) {
+function RouteLineHero({ status }: { status: RouteStatus }) {
   const active = status.paths.find((path) => path.active) || status.paths[0];
   const total = chainLatency(active);
   return (
@@ -94,7 +94,7 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
  * 指定了、通着、机器还没切过来：「已指定 · 切换中」（为什么没切在调度计划里写）。
  */
 /** 面板给的「当成挂了」提示（server/routeDrill）：Agent 原样报回来时是 relay down: drill。 */
-export function isRouteDrillReason(reason: unknown) {
+function isRouteDrillReason(reason: unknown) {
   return /^(relay down:\s*)?drill\b/i.test(String(reason ?? "").trim());
 }
 
@@ -142,7 +142,7 @@ export type RouteLineSwitch = {
 };
 
 /** 演练一次把线路当成挂了多久：界面上固定这一档（接口可以给 10–600 秒，server/routeDrill）。 */
-export const ROUTE_DRILL_SECONDS = 60;
+const ROUTE_DRILL_SECONDS = 60;
 
 /** 手动指定最长多久（防手滑多打一个 0）：30 天，再久就选「不限时」。 */
 const MAX_PIN_MINUTES = 30 * 24 * 60;
@@ -280,7 +280,7 @@ export function routeLineStatusControls(status: RouteStatus | null, lineKey: str
   return group ? <LineStatusControls group={group} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} /> : null;
 }
 
-export function RouteLineList({ status, onPause, pausing = false, lineSwitch }: { status: RouteStatus; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean; lineSwitch?: RouteLineSwitch }) {
+function RouteLineList({ status, onPause, pausing = false, lineSwitch }: { status: RouteStatus; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean; lineSwitch?: RouteLineSwitch }) {
   const groups = routeLineGroups(status);
   return (
     <div className="flex flex-col gap-[7px]" data-testid="route-line-list">
@@ -305,7 +305,7 @@ export function RouteLineList({ status, onPause, pausing = false, lineSwitch }: 
 
 type Stage = { label: string; pct: number | null; why: string | null };
 
-export function routeStages(status: RouteStatus, path: Path): { nodes: string[]; stages: Stage[] } {
+function routeStages(status: RouteStatus, path: Path): { nodes: string[]; stages: Stage[] } {
   const nodes = ["客户端", status.entry?.name || "入口", ...path.hops.map((hop) => hop.name), routeLandingName(path)];
   const inbound = status.inbound && status.inbound.ok + status.inbound.failed > 0 ? roundMs((status.inbound.ok / (status.inbound.ok + status.inbound.failed)) * 100) : null;
   const dials = path.dials;
@@ -331,7 +331,7 @@ function stageTone(stage: Stage): "ok" | "warn" | "down" | "none" {
   return "ok";
 }
 
-export function RouteStageStrip({ status }: { status: RouteStatus }) {
+function RouteStageStrip({ status }: { status: RouteStatus }) {
   const path = status.paths.find((item) => item.active) || status.paths[0];
   if (!path) return null;
   const { nodes, stages } = routeStages(status, path);
@@ -369,7 +369,7 @@ export function RouteStageStrip({ status }: { status: RouteStatus }) {
 // ---------------------------------------------------------------- 最近切换（底部第一个 chip）
 
 /** 最近一次切换说成一句：19:31 切到 备 1 · 19:36 已切回 / 19:31 自动切到 备 1 / 24 小时没切过。 */
-export function routeSwitchChip(status: RouteStatus, events: RouteEvent[], nowMs: number, timeZone?: string): { tone: LineTone; text: string } {
+function routeSwitchChip(status: RouteStatus, events: RouteEvent[], nowMs: number, timeZone?: string): { tone: LineTone; text: string } {
   const groups = routeLineGroups(status);
   const lineOf = (key: string | null) => {
     if (!key) return -1;
@@ -401,7 +401,7 @@ export function routeSwitchChip(status: RouteStatus, events: RouteEvent[], nowMs
  * 机器上跑的不是面板里这份（Agent 2.2.253 起随心跳报它实际生效的规格，面板按用户配的比）：标红、逐项列差异、
  * 一键重新下发。2.3.522 线上「切到备用 1 还是走主线路」就是面板存了、机器没拿到 —— 以前只看面板永远发现不了。
  */
-export function RouteDriftBanner({
+function RouteDriftBanner({
   drift,
   onResync,
   resyncing = false,
@@ -556,7 +556,7 @@ export function useRouteLinePause(ruleId: number) {
  * （2.3.524 第一版在胶囊菜单里加了一节、详情顶上加了进度卡和报告卡，用户嫌臃肿，都去掉了）：进行中那条线路的
  * 胶囊写「演练中」，结果是「最近切换」里的一行。
  */
-export function useRouteLineDrill(ruleId: number) {
+function useRouteLineDrill(ruleId: number) {
   const utils = trpc.useUtils();
   const refresh = () => {
     void utils.rules.routeStatus.invalidate({ ruleId });

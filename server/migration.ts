@@ -58,7 +58,7 @@ import {
   type PanelMigrationScope,
 } from "../shared/panelMigration";
 
-export type MigrationJobStatus = "pending" | "running" | "success" | "failed";
+type MigrationJobStatus = "pending" | "running" | "success" | "failed";
 
 export interface MigrationSnapshot {
   version: 1;
@@ -167,7 +167,7 @@ const MIGRATION_EXPORT_TIMEOUT_MS = Math.max(
     : 30 * 60 * 1000,
 );
 
-export type DirectSqliteMigrationMeta = {
+type DirectSqliteMigrationMeta = {
   version: 1;
   format: typeof SQLITE_MIGRATION_FORMAT;
   exportedAt: number;
@@ -238,7 +238,7 @@ export function hasActivePanelMigration() {
   return [...jobs.values()].some((job) => job.status === "pending" || job.status === "running");
 }
 
-export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABLES)[number]>([
+const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABLES)[number]>([
   "host_metrics",
   "host_probe_service_stats",
   "tunnel_latency_stats",
@@ -503,7 +503,7 @@ export function pruneMigrationSnapshotForPanelBackup(snapshot: MigrationSnapshot
  * 这一组之间互相引用，组外只有转发规则引用它们（proxyNodeId、egressInboundId），
  * 套餐挂的节点（subscription_plan_proxy_nodes）也在组里。
  */
-export const PROXY_BACKUP_TABLES = new Set<MigrationTableName>([
+const PROXY_BACKUP_TABLES = new Set<MigrationTableName>([
   "proxy_nodes",
   "proxy_inbounds",
   "proxy_inbound_users",
@@ -620,6 +620,7 @@ const PANEL_DATA_EXTRA_BUSINESS_TABLES = MIGRATION_TABLES.filter(
 
 let panelDataSummaryCache: { kind: string | null; expiresAt: number; data: any } | null = null;
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function invalidatePanelDataSummaryCache() {
   panelDataSummaryCache = null;
 }
@@ -2132,6 +2133,7 @@ async function resetImportedRuntimeState(maps: ImportMaps) {
   });
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export async function importDirectSqliteBackup(
   transfer: Extract<FetchedMigrationPayload, { kind: "sqlite-direct" }>,
   targetPanelUrl: string,
@@ -2609,7 +2611,7 @@ export async function importMigrationSnapshot(
   };
 }
 
-export async function announcePanelMigration(
+async function announcePanelMigration(
   targetPanelUrl: string,
   options: {
     forceAgentSwitch?: boolean;

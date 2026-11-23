@@ -26,7 +26,7 @@ import {
 } from "../shared/tlsInbound";
 import type { TlsInboundRow } from "./repositories/tlsInboundRepository";
 
-export type AgentSniRoute = {
+type AgentSniRoute = {
   name: string;
   ruleId: number;
   backendPort: number;
@@ -35,7 +35,7 @@ export type AgentSniRoute = {
   proxyProtocolVersion: number;
 };
 
-export type AgentSniBackend = {
+type AgentSniBackend = {
   ruleId: number;
   backendPort: number;
   proxyProtocolVersion: number;
@@ -113,7 +113,7 @@ export function sniRuleRuntimeView<T extends Record<string, any>>(rule: T, optio
 }
 
 /** 表的版本号：同样的内容永远算出同一个值，内容一变就变。只取前 16 位，够分辨又不占地方。 */
-export function sniInboundRevision(spec: Omit<AgentSniInbound, "revision">) {
+function sniInboundRevision(spec: Omit<AgentSniInbound, "revision">) {
   return createHash("sha256").update(JSON.stringify(spec)).digest("hex").slice(0, 16);
 }
 

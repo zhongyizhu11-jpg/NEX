@@ -7,7 +7,7 @@
  */
 export const DATABASE_UNAVAILABLE_MESSAGE = "数据库暂时不可用，请查看数据库异常提示";
 
-export type DatabaseHealthState = "checking" | "healthy" | "unavailable" | "not_configured";
+type DatabaseHealthState = "checking" | "healthy" | "unavailable" | "not_configured";
 
 export type DatabaseHealth = {
   state: DatabaseHealthState;
@@ -18,7 +18,7 @@ export type DatabaseHealth = {
   restartRequired: boolean;
 };
 
-export const DATABASE_HEALTH_STATES: readonly DatabaseHealthState[] = ["checking", "healthy", "unavailable", "not_configured"];
+const DATABASE_HEALTH_STATES: readonly DatabaseHealthState[] = ["checking", "healthy", "unavailable", "not_configured"];
 
 /** 老面板没有这个接口、或者回了看不懂的东西：当作没有健康信息，照常走原来的启动流程。 */
 export function parseDatabaseHealth(value: unknown): DatabaseHealth | null {

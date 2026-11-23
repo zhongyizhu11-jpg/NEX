@@ -91,7 +91,7 @@ export function billingDateTime(
   return new Date(candidateMs);
 }
 
-export function billingStartOfDay(year: number, month: number, day: number) {
+function billingStartOfDay(year: number, month: number, day: number) {
   return billingDateTime(year, month, day);
 }
 

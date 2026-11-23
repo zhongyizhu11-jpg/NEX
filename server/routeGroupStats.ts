@@ -44,7 +44,7 @@ export type RouteTargetStat = {
   udpLatencyMs?: number | null;
 };
 
-export type RouteDialStat = { ok: number; failed: number; slow: number; dialMs: number; lastAt: number };
+type RouteDialStat = { ok: number; failed: number; slow: number; dialMs: number; lastAt: number };
 
 export type RouteAgentStats = {
   ruleId: number;
@@ -92,7 +92,7 @@ export type RouteHopProbe = {
 export type RouteHopHint = { down: boolean; reason: string; hopIndex: number };
 
 /** 中转跳连续几次探不通才算这条路径在这一跳断了。探测一分钟一轮，三次就是两三分钟。 */
-export const ROUTE_HOP_DOWN_THRESHOLD = 3;
+const ROUTE_HOP_DOWN_THRESHOLD = 3;
 /** 快速探测每 30 秒报一次全量；超过 90 秒没报就当这条快速通道没在跑，退回普通探测的结论。 */
 export const ROUTE_HOP_FAST_STALE_MS = 90 * 1000;
 /** 中转多久没报探测结果就不再拿它的旧结论说事：机器掉线时说「中转断了」是对的，但说的该是掉线，不是探测。 */

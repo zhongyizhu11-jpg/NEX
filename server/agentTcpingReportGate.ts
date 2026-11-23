@@ -5,8 +5,8 @@ import type {
   AgentTunnelTcpingResult,
 } from "../shared/agentDtos";
 
-export const AGENT_TCPING_STEADY_REPORT_MS = 5 * 60 * 1000;
-export const AGENT_HEALTH_STEADY_REPORT_MS = 60 * 1000;
+const AGENT_TCPING_STEADY_REPORT_MS = 5 * 60 * 1000;
+const AGENT_HEALTH_STEADY_REPORT_MS = 60 * 1000;
 const AGENT_TCPING_GATE_STATE_TTL_MS = 30 * 60 * 1000;
 
 type ProbeResult = AgentTcpingResult | AgentTunnelTcpingResult | AgentForwardGroupLatencyResult;

@@ -21,11 +21,11 @@
   这里只放两头都要用的东西：id 规则、清单的形状和校验、预览色、上限。读包 / 校验 CSS 在 server/uiThemePackage.ts。
 */
 
-export const UI_THEME_API_VERSION = 1;
+const UI_THEME_API_VERSION = 1;
 
 /** 面板自带、不能卸载的三套。和 shared/personalization.ts 的 PERSONALIZATION_UI_THEMES 是同一份名单（那边有测试守着）。 */
 export const BUILTIN_UI_THEME_IDS = ["classic", "pearl", "liquid-glass"] as const;
-export type BuiltinUiThemeId = typeof BUILTIN_UI_THEME_IDS[number];
+type BuiltinUiThemeId = typeof BUILTIN_UI_THEME_IDS[number];
 
 /** 官方主题库里的那几套（原来都是内置的）。顺序就是主题库里的显示顺序。 */
 export const OFFICIAL_UI_THEME_IDS = ["deepspace", "gilt", "rose", "cinnabar", "indigo"] as const;
@@ -55,7 +55,7 @@ export const UI_THEME_LIMITS = {
 } as const;
 
 /** 预览用的三种颜色：页面底、卡片、强调色。只收十六进制色，别的写法界面上不认。 */
-export type UiThemePreviewColors = { page: string; card: string; accent: string };
+type UiThemePreviewColors = { page: string; card: string; accent: string };
 export type UiThemePreview = { light: UiThemePreviewColors; dark: UiThemePreviewColors };
 
 export type UiThemeManifest = {
@@ -97,7 +97,7 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_./-]+$/;
 
-export function isBuiltinUiThemeId(value: unknown): value is BuiltinUiThemeId {
+function isBuiltinUiThemeId(value: unknown): value is BuiltinUiThemeId {
   return (BUILTIN_UI_THEME_IDS as readonly string[]).includes(String(value || ""));
 }
 

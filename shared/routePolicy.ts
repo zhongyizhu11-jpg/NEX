@@ -49,9 +49,9 @@ import { timestampMillis } from "./timestamp";
  */
 
 /** Agent 那边的分配策略名：主备（fallback）或权重负载的四种分法。 */
-export type RoutePolicyStrategy = "fallback" | RouteSpread;
+type RoutePolicyStrategy = "fallback" | RouteSpread;
 
-export type RoutePolicyLine = {
+type RoutePolicyLine = {
   /** 0 是主线路，1.. 是第几条备用线路 */
   index: number;
   /** 「主线路」「备用 1」 */
@@ -74,7 +74,7 @@ export type RoutePolicyLine = {
   note?: string | null;
 };
 
-export type RoutePolicyConditionKind = "pin" | "schedule" | "fastest" | "order" | "spread";
+type RoutePolicyConditionKind = "pin" | "schedule" | "fastest" | "order" | "spread";
 
 export type RoutePolicyCondition = {
   kind: RoutePolicyConditionKind;
@@ -95,7 +95,7 @@ export type RoutePolicyCondition = {
   state: "deciding" | "overridden" | "idle";
 };
 
-export type RoutePolicyGuard = {
+type RoutePolicyGuard = {
   /**
    * health 只有转发组有：它的健康是面板测的，得说清楚按什么算。switch 两边都有：转发组说的是
    * 「改哪条解析」，规则说的是「切换时旧连接怎么办」。prewarm 是计划切换的预热预检。
@@ -105,7 +105,7 @@ export type RoutePolicyGuard = {
   value: string;
 };
 
-export type RoutePolicyReport =
+type RoutePolicyReport =
   /** Agent 每次心跳确认的「现在」 */
   | { kind: "current"; index: number; since: number | null }
   /** 报上来的地址不在线路清单里 —— 多半刚改过配置 */

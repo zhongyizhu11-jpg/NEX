@@ -14,7 +14,7 @@ import { formatHostAddressWithPort, getHostEntryAddress } from "../shared/hostEn
     · 落地：规则目标；绑了「我的节点」写节点名。线路组的路径另有落地时写那条路径的落地。
 */
 
-export type RouteViewHop = { name: string; role: "entry" | "relay" | "exit"; online: boolean | null; note?: string };
+type RouteViewHop = { name: string; role: "entry" | "relay" | "exit"; online: boolean | null; note?: string };
 
 export type SubscriptionRouteView = {
   ruleId: number;

@@ -58,7 +58,7 @@ export type NetworkEdgeSpec = {
 };
 
 /** 一个节点：点 + 名字 + 注脚。 */
-export function NetworkNode({
+function NetworkNode({
   node,
   className,
 }: {
@@ -118,7 +118,7 @@ export function NetworkNode({
  * 横排时是一条横线，竖排时是一条竖线 —— 但线型、颜色、标注的规则完全一样，
  * 只有方向不同。所以是同一个组件，不是两个。
  */
-export function NetworkEdge({
+function NetworkEdge({
   edge,
   orientation,
   className,

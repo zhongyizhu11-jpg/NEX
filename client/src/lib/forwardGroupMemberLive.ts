@@ -39,7 +39,7 @@ type LiveGroup = {
   peerProbe?: { active?: unknown; outdatedHosts?: Array<{ id?: unknown; name?: unknown }> | null } | null;
 };
 
-export type MemberPeerHealth = {
+type MemberPeerHealth = {
   state?: unknown;
   down?: unknown;
   reachableWhileAgentOffline?: unknown;

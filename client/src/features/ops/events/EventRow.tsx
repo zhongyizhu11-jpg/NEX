@@ -24,7 +24,7 @@ export type OpsEventItem = {
 };
 
 /** 严重 = 红，警告 = 橙，恢复 = 绿，其余普通消息 = 灰。和全站状态点同一套颜色。 */
-export function eventHealth(event: Pick<OpsEventItem, "kind" | "level">): NetworkHealth {
+function eventHealth(event: Pick<OpsEventItem, "kind" | "level">): NetworkHealth {
   if (event.level === "crit") return "down";
   if (event.level === "warn") return "degraded";
   return isRecoveryEventKind(event.kind) ? "healthy" : "standby";

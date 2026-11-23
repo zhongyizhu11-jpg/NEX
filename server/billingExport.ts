@@ -16,7 +16,7 @@ import { buildXlsx, type XlsxCellValue, type XlsxSheet } from "./xlsxWriter";
 */
 
 /** 一次导出的上限（三张表里最大的那张是账单流水，它的行数 = 另外两张 + 套餐记录）。 */
-export const BILLING_EXPORT_MAX_ROWS = 50_000;
+const BILLING_EXPORT_MAX_ROWS = 50_000;
 
 type Viewer = { id: number; role: string };
 
@@ -55,7 +55,7 @@ function fileStamp(now: Date) {
   return `${p.year}${pad(p.month)}${pad(p.day)}-${pad(p.hour)}${pad(p.minute)}${pad(p.second)}`;
 }
 
-export async function resolveBillingExportScope(input: BillingExportInput) {
+async function resolveBillingExportScope(input: BillingExportInput) {
   const isAdmin = input.viewer.role === "admin";
   const targetUserId = isAdmin ? (input.userId ? Number(input.userId) : undefined) : Number(input.viewer.id);
   if (!isAdmin && !(targetUserId && targetUserId > 0)) throw new TRPCError({ code: "FORBIDDEN", message: "无权导出账单" });

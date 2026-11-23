@@ -40,11 +40,6 @@ export function dispatchTicketNotification(label: string, task: () => Promise<vo
   void run.finally(() => pending.delete(run));
 }
 
-/** 测试用：等后台的通知都跑完。 */
-export async function flushTicketNotifications() {
-  while (pending.size > 0) await Promise.all([...pending]);
-}
-
 function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -138,6 +133,7 @@ export async function notifyTicketUserReply(ticket: NotifyTicket, actor: NotifyA
 }
 
 /** 工单主人要不要收邮件：面板开了邮件、他有邮箱且验证过。 */
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export function shouldEmailTicketOwner(owner: { email?: string | null; emailVerified?: unknown } | null | undefined, emailEnabled: boolean) {
   if (!emailEnabled || !owner) return false;
   const verified = owner.emailVerified === true || Number(owner.emailVerified) === 1;
@@ -195,4 +191,9 @@ export async function notifyTicketStaffReply(ticket: NotifyTicket, staff: Notify
       appendPanelLog("warn", `[Ticket] email notify failed user=${owner.id} ticket=${ticket.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export async function flushTicketNotifications() {
+  while (pending.size > 0) await Promise.all([...pending]);
 }

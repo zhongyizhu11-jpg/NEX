@@ -42,11 +42,6 @@ export async function getAutoIpChangePluginStatus(options: { fresh?: boolean } =
   return value;
 }
 
-export function invalidateAutoIpChangePluginStatus() {
-  statusCache = null;
-  serviceInstance?.invalidateProbeCache();
-}
-
 let cipherInstance: CredentialCipher | null = null;
 
 let serviceInstance: IpChangeService | null = null;
@@ -138,4 +133,10 @@ export function ingestIpChangeProbeReports(hostId: number, reports: ProbeReport[
 /** 定时任务：启动后先把上次被重启打断的标成「结果不确定」，之后每 30 秒一轮。 */
 export async function runIpChangeTick() {
   return getIpChangeService().tick();
+}
+
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
+export function invalidateAutoIpChangePluginStatus() {
+  statusCache = null;
+  serviceInstance?.invalidateProbeCache();
 }

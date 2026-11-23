@@ -23,7 +23,7 @@ import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 
 export type RouteBoardRate = { inBps: number; outBps: number; connections: number; at: number } | null;
 
-export type RouteBoardHop = {
+type RouteBoardHop = {
   hostId: number;
   name: string;
   port: number | null;

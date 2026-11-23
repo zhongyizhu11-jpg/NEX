@@ -33,7 +33,7 @@ export const SIDEBAR_MENU_LABELS: Record<SidebarMenuKey, string> = {
   referrals: "邀请返利",
 };
 
-export const DEFAULT_SIDEBAR_MENU_SETTINGS: SidebarMenuSettings = SIDEBAR_MENU_KEYS.reduce((acc, key) => {
+const DEFAULT_SIDEBAR_MENU_SETTINGS: SidebarMenuSettings = SIDEBAR_MENU_KEYS.reduce((acc, key) => {
   acc[key] = key !== "plugins";
   return acc;
 }, {} as SidebarMenuSettings);

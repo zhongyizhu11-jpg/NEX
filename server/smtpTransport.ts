@@ -3,11 +3,11 @@ export const SMTP_SECURITY_MODES = ["auto", "implicit-tls", "starttls", "none"] 
 export type SmtpSecurityMode = (typeof SMTP_SECURITY_MODES)[number];
 export type EffectiveSmtpSecurityMode = Exclude<SmtpSecurityMode, "auto">;
 
-export const SMTP_DNS_TIMEOUT_MS = 8_000;
-export const SMTP_CONNECTION_TIMEOUT_MS = 10_000;
-export const SMTP_GREETING_TIMEOUT_MS = 10_000;
-export const SMTP_SOCKET_TIMEOUT_MS = 20_000;
-export const SMTP_OPERATION_TIMEOUT_MS = 25_000;
+const SMTP_DNS_TIMEOUT_MS = 8_000;
+const SMTP_CONNECTION_TIMEOUT_MS = 10_000;
+const SMTP_GREETING_TIMEOUT_MS = 10_000;
+const SMTP_SOCKET_TIMEOUT_MS = 20_000;
+const SMTP_OPERATION_TIMEOUT_MS = 25_000;
 
 const smtpSecurityModeSet = new Set<string>(SMTP_SECURITY_MODES);
 

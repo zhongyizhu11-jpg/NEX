@@ -23,7 +23,7 @@ export type ViaExitSegment = {
 };
 
 /** 链路定时探测里「入口到这台出口」那一段（面板探的，新鲜的才有）。 */
-export function panelEntryExitSegment(leg: { ms: number; at: number } | null | undefined, entryHostId: number, exitHostId: number): ViaExitSegment | null {
+function panelEntryExitSegment(leg: { ms: number; at: number } | null | undefined, entryHostId: number, exitHostId: number): ViaExitSegment | null {
   if (!leg || !(exitHostId > 0)) return null;
   return { entryHostId, exitHostId, latencyMs: Math.max(1, Math.round(leg.ms)), isTimeout: false, recordedAt: leg.at, source: "panel" };
 }

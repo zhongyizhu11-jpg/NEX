@@ -1,4 +1,4 @@
-export type IpChangeProviderId =
+type IpChangeProviderId =
   | "aws-ec2" | "aws-lightsail" | "aliyun-ecs" | "tencent-cvm" | "huawei-ecs" | "volcengine-ecs"
   | "gcp-gce" | "oci" | "azure-vm" | "digitalocean" | "hetzner" | "vultr" | "aws-sb" | "webhook";
 

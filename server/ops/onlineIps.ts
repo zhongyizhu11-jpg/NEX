@@ -32,8 +32,8 @@ import {
 
 const q = quoteDbIdentifier;
 
-export const ONLINE_WATCH_INTERVAL_SECONDS = 10;
-export const ONLINE_IDLE_INTERVAL_SECONDS = 60;
+const ONLINE_WATCH_INTERVAL_SECONDS = 10;
+const ONLINE_IDLE_INTERVAL_SECONDS = 60;
 const WATCH_TTL_MS = 30_000;
 const OWNER_CACHE_MS = 30_000;
 const HOST_ADDR_CACHE_MS = 5 * 60_000;
@@ -49,7 +49,7 @@ export const onlineSnapshots = new OnlineSnapshotStore();
 
 let watchUntil = 0;
 
-export function isOnlineIpsWatching(now = Date.now()) {
+function isOnlineIpsWatching(now = Date.now()) {
   return watchUntil > now;
 }
 
@@ -76,7 +76,7 @@ export function onlineIntervalSeconds() {
 
 const ownerCache = new Map<number, { at: number; owners: OnlinePortOwner[] }>();
 
-export async function loadHostPortOwners(hostId: number, force = false): Promise<OnlinePortOwner[]> {
+async function loadHostPortOwners(hostId: number, force = false): Promise<OnlinePortOwner[]> {
   const cached = ownerCache.get(hostId);
   if (!force && cached && Date.now() - cached.at < OWNER_CACHE_MS) return cached.owners;
   const rules = await queryRaw<any>(
@@ -230,7 +230,7 @@ function countryFlag(code: string) {
 }
 
 /** 「🇺🇸 美国 · California」：国家名按中文显示，省 / 州照离线库原样。 */
-export function offlineRegionLabel(geo: { countryCode: string; countryName: string | null; region: string | null } | null) {
+function offlineRegionLabel(geo: { countryCode: string; countryName: string | null; region: string | null } | null) {
   if (!geo) return null;
   let country = geo.countryName || geo.countryCode;
   try {

@@ -9,11 +9,11 @@ export type MultiHopAddressHost = {
 };
 
 /** 和服务端共用同一套「算不算同一个地址」的判定，见 shared/ipAddress.ts。 */
-export function addressKey(value: unknown) {
+function addressKey(value: unknown) {
   return networkAddressKey(value);
 }
 
-export function sameMultiHopAddress(a: unknown, b: unknown) {
+function sameMultiHopAddress(a: unknown, b: unknown) {
   const left = addressKey(a);
   const right = addressKey(b);
   return !!left && !!right && left === right;

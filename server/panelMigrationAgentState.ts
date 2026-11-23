@@ -1,6 +1,6 @@
 import { getAllSettings, setSettings } from "./repositories/settingsRepository";
 
-export type PanelMigrationAgentState = "preparing" | "committing" | "committed" | "aborted";
+type PanelMigrationAgentState = "preparing" | "committing" | "committed" | "aborted";
 
 export type PanelMigrationAgentDirective = {
   id: string;

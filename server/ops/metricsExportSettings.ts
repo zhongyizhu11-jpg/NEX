@@ -13,9 +13,9 @@ import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { databaseHealth } from "../databaseHealthState";
 import { getAllSettings, setSetting } from "../repositories/settingsRepository";
 
-export const METRICS_EXPORT_ENABLED_KEY = "ops.metrics.enabled";
-export const METRICS_EXPORT_TOKEN_KEY = "ops.metrics.token";
-export const METRICS_EXPORT_MAX_RULES_KEY = "ops.metrics.maxRules";
+const METRICS_EXPORT_ENABLED_KEY = "ops.metrics.enabled";
+const METRICS_EXPORT_TOKEN_KEY = "ops.metrics.token";
+const METRICS_EXPORT_MAX_RULES_KEY = "ops.metrics.maxRules";
 
 /** 规则超过这么多条就不再逐条导出，只给汇总。0 = 永远只给汇总。 */
 export const METRICS_EXPORT_MAX_RULES_DEFAULT = 500;
@@ -110,8 +110,4 @@ export async function resetMetricsToken(): Promise<MetricsExportConfig> {
   await setSetting(METRICS_EXPORT_TOKEN_KEY, next.token);
   lastKnown = next;
   return next;
-}
-
-export function resetMetricsExportConfigForTest() {
-  lastKnown = null;
 }

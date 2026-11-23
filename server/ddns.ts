@@ -3,7 +3,7 @@ import { domainToASCII } from "node:url";
 import * as db from "./db";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 
-export type DdnsProvider = "disabled" | "cloudflare" | "webhook" | "huaweicloud" | "aliyun" | "tencentcloud";
+type DdnsProvider = "disabled" | "cloudflare" | "webhook" | "huaweicloud" | "aliyun" | "tencentcloud";
 
 export interface DdnsSettings {
   provider: DdnsProvider;
@@ -102,8 +102,8 @@ function normalizeProvider(value: string): DdnsProvider {
 // 默认 TTL 60 秒：入口组 / 主机 DDNS 用 DNS 做故障切换，TTL 就是客户端看到切换
 // 的最长延迟，原来的 600 秒意味着最多 10 分钟才生效。
 export const DEFAULT_DDNS_TTL = 60;
-export const MIN_DDNS_TTL = 60;
-export const MAX_DDNS_TTL = 86400;
+const MIN_DDNS_TTL = 60;
+const MAX_DDNS_TTL = 86400;
 
 // 阿里云 / 腾讯云 DNSPod 免费版（以及部分个人版）的记录 TTL 下限是 600 秒，低于
 // 下限会被 API 直接拒绝。套餐无法从配置里得知，所以先按设置的 TTL 提交，被以

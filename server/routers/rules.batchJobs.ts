@@ -123,6 +123,7 @@ async function runItem(
   }
 }
 
+/** @public 测试经 import(url(...)) 动态引用，knip 看不见 */
 export const ruleBatchJobQueue = new RuleBatchJobQueue<OwnerExtra>(runItem);
 
 // 做完的任务过期后从内存里清掉（查询时也会顺手清）。

@@ -7,7 +7,7 @@ import { normalizeClientIp } from "./ops/firewallCidr";
   入口组加了主机、端口转发 / 故障转移组加了成员，子规则会铺到新主机上）共用这一份。
 */
 
-export function normalizeAddressToken(value: unknown) {
+function normalizeAddressToken(value: unknown) {
   const token = String(value || "")
     .trim()
     .replace(/^\[(.*)\]$/, "$1")
@@ -19,7 +19,7 @@ export function normalizeAddressToken(value: unknown) {
   return token;
 }
 
-export function isLoopbackAddress(value: unknown) {
+function isLoopbackAddress(value: unknown) {
   const target = normalizeAddressToken(value);
   if (!target) return false;
   if (target === "localhost" || target === "ip6-localhost") return true;
@@ -39,7 +39,7 @@ export function isLoopbackAddress(value: unknown) {
   return false;
 }
 
-export function hostAddressTokens(host: any) {
+function hostAddressTokens(host: any) {
   return new Set(
     [
       host?.ip,

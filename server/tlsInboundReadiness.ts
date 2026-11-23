@@ -84,7 +84,7 @@ export function evaluateSniMemberReadiness(input: {
  * 从库里取齐一台入口机要看的东西再判断。templates 是相关组的模板（调用方手里通常已经有了）。
  * 取数出错按「没就绪」处理：宁可不切，也不切到一台说不清的机器上。
  */
-export async function loadSniMemberReadiness(hostId: number, templates: readonly SniReadinessTemplate[]): Promise<SniMemberReadiness> {
+async function loadSniMemberReadiness(hostId: number, templates: readonly SniReadinessTemplate[]): Promise<SniMemberReadiness> {
   const active = activeSniTemplates(templates);
   if (active.length === 0) return { ready: true, reason: null };
   try {

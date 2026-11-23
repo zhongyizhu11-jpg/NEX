@@ -5,14 +5,11 @@ import { useOverlayContainer } from "@/components/ui/overlay-root"
 
 const DropdownMenu = DropdownMenuPrimitive.Root
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger
-const DropdownMenuGroup = DropdownMenuPrimitive.Group
 const DropdownMenuPortal = ({ container, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) => {
   const overlayContainer = useOverlayContainer()
   return <DropdownMenuPrimitive.Portal container={container ?? overlayContainer} {...props} />
 }
 DropdownMenuPortal.displayName = DropdownMenuPrimitive.Portal.displayName
-const DropdownMenuSub = DropdownMenuPrimitive.Sub
-const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup
 
 const DropdownMenuContent = React.forwardRef<React.ComponentRef<typeof DropdownMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>>(({ className, sideOffset = 6, ...props }, ref) => (
   <DropdownMenuPortal>
@@ -51,4 +48,4 @@ const DropdownMenuLabel = React.forwardRef<React.ComponentRef<typeof DropdownMen
 ))
 DropdownMenuLabel.displayName = DropdownMenuPrimitive.Label.displayName
 
-export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel, DropdownMenuGroup, DropdownMenuPortal, DropdownMenuSub, DropdownMenuRadioGroup }
+export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,     }

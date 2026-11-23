@@ -47,7 +47,7 @@ export type ProxyCustomRuleParseResult = {
 };
 
 /** 去向的保留字：主选择器写 PROXY，渲染时换成实际的组名。 */
-export const PROXY_CUSTOM_RULE_TARGET_PROXY = "PROXY";
+const PROXY_CUSTOM_RULE_TARGET_PROXY = "PROXY";
 
 const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)*[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/i;
 const IPV4_CIDR_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;

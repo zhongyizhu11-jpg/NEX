@@ -28,7 +28,7 @@ export const TLS_INBOUND_MAX_PER_HOST = 64;
 /** 一条规则最多几个 SNI。 */
 export const TLS_INBOUND_MAX_SNI_PER_RULE = 32;
 /** 白名单最多几条。 */
-export const TLS_INBOUND_MAX_ALLOWLIST = 256;
+const TLS_INBOUND_MAX_ALLOWLIST = 256;
 /** 同时在等 ClientHello 的连接数上限（整个入站）。 */
 export const TLS_INBOUND_DEFAULT_MAX_HANDSHAKES = 128;
 export const TLS_INBOUND_MAX_HANDSHAKES_LIMIT = 4096;
@@ -69,7 +69,7 @@ const IPV4_PATTERN = /^\d{1,3}(?:\.\d{1,3}){3}$/;
  * 已经是 ASCII 的主机名合不合法。合法回 null，否则回给人看的原因。
  * 规则：总长 ≤ 253，至少两段，每段 1～63 个 [a-z0-9-]、不以连字符开头或结尾，最后一段不能全是数字。
  */
-export function asciiHostnameError(ascii: string): string | null {
+function asciiHostnameError(ascii: string): string | null {
   if (!ascii) return "域名格式无效";
   if (ascii.length > 253) return "域名太长（最多 253 个字符）";
   const labels = ascii.split(".");
@@ -115,7 +115,7 @@ export function normalizeSniName(raw: unknown, toAscii: ToAscii): NameResult {
 }
 
 /** 文本框里一行一个；也容忍逗号、空格分隔。 */
-export function splitSniNameLines(text: unknown): string[] {
+function splitSniNameLines(text: unknown): string[] {
   if (Array.isArray(text)) return text.map((item) => String(item ?? "").trim()).filter(Boolean);
   return String(text ?? "")
     .split(/[\n\r,，;；\s]+/)
@@ -146,7 +146,7 @@ export function normalizeSniNameList(input: unknown, toAscii: ToAscii): SniNameL
  * 白名单的一项：`example.com` 放行它自己和所有子域名，`.example.com` 只放行子域名。
  * `*.example.com` 当作 `.example.com` 收下（很多人习惯这么写）。
  */
-export function normalizeSniAllowlistEntry(raw: unknown, toAscii: ToAscii): NameResult {
+function normalizeSniAllowlistEntry(raw: unknown, toAscii: ToAscii): NameResult {
   let value = String(raw ?? "").trim();
   if (!value) return { ok: false, error: "白名单项不能为空" };
   let subdomainsOnly = false;

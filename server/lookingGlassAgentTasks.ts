@@ -1,7 +1,7 @@
 import crypto from "crypto";
 
 export type LookingGlassMethod = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3-client";
-export type LookingGlassTaskState = "queued" | "running" | "success" | "error" | "timeout";
+type LookingGlassTaskState = "queued" | "running" | "success" | "error" | "timeout";
 
 export type LookingGlassAgentTask = {
   taskId: string;

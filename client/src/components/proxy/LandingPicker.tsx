@@ -49,7 +49,7 @@ export type LandingHost = {
   inbounds: LandingInbound[];
 };
 
-export type LandingPickerValue = {
+type LandingPickerValue = {
   /** 选中的主机；只知道入站 id 时可以留空，选择器会从清单里反查。 */
   hostId: number | null;
   inboundId: number | null;
@@ -101,7 +101,7 @@ export function useLandingOptions(enabled = true) {
 }
 
 /** 入站上所在主机最新检测的结论，一个服务一个小标签。 */
-export function LandingUnlockChips({ inbound, services, className }: { inbound: LandingInbound; services?: string[]; className?: string }) {
+function LandingUnlockChips({ inbound, services, className }: { inbound: LandingInbound; services?: string[]; className?: string }) {
   const ids = services && services.length > 0 ? services : UNLOCK_SERVICES.filter((service) => inbound.unlock[service.id]).map((service) => service.id);
   if (ids.length === 0) return null;
   return (
