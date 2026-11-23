@@ -1276,7 +1276,7 @@ export default function PersonalizationSettingsSection() {
                   );
                 })}
               </div>
-              {liquidGlassPhotoHint ? <p className="text-xs leading-5 text-amber-700 dark:text-amber-400">{liquidGlassPhotoHint}</p> : null}
+              {liquidGlassPhotoHint ? <p className="text-xs leading-5 text-[var(--fx-warn-text)]">{liquidGlassPhotoHint}</p> : null}
             </div>
             <div className="space-y-2">
               <Label>照片布局</Label>
