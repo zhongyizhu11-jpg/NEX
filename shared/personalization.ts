@@ -716,7 +716,7 @@ export const LIQUID_GLASS_PHOTO_SOURCES = [
   { id: "none", name: "不放照片", description: "只留渐变色块。" },
 ] as const;
 
-type LiquidGlassPhotoSource = typeof LIQUID_GLASS_PHOTO_SOURCES[number]["id"];
+export type LiquidGlassPhotoSource = typeof LIQUID_GLASS_PHOTO_SOURCES[number]["id"];
 
 export const LIQUID_GLASS_LAYOUTS = [
   { id: "auto", name: "自动", description: "一张图或手机上铺满全屏，两张不同的照片在宽屏上左右错落。" },

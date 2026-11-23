@@ -4,6 +4,42 @@ NEX 面板每个版本的主要变化，新的在上面。括号里是同一版�
 
 完整的发布文件见 [GitHub Releases](https://github.com/zhongyizhu11-jpg/NEX/releases)，升级方法见[升级和备份](https://zhongyizhu11-jpg.github.io/NEX/guide/upgrade-backup)。
 
+## 2.3.551（Agent 2.2.269、FXP 2.2.150 不变）
+
+体积与顺滑度专项（用户：「系统还可以优化代码和文件吗，感觉有点臃肿了，有 88 M」）。先量再改，量过没收益的不改；全部数据在 `docs/dev/bundle-size-review.md`。
+
+**升级须知**
+
+- **面板安装包和 Docker 镜像不再带 gost 运行时和 mita**（两个架构合计约 90 MB），只带 Agent 和 FXP：默认包 88 MB → 37 MB。主机第一次装 GOST 转发 / Mieru 落地时，面板按发布页的 SHA256SUMS 从 GitHub Releases 下载（开了 GitHub 加速站先走加速站）、校验后缓存到数据目录 `agent-assets/`（Docker 是 `/data/agent-assets`）；面板启动 20 秒后也会在后台先取好，每 6 小时补一次。**面板连不上 GitHub 的部署**改用完整包 `forwardx-panel-v2.3.551-full.tar.gz`（装机脚本加 `FORWARDX_PANEL_BUNDLE_SUFFIX=-full`），Docker 部署把发布页上的 `forwardx-runtime-linux-<架构>`、`forwardx-mita-linux-<架构>` 放进 `/data/agent-assets/v2.3.551/` 即可。
+- 面板替主机缓存的二进制（Agent 资产、mimic / realm 转发包）以前写在容器内 `/app/data`，容器一重建就丢，现在跟数据库一起放数据卷 `/data`；`FORWARDX_AGENT_ASSET_CACHE_DIR` 可改目录。
+- 壁纸和地球贴图改成 WebP；旧文件名 `.jpg` / `.png` 301 到同名 `.webp`，老 App 缓存的页面不受影响。设置里壁纸按 id 存，不用动。
+- 服务端产物不再出 source map（Node 不加 `--enable-source-maps` 根本不读），`dist/` 82 MB → 21 MB；要排错 `FORWARDX_SERVER_SOURCEMAP=1 pnpm build`。`dist/` 里多了公共块 `chunk-*.js`，入口文件名不变，安装脚本和镜像都整目录拷。
+
+### 瘦身
+
+| | 改前 | 改后 |
+|---|---|---|
+| 默认面板包（同一套 Go 二进制重打实测） | 88.2 MB | 36.6 MB（完整包 69.9 MB） |
+| 服务端产物 dist/（含 12 MB 离线 IP 库） | 82 MB | 21 MB |
+| 面板冷启动到可服务（空库、本机） | 3.4 s | 1.3 s |
+| 壁纸 5 张 + 星空 / 地形贴图 | 6.5 MB | 2.4 MB |
+| 无用导出 / 导出类型 / 死声明（knip + tsc） | 860 / 251 / 69 | 0 |
+| lint 基线警告总数 | 7589 | 7460 |
+
+- 四个服务端入口（面板、两条迁移命令、重置密码）共享公共代码，以前 migrate-forwardx.js 和 reset-admin-password.js 各自把整个服务端打了一遍（各 6.5 MB）。
+- 开发面板的演示数据种子（2978 行）改动态导入，只在 `FORWARDX_DEV_PANEL=1` 时加载。
+- 本机反复 `pnpm build` 不再在 dist/ 里堆旧块。
+
+### 结构
+
+- `server/telegram/telegramBot.ts`（6483 行）按依赖方向拆成 7 个文件：文本解析 → 传输 → 视图 → AI 问答 → 管理动作 → 简报 → 处理器，外部导入不变。规矩在 `docs/dev/server-layout.md`。
+- knip 清理时发现仓库里 195 个测试用字符串路径动态导入模块（knip 看不见），这些导出现在带 `@public` 标记；被脚本正则读取的几个 `shared/` 文件加进 knip 的忽略名单。
+
+### 量过、没收益、没改
+
+- 空闲预取改成「只下载不执行」：登录后 6 秒执行的 JS 4553 KB → 4550 KB，大头是规则 / 主机 / 链路三页本身，而这三页正是要点下去就到的。已回退。
+- 外壳 15 个慢变查询合成一个：它们本来就在同一个批量请求里，服务端处理整批 11～13 ms。不做。
+
 ## 2.3.550（Agent 2.2.269、FXP 2.2.150 不变）
 
 - **主题样式包一次没下到不再卡一整页**（用户手机截图：选了壁纸之后照片当成普通内容排在页面顶上，跟着页面一起滚）。内置的珍珠 / 液态玻璃的样式是按需下的；手机上网一抖没下到，这一页以前从此挂着主题属性却没有主题样式（打包工具对同一个文件只发一次请求），只能刷新。现在失败后在后台按 3 秒 → 10 秒 → 30 秒 → 1 / 2 / 3 分钟自己再挂样式表（网断了重连上马上再试），下到了主题当场补上；液态玻璃的照片层等样式到了才画，不会再排进页面里。
