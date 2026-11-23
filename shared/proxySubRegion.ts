@@ -82,6 +82,9 @@ export function guessProxySubRegionCode(name: unknown): string {
   return "";
 }
 
+/** 关键字表里认得的国家码，按表的顺序（编辑订阅时「某个地区单独选」的候选）。 */
+export const PROXY_SUB_REGION_CODES: readonly string[] = KEYWORDS.map(([code]) => code);
+
 /** 名字里已经带着的国旗去掉（加旗帜时先清一遍，免得「🇭🇰 🇭🇰 香港」）。 */
 export function stripProxySubRegionFlag(name: string): string {
   return String(name || "").replace(/[\u{1F1E6}-\u{1F1FF}][\u{1F1E6}-\u{1F1FF}]\s*/gu, "").trim();

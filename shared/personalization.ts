@@ -710,8 +710,8 @@ export function resolveEffectiveLayout(
 */
 export const LIQUID_GLASS_PHOTO_SOURCES = [
   { id: "auto", name: "自动", description: "设了自定义背景就用那张，没设就随机拉。" },
-  { id: "random", name: "随机照片", description: "每次打开从 picsum.photos 拉两张，和预览站一样；拉不到退回色块。" },
-  { id: "wallpaper", name: "自定义背景", description: "只用「自定义背景」里设的那张。" },
+  { id: "random", name: "随机照片", description: "每次打开从 picsum.photos 拉两张，和预览站一样；拉不到退回内置壁纸。" },
+  { id: "wallpaper", name: "自定义背景", description: "只用「背景」里选的那张；还没选时先用内置壁纸顶着。" },
   { id: "builtin", name: "内置壁纸", description: "面板自带的壁纸里随机挑两张，不依赖外网。" },
   { id: "none", name: "不放照片", description: "只留渐变色块。" },
 ] as const;

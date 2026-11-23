@@ -93,6 +93,7 @@ export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): Pro
     regionGroupType: input.options.regionGroupType && input.options.regionGroupType !== "default"
       ? input.options.regionGroupType
       : input.settings.regionGroupTypeDefault,
+    regionGroupTypes: input.options.regionGroupTypes,
     customGroups,
     categoryTargets: input.options.categoryTargets,
     providers: input.providers,

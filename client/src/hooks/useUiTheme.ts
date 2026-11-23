@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+import { isUiThemeStyleLoaded, UI_THEME_STYLE_LOADED_EVENT } from "@/lib/uiThemeStyles";
 
 /**
  * 现在生效的界面主题（设置 › 个性化 › 界面主题）：<html data-ui-theme> 上那个值，经典没有属性。
@@ -23,4 +25,19 @@ export function useUiTheme(): string {
     return () => observer.disconnect();
   }, []);
   return theme;
+}
+
+/**
+ * 这一套主题的样式是不是真的到了。只在那套主题下才渲染、又没挂在 data-ui-theme 下面的元素
+ * （液态玻璃的照片层）用它：样式没下到（手机上网一抖）就先别画，等后台重试下到了再挂上。
+ */
+export function useUiThemeStyleLoaded(id: string | null | undefined): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      window.addEventListener(UI_THEME_STYLE_LOADED_EVENT, onChange);
+      return () => window.removeEventListener(UI_THEME_STYLE_LOADED_EVENT, onChange);
+    },
+    () => isUiThemeStyleLoaded(id),
+    () => true,
+  );
 }
