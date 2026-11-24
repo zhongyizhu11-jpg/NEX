@@ -5,13 +5,13 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
-import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
+import { SecretRevealDialog } from "@/components/SecretRevealDialog";
+import { useCopyWithToast } from "@/components/useCopyWithToast";
 import { trpc } from "@/lib/trpc";
 import { relativeTimeLabel } from "../ops/account/timeLabel";
 import {
@@ -47,14 +47,6 @@ function sameForm(form: Form, saved: SavedConfig) {
   return form.plans.every((row, index) => row.shopPlanId.trim() === saved.plans[index].shopPlanId && Number(row.planId) === saved.plans[index].planId);
 }
 
-async function copy(text: string, what = "已复制") {
-  if (await copyTextToClipboard(text)) {
-    toast.success(what);
-    return;
-  }
-  toast.error(clipboardNeedsManualCopy() ? "当前是 http 访问，浏览器限制了剪贴板，请长按选中内容复制" : "复制失败，请手动复制");
-}
-
 const STATUS_TONE: Record<ShopSyncRecordStatus, BadgeTone> = {
   processing: "info",
   applied: "up",
@@ -80,6 +72,7 @@ function whatLabel(kind: string | null, action: string) {
  * 怎么在商城那边接，见文档「商城对接」（docs/guide/shop-sync.md）。
  */
 export default function ShopSyncSection(_props: Record<string, never>) {
+  const copy = useCopyWithToast();
   const utils = trpc.useUtils();
   const query = trpc.shopSync.get.useQuery();
   const saveMutation = trpc.shopSync.save.useMutation();
@@ -253,7 +246,7 @@ export default function ShopSyncSection(_props: Record<string, never>) {
             <div className="space-y-2 rounded-lg border border-[var(--fx-stroke-weak)] p-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-meta text-muted-foreground">商城回调地址（POST）</span>
-                <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => copy(query.data.endpoint, "地址已复制")}>
+                <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => copy(query.data.endpoint, { success: "地址已复制" })}>
                   <Copy className="h-3.5 w-3.5" />
                   复制
                 </Button>
@@ -307,26 +300,17 @@ export default function ShopSyncSection(_props: Record<string, never>) {
         )}
       </CardContent>
 
-      <Dialog open={!!createdToken} onOpenChange={(open) => { if (!open) setCreatedToken(null); }}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>对接令牌已生成</DialogTitle>
-            <DialogDescription>只显示这一次，请现在填进商城那边的插件或脚本。它只能调商城回调，一年后过期。</DialogDescription>
-          </DialogHeader>
-          {createdToken ? (
-            <div className="space-y-3">
-              <code className="block break-all rounded-md border bg-background px-3 py-2 font-mono text-sm">{createdToken}</code>
-              <Button className="w-full gap-2" onClick={() => copy(createdToken, "令牌已复制")}>
-                <Copy className="h-4 w-4" />
-                复制令牌
-              </Button>
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreatedToken(null)}>我已保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* 只显示一次的令牌：ESC / 点遮罩关不掉，只能点「我已保存」（SecretRevealDialog） */}
+      <SecretRevealDialog
+        open={!!createdToken}
+        onOpenChange={(open) => { if (!open) setCreatedToken(null); }}
+        title="对接令牌已生成"
+        description="只显示这一次，请现在填进商城那边的插件或脚本。它只能调商城回调，一年后过期。"
+        secret={createdToken ?? ""}
+        copyLabel="复制令牌"
+        copiedMessage="令牌已复制"
+        warning="拿到它的人就能冒充商城给面板发回调，别转发给别人。"
+      />
     </Card>
   );
 }

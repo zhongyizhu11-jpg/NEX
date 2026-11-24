@@ -29,7 +29,7 @@ import { sameNullableStringArray } from "@/lib/multiHopAddress";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
-import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
+import { DiagnoseSubjectActions } from "@/components/DiagnoseDialog";
 import EmptyState from "@/components/EmptyState";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating, getLatencyRating } from "@/components/LatencyRating";
@@ -84,7 +84,6 @@ import MultiHopEditor from "@/components/MultiHopEditor";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { pollingInterval } from "@/lib/polling";
 import { buildLinkAvailabilityIndex } from "@shared/linkAvailability";
-import { handoffManualTestResult } from "@/lib/manualTestCache";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -119,9 +118,7 @@ import { LoadBalanceFields } from "@/features/links/LoadBalanceFields";
 import { exitManualWeights, exitStrategyNote } from "@/lib/exitGroupBalance";
 import { type BalanceDetect, type BalanceStrategy, BALANCE_DEFAULT_STRATEGY, DEFAULT_BALANCE_DETECT, normalizeBalanceDetect, normalizeBalanceStrategy, normalizeExitGroupStrategy, UNIFIED_BALANCE_AGENT_VERSION } from "@shared/loadBalance";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
-import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
-import { addHostNodeMeta, addNodeMetaAliases, hostDisplayName } from "@/lib/linkTestNodeMeta";
 import {
   trafficMultiplierFromInput,
   formatTrafficMultiplier,
@@ -164,6 +161,8 @@ import { ddnsWeightRecordTypeSupported } from "@shared/ddnsWeights";
 
 // 延迟曲线按需加载：recharts 不跟着组列表一起下，点开延迟弹窗才取。
 const GroupLatencyAreaChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.GroupLatencyAreaChart })));
+// 诊断框只在点了「诊断」之后才要，和规则、链路页一样抽成模块懒加载（components/forwardGroups/ForwardGroupSelfTestDialog）。
+const ForwardGroupSelfTestDialog = lazy(() => import("@/components/forwardGroups/ForwardGroupSelfTestDialog"));
 
 /** MySQL 会把布尔返回成 0 / 1 或 "0" / "1"。 */
 const dbFlag = (value: unknown) => value === true || value === 1 || value === "1";
@@ -608,200 +607,6 @@ function ForwardGroupLatencyBody({ groupId, active }: { groupId: number; active:
         />
         <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
     </div>
-  );
-}
-
-function ForwardGroupSelfTestDialog({
-  groupId,
-  groupName,
-  group,
-  entryGroup,
-  hostById,
-  open,
-  onOpenChange,
-  extraTabs,
-  actions,
-}: {
-  groupId: number;
-  groupName: string;
-  group?: any | null;
-  entryGroup?: any | null;
-  hostById?: Map<number, any>;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  /** 并进来的页（延迟记录）和底部动作（故障包、拓扑），和规则、隧道的诊断框一样（DiagnoseDialog）。 */
-  extraTabs?: DiagnoseExtraTab[];
-  actions?: ReactNode;
-}) {
-  const utils = trpc.useUtils();
-  const [optimisticTesting, setOptimisticTesting] = useState(false);
-  const [baselineTestId, setBaselineTestId] = useState(0);
-  const manualTestRef = useRef(false);
-  const { data: latest } = trpc.forwardGroups.latestTest.useQuery(
-    { groupId, includeActive: optimisticTesting },
-    { enabled: open, refetchInterval: pollingInterval("interactive", open), refetchOnWindowFocus: false }
-  );
-  const lastFailureToastKey = useRef("");
-  const testMutation = trpc.forwardGroups.test.useMutation({
-    onSuccess: async () => {
-      await utils.forwardGroups.latestTest.invalidate({ groupId });
-    },
-    onError: (e) => {
-      setOptimisticTesting(false);
-      manualTestRef.current = false;
-      toast.error(e.message || "诊断没发出去");
-    },
-  });
-  const status = latest?.status as string | undefined;
-  const isServerTesting = status === "pending" || status === "running";
-  const isTesting = testMutation.isPending || optimisticTesting || isServerTesting;
-  const isSuccess = status === "success";
-  const isFailed = !!latest && !isTesting && !isSuccess;
-  const parsedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
-  const latestTestId = Number(latest?.id) || 0;
-  const hasFreshResult = latestTestId > baselineTestId;
-  const linkTestNodeData = useMemo(() => {
-    const meta: Record<string, any> = {};
-    const members = [...(group?.members || [])]
-      .filter((member: any) => member.isEnabled !== false)
-      .sort((a: any, b: any) => Number(a.priority) - Number(b.priority));
-    const entryMembers = entryGroup
-      ? [...(entryGroup.members || [])]
-        .filter((member: any) => member.memberType === "host" && member.isEnabled !== false)
-        .sort((a: any, b: any) => Number(a.priority) - Number(b.priority))
-      : [];
-    [...entryMembers, ...members].forEach((member: any) => {
-      const hostId = Number(member.hostId || 0);
-      const host = hostById?.get(hostId);
-      addHostNodeMeta(meta, host, [
-        member.entryAddress,
-        hostId ? `主机${hostId}` : "",
-        hostId ? `主机 #${hostId}` : "",
-      ]);
-    });
-    const firstEntryHost = hostById?.get(Number(entryMembers[0]?.hostId || 0));
-    const firstHost = hostById?.get(Number(members[0]?.hostId || 0));
-    const lastHost = hostById?.get(Number(members[members.length - 1]?.hostId || 0));
-    const targetRemark = String(group?.remark || "").trim();
-    const targetLabel = targetRemark || hostDisplayName(lastHost) || groupName;
-    const targetMeta = targetLabel ? { label: targetLabel } : undefined;
-    if (targetMeta) addNodeMetaAliases(meta, [targetLabel, "目标", "目的节点"], targetMeta);
-    const plannedSegments: LinkTestPlannedSegment[] = [];
-    const hopCount = (entryMembers.length > 0 ? 1 : 0) + Math.max(0, members.length - 1);
-    if (entryMembers.length > 0 && members[0]) {
-      const firstChainHost = hostById?.get(Number(members[0].hostId || 0));
-      entryMembers.forEach((entryMember: any) => {
-        const entryHostId = Number(entryMember.hostId || 0);
-        const firstChainHostId = Number(members[0].hostId || 0);
-        const entryHost = hostById?.get(Number(entryMember.hostId || 0));
-        plannedSegments.push({
-          from: hostDisplayName(entryHost) || `入口主机 #${entryMember.hostId || "-"}`,
-          to: hostDisplayName(firstChainHost) || `主机 #${members[0].hostId || "-"}`,
-          fromHostId: entryHostId || null,
-          toHostId: firstChainHostId || null,
-          hopIndex: 0,
-          hopCount,
-          fromMeta: meta[hostDisplayName(entryHost)] || meta[String(entryMember.hostId || "")],
-          toMeta: meta[hostDisplayName(firstChainHost)] || meta[String(members[0].hostId || "")],
-        });
-      });
-    }
-    members.slice(0, -1).forEach((member: any, index: number) => {
-      const fromHostId = Number(member.hostId || 0);
-      const toHostId = Number(members[index + 1]?.hostId || 0);
-      const fromHost = hostById?.get(Number(member.hostId || 0));
-      const toHost = hostById?.get(Number(members[index + 1]?.hostId || 0));
-      plannedSegments.push({
-        from: hostDisplayName(fromHost) || `主机 #${member.hostId || "-"}`,
-        to: hostDisplayName(toHost) || `主机 #${members[index + 1]?.hostId || "-"}`,
-        fromHostId: fromHostId || null,
-        toHostId: toHostId || null,
-        hopIndex: index + (entryMembers.length > 0 ? 1 : 0),
-        hopCount,
-        fromMeta: meta[hostDisplayName(fromHost)] || meta[String(member.hostId || "")],
-        toMeta: meta[hostDisplayName(toHost)] || meta[String(members[index + 1]?.hostId || "")],
-      });
-    });
-    return {
-      nodeMeta: meta,
-      sourceLabel: hostDisplayName(firstEntryHost) || hostDisplayName(firstHost) || groupName,
-      targetLabel,
-      plannedSegments: plannedSegments.filter((segment) => segment.from && segment.to && segment.from.trim().toLowerCase() !== segment.to.trim().toLowerCase()),
-    };
-  }, [entryGroup?.members, group?.members, group?.remark, groupName, hostById]);
-
-  useEffect(() => {
-    if (!open) {
-      setOptimisticTesting(false);
-      setBaselineTestId(0);
-      manualTestRef.current = false;
-      lastFailureToastKey.current = "";
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (optimisticTesting && hasFreshResult && !isServerTesting && latest) {
-      handoffManualTestResult(
-        latest,
-        (result) => utils.forwardGroups.latestTest.setData(
-          { groupId, includeActive: false },
-          result,
-        ),
-        () => setOptimisticTesting(false),
-      );
-    }
-  }, [groupId, hasFreshResult, isServerTesting, latest, optimisticTesting, utils]);
-
-  useEffect(() => {
-    const message = parsedMessage.message.trim();
-    if (!open || isTesting || !isFailed || !message || !manualTestRef.current || !hasFreshResult) return;
-    const key = `${groupId}:${status}:${latest?.updatedAt || ""}:${message}`;
-    if (lastFailureToastKey.current !== key) {
-      lastFailureToastKey.current = key;
-      manualTestRef.current = false;
-      toast.error("诊断没通过", { description: message });
-    }
-  }, [groupId, hasFreshResult, isFailed, isTesting, latest?.updatedAt, open, parsedMessage.message, status]);
-
-  useEffect(() => {
-    if (!isTesting && isSuccess) manualTestRef.current = false;
-  }, [isSuccess, isTesting]);
-
-  const plannedSegmentCount = linkTestNodeData.plannedSegments?.length || 0;
-  const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
-
-  return (
-    <DiagnoseDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      subjectName={groupName}
-      scope="沿着链一段段测到出口"
-      sizeClassName={probeDialogSizeClass}
-      testing={isTesting}
-      lastRunAt={latest?.updatedAt ?? null}
-      outcome={isSuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
-      failureReason={parsedMessage.message}
-      checklist={{ kind: "forwardGroup", id: groupId }}
-      extraTabs={extraTabs}
-      actions={actions}
-      onRun={() => {
-        manualTestRef.current = true;
-        setBaselineTestId(latestTestId);
-        setOptimisticTesting(true);
-        testMutation.mutate({ groupId });
-      }}
-    >
-      <LinkTestProbeView
-        parsed={parsedMessage}
-        fallbackLatencyMs={latest?.latencyMs}
-        isSuccess={isSuccess}
-        isTesting={isTesting}
-        sourceLabel={linkTestNodeData.sourceLabel}
-        targetLabel={linkTestNodeData.targetLabel}
-        nodeMeta={linkTestNodeData.nodeMeta}
-        plannedSegments={linkTestNodeData.plannedSegments}
-      />
-    </DiagnoseDialog>
   );
 }
 
@@ -2572,6 +2377,10 @@ export function ForwardGroupsContent({
         <DialogContent className={"flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-4 sm:p-5 " + (isChainMode || isPortMode ? "sm:max-w-xl" : "sm:max-w-2xl")}>
           <DialogHeader>
             <DialogTitle>{dialogTitle}</DialogTitle>
+            {/* 读屏要的：没有 Description Radix 会在控制台告警，读屏也只念标题。视觉上标题已经够了，所以 sr-only。 */}
+            <DialogDescription className="sr-only">
+              {isPortMode ? "填写端口转发的名称、入口与目标" : isChainMode ? "填写转发链的名称、入口与各跳主机" : "填写转发组的名称、成员与策略"}
+            </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div className={"grid gap-3 " + (isPortMode || isChainMode ? "sm:grid-cols-1" : "sm:grid-cols-2")}>
@@ -3341,6 +3150,7 @@ export function ForwardGroupsContent({
         </DialogContent>
       </Dialog>
       {testGroup && (
+        <Suspense fallback={null}>
         <ForwardGroupSelfTestDialog
           groupId={testGroup.id}
           groupName={testGroup.name}
@@ -3352,6 +3162,7 @@ export function ForwardGroupsContent({
           extraTabs={[{ key: "history", label: "延迟记录", content: <ForwardGroupLatencyBody groupId={testGroup.id} active={!!testGroup} /> }]}
           actions={<DiagnoseSubjectActions kind="forwardGroup" id={testGroup.id} onLeave={() => setTestGroup(null)} />}
         />
+        </Suspense>
       )}
       {(() => {
         const policyGroup = policyGroupId === null ? null : (groups || []).find((group: any) => Number(group.id) === policyGroupId) || null;

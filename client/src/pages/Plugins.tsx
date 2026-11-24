@@ -2882,9 +2882,10 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
         <DialogContent className="flex max-h-[calc(100svh-1.5rem)] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col overflow-hidden p-0 sm:max-w-2xl">
           <DialogHeader className="px-4 pt-4 sm:px-6 sm:pt-6">
             <DialogTitle>{actionInputDialog?.label || "执行插件动作"}</DialogTitle>
-            {actionInputDialog?.description && (
-              <DialogDescription>{actionInputDialog.description}</DialogDescription>
-            )}
+            {/* 动作没写说明时也得有 Description（读屏、Radix 告警），那就 sr-only 说一句这框是干什么的 */}
+            <DialogDescription className={actionInputDialog?.description ? undefined : "sr-only"}>
+              {actionInputDialog?.description || "填好参数后执行这个插件动作"}
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 overflow-y-auto px-4 py-2 sm:grid-cols-2 sm:px-6">
             {(Array.isArray(actionInputDialog?.inputSchema) ? actionInputDialog.inputSchema as PluginSettingField[] : []).map((field) => (

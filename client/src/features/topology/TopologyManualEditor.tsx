@@ -114,7 +114,16 @@ export function TopologyManualEditor({ open, onOpenChange, graphNodes }: { open:
               {links.map((link) => (
                 <li key={link.id} className="flex min-w-0 items-center gap-2 rounded-md bg-[var(--fx-l2-group)] px-2.5 py-1.5 text-sm">
                   <span className="min-w-0 flex-1 truncate">{endpointLabel(link.fromRef)} → {endpointLabel(link.toRef)}{link.label ? <span className="ml-1 text-meta text-muted-foreground">{link.label}</span> : null}</span>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="删除连线" onClick={() => deleteLink.mutate({ id: link.id })}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    aria-label="删除连线"
+                    onClick={async () => {
+                      // 和删节点一样先确认：虽然只是标注、不碰真实配置，但一点就没、没有撤销
+                      if (await confirm({ title: "删除连线", description: `删除「${endpointLabel(link.fromRef)} → ${endpointLabel(link.toRef)}」这条标注连线？不影响任何真实配置。`, confirmText: "删除", tone: "destructive" })) deleteLink.mutate({ id: link.id });
+                    }}
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </li>

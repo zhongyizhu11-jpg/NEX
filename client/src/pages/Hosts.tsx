@@ -38,7 +38,7 @@ import AddSelfServiceHostDialog from "@/components/hosts/AddSelfServiceHostDialo
 import { defaultHostCostForm, HostCostFields, hostCostFormFrom, hostCostPayload, type HostCostForm } from "@/components/hosts/HostCostFields";
 import { HostLedgerView } from "@/components/hosts/HostLedgerView";
 import HostTrafficBillingDialog from "@/components/hosts/HostTrafficBillingDialog";
-import HostReplaceDialog, { type HostReplaceTarget } from "@/components/hosts/HostReplaceDialog";
+import type { HostReplaceTarget } from "@/components/hosts/HostReplaceDialog";
 import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
 import HostEntitySummaryCard from "@/components/hosts/HostSummaryCard";
@@ -170,6 +170,8 @@ const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-
 const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
 // 探测延迟曲线（recharts）点开才下载，不跟着主机页一起。
 const HostProbeServiceLatencyDialog = lazy(() => import("@/components/hosts/HostProbeServiceLatencyDialog"));
+// 「换机器」弹窗很少用到，点了再下
+const HostReplaceDialog = lazy(() => import("@/components/hosts/HostReplaceDialog"));
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
 const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.webp";
 const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.webp";
@@ -3475,11 +3477,15 @@ function HostsContent() {
         }}
       />
 
-      <HostReplaceDialog
-        open={!!replaceHost}
-        onOpenChange={(open) => !open && setReplaceHost(null)}
-        host={replaceHost}
-      />
+      {replaceHost ? (
+        <Suspense fallback={null}>
+          <HostReplaceDialog
+            open={!!replaceHost}
+            onOpenChange={(open) => !open && setReplaceHost(null)}
+            host={replaceHost}
+          />
+        </Suspense>
+      ) : null}
       {/* 整台机器的按量计费 —— 底层就是转发找配置时的最后一档兜底。 */}
       <HostTrafficBillingDialog
         open={!!billingHost}

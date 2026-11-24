@@ -33,3 +33,36 @@ test("主机 / 链路页：分类条和搜索那一行包进 fx-list-controls �
     assert.match(page, /className="fx-list-controls space-y-4"/, `${file} 的 fx-list-controls 要带 space-y-4`);
   }
 });
+
+/*
+  「流量与权限设置」不能把权限存成空。
+
+  复现：打开某个用户的设置 → 关掉 → 再打开同一个用户 → 直接点「保存设置」。
+  打开时 openTrafficSettings 把五个 ID 列表清成 []，回填靠的是「query data 变了」的 effect；
+  第二次打开时 data 还是缓存里那个引用，effect 不跑，列表停在 []，而 isLoading 是 false、
+  保存按钮能点，一点就把他的主机 / 转发组 / 隧道授权全写成空。
+  修法：effect 以 [弹窗打开, 用户 id, data] 为键，每次打开都重新种子；「加载中」改看 data 到了没。
+*/
+test("权限弹窗：每次打开都从缓存重新种子，加载判断看 data 而不是 isLoading", () => {
+  const perms = ["userHostPerms", "userForwardGroupPerms", "userTunnelPerms", "userProxyNodeShares", "userTrafficBillingPerms"];
+  for (const name of perms) {
+    assert.match(
+      source,
+      new RegExp(`\\}, \\[showTrafficSettings, trafficUserId, ${name}\\]\\);`),
+      `${name} 的回填 effect 要以 [showTrafficSettings, trafficUserId, data] 为键`,
+    );
+    assert.doesNotMatch(source, new RegExp(`\\}, \\[${name}\\]\\);`), `${name} 的 effect 不能只看 data`);
+    assert.doesNotMatch(source, new RegExp(`isLoading: ${name}Loading`), `${name} 不再用 isLoading 判断`);
+  }
+  // 「权限加载中」= 这个用户的五份数据有一份还没到
+  const guard = source.slice(source.indexOf("const permissionDataLoading ="), source.indexOf(");", source.indexOf("const permissionDataLoading =")));
+  for (const name of perms) assert.match(guard, new RegExp(`${name} === undefined`), `permissionDataLoading 要看 ${name} 是否到了`);
+  assert.doesNotMatch(guard, /(Perms|Shares)Loading\b/, "permissionDataLoading 不能再用 isLoading");
+  // 打开时五个列表一起清空，sharedProxyNodeIds 不能漏
+  const opener = source.slice(source.indexOf("const openTrafficSettings = "), source.indexOf("setShowTrafficSettings(true);"));
+  for (const setter of ["setAllowedHostIds", "setAllowedForwardGroupIds", "setAllowedTunnelIds", "setSharedProxyNodeIds", "setTrafficBillingHostIds", "setTrafficBillingTunnelIds", "setTrafficBillingForwardGroupIds"]) {
+    assert.match(opener, new RegExp(`${setter}\\(\\[\\]\\);`), `打开时要清空 ${setter}`);
+  }
+  // 保存按钮在数据没到时禁用
+  assert.match(source, /disabled=\{updateTrafficMutation\.isPending \|\| permissionDataLoading\}/);
+});

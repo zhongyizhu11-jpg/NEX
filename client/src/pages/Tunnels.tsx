@@ -30,8 +30,6 @@ import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import { LineWorkspace, NodePoolsSection } from "@/features/links/LineWorkspace";
-import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
-import { ExitBalanceDialog } from "@/features/links/ExitBalanceDialog";
 import type { LinkWizardAction } from "@shared/linkWizard";
 import { prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 
@@ -150,6 +148,9 @@ import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
 const TunnelSelfTestDialog = lazy(() => import("@/features/tunnels/TunnelSelfTestDialog"));
+// 新建向导、出口均衡两个弹窗都很少打开，和自测框一样点了再下
+const LinkWizardDialog = lazy(() => import("@/features/links/LinkWizardDialog").then((m) => ({ default: m.LinkWizardDialog })));
+const ExitBalanceDialog = lazy(() => import("@/features/links/ExitBalanceDialog").then((m) => ({ default: m.ExitBalanceDialog })));
 const TunnelWorldGlobe = lazy(() => import("@/features/tunnels/TunnelWorldGlobe"));
 
 export function hasLatestTunnelLatency(tunnel: any) {
@@ -3877,12 +3878,16 @@ function TunnelsContent() {
         onMoreSettings={(tunnel) => openEdit(tunnel)}
       />
       <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
-      <LinkWizardDialog
-        open={linkWizardOpen}
-        onOpenChange={setLinkWizardOpen}
-        onCreate={handleLinkWizardCreate}
-        forwardXAvailable={forwardProtocolSettings.forwardx !== false}
-      />
+      {linkWizardOpen && (
+        <Suspense fallback={null}>
+          <LinkWizardDialog
+            open={linkWizardOpen}
+            onOpenChange={setLinkWizardOpen}
+            onCreate={handleLinkWizardCreate}
+            forwardXAvailable={forwardProtocolSettings.forwardx !== false}
+          />
+        </Suspense>
+      )}
       <Dialog open={!!deleteTunnel} onOpenChange={(open) => !open && setDeleteTunnel(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -3936,6 +3941,7 @@ function TunnelsContent() {
         <DialogContent className="flex h-[min(92svh,48rem)] w-[calc(100vw-1rem)] max-w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl sm:p-0">
           <DialogHeader className="shrink-0 px-3.5 pb-2 pt-3.5 pr-12 sm:px-4 sm:pr-12 sm:pt-4">
             <DialogTitle>新增链路</DialogTitle>
+            <DialogDescription className="sr-only">填写转发链的名称、入口与各跳主机</DialogDescription>
           </DialogHeader>
           <div className="dialog-scroll-area min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain px-3.5 py-2.5 sm:px-4">
                 {/* 新增链路对话框只建转发链：隧道走「新建链路」类型选择 → 编辑对话框（2.3.4xx 起），这里原来还留着一份永远走不到的隧道分支 */}
@@ -4058,6 +4064,7 @@ function TunnelsContent() {
         <DialogContent className="flex h-[min(92svh,48rem)] w-[calc(100vw-1rem)] max-w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl sm:p-0">
           <DialogHeader className="shrink-0 px-3.5 pb-2 pt-3.5 pr-12 sm:px-4 sm:pr-12 sm:pt-4">
             <DialogTitle>{editingId ? "编辑隧道" : "添加链路"}</DialogTitle>
+            <DialogDescription className="sr-only">{editingId ? "修改隧道的入口、出口与传输参数" : "填写隧道的名称、入口、出口与传输参数"}</DialogDescription>
           </DialogHeader>
           <div className="dialog-scroll-area min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain px-3.5 py-2.5 sm:px-4">
             <FormField className="space-y-2">
@@ -4260,14 +4267,16 @@ function TunnelsContent() {
         // 用列表里最新的那份，切换 / 排序后马上反映出来
         const tunnel = (rawTunnelItems.find((item) => Number(item.id) === Number(exitGroupDialogTunnel.id)) || exitGroupDialogTunnel) as TunnelListItem;
         return (
-          <ExitBalanceDialog
-            tunnel={tunnel}
-            exitGroup={Number(tunnel.exitGroupId || 0) > 0 ? exitGroupById.get(Number(tunnel.exitGroupId)) ?? null : null}
-            hosts={hosts}
-            canManagePin={user?.role === "admin" || Number(tunnel.userId) === Number(user?.id)}
-            canReorder={user?.role === "admin"}
-            onClose={() => setExitGroupDialogTunnel(null)}
-          />
+          <Suspense fallback={null}>
+            <ExitBalanceDialog
+              tunnel={tunnel}
+              exitGroup={Number(tunnel.exitGroupId || 0) > 0 ? exitGroupById.get(Number(tunnel.exitGroupId)) ?? null : null}
+              hosts={hosts}
+              canManagePin={user?.role === "admin" || Number(tunnel.userId) === Number(user?.id)}
+              canReorder={user?.role === "admin"}
+              onClose={() => setExitGroupDialogTunnel(null)}
+            />
+          </Suspense>
         );
       })() : null}
     </div>

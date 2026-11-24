@@ -695,8 +695,9 @@ function payload(form: PlanForm) {
 export default function Plans() {
   const utils = trpc.useUtils();
   const [form, setForm] = useState<PlanForm>(emptyForm);
-  const subTemplatesQuery = trpc.proxySubscriptions.adminListTemplates.useQuery();
   const [editing, setEditing] = useState(false);
+  // 订阅模板清单只在编辑弹窗里用：页面一打开就拉是白发一个请求，等弹窗开了再要。
+  const subTemplatesQuery = trpc.proxySubscriptions.adminListTemplates.useQuery(undefined, { enabled: editing });
   const [planDialogTab, setPlanDialogTab] = useState<PlanDialogTab>("settings");
   const [assignOpen, setAssignOpen] = useState(false);
   // 页头的「新增计费资源」：每点一次 +1，TrafficBillingSection 转给计费资源列表开新建弹窗
@@ -907,6 +908,8 @@ export default function Plans() {
    */
   const { data: proxyNodeOptions = [], isLoading: proxyNodeOptionsLoading } = trpc.plans.proxyNodeOptions.useQuery(undefined, {
     staleTime: 30_000,
+    // 同样只在编辑弹窗里用（附带落地节点那一栏），列表页不需要
+    enabled: editing,
   });
   const storeVisiblePlans = Number(planSummary?.storeVisibleItems ?? 0);
   const trafficBillingEnabled = !!trafficBillingData?.enabled;

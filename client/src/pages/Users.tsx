@@ -296,33 +296,42 @@ function UsersContent() {
   const { data: allTunnels } = trpc.tunnels.options.useQuery(undefined, { enabled: showTrafficSettings });
   const { data: allForwardGroups } = trpc.forwardGroups.options.useQuery(undefined, { enabled: showTrafficSettings });
   const { data: trafficBillingConfigs } = trpc.trafficBilling.configs.useQuery(undefined, { enabled: showTrafficSettings });
-  const { data: userHostPerms, isLoading: userHostPermsLoading } = trpc.users.getHostPermissions.useQuery(
+  const { data: userHostPerms } = trpc.users.getHostPermissions.useQuery(
     { userId: trafficUserId! },
     { enabled: showTrafficSettings && !!trafficUserId }
   );
-  const { data: userForwardGroupPerms, isLoading: userForwardGroupPermsLoading } = trpc.users.getForwardGroupPermissions.useQuery(
+  const { data: userForwardGroupPerms } = trpc.users.getForwardGroupPermissions.useQuery(
     { userId: trafficUserId! },
     { enabled: showTrafficSettings && !!trafficUserId }
   );
-  const { data: userTunnelPerms, isLoading: userTunnelPermsLoading } = trpc.users.getTunnelPermissions.useQuery(
+  const { data: userTunnelPerms } = trpc.users.getTunnelPermissions.useQuery(
     { userId: trafficUserId! },
     { enabled: showTrafficSettings && !!trafficUserId }
   );
-  const { data: userTrafficBillingPerms, isLoading: userTrafficBillingPermsLoading } = trpc.users.getTrafficBillingPermissions.useQuery(
+  const { data: userTrafficBillingPerms } = trpc.users.getTrafficBillingPermissions.useQuery(
     { userId: trafficUserId! },
     { enabled: showTrafficSettings && !!trafficUserId }
   );
-  const { data: userProxyNodeShares, isLoading: userProxyNodeSharesLoading } = trpc.users.getProxyNodeShares.useQuery(
+  const { data: userProxyNodeShares } = trpc.users.getProxyNodeShares.useQuery(
     { userId: trafficUserId! },
     { enabled: showTrafficSettings && !!trafficUserId }
   );
   const { data: proxyNodeShareOptions } = trpc.users.proxyNodeShareOptions.useQuery(undefined, { enabled: showTrafficSettings });
+  /*
+    「权限加载中」看的是**这个用户的数据到了没**，不是 isLoading。
+
+    同一个用户关了再开，五个查询全是热缓存：isLoading 是 false、data 的引用也没变。上一版打开时
+    先把列表清成 []，再靠「data 变了」的 effect 回填 —— 这时一个 effect 都不跑，列表停在 []，
+    保存按钮却能点，一点就把他的主机 / 转发组 / 隧道授权全写成空（2.3.5xx 线上踩过）。
+    现在 effect 以「弹窗打开 + 用户」为键重新种子（见下面），这里按 data 是否 undefined 判断：
+    换到另一个用户时 query key 一换，data 立刻是 undefined，保存按钮就禁住，直到他的数据回来。
+  */
   const permissionDataLoading = showTrafficSettings && !!trafficUserId && (
-    userHostPermsLoading
-    || userForwardGroupPermsLoading
-    || userTunnelPermsLoading
-    || userTrafficBillingPermsLoading
-    || userProxyNodeSharesLoading
+    userHostPerms === undefined
+    || userForwardGroupPerms === undefined
+    || userTunnelPerms === undefined
+    || userTrafficBillingPerms === undefined
+    || userProxyNodeShares === undefined
   );
   const { data: userSummary, isLoading: summaryLoading } = trpc.users.summary.useQuery(undefined, {
     enabled: currentUser?.role === "admin",
@@ -397,30 +406,37 @@ function UsersContent() {
   });
 
 
-  // 当权限数据加载完成后同步到状态
+  /*
+    权限数据到了就同步到表单状态。
+
+    依赖里带上 showTrafficSettings 和 trafficUserId，不能只看 data：openTrafficSettings 每次打开都把
+    列表清成 []，而同一个用户再次打开时 data 还是缓存里那个引用，只看 data 的 effect 不会再跑，
+    列表就停在 []（见上面 permissionDataLoading 的注释）。以「打开 + 用户 + 数据」为键，每次打开都
+    从缓存重新种子；换用户时 data 先是 undefined，等他的数据回来再种。
+  */
   useEffect(() => {
     if (userHostPerms) {
       setAllowedHostIds([...userHostPerms]);
     }
-  }, [userHostPerms]);
+  }, [showTrafficSettings, trafficUserId, userHostPerms]);
 
   useEffect(() => {
     if (userForwardGroupPerms) {
       setAllowedForwardGroupIds([...userForwardGroupPerms]);
     }
-  }, [userForwardGroupPerms]);
+  }, [showTrafficSettings, trafficUserId, userForwardGroupPerms]);
 
   useEffect(() => {
     if (userTunnelPerms) {
       setAllowedTunnelIds([...userTunnelPerms]);
     }
-  }, [userTunnelPerms]);
+  }, [showTrafficSettings, trafficUserId, userTunnelPerms]);
 
   useEffect(() => {
     if (userProxyNodeShares) {
       setSharedProxyNodeIds([...userProxyNodeShares]);
     }
-  }, [userProxyNodeShares]);
+  }, [showTrafficSettings, trafficUserId, userProxyNodeShares]);
 
   useEffect(() => {
     if (userTrafficBillingPerms) {
@@ -428,7 +444,7 @@ function UsersContent() {
       setTrafficBillingTunnelIds([...(userTrafficBillingPerms.tunnelIds || [])]);
       setTrafficBillingForwardGroupIds([...(userTrafficBillingPerms.forwardGroupIds || [])]);
     }
-  }, [userTrafficBillingPerms]);
+  }, [showTrafficSettings, trafficUserId, userTrafficBillingPerms]);
 
   useEffect(() => {
     if (currentUser && currentUser.role !== "admin") {
@@ -944,9 +960,11 @@ function UsersContent() {
       setAllowSocat(set.has("socat"));
       setAllowGost(set.has("gost"));
     }
+    // 五个列表一起清空，等上面的 effect 按「打开 + 用户」从缓存种子；少清一个就会把上一个用户的留给这一个。
     setAllowedForwardGroupIds([]);
     setAllowedHostIds([]);
     setAllowedTunnelIds([]);
+    setSharedProxyNodeIds([]);
     setTrafficBillingHostIds([]);
     setTrafficBillingTunnelIds([]);
     setTrafficBillingForwardGroupIds([]);
@@ -2173,7 +2191,7 @@ function UsersContent() {
             给 "{addonUserName}" 的 {addonSubscriptionLabel || "当前套餐"} 增加仅本周期有效的流量。
           </DialogDescription>
           <div className="space-y-4 py-2">
-            <div className="space-y-2">
+            <FormField className="space-y-2">
               <Label>加赠流量</Label>
               <div className="flex items-center gap-2">
                 <Input
@@ -2188,7 +2206,7 @@ function UsersContent() {
                 <span className="shrink-0 text-sm text-muted-foreground">GB</span>
               </div>
               <p data-fx-help="" className="text-xs text-muted-foreground">附加流量会在当前套餐流量周期结束或订阅到期时自动失效。</p>
-            </div>
+            </FormField>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddonDialog(false)}>
@@ -2206,7 +2224,7 @@ function UsersContent() {
           <DialogTitle>更改到期时间</DialogTitle>
           <DialogDescription>给 "{extendSubscriptionLabel}" 设置订阅到期时间。</DialogDescription>
           <div className="space-y-4 py-2">
-            <div className="space-y-2">
+            <FormField className="space-y-2">
               <Label>到期日期</Label>
               <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                 <DatePickerInput
@@ -2219,7 +2237,7 @@ function UsersContent() {
                 </Button>
               </div>
               <p data-fx-help="" className="text-xs text-muted-foreground">留空表示永久有效。</p>
-            </div>
+            </FormField>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowExtendDialog(false)}>
@@ -2273,7 +2291,8 @@ function UsersContent() {
 
       {/* Traffic & Permission Settings Dialog */}
       <Dialog open={showTrafficSettings} onOpenChange={setShowTrafficSettings}>
-        <DialogContent className="sm:max-w-lg max-h-[90svh] flex flex-col">
+        {/* overflow-hidden：滚动只交给下面的 TabsContent，否则 DialogContent 默认的 overflow-y-auto 会再套一层滚动区 */}
+        <DialogContent className="sm:max-w-lg max-h-[90svh] flex flex-col overflow-hidden">
           <DialogTitle>流量与权限设置</DialogTitle>
           <DialogDescription data-fx-help="">
             设置 "{trafficUserName}" 的管理员额外配额和权限；套餐权益在订阅管理中单独体现。
@@ -2296,8 +2315,8 @@ function UsersContent() {
 
             {/* 权限标签页 */}
             <TabsContent value="permission" className="flex-1 min-h-0 overflow-y-auto pr-1 mt-3 space-y-3 data-[state=inactive]:hidden">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2 space-y-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <FormField className="space-y-2 sm:col-span-2">
                   <div className="flex items-center justify-between gap-3">
                     <Label>用户备注</Label>
                     <span className="text-xs text-muted-foreground">{trafficDisplayRemark.trim().length}/24</span>
@@ -2308,7 +2327,7 @@ function UsersContent() {
                     onChange={(e) => setTrafficDisplayRemark(e.target.value.slice(0, 24))}
                     placeholder="可选，留空则不显示"
                   />
-                </div>
+                </FormField>
                 <FormField className="space-y-2">
                   <Label>最大规则数</Label>
                   <Input
@@ -2489,7 +2508,7 @@ function UsersContent() {
                     对普通端口转发和隧道入口生效。同一用户在一台主机上的所有规则、所有连接共用这个速度，开多线程也绕不过去。
                   </p>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {([
                     ["上行（客户端 → 目标）", gostRateLimitInInput, setGostRateLimitInInput],
                     ["下行（目标 → 客户端）", gostRateLimitOutInput, setGostRateLimitOutInput],
@@ -2513,7 +2532,7 @@ function UsersContent() {
                     </div>
                   ))}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label className="text-xs">突发峰值</Label>
                     <div className="flex items-center gap-2">

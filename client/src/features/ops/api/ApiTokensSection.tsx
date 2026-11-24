@@ -13,7 +13,6 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
-import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
 import { downloadTextFile } from "@/lib/fileDownload";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
@@ -21,6 +20,8 @@ import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { dateLabel, relativeTimeLabel } from "../account/timeLabel";
 import { apiTokenModulesLabel, type ApiTokenModule } from "@shared/apiTokenModules";
 import { ApiTokenModulePicker } from "./ApiTokenModulePicker";
+import { SecretRevealDialog } from "@/components/SecretRevealDialog";
+import { useCopyWithToast } from "@/components/useCopyWithToast";
 
 type Scope = "read" | "full";
 const EXPIRY_OPTIONS = [
@@ -30,21 +31,14 @@ const EXPIRY_OPTIONS = [
   { value: "never", label: "永不过期" },
 ] as const;
 
-async function copy(text: string, what = "已复制") {
-  if (await copyTextToClipboard(text)) {
-    toast.success(what);
-    return;
-  }
-  toast.error(clipboardNeedsManualCopy() ? "当前是 http 访问，浏览器限制了剪贴板，请长按选中内容复制" : "复制失败，请手动复制");
-}
-
 /** 一段可复制的代码：手机上自动折行，不出横向滚动条。 */
 function CopyBlock({ label, text, copyLabel }: { label: string; text: string; copyLabel?: string }) {
+  const copy = useCopyWithToast();
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-meta text-muted-foreground">{label}</span>
-        <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => copy(text, copyLabel)}>
+        <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => copy(text, { success: copyLabel })}>
           <Copy className="h-3.5 w-3.5" />
           复制
         </Button>
@@ -64,6 +58,7 @@ function CopyBlock({ label, text, copyLabel }: { label: string; text: string; co
 export default function ApiTokensSection(_props: Record<string, never>) {
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
+  const copy = useCopyWithToast();
   const listQuery = trpc.ops.apiTokens.list.useQuery();
   // 面板公开地址从 publicInfo 读，不为这一项拉整份 getSettings。
   const { panelPublicUrl } = usePanelFlags();
@@ -236,7 +231,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
                     <Button variant="ghost" size="sm" onClick={handleDownloadDocs} disabled={downloadingDocs}>
                       {downloadingDocs ? "下载中…" : "下载"}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => copy(openApiUrl, "地址已复制")}>
+                    <Button variant="ghost" size="sm" onClick={() => copy(openApiUrl, { success: "地址已复制" })}>
                       复制地址
                     </Button>
                   </span>
@@ -265,73 +260,68 @@ export default function ApiTokensSection(_props: Record<string, never>) {
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setCreated(null); }}>
+      {/*
+        建好之后换成 SecretRevealDialog：令牌只显示这一次，那个框 ESC / 点遮罩都关不掉，只能点「我已保存」。
+        表单框在 created 期间收起来（open 带 !created），免得两个框叠在一起。
+      */}
+      <SecretRevealDialog
+        open={!!created}
+        onOpenChange={(open) => { if (!open) { setCreated(null); setDialogOpen(false); } }}
+        title="令牌已创建"
+        description={<>「{created?.name}」的令牌只显示这一次，关掉就看不到了，请现在复制保存。</>}
+        secret={created?.token ?? ""}
+        copyLabel="复制令牌"
+        copiedMessage="令牌已复制"
+        warning="令牌能以你的身份调用面板，像密码一样保管，别转发给别人。"
+      >
+        <CopyBlock label="直接接入 Claude Code" text={claudeCommand} copyLabel="命令已复制" />
+      </SecretRevealDialog>
+
+      <Dialog open={dialogOpen && !created} onOpenChange={(open) => { setDialogOpen(open); if (!open) setCreated(null); }}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
-          {created ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>令牌已创建</DialogTitle>
-                <DialogDescription>「{created.name}」的令牌只显示这一次，关掉就看不到了，请现在复制保存。</DialogDescription>
-              </DialogHeader>
-              <div className="space-y-3">
-                <code className="block break-all rounded-md border bg-background px-3 py-2 font-mono text-sm">{created.token}</code>
-                <Button className="w-full gap-2" onClick={() => copy(created.token, "令牌已复制")}>
-                  <Copy className="h-4 w-4" />
-                  复制令牌
-                </Button>
-                <CopyBlock label="直接接入 Claude Code" text={claudeCommand} copyLabel="命令已复制" />
+          <DialogHeader>
+            <DialogTitle>新建 API 令牌</DialogTitle>
+            <DialogDescription>令牌能以你的身份调用面板，像密码一样保管。改密码、被重置密码或摘掉双重验证后，已有令牌全部失效。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <FormField className="space-y-2">
+              <Label>名字</Label>
+              <Input value={name} maxLength={64} placeholder="例如：Claude Code、备份脚本" onChange={(event) => setName(event.target.value)} />
+            </FormField>
+            <FormField className="space-y-2">
+              <Label>权限</Label>
+              <Select value={scope} onValueChange={(value) => setScope(value as Scope)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="read">只读 —— 只能查看</SelectItem>
+                  <SelectItem value="full">完全 —— 能修改，和你本人一样</SelectItem>
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField className="space-y-2">
+              <Label>能访问的模块</Label>
+              <ApiTokenModulePicker value={modules} onChange={setModules} />
+            </FormField>
+            <FormField className="space-y-2">
+              <Label>有效期</Label>
+              <Select value={expiry} onValueChange={(value) => setExpiry(value as typeof expiry)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {EXPIRY_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormField>
+            {scope === "full" ? (
+              <div className="flex items-start gap-2 rounded-lg bg-[var(--fx-warn-soft)] p-3 text-sm text-[var(--fx-warn-text)]">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>完全令牌能启停、新建规则，交给 AI 助手前想清楚它会做什么。</span>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => { setDialogOpen(false); setCreated(null); }}>我已保存</Button>
-              </DialogFooter>
-            </>
-          ) : (
-            <>
-              <DialogHeader>
-                <DialogTitle>新建 API 令牌</DialogTitle>
-                <DialogDescription>令牌能以你的身份调用面板，像密码一样保管。改密码、被重置密码或摘掉双重验证后，已有令牌全部失效。</DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <FormField className="space-y-2">
-                  <Label>名字</Label>
-                  <Input value={name} maxLength={64} placeholder="例如：Claude Code、备份脚本" onChange={(event) => setName(event.target.value)} />
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>权限</Label>
-                  <Select value={scope} onValueChange={(value) => setScope(value as Scope)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="read">只读 —— 只能查看</SelectItem>
-                      <SelectItem value="full">完全 —— 能修改，和你本人一样</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>能访问的模块</Label>
-                  <ApiTokenModulePicker value={modules} onChange={setModules} />
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>有效期</Label>
-                  <Select value={expiry} onValueChange={(value) => setExpiry(value as typeof expiry)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {EXPIRY_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </FormField>
-                {scope === "full" ? (
-                  <div className="flex items-start gap-2 rounded-lg bg-[var(--fx-warn-soft)] p-3 text-sm text-[var(--fx-warn-text)]">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span>完全令牌能启停、新建规则，交给 AI 助手前想清楚它会做什么。</span>
-                  </div>
-                ) : null}
-              </div>
-              <DialogFooter className="gap-2">
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
-                <Button onClick={handleCreate} disabled={createMutation.isPending}>{createMutation.isPending ? "创建中…" : "创建"}</Button>
-              </DialogFooter>
-            </>
-          )}
+            ) : null}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
+            <Button onClick={handleCreate} disabled={createMutation.isPending}>{createMutation.isPending ? "创建中…" : "创建"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

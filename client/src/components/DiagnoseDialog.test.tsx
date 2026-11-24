@@ -41,6 +41,7 @@ test("时间写成「09-23 21:30」；坏值不编一个出来", () => {
 const pageModules: Record<string, string[]> = {
   "Rules.tsx": ["../features/rules/SelfTestDialog.tsx", "../features/rules/RuleTrafficGlobe.tsx"],
   "Tunnels.tsx": ["../features/tunnels/TunnelSelfTestDialog.tsx", "../features/tunnels/TunnelWorldGlobe.tsx"],
+  "ForwardGroups.tsx": ["./forwardGroups/ForwardGroupSelfTestDialog.tsx"],
 };
 function readPageWithModules(file: string): string {
   const pages = path.resolve(import.meta.dirname, "../pages");
