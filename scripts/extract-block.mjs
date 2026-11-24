@@ -128,6 +128,11 @@ for (const st of statements) {
   };
   collect(st, 0);
 }
+// 输入若在段后才声明（原来靠闭包晚绑定），抽出去后调用处会在声明前取值（TDZ），直接报错让人缩小范围
+for (const [name, info] of inputs) {
+  const decl = info?.decl; if (!decl) continue;
+  if (decl.getStart(sf) >= rangeEnd && decl.getSourceFile() === sf) { console.error(`输入 ${name} 在段后（第 ${sf.getLineAndCharacterOfPosition(decl.getStart(sf)).line + 1} 行）才声明：段里的闭包靠晚绑定拿到它，抽出去会在声明前取值。把用到它的语句排除在段外，或先把它的声明挪到前面。`); process.exit(1); }
+}
 // 段外引用：段后的语句，以及段前声明的闭包里的引用（const 闭包晚于声明才被调用，运行时拿得到）
 const outsideRange = (node) => node.getStart(sf) >= rangeEnd || node.end <= rangeStart;
 function walkAfter(node) {
