@@ -20,25 +20,25 @@ import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, t
 import * as db from "./db";
 import { classifyHeartbeatAgentDistribution, normalizeAgentDistribution } from "../shared/agentDistribution";
 import { isForwardxAgentMigrationEnabled, shouldQueueForwardxAgentMigration } from "./forwardxAgentMigration";
-import { getIpChangeProbeTasksForHost, hasPendingIpChangeProbeDelivery } from "./ipChange/runtime";
+import { getIpChangeProbeTasksForHost } from "./ipChange/runtime";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import { isRuleProtocolEnabled, isTunnelProtocolEnabled } from "./forwardProtocolSettings";
-import { agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
+import { agentStableHeartbeatPlanCache, buildPresenceAgentHeartbeatResponse, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { anomalyAwareRuleMbps } from "./ops/trafficAnomalyThrottles";
 import { getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
-import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
-import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
-import { hasQueuedRuleConnectionsTasks, hasRunningRuleConnectionsTasks, takeRuleConnectionsTasks } from "./ruleConnectionsAgentTasks";
-import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
+import { takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
+import { hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
+import { hasRunningRuleConnectionsTasks, takeRuleConnectionsTasks } from "./ruleConnectionsAgentTasks";
+import { takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
-import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
+import { hasPendingMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest } from "./agentAuth";
 import { liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
@@ -150,6 +150,7 @@ import { buildTunnelProbes } from "./heartbeat/tunnelProbes";
 import { blockRulesForTrafficExcludedHosts } from "./heartbeat/trafficExcludedHosts";
 import { validateTunnelEgressRules } from "./heartbeat/tunnelEgressRuleShape";
 import { acquireHeartbeatReconciliation } from "./heartbeat/acquireReconciliation";
+import { tryStableHeartbeatFastPath } from "./heartbeat/stablePlanFastPath";
 // 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
@@ -366,78 +367,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentDistribution: host.agentDistribution,
       agentUpgradeRequested: host.agentUpgradeRequested,
     });
-    const stablePlan = agentStableHeartbeatPlanCache.match(host.id, {
-      forceReconcile,
-      hasBlockingWork: !!(host as any).agentUpgradeRequested
-        || forwardxAgentMigrationDue
-        || !!panelMigrationForFastPath
-        || hasHostTcpingRequest(host.id)
-        || hasQueuedLookingGlassAgentTasks(host.id)
-        // 一键链路诊断（2.3.444）：排着的任务只在完整心跳里下发
-        || hasQueuedDiagnosticsAgentTasks(host.id)
-        || hasQueuedRuleConnectionsTasks(host.id)
-        || hasQueuedIperf3AgentTasks(host.id)
-        || hasQueuedPluginAgentTasks(host.id)
-        // 排着的 mimic 安装任务只在完整心跳里下发（2.3.441 前漏了这条：配置不变的主机任务永远发不下去）
-        || hasQueuedMimicInstallTask(host.id)
-        // 自动换 IP 的探测任务跟着 hostProbeServices 下发；插件刚启停时配置签名没变，得靠这一条把快路径打断。
-        || hasPendingIpChangeProbeDelivery(host.id),
-      recoveryTriggered,
-      addressChanged: addressApplied,
-      hasDnsChanges: dnsChangedReports.length > 0,
-      hasLocalStateUpload: !!req.body?.localState || localRuntimeState.requestLocalState,
-      hasEndpointEvents: fxpEndpointEvents.length > 0,
-      localStateSignature: localRuntimeStateSignature,
-      stateSignatures: agentStateSignatures as Record<string, string>,
-      agentVersion: effectiveAgentVersion,
-      agentBootId,
-      agentProcessStartedAt: agentProcessStartedAtSeconds,
-      defaultNetworkInterface: reportedDefaultNetworkInterface,
-      pluginInventorySignature,
-      mimicEnvironmentSignature,
-      agentLastReceivedRevision,
-      agentLastAppliedRevision,
-      agentLastReceivedHash,
-      agentLastAppliedHash,
-    });
-    if (stablePlan) {
-      const metricsWatching = isHostMetricsWatching(host.id);
-      logAgentHeartbeatSummary({
-        hostId: logHostId,
-        hostName: logHostName,
-        expectedRules: 0,
-        reportedRules: Array.isArray(localRuntimeState.state?.rules) ? localRuntimeState.state.rules.length : 0,
-        reportedServices: Array.isArray(localRuntimeState.state?.services) ? localRuntimeState.state.services.length : 0,
-        actions: 0,
-        pendingApply: 0,
-        pendingRemove: 0,
-        recoveryPending: false,
-        requestLocalState: false,
-        stable: true,
-        metricsWatching,
-        nextInterval: metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : stablePlan.idleNextInterval,
-      });
-      res.json({
-        success: true,
-        actions: [],
-        selfTests: [],
-        lookingGlassTests: [],
-        diagnosticsTasks: [],
-        ruleConnectionTasks: [],
-        iperf3Tasks: [],
-        pluginTasks: [],
-        agentUpgrade: null,
-        panelUrl: stablePlan.panelUrl,
-        forceTcping: false,
-        nextInterval: metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : stablePlan.idleNextInterval,
-        requestLocalState: false,
-        compactReports: true,
-        presenceSupported: true,
-        metricsOnly: metricsWatching,
-        ...(metricsWatching ? { trafficReportInterval: 10 } : {}),
-      });
-      return;
-    }
+    const tryStableHeartbeatFastPathResult = tryStableHeartbeatFastPath({ host, forceReconcile, forwardxAgentMigrationDue, panelMigrationForFastPath, recoveryTriggered, addressApplied, dnsChangedReports, req, localRuntimeState, fxpEndpointEvents, localRuntimeStateSignature, agentStateSignatures, effectiveAgentVersion, agentBootId, agentProcessStartedAtSeconds, reportedDefaultNetworkInterface, pluginInventorySignature, mimicEnvironmentSignature, agentLastReceivedRevision, agentLastAppliedRevision, agentLastReceivedHash, agentLastAppliedHash, logHostId, logHostName, res });
+    if (tryStableHeartbeatFastPathResult.done) return ;
 
     // 获取该主机的转发规则
     const loadHeartbeatRulesResult = await loadHeartbeatRules({ host, effectiveAgentVersion, reportedDefaultNetworkInterface, dnsChangedScopes, dnsChangedTokenByScope });
