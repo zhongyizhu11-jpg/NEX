@@ -60,9 +60,16 @@
 
 ## 四、分批
 
-第一批（并行三线，互不碰文件）：
+第一批（并行三线，互不碰文件；已做完，见 2026-11-24 的提交「订阅后端第一批」「订阅与运营页面第一批」「弹窗与编辑表单第一批」）：
 - A 订阅后端快赢：一 1、2、4、5、6、7、8 及 N+1 / count / 失效目标 / rowsAffected 这些小项。
 - B 订阅与运营页面快赢：二 3～9、12、13、15～17、20～22，以及三里落在这些文件上的项（重排弹窗重置键、DialogDescription、tone）。
 - C 其他弹窗与表单快赢：三 1、3、Plans 查询门控、Rules 双重请求、确认后在 onSuccess 关闭、AuditDetailDialog 单位、Topology 删连线确认、Tunnels / Hosts / ForwardGroups 的弹窗懒加载、缺 DialogDescription 的站点 + ratchet 测试、SecretRevealDialog + useCopyWithToast 收掉 6 处。
 
 第二批：一 3 的按用户缓存、字节上限缓存、源同步串行化与事务与 diff 写、批量访问日志、后台任务（套餐更新扇出、到期处理）、正则安全；二 1、2、6、10、11、14、18；三 2 的 FormDialog + 未保存保护、扩展 useConfirmDialog 替掉手写确认、DeleteWithImpactDialog、useDialogTarget、八个大弹窗懒加载。
+
+## 五、第一批结果
+
+- 订阅后端：一次订阅构建 6 → 5 条语句；被限流的命中从「5 次读 + 2～3 次写」变成 0 次写、1 次读（设置缓存）；入站 / 地址变化即时让缓存失效；读路径不再跑全体用户到期处理。订阅相关 125 项测试通过、golden 输出逐字节一致。
+- 页面：ClientSubscriptions 块 155.8 kB、Payments 块 32.0 kB，qrcode 独立成 25.8 kB 共享块；入站列表不再每个键击重算；搜索与规则校验防抖；7 处破坏性确认补上红色 tone 并进测试。
+- 弹窗：Users 权限弹窗存空 bug 修掉并钉住测试；5 处一次性密钥弹窗收成 SecretRevealDialog（不可误关）；DialogDescription 守门测试上线（零例外）；4 个弹窗模块懒加载。
+- 顺带发现并修掉：PostgreSQL 的 epoch 默认值四舍五入（见 docs/dev/postgres-baseline.md）。
