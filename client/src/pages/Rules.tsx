@@ -18,9 +18,6 @@ import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseSubjectActions } from "@/components/DiagnoseDialog";
-import { LatencyRating } from "@/components/LatencyRating";
-
-import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -99,7 +96,6 @@ import {
 import { parseCompatibleRuleTransferText, validateNyanpassImportTarget, type CompatibleRuleFile, type ImportedRule } from "@/lib/nyanpassImport";
 import { getEntryAddressFamily as addressFamily, type EntryAddressFamily } from "@/lib/ruleEntryDisplay";
 import { cn } from "@/lib/utils";
-import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
 import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
 import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
@@ -115,43 +111,17 @@ import {
 } from "@shared/ruleGroups";
 import { hasRuleLimits } from "@shared/ruleLimits";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
-import {
-  normalizeRuleEgressType,
-  RULE_EGRESS_STATE_LABELS,
-  ruleEgressShapeError,
-  ssEgressTunnelModeSupported,
-  ruleEgressSwitchesForwardType,
-  ruleEgressStateTone,
-  ruleEgressSummaryText,
-  RULE_EGRESS_TYPE_LABELS,
-  ruleEgressProtocolOf,
-  ruleEgressUsesInbound,
-  ruleEgressUsesLink,
-  SS_EGRESS_UDP_SUPPORTED,
-  type RuleEgressState,
-} from "@shared/ssEgress";
+import { normalizeRuleEgressType, ruleEgressShapeError, ssEgressTunnelModeSupported, ruleEgressSwitchesForwardType, RULE_EGRESS_TYPE_LABELS, ruleEgressProtocolOf, ruleEgressUsesInbound, ruleEgressUsesLink, SS_EGRESS_UDP_SUPPORTED } from "@shared/ssEgress";
 import { VLESS_EGRESS_UDP_SUPPORTED } from "@shared/vlessEgress";
-import {
-  formatSniRuleEntry,
-  parseSniNameJson,
-  sniInboundChoiceKey,
-  sniInboundChoices,
-  sniRuleFormBlocker,
-  sniRuleRouteKind,
-  TLS_INBOUND_MAX_SNI_PER_RULE,
-  TLS_INBOUND_RULE_STATE_LABELS,
-  tlsInboundRuleState,
-  type SniRuleRouteKind,
-} from "@shared/tlsInbound";
+import { parseSniNameJson, sniInboundChoiceKey, sniInboundChoices, sniRuleFormBlocker, TLS_INBOUND_MAX_SNI_PER_RULE, type SniRuleRouteKind } from "@shared/tlsInbound";
 import {
   BILLING_TIME_ZONE,
 } from "@shared/billingTime";
 import { parseFailoverTargets } from "@shared/failoverTargets";
-import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
-import { buildRuleCardDerivedProps, describeRuleLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
+import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -197,50 +167,7 @@ import {
   ruleSourcePortEnd,
 } from "@shared/portRange";
 import { RuleBatchAddDialog } from "@/components/rules/RuleBatchAddDialog";
-import {
-  Plus,
-  Trash2,
-  Pencil,
-  ArrowRightLeft,
-  ArrowRight,
-  Zap,
-  Shield,
-  Filter,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Stethoscope,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  XCircle,
-  Loader2,
-  Shuffle,
-  AlertCircle,
-  AlertTriangle,
-  Copy,
-  Download,
-  Upload,
-  Search,
-  Network,
-  ClipboardCopy,
-  ListPlus,
-  Layers3,
-  Combine,
-  LayoutGrid,
-  List,
-  Rows3,
-  GitBranch,
-  Globe,
-  RotateCcw,
-  Lock,
-  X,
-  Check,
-  Folder,
-  FolderCog,
-  Pause,
-  Play,
-  RotateCw,
-} from "lucide-react";
+import { Plus, Trash2, Pencil, ArrowRightLeft, ArrowRight, Zap, Shield, Filter, Stethoscope, CheckCircle2, ChevronDown, ChevronRight, XCircle, Loader2, Shuffle, AlertCircle, Copy, Download, Upload, Search, Network, ClipboardCopy, ListPlus, Layers3, Combine, LayoutGrid, List, Rows3, GitBranch, Globe, RotateCcw, X, Check, Folder, FolderCog, Pause, Play, RotateCw } from "lucide-react";
 
 import {
   FORWARD_TYPES,
@@ -272,7 +199,6 @@ import { StatusDot } from "@/components/network/StatusDot";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { HeaderSpark, HeaderStatusChips } from "@/components/HeaderStatusChips";
-import { useDailyTrafficSpark } from "@/features/traffic/useDailyTrafficSpark";
 import {
   decideRuleFlowLayout,
   ruleVisualStateToHealth,
@@ -290,11 +216,17 @@ import { useRuleEntryAddresses } from "../features/rules/useRuleEntryAddresses";
 import { useRuleTransferResources } from "../features/rules/useRuleTransferResources";
 import { useRenderTunnelRoute } from "../features/rules/useRenderTunnelRoute";
 import { useRuleVisualStatuses } from "../features/rules/useRuleVisualStatuses";
+import { useRuleTrafficCells } from "../features/rules/useRuleTrafficCells";
+import { useRuleSourceBadges } from "../features/rules/useRuleSourceBadges";
+import { useRuleWarningBadges } from "../features/rules/useRuleWarningBadges";
+import { useRuleTableTransferCells } from "../features/rules/useRuleTableTransferCells";
+import { useRuleStateBadges } from "../features/rules/useRuleStateBadges";
+import { useRuleTrafficSeries } from "../features/rules/useRuleTrafficSeries";
 const SelfTestDialog = lazy(() => import("@/features/rules/SelfTestDialog"));
 const RuleTrafficGlobe = lazy(() => import("@/features/rules/RuleTrafficGlobe"));
 
 /** 探测是多久以前的：「18 分钟前」。 */
-const formatProbeAge = (at: unknown) => formatAgo(Date.now() - timestampMillis(at));
+export const formatProbeAge = (at: unknown) => formatAgo(Date.now() - timestampMillis(at));
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 // 精简布局：延迟记录并进诊断框当一页
 const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
@@ -437,7 +369,7 @@ const ruleTypeDescriptions = {
   group: "使用转发组入口",
 } as const;
 
-type RuleViewMode = "card" | "table" | "globe";
+export type RuleViewMode = "card" | "table" | "globe";
 type RuleCardSize = "standard" | "compact";
 type RuleDisplayMode = RuleCardSize | "table" | "globe";
 type RulePageSize = 12 | 24 | 36 | 48;
@@ -1960,11 +1892,11 @@ function normalizeRuleProtocol(value: unknown): RuleProtocol {
   return value === "tcp" || value === "udp" || value === "both" ? value : "both";
 }
 
-function normalizeRuleForwardType(value: unknown): ForwardType {
+export function normalizeRuleForwardType(value: unknown): ForwardType {
   return FORWARD_TYPES.includes(value as ForwardType) ? (value as ForwardType) : "iptables";
 }
 
-function getForwardGroupRuleForwardType(group: any | null | undefined, fallback: ForwardType | undefined = "iptables"): ForwardType {
+export function getForwardGroupRuleForwardType(group: any | null | undefined, fallback: ForwardType | undefined = "iptables"): ForwardType {
   if (!group) return fallback || "iptables";
   if (!isForwardChainGroup(group) && String(group?.groupType || "") === "tunnel") return "gost";
   return normalizeRuleForwardType(group?.forwardType || fallback);
@@ -5018,76 +4950,8 @@ function RulesContent() {
     dailyTrafficSummaryFetched
     && (!hasForwardGroupRules || forwardGroupsFetched || forwardGroupsError)
   );
-  const dailyTrafficByRule = useMemo(() => {
-    const m = new Map<number, { bytesIn: number; bytesOut: number }>();
-    dailyTrafficSummaryRows.forEach((t: any) => {
-      const rid = Number(t.ruleId);
-      const prev = m.get(rid);
-      if (prev) {
-        prev.bytesIn += Number(t.bytesIn) || 0;
-        prev.bytesOut += Number(t.bytesOut) || 0;
-      } else {
-        m.set(rid, {
-          bytesIn: Number(t.bytesIn) || 0,
-          bytesOut: Number(t.bytesOut) || 0,
-        });
-      }
-    });
-    return m;
-  }, [dailyTrafficSummaryRows]);
-  /*
-    规则卡上那条小走势线：这一页规则近 24 小时的逐时字节，一次请求全拿。表格和地图视图
-    不画它，就不请求。
-  */
-  // 页头右上角那条近 24H 小走势（和首页图表同一条数据，服务端按用户缓存）
-  const dailySpark = useDailyTrafficSpark(secondaryQueriesReady);
-  const { data: ruleTrafficSeriesRows } = trpc.rules.trafficSeriesBatch.useQuery(
-    { ruleIds: visibleRuleIdsForMetrics, hours: 24, bucketMinutes: 60 },
-    {
-      enabled: secondaryQueriesReady && visibleRuleIdsForMetrics.length > 0 && effectiveViewMode === "card",
-      refetchInterval: pollingInterval("slow"),
-      staleTime: 30_000,
-      refetchOnWindowFocus: false,
-      placeholderData: (previousData) => previousData,
-    }
-  );
-  const sparkByRule = useMemo(() => {
-    const m = new Map<number, number[]>();
-    if (!ruleTrafficSeriesRows) return m;
-    const hourMs = 60 * 60 * 1000;
-    // 24 格 = 过去 24 个整点小时；正在走的这个小时并进最后一格，刚发生的流量不会被截掉。
-    const firstHour = Math.floor(Date.now() / hourMs) - 24;
-    ruleTrafficSeriesRows.forEach((row: any) => {
-      const rid = Number(row.ruleId);
-      const at = new Date(row.bucket).getTime();
-      if (!Number.isFinite(at)) return;
-      const index = Math.min(23, Math.floor(at / hourMs) - firstHour);
-      if (index < 0) return;
-      const slots = m.get(rid) || new Array<number>(24).fill(0);
-      slots[index] += (Number(row.bytesIn) || 0) + (Number(row.bytesOut) || 0);
-      m.set(rid, slots);
-    });
-    return m;
-  }, [ruleTrafficSeriesRows]);
-  const totalTrafficByRule = useMemo(() => {
-    const m = new Map<number, { bytesIn: number; bytesOut: number; connections: number }>();
-    totalTrafficSummaryRows.forEach((t: any) => {
-      const rid = Number(t.ruleId);
-      const prev = m.get(rid);
-      if (prev) {
-        prev.bytesIn += Number(t.bytesIn) || 0;
-        prev.bytesOut += Number(t.bytesOut) || 0;
-        prev.connections += Number(t.connections) || 0;
-      } else {
-        m.set(rid, {
-          bytesIn: Number(t.bytesIn) || 0,
-          bytesOut: Number(t.bytesOut) || 0,
-          connections: Number(t.connections) || 0,
-        });
-      }
-    });
-    return m;
-  }, [totalTrafficSummaryRows]);
+  const useRuleTrafficSeriesResult = useRuleTrafficSeries({ dailyTrafficSummaryRows, secondaryQueriesReady, visibleRuleIdsForMetrics, effectiveViewMode, totalTrafficSummaryRows });
+  const { dailyTrafficByRule, totalTrafficByRule, sparkByRule, dailySpark } = useRuleTrafficSeriesResult;
   const pageDailyTrafficTotals = useMemo(() => {
     let bytesIn = 0;
     let bytesOut = 0;
@@ -5865,76 +5729,8 @@ function RulesContent() {
   };
 
   /** 表格里灰点的规则：名字下面一行写为什么没在运行（和卡片地址行右端那枚同一句），悬停看原文。 */
-  const renderNotRunningReason = (rule: { id?: unknown; portWarnings?: unknown }) => {
-    const visual = ruleVisualStatuses.get(Number(rule.id))?.display || resolveRuleVisualStatus(rule);
-    const reason = resolveForwardRuleNotRunningReason(visual, rule?.portWarnings);
-    if (!reason) return null;
-    return (
-      <span
-        className={cn("mt-0.5 block truncate text-[11px] leading-4", reason.tone === "down" ? "text-[var(--fx-down-text)]" : "text-muted-foreground")}
-        title={reason.detail}
-        data-rule-not-running=""
-      >
-        {reason.label}
-      </span>
-    );
-  };
-
-  /** 共享 TLS 入站规则卡片上那枚：「SNI：a.com、b.com @ 主机:443」，入站停用 / Agent 太旧时换成原因。 */
-  /** 规则主人看到的那枚「管理员管理」：说明为什么编辑、开关、删除都不在。 */
-  const renderAdminManagedBadge = (rule: any) => (
-    user?.role !== "admin" && isAdminManagedRule(rule) ? (
-      <Badge key="admin-managed" variant="outline" className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground" title={ADMIN_MANAGED_RULE_MESSAGE}>
-        <Lock className="h-3 w-3" aria-hidden="true" />
-        管理员管理
-      </Badge>
-    ) : null
-  );
-
-  const renderSniRuleBadge = (rule: any) => {
-    if (!(Number(rule?.tlsInboundId || 0) > 0)) return null;
-    const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
-    const state = tlsInboundRuleState({ inbound, agentVersion: inbound?.agentVersion, routeKind: sniRuleRouteKind(rule) });
-    const text = formatSniRuleEntry({ names: parseSniNameJson(rule.sniNames), hostName: inbound?.hostName, port: inbound?.port });
-    return (
-      <span key="sni" className="inline-flex min-w-0 max-w-full items-center gap-1">
-        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[11px] font-normal" title={text}>{text}</Badge>
-        {state !== "ok" ? (
-          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] px-1.5 text-[11px] text-[var(--fx-warn-text)]">
-            {TLS_INBOUND_RULE_STATE_LABELS[state]}
-          </Badge>
-        ) : null}
-      </span>
-    );
-  };
-
-  /** Shadowsocks 出口那一枚：「经 落地主机 X 出口」/「经 外部 SS 出口」，后面跟状态（运行 / 落地离线 / 需要升级 Agent…）。 */
-  const renderEgressBadge = (rule: any) => {
-    const egress = rule?.egress;
-    if (!egress || normalizeRuleEgressType(egress.type) === "none") return null;
-    const state = String(egress.state || "running") as RuleEgressState;
-    const tone = ruleEgressStateTone(state);
-    const text = ruleEgressSummaryText({ type: egress.type, landingHostName: egress.landingHostName, udp: egress.udp === true });
-    const title = [text, egress.masked, egress.message].filter(Boolean).join(" · ");
-    return (
-      <span key="egress" className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1" data-testid="rule-egress-badge">
-        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[11px] font-normal" title={title}>{text}</Badge>
-        <Badge
-          variant="outline"
-          className={cn(
-            // 状态那一枚（例如「UDP 出口需要升级 Agent/运行时」）在窄屏上可能比剩下的宽度长：整枚换行，不截字。
-            "h-5 max-w-full shrink-0 truncate px-1.5 text-[11px]",
-            tone === "ok" && "border-[color-mix(in_srgb,var(--fx-healthy)_40%,transparent)] text-[var(--fx-healthy-text)]",
-            tone === "warn" && "border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[var(--fx-warn-text)]",
-            tone === "muted" && "text-muted-foreground",
-          )}
-          title={egress.message || undefined}
-        >
-          {RULE_EGRESS_STATE_LABELS[state] || state}
-        </Badge>
-      </span>
-    );
-  };
+  const useRuleStateBadgesResult = useRuleStateBadges({ ruleVisualStatuses, resolveRuleVisualStatus, user, tlsInboundById });
+  const { renderNotRunningReason, renderAdminManagedBadge, renderSniRuleBadge, renderEgressBadge } = useRuleStateBadgesResult;
 
   /** 两种入口方式。编辑时定死（要换就新建规则）。 */
   const renderEntryModeSwitch = () => {
@@ -6104,90 +5900,8 @@ function RulesContent() {
     状态，线中间的小药丸写转发工具和协议；隧道 / 转发链的中继画成线上的小圆点，名字写在
     药丸里。资源名从卡头的第二行挪到了这里 —— 它本来就是「入口」。
   */
-  const renderTableTransferEntry = (rule: any) => {
-    const { entryAddresses, entryTitle } = getRuleTransferDisplay(rule);
-    // 表里的地址是等宽的裸文字（参考站的模型名那一列），不再套小框；能复制的悬停时才显出底。
-    // 精简的表里地址画成药丸、写全不截（用户定的：规则信息要全）；列宽让给入口，太长的域名在药丸里换行（compact.css）。
-    return (
-      <div className="flex min-w-0 items-center gap-1 overflow-hidden font-mono text-[12px] leading-5">
-        {entryAddresses.map((entry) => (
-          <button
-            key={`${entry.label}:${entry.value}`}
-            type="button"
-            onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
-            disabled={!entry.copyable}
-            className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-inner px-1 py-0.5 -mx-1 text-left transition-colors enabled:hover:bg-[var(--fx-l2-group)] disabled:cursor-default disabled:text-muted-foreground"
-            title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
-          >
-            {entryAddresses.length > 1 && <span className="shrink-0 text-[11px] text-muted-foreground">{entry.label}</span>}
-            <code className="fx-table-addr min-w-0 truncate">{entry.text}</code>
-            {entry.copyable && <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
-          </button>
-        ))}
-      </div>
-    );
-  };
-
-  const renderTableTransferExit = (rule: any) => {
-    const { targetAddress, failoverCount, failoverEnabled, routeLabel } = getRuleTransferDisplay(rule);
-    // 出口和入口一样点一下就复制（用户要的）：表里原来只有入口能复制
-    return (
-      <div className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] leading-5">
-        <button
-          type="button"
-          onClick={() => copyTargetAddress(targetAddress)}
-          className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-inner px-1 py-0.5 -mx-1 text-left transition-colors hover:bg-[var(--fx-l2-group)]"
-          title={`复制目标地址: ${targetAddress}`}
-        >
-          <code className="fx-table-addr min-w-0 truncate">{targetAddress}</code>
-          <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />
-        </button>
-        {failoverEnabled && (
-          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 text-[11px] text-[var(--fx-warn-text)]">
-            {routeLabel} {failoverCount} 条
-          </Badge>
-        )}
-      </div>
-    );
-  };
-
-  /*
-    转发工具的标签回答的是「它是哪一种」，不是「它好不好」，所以走分类色，不碰状态色：
-    原来 socat 是红、gost 是琥珀 —— 一枚红标签在一列灰字里看着像出错了。
-    内核转发（iptables / nftables）用强调色，和「路径」同一个色；其余三个各一个分类色。
-  */
-  const forwardToolBadgeClass = (forwardType: unknown) => {
-    const type = String(forwardType || "");
-    if (type === "iptables" || type === "nftables") return "border-[color-mix(in_srgb,var(--fx-accent)_30%,transparent)] bg-[var(--fx-accent-soft)] text-[var(--fx-accent)]";
-    if (type === "socat") return "border-[color-mix(in_srgb,var(--fx-cat-orange)_30%,transparent)] bg-[var(--fx-cat-orange-soft)] text-[var(--fx-cat-orange)]";
-    if (type === "gost") return "border-[color-mix(in_srgb,var(--fx-cat-teal)_30%,transparent)] bg-[var(--fx-cat-teal-soft)] text-[var(--fx-cat-teal)]";
-    return "border-[color-mix(in_srgb,var(--fx-cat-indigo)_30%,transparent)] bg-[var(--fx-cat-indigo-soft)] text-[var(--fx-cat-indigo)]";
-  };
-
-  const renderForwardToolBadge = (rule: any, group?: any | null) => {
-    const forwardType = group
-      ? getForwardGroupRuleForwardType(group, rule.forwardType)
-      : normalizeRuleForwardType(rule.forwardType);
-    const label = forwardTypeDisplayLabel(forwardType);
-    return (
-      <Badge
-        variant="outline"
-        className={`w-fit whitespace-nowrap text-[11px] ${forwardToolBadgeClass(forwardType)}`}
-        title={`转发工具：${label}`}
-      >
-        {forwardType === "iptables" || forwardType === "nftables" ? (
-          <Shield className="mr-1 h-3 w-3" />
-        ) : forwardType === "socat" ? (
-          <ArrowRightLeft className="mr-1 h-3 w-3" />
-        ) : forwardType === "gost" ? (
-          <Network className="mr-1 h-3 w-3" />
-        ) : (
-          <Zap className="mr-1 h-3 w-3" />
-        )}
-        {label}
-      </Badge>
-    );
-  };
+  const useRuleTableTransferCellsResult = useRuleTableTransferCells({ getRuleTransferDisplay, copyEntryAddress, copyTargetAddress, forwardTypeDisplayLabel });
+  const { renderForwardToolBadge, renderTableTransferEntry, renderTableTransferExit } = useRuleTableTransferCellsResult;
 
   const getRuleKernelForwardWarning = (rule: any) => buildKernelForwardWarning({
     rule,
@@ -6199,164 +5913,14 @@ function RulesContent() {
   });
 
   // 走的 NEX 隧道上有节点的 FXP 握不上当前协议：规则 tcping 能通、流量全超时，要直接标出来。
-  const renderTunnelFxpIssueBadge = (tunnel: any) => {
-    const issue = tunnelFxpIssueText(tunnel);
-    if (!issue) return null;
-    return (
-      <Badge
-        key="fxp-issue"
-        variant="outline"
-        className="h-5 w-fit border-destructive/30 px-1.5 text-[11px] text-destructive"
-        title={issue}
-      >
-        <AlertCircle className="mr-1 h-3 w-3" />
-        隧道 FXP 过旧
-      </Badge>
-    );
-  };
-  const renderKernelForwardWarningBadge = (warning: string | null) => {
-    if (!warning) return null;
-    return (
-      <Badge
-        variant="outline"
-        className="h-5 w-fit border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 text-[11px] text-[var(--fx-warn-text)]"
-        title={warning}
-      >
-        <AlertCircle className="mr-1 h-3 w-3" />
-        跨 IPv4/IPv6 风险
-      </Badge>
-    );
-  };
-  /*
-    端口占用告警（server/rulePortOccupancy.ts）：和规则的运行状态分开的一枚。
-    黄 = Agent 核对到入口端口上有别的程序在监听（内核转发不绑端口，只能这样发现）；
-    红 = 绑定失败或内核转发没装全，后面跟着 Agent 报的原因。冲突消失后下一轮就不再带这个字段。
-  */
-  const renderPortWarningBadge = (rule: { portWarnings?: unknown }) => {
-    const warnings = (Array.isArray(rule?.portWarnings) ? rule.portWarnings : []) as Array<{ level: string; label: string; message: string }>;
-    if (warnings.length === 0) return null;
-    const error = warnings.find((item) => item.level === "error");
-    const head = error || warnings[0];
-    const title = warnings.map((item) => item.message).join("\n");
-    return (
-      <Badge
-        key="port-warning"
-        variant="outline"
-        data-testid="rule-port-warning"
-        data-level={error ? "error" : "warn"}
-        className={cn(
-          "h-5 w-fit max-w-full truncate px-1.5 text-[11px]",
-          error
-            ? "border-destructive/30 text-destructive"
-            : "border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]",
-        )}
-        title={title}
-      >
-        <AlertTriangle className="mr-1 h-3 w-3" aria-hidden="true" />
-        {head.label}{warnings.length > 1 ? ` · ${warnings.length}` : ""}
-      </Badge>
-    );
-  };
+  const useRuleWarningBadgesResult = useRuleWarningBadges();
+  const { renderKernelForwardWarningBadge, renderTunnelFxpIssueBadge, renderPortWarningBadge } = useRuleWarningBadgesResult;
   /**
    * 「在订阅里」这一小块。没绑就什么都不显示 —— 大多数转发跟订阅无关，
    * 给每一行都挂个「未加入订阅」只是噪音。
    */
-  const renderSubscriptionBadge = (rule: any, placement: "table" | "card" = "table") => {
-    if (!subscriptionAllowed) return null;
-    const nodeId = Number(rule?.proxyNodeId || 0);
-    if (!nodeId) return null;
-    const nodeName = proxyNodeNameById.get(nodeId) || "落地节点";
-    const visible = rule?.proxyNodeVisible !== false;
-    const drifted = driftedRuleIds.has(Number(rule?.id || 0));
-    // 卡片上正常的「订阅」写在名字后面（renderSubscriptionMark），这里只剩指向已变那种要人看的。
-    if (placement === "card" && !drifted) return null;
-    /*
-      绑定和现实对不上了：这条线路还在订阅里，但客户端会拿着「nodeName」那个落地的
-      凭据去连现在这个目标。比「少一条线路」严重，所以用警示色，别混在正常的订阅角标里。
-    */
-    if (drifted) {
-      return (
-        <Badge
-          variant="outline"
-          className="w-fit whitespace-nowrap border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[11px] text-[var(--fx-warn-text)]"
-          title={`这条转发的目标已经不是它绑的「${nodeName}」了。订阅里那条线路还在，但客户端连过去是拿着「${nodeName}」的凭据去连新目标 —— 把目标改回去，或者在这里重新选节点。`}
-        >
-          <AlertTriangle className="mr-1 h-3 w-3" />
-          订阅·指向已变
-        </Badge>
-      );
-    }
-    return (
-      <Badge
-        variant="outline"
-        className={`w-fit whitespace-nowrap text-[11px] ${
-          visible ? "border-[color-mix(in_srgb,var(--fx-path)_30%,transparent)] text-[var(--fx-path)]" : "border-muted-foreground/30 text-muted-foreground"
-        }`}
-        title={visible
-          ? `这条转发以「${nodeName}」的身份出现在你的订阅里。改目标、停用或删掉它，客户端里那条线路会跟着变。`
-          : `已绑定「${nodeName}」，但设成了不进订阅。转发照常跑，客户端里看不到它。`}
-      >
-        <Zap className="mr-1 h-3 w-3" />
-        {visible ? "订阅" : "订阅已隐藏"}
-      </Badge>
-    );
-  };
-
-  /**
-   * 卡片名字后面那两个字「订阅」：说明这条转发在客户端订阅里。
-   *
-   * 原来是名字下面单独一行的徽标 —— 卡上为它多 24px，看着像又一条状态。它其实是这条
-   * 转发的一个身份，跟名字待在一起就够了；指向已变那种要人处理的仍走 renderSubscriptionBadge。
-   */
-  const renderSubscriptionMark = (rule: any) => {
-    if (!subscriptionAllowed) return null;
-    const nodeId = Number(rule?.proxyNodeId || 0);
-    if (!nodeId) return null;
-    if (driftedRuleIds.has(Number(rule?.id || 0))) return null;
-    const nodeName = proxyNodeNameById.get(nodeId) || "落地节点";
-    const visible = rule?.proxyNodeVisible !== false;
-    return (
-      <span
-        className="fx-rule-mark"
-        data-muted={visible ? undefined : ""}
-        title={visible
-          ? `这条转发以「${nodeName}」的身份出现在你的订阅里。改目标、停用或删掉它，客户端里那条线路会跟着变。`
-          : `已绑定「${nodeName}」，但设成了不进订阅。转发照常跑，客户端里看不到它。`}
-      >
-        <Zap className="h-3 w-3" aria-hidden="true" />
-        {visible ? "订阅" : "订阅已隐藏"}
-      </span>
-    );
-  };
-
-  /*
-    规则行上的主备状态。
-    原来这里只有一个「主备 2」的计数徽标 —— 它回答的是「配了几条」，而人要
-    知道的是「现在走的哪条」。配了主备和没配在列表上几乎长一样，功能配完就
-    看不见了，这正是「主备到底在哪儿用」说不清楚的地方。
-  */
-  const renderFailoverLineBadge = (rule: any) => {
-    const display = describeFailoverLineDisplay(rule, hostById.get(Number(rule.hostId)));
-    if (!display) return null;
-    // 点进去是线路组面板：现在走哪条、当前和备用路径、调度计划、最近切换、应急强制走。
-    return (
-      <button
-        type="button"
-        className="shrink-0 rounded-[var(--fx-radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => setPolicyRuleId(Number(rule.id))}
-        title={display.title}
-        aria-label={`线路组：${display.title}`}
-      >
-        <Badge
-          variant="outline"
-          className={cn("h-5 cursor-pointer gap-1 px-1.5 text-[11px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
-        >
-          <GitBranch className="h-3 w-3" aria-hidden="true" />
-          {display.text}
-        </Badge>
-      </button>
-    );
-  };
+  const useRuleSourceBadgesResult = useRuleSourceBadges({ subscriptionAllowed, proxyNodeNameById, driftedRuleIds, hostById, setPolicyRuleId });
+  const { renderSubscriptionBadge, renderFailoverLineBadge, renderSubscriptionMark } = useRuleSourceBadgesResult;
 
   /**
    * 线路徽标。
@@ -6474,82 +6038,8 @@ function RulesContent() {
     </TooltipProvider>
   );
 
-  const renderTrafficBytesValue = (t: { bytesIn?: number | null; bytesOut?: number | null } | undefined, direction: "in" | "out") => {
-    const value = direction === "in" ? Number(t?.bytesIn || 0) : Number(t?.bytesOut || 0);
-    if (!t || value <= 0) {
-      return <span className="text-xs text-muted-foreground">—</span>;
-    }
-    const Icon = direction === "in" ? ArrowDownToLine : ArrowUpFromLine;
-    // 入站走强调色、出站走次要字色（--fx-flow-*），和总览页的走势图同一对颜色：进出不是状态
-    const color = direction === "in" ? "text-[var(--fx-flow-in)]" : "text-[var(--fx-flow-out)]";
-    return (
-      <span className={`flex items-center gap-1 whitespace-nowrap text-xs tabular-nums ${color}`}>
-        <Icon className="h-3 w-3 shrink-0" /> {formatBytes(value)}
-      </span>
-    );
-  };
-  const renderRuleDailyTrafficValue = (rule: any, direction: "in" | "out") => (
-    renderTrafficBytesValue(dailyTrafficByRule.get(rule.id), direction)
-  );
-  const renderRuleTotalTraffic = (rule: any) => {
-    const t = totalTrafficByRule.get(rule.id);
-    if (!t) {
-      return <span className="text-xs text-muted-foreground">累计 —</span>;
-    }
-    const total = Number(t.bytesIn || 0) + Number(t.bytesOut || 0);
-    return (
-      <span
-        className="flex items-center gap-1 whitespace-nowrap text-xs font-medium tabular-nums text-foreground"
-        title={`累计入向 ${formatBytes(t.bytesIn)} / 出向 ${formatBytes(t.bytesOut)}`}
-      >
-        <ArrowRightLeft className="h-3 w-3 shrink-0 text-muted-foreground" />
-        累计 {formatBytes(total)}
-      </span>
-    );
-  };
-  const renderTableRuleTotalTraffic = (rule: any) => (
-    <div className="min-w-0 whitespace-nowrap text-xs">
-      {renderRuleTotalTraffic(rule)}
-    </div>
-  );
-
-  const renderTableRuleDailyTraffic = (rule: any) => (
-    <div className="flex min-w-0 flex-col items-start gap-0.5 whitespace-nowrap text-xs leading-4">
-      {renderRuleDailyTrafficValue(rule, "in")}
-      {renderRuleDailyTrafficValue(rule, "out")}
-    </div>
-  );
-
-  const renderTableRuleLatency = (rule: any) => (
-    <div className="min-w-0 whitespace-nowrap text-xs">
-      {renderLatestLatency(rule)}
-    </div>
-  );
-
-  const renderLatestLatency = (rule: any) => {
-    const t = stableProbeByRule.get(Number(rule.id));
-    if (!t?.latestLatencyAt) return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
-    // 过了新鲜期的探测只能说明「当时」：数字灰掉、写明多久以前，不再冒充现在的延迟。
-    if (!isLinkProbeFresh(t.latestLatencyAt)) {
-      return (
-        <span className="whitespace-nowrap text-xs text-muted-foreground" title={`整链：${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
-          {t.latestLatencyIsTimeout ? describeProbeFailureShort(t.latestProbeFailure) : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
-        </span>
-      );
-    }
-    if (t.latestLatencyIsTimeout) {
-      return <LatencyRating isTimeout timeoutText="超时" className="whitespace-nowrap" />;
-    }
-    if (typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs)) {
-      // 和卡片同一句悬停：整链，写明是入口实时 / 定时探测 / 最近一次诊断
-      return (
-        <span title={describeRuleLatency(t, t.latestLatencyMs).title}>
-          <LatencyRating latencyMs={t.latestLatencyMs} className="whitespace-nowrap" badge={false} />
-        </span>
-      );
-    }
-    return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
-  };
+  const useRuleTrafficCellsResult = useRuleTrafficCells({ dailyTrafficByRule, totalTrafficByRule, stableProbeByRule });
+  const { renderTableRuleDailyTraffic, renderTableRuleTotalTraffic, renderTableRuleLatency } = useRuleTrafficCellsResult;
 
   /*
     规则卡、表格行上的操作。原来五个图标常驻（延迟、自测、重置、编辑、删除）—— 十二条规则
