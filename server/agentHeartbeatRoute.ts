@@ -16,28 +16,19 @@ import { buildRouteFailoverTargets } from "./routeTargetHints";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
-import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, recordTunnelExitPorts, tunnelExitPortFor, type TunnelExitPortEntry } from "./tunnelExitPorts";
+import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, tunnelExitPortFor } from "./tunnelExitPorts";
 import * as db from "./db";
-import { classifyHeartbeatAgentDistribution, NEX_AGENT_DISTRIBUTION, normalizeAgentDistribution } from "../shared/agentDistribution";
-import { isForwardxAgentMigrationEnabled, markForwardxAgentMigrationQueued, shouldQueueForwardxAgentMigration } from "./forwardxAgentMigration";
+import { classifyHeartbeatAgentDistribution, normalizeAgentDistribution } from "../shared/agentDistribution";
+import { isForwardxAgentMigrationEnabled, shouldQueueForwardxAgentMigration } from "./forwardxAgentMigration";
 import { getIpChangeProbeTasksForHost, hasPendingIpChangeProbeDelivery } from "./ipChange/runtime";
-import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
-import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
 import { buildVlessEgressBridgePlan, collectVlessEgressBridges } from "./vlessEgress";
 import { isVlessEgressAgentSupported } from "../shared/vlessEgress";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
-import {
-  PROXY_INBOUND_TRAFFIC_FORWARD_TYPE,
-  proxyInboundTrafficProtocol,
-  proxyInboundTrafficRuleId,
-} from "../shared/proxyInboundTraffic";
-import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeCompleted, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
-// 主机可以单独指定 Agent 连哪个面板地址（server/hostAgentPanelUrl.ts），没指定时就是全局的公开地址。
-import { resolveHostAgentAdvertisedPanelUrl } from "./hostAgentPanelUrl";
-import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
+import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
+import { getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import { isRuleProtocolEnabled, isTunnelProtocolEnabled } from "./forwardProtocolSettings";
 import { agentHeartbeatGate, agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, rememberHostWaitingForTunnels, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
@@ -45,7 +36,7 @@ import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { anomalyAwareRuleMbps } from "./ops/trafficAnomalyThrottles";
-import { getHostWireGuardPlane, getTunnelRuntimeGeneration, getTunnelRuntimeTopologyStatus, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
+import { getTunnelRuntimeGeneration, getTunnelRuntimeTopologyStatus, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
@@ -112,7 +103,7 @@ import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
-import { isSniRuntimeRule, planAgentSniInbounds } from "./tlsInboundRuntime";
+import { isSniRuntimeRule } from "./tlsInboundRuntime";
 import { evaluateRuleEgress, loadEgressRuntimeContext, tunnelEgressDialHostIdsOf } from "./ssEgress";
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
 import { AGENT_DYNAMIC_CACHE_MAX, AGENT_HOST_CACHE_MAX, AGENT_ORPHAN_REMOVE_MIN_STREAK, agentDesiredDispatchAuditHash, agentOrphanPortStreakCache, forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, fxpUdpTargetSignatureCache, pruneAgentHeartbeatCaches } from "./agentHeartbeatState";
@@ -140,22 +131,9 @@ import {
   pointTunnelEgressRule,
   tunnelExitRowsMatchNodes,
 } from "./agentHeartbeatTunnel";
-import {
-  actionMayAffectRuntimeFamily,
-  AGENT_PLUGIN_SYNC_RESEND_MS,
-  dropStalePortRemoveActions,
-  isTunnelApplyBlockingProbe,
-  resolveActionBatchIssuedAt,
-  ruleRuntimeIdentityKey,
-  ruleRuntimePortIdentityKey,
-  runtimePortProtocolKey,
-  runtimeSyncReconcileDue,
-  shouldSendDesiredState,
-  shouldSendPluginSyncAction,
-  shouldSendRuntimeSyncAction,
-} from "./agentHeartbeatDispatch";
+import { actionMayAffectRuntimeFamily, AGENT_PLUGIN_SYNC_RESEND_MS, isTunnelApplyBlockingProbe, ruleRuntimeIdentityKey, ruleRuntimePortIdentityKey, runtimePortProtocolKey, runtimeSyncReconcileDue, shouldSendDesiredState, shouldSendPluginSyncAction, shouldSendRuntimeSyncAction } from "./agentHeartbeatDispatch";
 import { agentPluginInventorySignature, buildAgentStateResponseSections, getOrphanPortStreaks, isKernelForwardRule, settleStoppedRule } from "./agentHeartbeatLocalState";
-import { heartbeatTimestampMs, resetAgentRuntimeStateForRecovery } from "./agentHeartbeatRecovery";
+import { resetAgentRuntimeStateForRecovery } from "./agentHeartbeatRecovery";
 import {
   compactMimicFiltersForLog,
   logAgentHeartbeatSummary,
@@ -169,6 +147,10 @@ import { buildProtocolPolicyHelpers } from "./heartbeat/protocolPolicyHelpers";
 import { resolveHostRuleTargets } from "./heartbeat/hostRuleTargets";
 import { loadHeartbeatRules } from "./heartbeat/loadRules";
 import { ingestHeartbeatHostState } from "./heartbeat/ingestHostState";
+import { planTunnelExitPortsAndSni } from "./heartbeat/tunnelExitPortsAndSni";
+import { orderHeartbeatActions } from "./heartbeat/orderActions";
+import { resolveAgentUpgradeDirective } from "./heartbeat/agentUpgradeDirective";
+import { collectHeartbeatRunningRules } from "./heartbeat/runningRules";
 // 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
@@ -3065,182 +3047,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 取走该主机的 pending 转发自测任务并标为 running
     if (runtimeDriftedRuleIds.length > 0) await markRuntimeRulesNotRunning(runtimeDriftedRuleIds);
 
-    for (const rule of tunnelExitRules) {
-      const tunnel = tunnelById.get((rule as any).tunnelId) as any;
-      const policy = tunnel ? await tunnelProtocolPolicy(tunnel) : emptyProtocolPolicy;
-      const tunnelProxyPlan = tunnelProxyProtocolPlan(rule);
-      const useExitBridge = shouldUseProtocolGuard(rule, policy) || !!tunnelProxyPlan.exitBridgeReceive || !!tunnelProxyPlan.exitBridgeSend;
-      if (tunnel && !isForwardXTunnel(tunnel) && useExitBridge) {
-        const target = failoverTargetEndpoint(rule, "exitSend");
-        guardRules.push({
-          ruleId: rule.id,
-          tunnelId: tunnel.id,
-          listenPort: guardListenPort(rule),
-          bindAddress: "127.0.0.1",
-          targetIp: target.targetIp,
-          targetPort: target.targetPort,
-          protocol: normalizeForwardRuleProtocol(rule.protocol),
-          policy,
-          proxyProtocolReceive: !!tunnelProxyPlan.exitBridgeReceive,
-          proxyProtocolSend: !!tunnelProxyPlan.exitBridgeSend,
-          proxyProtocolVersion: proxyProtocolVersion(rule),
-        });
-      }
-    }
-    for (const rule of nginxTunnelExitRules) {
-      const tunnel = tunnelById.get((rule as any).tunnelId) as any;
-      if (!tunnel) continue;
-      const policy = await tunnelProtocolPolicy(tunnel);
-      if (shouldUseProtocolGuard(rule, policy)) {
-        const target = failoverTargetEndpoint(rule);
-        guardRules.push({
-          ruleId: rule.id,
-          tunnelId: tunnel.id,
-          listenPort: guardListenPort(rule),
-          bindAddress: "127.0.0.1",
-          targetIp: target.targetIp,
-          targetPort: target.targetPort,
-          protocol: normalizeForwardRuleProtocol(rule.protocol),
-          policy,
-          proxyProtocolReceive: false,
-          proxyProtocolSend: false,
-          proxyProtocolVersion: proxyProtocolVersion(rule),
-        });
-      }
-    }
-
-    for (const rule of tunnelExitRules) {
-      if (!runtimeBool(rule.isEnabled)) continue;
-      const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-      for (const trafficPort of currentHostTunnelExitPortsForRule(rule, tunnel)) {
-        if (!trafficPort) continue;
-        protectActiveRulePort(rule, trafficPort);
-        addRunningRule({
-          ruleId: rule.id,
-          tunnelId: tunnel ? Number(tunnel.id) : 0,
-          sourcePort: trafficPort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          forwardType: tunnel && isForwardXTunnel(tunnel) ? "forwardx-tunnel-exit" : "gost-tunnel-exit",
-          failover: failoverForCurrentHost(rule, tunnel, { listenPort: failoverProxyPort(rule) }),
-        });
-      }
-    }
-    for (const rule of nginxTunnelExitRules) {
-      if (!runtimeBool(rule.isEnabled)) continue;
-      const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-      for (const trafficPort of currentHostTunnelExitPortsForRule(rule, tunnel)) {
-        if (!trafficPort) continue;
-        protectActiveRulePort(rule, trafficPort);
-        addRunningRule({
-          ruleId: rule.id,
-          tunnelId: tunnel ? Number(tunnel.id) : 0,
-          sourcePort: trafficPort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          forwardType: "nginx-tunnel-exit",
-          failover: failoverForCurrentHost(rule, tunnel, { listenPort: failoverProxyPort(rule) }),
-        });
-      }
-    }
-    /*
-      NEX 隧道的线路组：出口机上只跑调度器（schedulerOnly，见 shared/routeGroup 的
-      routeGroupIsForwardXTunnel）。这台机器上没有这条规则的端口：sourcePort 填调度器自己的监听端口，
-      只给 Agent 当认调度器的标识；Agent 不给它写端口状态、不装计数链，流量照旧在入口计。
-    */
-    for (const rule of agentAllRules as any[]) {
-      if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !rule.failoverEnabled) continue;
-      if (rule.forwardType !== "gost" || !rule.tunnelId) continue;
-      const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-      if (!tunnel || !isForwardXTunnel(tunnel) || !runtimeBool(tunnel.isEnabled)) continue;
-      if (!isTunnelProtocolEnabled(forwardProtocolSettings, tunnel) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) continue;
-      const failover = forwardXSchedulerFailover(rule, tunnel);
-      if (!failover || Number(failover.listenPort || 0) <= 0) continue;
-      addRunningRule({
-        ruleId: Number(rule.id),
-        tunnelId: Number(tunnel.id),
-        sourcePort: Number(failover.listenPort),
-        targetIp: rule.targetIp,
-        targetPort: rule.targetPort,
-        protocol: rule.protocol,
-        forwardType: "route-scheduler",
-        schedulerOnly: true,
-        failover,
-      });
-    }
-
-    const gostMultiHopRelayRules = await Promise.all(agentAllRules
-      .filter((rule: any) => {
-        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !runtimeBool(rule.isRunning)) return false;
-        if (rule.forwardType !== "gost" || !rule.tunnelId) return false;
-        const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-        if (!tunnel || !isGostTunnelMode(tunnel) || !runtimeBool(tunnel.isEnabled)) return false;
-        if (!isTunnelProtocolEnabled(forwardProtocolSettings, tunnel)) return false;
-        if (!isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) return false;
-        const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
-        return Array.isArray(hops) && hops.length >= 3;
-      })
-      .map(async (rule: any) => {
-        const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-        const hops = tunnelHopsByTunnelId.get(Number(tunnel.id)) || [];
-        const hostIdx = hops.findIndex((hop: any) => Number(hop.hostId) === Number(host.id));
-        if (hostIdx <= 0 || hostIdx >= hops.length - 1) return null;
-        const currentHop = hops[hostIdx] as any;
-        const nextHop = tunnelRelayUsesParallelRelays(tunnel, hops) ? hops[hops.length - 1] : hops[hostIdx + 1] as any;
-        const nextHost = await getHopDialAddress(nextHop, tunnel);
-        const sourcePort = Number(currentHop.listenPort) || 0;
-        const targetPort = Number(nextHop.listenPort) || 0;
-        if (!sourcePort || !targetPort || !nextHost) return null;
-        return {
-          ruleId: Number(rule.id),
-          tunnelId: Number(tunnel.id),
-          sourcePort,
-          targetIp: nextHost,
-          targetPort,
-          protocol: "tcp",
-          forwardType: "gost-tunnel-hop",
-        };
-      }));
-    for (const runningRule of gostMultiHopRelayRules) {
-      if (runningRule) addRunningRule(runningRule);
-    }
-
-    /**
-     * 落地入站的端口也要进 runningRules —— 但只为了计数，不为了转发。
-     *
-     * 这条路能走通靠两个既有事实：runningRules 只驱动「写状态 + 装计数链」，
-     * 转发器是 actions 启动的；而非 iptables/nftables/forwardx 的方式走
-     * countingRuleProcess 模式，装计数链只需要监听端口和协议，不需要目标地址。
-     * 所以放进来但不发 apply 动作，就只会计数。已装的 Agent 不必升级。
-     *
-     * 必须放在下面那个 expectedRulePorts 循环之前：那里算的是「这台机器上应该
-     * 存在哪些端口」，漏掉的话 Agent 会把落地端口的计数链当孤儿清掉。
-     */
-    const hostProxyInbounds = await getEnabledProxyInboundsWithUsersByHost(Number(host.id));
-    for (const row of hostProxyInbounds) {
-      // Mieru 由 mita 按用户计数（server/mitaTraffic.ts）：mita 的用户不分端口，按端口计会记错人。
-      if (row.protocol === "mieru") continue;
-      addRunningRule({
-        ruleId: proxyInboundTrafficRuleId(row.id),
-        sourcePort: row.port,
-        // 只计数，没有转发目标。
-        targetIp: "",
-        targetPort: 0,
-        protocol: proxyInboundTrafficProtocol(row.protocol),
-        forwardType: PROXY_INBOUND_TRAFFIC_FORWARD_TYPE,
-      });
-    }
-
-    for (const runningRule of runningRules) {
-      // 只跑调度器的那种不占端口（上面 NEX 隧道出口那段），不算这台机器上「应该有」的端口。
-      if (runningRule.schedulerOnly) continue;
-      const port = Number(runningRule.sourcePort || 0);
-      if (port > 0) expectedRulePorts.add(runtimePortProtocolKey(port, runningRule.protocol));
-      if (port > 0) expectedRuleIdentityKeys.add(ruleRuntimeIdentityKey(runningRule.ruleId, port, runningRule.protocol));
-      if (port > 0) expectedRulePortIdentityKeys.add(ruleRuntimePortIdentityKey(runningRule.ruleId, port));
-    }
+    const collectHeartbeatRunningRulesResult = await collectHeartbeatRunningRules({ tunnelExitRules, tunnelById, tunnelProtocolPolicy, emptyProtocolPolicy, tunnelProxyProtocolPlan, isForwardXTunnel, failoverTargetEndpoint, guardRules, guardListenPort, proxyProtocolVersion, nginxTunnelExitRules, currentHostTunnelExitPortsForRule, protectActiveRulePort, addRunningRule, failoverForCurrentHost, failoverProxyPort, agentAllRules, forwardProtocolSettings, forwardXSchedulerFailover, tunnelHopsByTunnelId, host, getHopDialAddress, runningRules, expectedRulePorts, expectedRuleIdentityKeys, expectedRulePortIdentityKeys });
+    const { hostProxyInbounds } = collectHeartbeatRunningRulesResult;
     if (hasReportedRuntimeState) {
       const ruleActionPorts = new Set<string>();
       const ruleActionPortIdentityKeys = new Set<string>();
@@ -3361,56 +3169,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       从原版 ForwardX 迁过来的面板（server/forwardxAgentMigration.ts）：原版 Agent 自动排一次升级，
       换成 NEX 发的 Agent。不看版本号 —— 原版的版本号可能比 NEX 的还高。
     */
-    if (shouldQueueForwardxAgentMigration({
-      enabled: forwardxAgentMigrationEnabled,
-      hostId: Number(host.id),
-      agentDistribution: host.agentDistribution,
-      agentUpgradeRequested: host.agentUpgradeRequested,
-    })) {
-      await db.requestHostAgentUpgrade(host.id, AGENT_VERSION, null, new Date(responseIssuedAt), NEX_AGENT_DISTRIBUTION);
-      markForwardxAgentMigrationQueued(Number(host.id));
-      Object.assign(host, {
-        agentUpgradeRequested: true,
-        agentUpgradeTargetVersion: AGENT_VERSION,
-        agentUpgradeReleaseVersion: null,
-        agentUpgradeTargetDistribution: NEX_AGENT_DISTRIBUTION,
-        agentUpgradeRequestedAt: new Date(responseIssuedAt),
-      });
-      appendPanelLog(
-        "info",
-        `[AgentMigration] queued host=${host.id} name=${String(host.name || "-")} version=${effectiveAgentVersion || "-"} distribution=forwardx target=${AGENT_VERSION}/nex`,
-      );
-    }
-    const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
-    const agentUpgradeCompleted = (host as any).agentUpgradeRequested
-      && agentVersion
-      && isAgentUpgradeCompleted(
-        {
-          agentVersion,
-          fxpVersion: nextFxpVersion || host.fxpVersion,
-          agentDistribution: host.agentDistribution,
-          agentUpgradeTargetDistribution: host.agentUpgradeTargetDistribution,
-        },
-        requestedTargetVersion,
-        AGENT_VERSION,
-      );
-    if (agentUpgradeCompleted) {
-      await db.clearHostAgentUpgradeRequest(host.id);
-    }
-    const panelUrl = await resolveHostAgentAdvertisedPanelUrl(host);
-    const agentMigrationTargetPanelUrl = await getAgentMigrationSwitchTarget();
-    const panelMigration = await getPanelMigrationAgentDirective(Number(host.id));
-    const staleMigrationUpgrade = (host as any).agentUpgradeRequested
-      && requestedTargetVersion === "9999.0.0"
-      && !agentMigrationTargetPanelUrl;
-    if (staleMigrationUpgrade) await db.clearHostAgentUpgradeRequest(host.id);
-    const agentUpgradeRequestedAt = heartbeatTimestampMs((host as any).agentUpgradeRequestedAt);
-    const agentUpgradeDue = agentUpgradeRequestedAt <= 0 || agentUpgradeRequestedAt <= responseIssuedAt;
-    const agentUpgrade = (host as any).agentUpgradeRequested && agentUpgradeDue && !agentUpgradeCompleted && !staleMigrationUpgrade ? {
-      targetVersion: requestedTargetVersion,
-      panelUrl: agentMigrationTargetPanelUrl || panelUrl,
-      releaseVersion: (host as any).agentUpgradeReleaseVersion || null,
-    } : null;
+    const resolveAgentUpgradeDirectiveResult = await resolveAgentUpgradeDirective({ forwardxAgentMigrationEnabled, host, responseIssuedAt, effectiveAgentVersion, agentVersion, nextFxpVersion });
+    const { panelUrl, agentUpgrade, panelMigration } = resolveAgentUpgradeDirectiveResult;
 
     // Do not mark plugin sync as delivered while an Agent is first uploading its
     // local runtime snapshot. Desired state is intentionally withheld for that
@@ -3961,112 +3721,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       );
       if (portLimitAction) actions.push(portLimitAction);
     }
-    const effectiveActions = dropStalePortRemoveActions(actions, protectedRuleRemoveActionKeys);
-    const actionBatchIssuedAt = resolveActionBatchIssuedAt(Number(host.id), effectiveActions, responseIssuedAt);
-    const ruleByIdForDesired = new Map((rules as any[]).map((rule: any) => [Number(rule.id), rule]));
-    const desiredKnownRunning = (action: any) => {
-      if (action?.op === "remove") return true;
-      /*
-        V2 隧道的 WireGuard 运行时动作：本机报上来的 localState 里有这条隧道的数据面（kernel / netstack），
-        就是已经在跑。原来所有 runtime 动作一律算「没在跑」，于是每台 V2 隧道两端的主机：
-          - 每次心跳都有待办，永远走不上稳定快路径，每次都整份重算期望状态；
-          - 期望状态每 60 秒整份重发一遍；
-          - 重连后的恢复进度永远差一条（「恢复中 23/24」），每次心跳还要写一次库。
-        配置变了动作内容就变，照样立刻下发（shouldSendDesiredState 比的是不含 knownRunning 的签名）；
-        Agent 对 runtime 动作不看 knownRunning，按自己的记录决定要不要重做，所以这里改成 true 不影响下发。
-      */
-      if (action?.statusType === "runtime") {
-        return action?.op === "apply"
-          && String(action?.forwardType || "") === "forwardx-wireguard"
-          && hasReportedRuntimeState
-          && Number(action?.tunnelId || 0) > 0
-          && !!getHostWireGuardPlane(Number(action.tunnelId), Number(host.id));
-      }
-      const ruleId = Number(action?.ruleId || 0);
-      if (ruleId > 0) {
-        const rule = ruleByIdForDesired.get(ruleId) as any;
-        const sourcePort = Number(action?.sourcePort || 0);
-        if (rule && hasReportedRuntimeState && sourcePort > 0) {
-          return localRuleMatches(rule, String(action?.forwardType || rule.forwardType || ""), sourcePort);
-        }
-        return runtimeBool(rule?.isRunning);
-      }
-      const tunnelId = Number(action?.tunnelId || 0);
-      if (tunnelId > 0) {
-        const sourcePort = Number(action?.sourcePort || 0);
-        if (hasReportedRuntimeState && sourcePort > 0) {
-          return localTunnelMatches(tunnelId, String(action?.forwardType || ""), sourcePort);
-        }
-        const tunnel = tunnelById.get(tunnelId) as any;
-        return runtimeBool(tunnel?.isRunning) || isTunnelRuntimeHostReady(tunnelId, Number(host.id));
-      }
-      return false;
-    };
-    // 每条动作只规整一次：同一份结果既出 configHash，又留给下面的 desiredStateHash 拼接。
-    const desiredStatePieceByAction = new WeakMap<object, string>();
-    const normalizedActions = effectiveActions.map((action: any) => {
-      const statusType = action.statusType || (Number(action.ruleId) > 0 ? "rule" : (Number(action.tunnelId) > 0 ? "tunnel" : undefined));
-      const normalized = {
-        ...action,
-        issuedAt: Number(action.issuedAt) || actionBatchIssuedAt,
-        configRevision,
-        knownRunning: typeof action.knownRunning === "boolean" ? action.knownRunning : desiredKnownRunning(action),
-        statusType,
-        // A tunnel apply can be fully adopted by the Agent's persisted local
-        // runtime record. Ask it to report that adoption so a panel restart or
-        // a cleared in-memory runtime map becomes ready without restarting the
-        // healthy listener.
-        ...(statusType === "tunnel" && action.op === "apply" && action.reportStatus === undefined
-          ? { reportStatus: true }
-          : {}),
-      };
-      return withDesiredStateConfigHash(normalized, desiredStatePieceByAction);
-    });
-    if (!deferActionsForLocalState) {
-      const runningRuleKeys = new Set(runningRules.map((rule: any) => ruleRuntimeIdentityKey(rule.ruleId, rule.sourcePort, rule.protocol)));
-      for (const action of normalizedActions) {
-        if (action.op !== "apply" || !Number(action.ruleId) || !Number(action.sourcePort)) continue;
-        const key = ruleRuntimeIdentityKey(action.ruleId, action.sourcePort, action.protocol);
-        if (runningRuleKeys.has(key)) continue;
-        addRunningRule({
-          ruleId: Number(action.ruleId),
-          tunnelId: Number(action.tunnelId || 0) || undefined,
-          sourcePort: Number(action.sourcePort),
-          ...(Number(action.sourcePortEnd || 0) > Number(action.sourcePort) ? { sourcePortEnd: Number(action.sourcePortEnd) } : {}),
-          targetIp: String(action.targetIp || ""),
-          targetPort: Number(action.targetPort || 0),
-          protocol: action.protocol || "tcp",
-          forwardType: action.forwardType || "unknown",
-          failover: action.failover,
-        });
-        runningRuleKeys.add(key);
-      }
-    }
-    const actionRank = (action: any) => (
-      action.statusType === "runtime" ? 0 : action.op === "apply" ? 1 : 2
-    );
-    const orderedActions = normalizedActions.slice().sort((a: any, b: any) => actionRank(a) - actionRank(b));
-    const activeWorkActions = deferActionsForLocalState
-      ? []
-      : orderedActions.filter((action: any) => action.op === "remove" || !action.knownRunning);
-    const recoveryWasInProgress = recoveryTriggered
-      || (!!previousHost.agentRecoveryStartedAt && !previousHost.agentRecoveryCompletedAt);
-    if (recoveryWasInProgress) {
-      const currentApplyCount = activeWorkActions.filter((action: any) => action.op === "apply").length;
-      const expected = recoveryTriggered
-        ? orderedActions.filter((action: any) => action.op === "apply").length
-        : Math.max(Number(previousHost.agentRecoveryExpected || 0), currentApplyCount);
-      const ready = Math.max(0, expected - currentApplyCount);
-      const completed = !deferActionsForLocalState && currentApplyCount === 0;
-      await db.updateHostHeartbeat(host.id, {
-        agentRecoveryExpected: expected,
-        agentRecoveryReady: completed ? expected : ready,
-        ...(completed ? { agentRecoveryCompletedAt: new Date() } : {}),
-      } as any);
-      if (completed && !previousHost.agentRecoveryCompletedAt) {
-        appendPanelLog("info", `[AgentRecovery] host=${host.id} complete ready=${expected}/${expected} bootId=${agentBootId || "-"} pid=${agentProcessId || "-"}`);
-      }
-    }
+    const orderHeartbeatActionsResult = await orderHeartbeatActions({ actions, protectedRuleRemoveActionKeys, host, responseIssuedAt, rules, hasReportedRuntimeState, localRuleMatches, localTunnelMatches, tunnelById, configRevision, deferActionsForLocalState, runningRules, addRunningRule, recoveryTriggered, previousHost, agentBootId, agentProcessId });
+    const { activeWorkActions, orderedActions, desiredStatePieceByAction, actionBatchIssuedAt, recoveryWasInProgress } = orderHeartbeatActionsResult;
     const hasTunnelApplyActions = activeWorkActions.some(isTunnelApplyBlockingProbe);
     const hasPendingMultiHopRuntime = (hostTunnels as any[]).some((tunnel: any) => {
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
@@ -4147,46 +3803,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       替出口填，得按出口自己分到的来。端口有变化（包括出口升级、降级后调度器出现或没了）就推这些隧道的
       入口（含入口组的成员）马上重算，不等 5 分钟一次的核对。
     */
-    const tunnelExitPortEntries: TunnelExitPortEntry[] = [];
-    for (const runningRule of runningRules) {
-      const tunnel = tunnelById.get(Number(runningRule.tunnelId || 0)) as any;
-      if (!tunnel || !runningRule.failover?.enabled || (!isGostTunnelMode(tunnel) && !isForwardXTunnel(tunnel))) continue;
-      tunnelExitPortEntries.push({
-        ruleId: Number(runningRule.ruleId),
-        kind: "scheduler",
-        port: Number(runningRule.failover.listenPort),
-        entryHostIds: tunnelEntryHostIds(tunnel),
-      });
-    }
-    for (const guardRule of guardRules) {
-      const tunnel = tunnelById.get(Number(guardRule?.tunnelId || 0)) as any;
-      if (!tunnel || !isGostTunnelMode(tunnel)) continue;
-      tunnelExitPortEntries.push({
-        ruleId: Number(guardRule.ruleId),
-        kind: "guard",
-        port: Number(guardRule.listenPort),
-        entryHostIds: tunnelEntryHostIds(tunnel),
-      });
-    }
-    for (const helper of tunnelEgressHelpers.values()) {
-      if (!helper.port) continue;
-      tunnelExitPortEntries.push({
-        ruleId: helper.ruleId,
-        kind: "egress",
-        port: helper.port,
-        entryHostIds: tunnelEntryHostIds(helper.tunnel),
-      });
-    }
-    for (const entryHostId of recordTunnelExitPorts(Number(host.id), tunnelExitPortEntries)) {
-      pushAgentRefresh(entryHostId, "tunnel-exit-ports-changed");
-    }
-    const sniInbounds = planAgentSniInbounds({
-      hostId: Number(host.id),
-      agentVersion: effectiveAgentVersion,
-      inbounds: hostTlsInbounds,
-      rules,
-      visitorHeaderRuleIds: new Set(gostBalancePlans.keys()),
-    });
+    const planTunnelExitPortsAndSniResult = planTunnelExitPortsAndSni({ runningRules, tunnelById, isForwardXTunnel, tunnelEntryHostIds, guardRules, tunnelEgressHelpers, host, effectiveAgentVersion, hostTlsInbounds, rules, gostBalancePlans });
+    const { sniInbounds } = planTunnelExitPortsAndSniResult;
     const stateSections = buildAgentStateResponseSections({
       runningRules,
       ruleLatencyProbes,

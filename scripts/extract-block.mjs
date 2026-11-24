@@ -249,9 +249,10 @@ const externalTypeImports = [];
   }
   const typeTexts = [...inputRows.map((r) => r.type), ...outputRows.map((r) => r.type), returnValueType];
   const probe = ts.createSourceFile("probe.ts", typeTexts.map((t, i) => `type T${i} = ${t};`).join("\n"), ts.ScriptTarget.ESNext, true);
-  const seen = new Set();
-  const visit = (n) => { if (ts.isIdentifier(n) && !(ts.isTypeAliasDeclaration(n.parent) && n.parent.name === n) && !(ts.isQualifiedName(n.parent) && n.parent.right === n) && !(ts.isPropertySignature(n.parent) && n.parent.name === n)) seen.add(n.text); ts.forEachChild(n, visit); };
-  visit(probe);
+  const seen = new Set(); const namesByRow = typeTexts.map(() => new Set());
+  // 属性名、函数类型里的参数名、方法名都不是类型引用，跳过
+  const isTypeRef = (n) => ts.isIdentifier(n) && !(ts.isTypeAliasDeclaration(n.parent) && n.parent.name === n) && !(ts.isQualifiedName(n.parent) && n.parent.right === n) && !((ts.isPropertySignature(n.parent) || ts.isMethodSignature(n.parent) || ts.isParameter(n.parent) || ts.isBindingElement(n.parent)) && n.parent.name === n);
+  for (const st of probe.statements) { const idx = Number(st.name.text.slice(1)); const visit = (n) => { if (isTypeRef(n)) { seen.add(n.text); namesByRow[idx].add(n.text); } ts.forEachChild(n, visit); }; visit(st); }
   const unresolvedTypeNames = new Set();
   for (const name of seen) {
     if (moduleRefs.has(name)) continue;
@@ -269,8 +270,8 @@ const externalTypeImports = [];
     externalTypeImports.push({ name, file: declFile.fileName, isType: ts.isTypeAliasDeclaration(top) || ts.isInterfaceDeclaration(top) });
   }
   // 引用了拿不到的类型的那几个类型串整体退成 any（带注释），不留编译错误
-  const anyify = (row) => { for (const n of unresolvedTypeNames) if (new RegExp(`\\b${n}\\b`).test(row.type)) { row.type = `any /* 原类型 ${row.type.slice(0, 80).replace(/\*\//g, "* /")}… 引用了拿不到的 ${n}，手动收拾 */`; break; } };
-  inputRows.forEach(anyify); outputRows.forEach(anyify);
+  const anyify = (row, idx) => { for (const n of unresolvedTypeNames) if (namesByRow[idx].has(n)) { row.type = `any /* 原类型 ${row.type.slice(0, 80).replace(/\*\//g, "* /")}… 引用了拿不到的 ${n}，手动收拾 */`; break; } };
+  inputRows.forEach((row, i) => anyify(row, i)); outputRows.forEach((row, i) => anyify(row, inputRows.length + i));
 }
 // moduleRefs 现在齐了，再生成 import 行（上面那段先算好的会被覆盖）
 byModule.clear(); importLines.length = 0; needExportInSource.length = 0;
