@@ -4,7 +4,9 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -318,7 +320,32 @@ type fxpUDPSessionPolicy struct {
 	reclaimAfter time.Duration
 }
 
+/*
+UDP 会话上限可以用环境变量改（写进 Agent 的 systemd 单元，FXP 是它的子进程）：
+
+	FORWARDX_FXP_UDP_MAX_SESSIONS          一个监听进程同时保留的 UDP 会话总数硬上限（默认 1024）
+	FORWARDX_FXP_UDP_SOFT_SESSIONS         总数软上限，到了就开始回收闲置最久的会话（默认 512；只给硬上限时取其 3/4）
+	FORWARDX_FXP_UDP_MAX_SESSIONS_PER_IP   同一来源 IP 的硬上限（默认 64）
+	FORWARDX_FXP_UDP_SOFT_SESSIONS_PER_IP  同一来源 IP 的软上限（默认 48；只给硬上限时取其 3/4）
+
+0 表示不限；软上限超过硬上限时按硬上限算；写错的值当没写。NAT 后面几十上百个玩家共用一个出口 IP、
+或者单台机器要承载更多游戏会话的场景，调大每 IP 上限；总数上限要和内存一起看（每个会话一个 128 KiB
+缓冲的已连接套接字）。进程起来时把生效值打一行日志，方便核对。
+*/
+const (
+	fxpUDPMaxSessionsEnv       = "FORWARDX_FXP_UDP_MAX_SESSIONS"
+	fxpUDPSoftSessionsEnv      = "FORWARDX_FXP_UDP_SOFT_SESSIONS"
+	fxpUDPMaxSessionsPerIPEnv  = "FORWARDX_FXP_UDP_MAX_SESSIONS_PER_IP"
+	fxpUDPSoftSessionsPerIPEnv = "FORWARDX_FXP_UDP_SOFT_SESSIONS_PER_IP"
+)
+
+var fxpUDPSessionPolicyFromEnv = udpSessionPolicyFromEnv(os.Getenv)
+
 func defaultFXPUDPSessionPolicy() fxpUDPSessionPolicy {
+	return fxpUDPSessionPolicyFromEnv
+}
+
+func builtinFXPUDPSessionPolicy() fxpUDPSessionPolicy {
 	return fxpUDPSessionPolicy{
 		softSessions: fxpUDPSoftSessions,
 		hardSessions: fxpUDPMaxSessions,
@@ -326,6 +353,45 @@ func defaultFXPUDPSessionPolicy() fxpUDPSessionPolicy {
 		hardPerIP:    fxpUDPMaxSessionsPerIP,
 		reclaimAfter: fxpUDPReclaimAfter,
 	}
+}
+
+// udpSessionPolicyFromEnv 按上面的环境变量算出会话上限；getenv 可替换，测试不用动真环境。
+func udpSessionPolicyFromEnv(getenv func(string) string) fxpUDPSessionPolicy {
+	policy := builtinFXPUDPSessionPolicy()
+	parse := func(name string) (int, bool) {
+		raw := strings.TrimSpace(getenv(name))
+		if raw == "" {
+			return 0, false
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			log.Printf("udp session policy: %s=%q 不是非负整数，按默认值", name, raw)
+			return 0, false
+		}
+		return value, true
+	}
+	applyPair := func(hardName, softName string, hard, soft *int) {
+		hardValue, hardSet := parse(hardName)
+		softValue, softSet := parse(softName)
+		if hardSet {
+			*hard = hardValue
+			if !softSet {
+				*soft = hardValue * 3 / 4
+			}
+		}
+		if softSet {
+			*soft = softValue
+		}
+		if *hard > 0 && (*soft == 0 || *soft > *hard) {
+			*soft = *hard
+		}
+	}
+	applyPair(fxpUDPMaxSessionsEnv, fxpUDPSoftSessionsEnv, &policy.hardSessions, &policy.softSessions)
+	applyPair(fxpUDPMaxSessionsPerIPEnv, fxpUDPSoftSessionsPerIPEnv, &policy.hardPerIP, &policy.softPerIP)
+	if policy != builtinFXPUDPSessionPolicy() {
+		log.Printf("udp session policy: total soft/hard=%d/%d per-ip soft/hard=%d/%d (0 = unlimited)", policy.softSessions, policy.hardSessions, policy.softPerIP, policy.hardPerIP)
+	}
+	return policy
 }
 
 type fxpUDPSessionSnapshot struct {

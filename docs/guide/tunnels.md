@@ -175,6 +175,19 @@ FXP 2.2.126 起，每条 NEX 隧道连接都会自动做两件事，不需要配
 
 两项都可以用环境变量强制（写进 Agent 的 systemd 单元，FXP 是它的子进程）：`FORWARDX_FXP_TCP_CONGESTION=bbr|cubic|off`、`FORWARDX_FXP_AEAD=aes-gcm|chacha20-poly1305`。FXP 的启动日志会打印实测的两种算法速度和最终的选择。
 
+### UDP 会话上限
+
+FXP 给每个 UDP 监听进程保留的会话数有上限：总数软 / 硬上限默认 512 / 1024，同一来源 IP 默认 48 / 64。到软上限先回收闲置最久的会话，到硬上限才拒收新会话（日志里是 `reject-active-per-ip` / `reject-active-global`）。NAT 后面几十上百个玩家共用一个出口 IP、或者单机要承载更多游戏会话时，用环境变量调（同样写进 Agent 的 systemd 单元，FXP 是它的子进程、继承它的环境）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `FORWARDX_FXP_UDP_MAX_SESSIONS_PER_IP` | `64` | 同一来源 IP 的硬上限 |
+| `FORWARDX_FXP_UDP_SOFT_SESSIONS_PER_IP` | `48` | 同一来源 IP 的软上限；只给硬上限时自动取其 3/4 |
+| `FORWARDX_FXP_UDP_MAX_SESSIONS` | `1024` | 一个监听进程的会话总数硬上限 |
+| `FORWARDX_FXP_UDP_SOFT_SESSIONS` | `512` | 总数软上限；只给硬上限时自动取其 3/4 |
+
+`0` 表示不限；软上限超过硬上限按硬上限算；写错的值当没写。总数上限要和内存一起看：每个会话一个已连接的目标套接字，带 128 KiB 缓冲。改了默认值的进程启动时会打一行 `udp session policy:` 日志，方便核对。
+
 NEX V2 隧道（用户态 WireGuard）在 Agent 2.2.209 起按批收发：协议栈里排着的包一次最多 128 个交给 WireGuard，再经 UDP GSO 一次系统调用发出，对端按 GRO 一批收回。千兆以上的 V2 隧道 CPU 大头正是每包一次的系统调用和加密调度。
 
 ## 状态
