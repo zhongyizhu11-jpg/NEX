@@ -6,6 +6,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
 import { formatBytes, formatCpuPercent, formatUptime } from "@/components/hosts/hostDisplay";
 import { ProxyNodeRow, proxyNodeMetaText } from "@/components/proxy/ProxyNodeRow";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { Plus, Terminal, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -64,7 +65,7 @@ export default function MyHostsSection() {
     {
       enabled: !isAdmin && myHostIds.length > 0,
       // 机器状态是看一眼就走的东西，不值得为它一直轮询。
-      refetchInterval: 30_000,
+      refetchInterval: pollingInterval("slow"),
       staleTime: 20_000,
     },
   );

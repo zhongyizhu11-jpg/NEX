@@ -53,3 +53,46 @@ for (const [file, mutation] of [
     assert.match(source, new RegExp(`if \\(${mutation}\\.isPending\\) return;`));
   });
 }
+
+/**
+ * 删除、重置这类回不了头的确认，tone 要是 destructive：桌面版按钮变红、手机操作表那一行用红字，
+ * 用户在按下去之前就看得出「这个不一样」。原来这几处和「保存」用同一个默认样子。
+ *
+ * 按确认框的标题（或说明里的一句）找到那次 confirm({...}) 调用，看它的参数里有没有 tone。
+ */
+function confirmCallsContaining(source: string, needle: string) {
+  const calls: string[] = [];
+  const pattern = /\bconfirm\(\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source))) {
+    // 从 `{` 起数括号，取到配对的 `}` 为止：参数对象里可能嵌着模板串和三元表达式
+    let depth = 0;
+    let index = match.index + match[0].length - 1;
+    for (; index < source.length; index += 1) {
+      if (source[index] === "{") depth += 1;
+      else if (source[index] === "}") { depth -= 1; if (depth === 0) break; }
+    }
+    const call = source.slice(match.index, index + 1);
+    if (call.includes(needle)) calls.push(call);
+  }
+  return calls;
+}
+
+for (const [file, needle] of [
+  ["AdminSubscriptions.tsx", "重置这条地址？"],
+  ["AdminSubscriptions.tsx", "删除这条地址？"],
+  ["AdminSubscriptions.tsx", "删除模板「"],
+  ["ClientSubscriptions.tsx", "重置这个订阅地址？"],
+  ["ClientSubscriptions.tsx", "删除这个订阅链接？"],
+  ["ClientSubscriptions.tsx", "删除这个客户端节点？"],
+  ["../components/proxy/ProxySubSourcesSection.tsx", "它同步来的节点会一起删掉"],
+] as const) {
+  test(`${file}：「${needle}」的确认框是破坏性语气`, () => {
+    const calls = confirmCallsContaining(read(file), needle);
+    // 反向对照：确实找到了那次确认，不是因为找不到才通过
+    assert.ok(calls.length >= 1, `没找到含「${needle}」的 confirm 调用`);
+    for (const call of calls) {
+      assert.match(call, /tone: "destructive"/, `确认框少了 tone: "destructive"：${call.slice(0, 120)}…`);
+    }
+  });
+}

@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import {
   TRAFFIC_ANOMALY_PRESETS,
@@ -66,7 +67,7 @@ function clock(ms: number) {
 
 function ActiveThrottles({ enabled }: { enabled: boolean }) {
   const utils = trpc.useUtils();
-  const query = trpc.ops.trafficAnomaly.throttles.useQuery(undefined, { enabled, refetchInterval: 60_000 });
+  const query = trpc.ops.trafficAnomaly.throttles.useQuery(undefined, { enabled, refetchInterval: pollingInterval("minute") });
   const release = trpc.ops.trafficAnomaly.release.useMutation({
     onSuccess: () => {
       void utils.ops.trafficAnomaly.throttles.invalidate();

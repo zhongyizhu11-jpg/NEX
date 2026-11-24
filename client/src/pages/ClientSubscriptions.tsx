@@ -9,6 +9,7 @@ import { proxyNodeMetaText, type ProxyNodeRowSpec } from "@/components/proxy/Pro
 import { ProxyNodeShareDialog } from "@/components/proxy/ProxyNodeShareDialog";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
+import EmptyState from "@/components/EmptyState";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -133,9 +134,14 @@ import ProxySubSourcesSection from "@/components/proxy/ProxySubSourcesSection";
 import ProxyNodeReorderDialog from "@/components/proxy/ProxyNodeReorderDialog";
 import { proxySubRegionLabel } from "@shared/proxySubRegion";
 import { PROXY_SUB_IP_VERSIONS, PROXY_SUB_IP_VERSION_LABELS, type ProxySubIpVersion } from "@shared/proxySubIpVersion";
-import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+
+/*
+  节点列表还没回来时的兜底。写成模块级常量而不是 `?? []`：后者每次渲染都是新数组，
+  传给排序弹窗等子组件后，它们按引用比较的 effect / memo 每帧都会重跑一遍。
+*/
+const EMPTY_NODES: never[] = [];
 
 /**
  * 每个客户端一个可辨识的图案 + 各自的品牌色。
@@ -516,6 +522,7 @@ export default function ClientSubscriptionsPage() {
       title: "重置这个订阅地址？",
       description: "只更换订阅地址本身，不会重置流量。旧地址和短链接立即失效，已经导入过的客户端都要重新填写新地址。",
       confirmText: "重置地址",
+      tone: "destructive",
     });
     if (ok) rotateToken.mutate({ id });
   };
@@ -526,6 +533,7 @@ export default function ClientSubscriptionsPage() {
       // 不说清这一点，用户会以为删了地址就等于断网。
       description: "只是这条地址失效：用它的客户端拉不到更新，但已经导入的节点照常能连。要让某台设备彻底断开，去落地节点上「重置凭据」（其他设备要重新拉订阅）。",
       confirmText: "删除",
+      tone: "destructive",
     });
     if (ok) deleteToken.mutate({ id });
   };
@@ -560,7 +568,9 @@ export default function ClientSubscriptionsPage() {
       return;
     }
     let cancelled = false;
-    QRCode.toDataURL(qrTarget.url, { width: 480, margin: 1, color: { dark: "#000000", light: "#ffffff" } })
+    // 二维码库只在点开二维码时才用得上，不跟这一页一起进包（和 DashboardLayout 开双重验证那里一样）。
+    import("qrcode")
+      .then(({ default: QRCode }) => QRCode.toDataURL(qrTarget.url, { width: 480, margin: 1, color: { dark: "#000000", light: "#ffffff" } }))
       .then((value) => {
         if (!cancelled) setQrDataUrl(value);
       })
@@ -572,7 +582,7 @@ export default function ClientSubscriptionsPage() {
     };
   }, [qrTarget]);
 
-  const nodes = nodesQuery.data ?? [];
+  const nodes = nodesQuery.data ?? EMPTY_NODES;
   /**
    * 预览里直连条目的开关写的是节点模板的「直连也放进订阅」（includeDirect）。
    * 只有自己的节点能改；被别的节点当前置代理引用的，订阅里必须出现，不给关。
@@ -899,6 +909,7 @@ export default function ClientSubscriptionsPage() {
                 ? `${node.ruleCount} 条转发会被解绑，不再出现在订阅里。转发本身继续运行，不受影响。`
                 : "该节点没有被任何转发绑定。",
               confirmText: "删除",
+              tone: "destructive",
             });
             if (ok) deleteNode.mutate({ id: node.id });
           },
@@ -1302,12 +1313,13 @@ export default function ClientSubscriptionsPage() {
                 onRetry={() => { void tokensQuery.refetch(); }}
               />
             ) : tokens.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                还没有订阅链接。
-                {nodeCount > 0
+              <EmptyState
+                icon={<Link2 />}
+                title="还没有订阅链接"
+                description={nodeCount > 0
                   ? "新建一个，然后把地址导入客户端。"
                   : "先在下面加节点 —— 自己机器上开一个，或者粘一条别处的链接 —— 再回来建链接。"}
-              </p>
+              />
             ) : (
               <div className="fx-sub-token-list space-y-4">
                 {tokens.map((token: any) => {
@@ -2278,8 +2290,8 @@ export default function ClientSubscriptionsPage() {
       />
 
       <Dialog open={nodeDialogOpen} onOpenChange={setNodeDialogOpen}>
-        {/* DialogContent 默认 max-h + overflow-hidden，内容超出直接裁掉、滚不动。
-            改成 flex 列、正文单独一层可滚 —— 项目里其他长弹窗都是这个写法。 */}
+        {/* DialogContent 默认整块可滚（max-h + overflow-y-auto）。这里显式 overflow-hidden 改成 flex 列、
+            只让正文那一层滚，标题和底栏钉住 —— 项目里其他长弹窗都是这个写法。 */}
         <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>{editingNodeId ? "编辑客户端节点" : "添加客户端节点"}</DialogTitle>

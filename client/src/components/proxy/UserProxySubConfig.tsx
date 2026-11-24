@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -26,7 +27,12 @@ export default function UserProxySubConfig({ userId }: { userId: number | null }
       setDirty(false);
     }
   }, [configQuery.data]);
-  const validation = validateQuery({ text: customRules }, { enabled: !!userId && customRules.trim().length > 0 });
+  // 键是整段文本：停手 400 ms 再校验，期间留着上一轮的结果，别每个键击都请求一次。
+  const customRulesToValidate = useDebouncedValue(customRules, 400);
+  const validation = validateQuery(
+    { text: customRulesToValidate },
+    { enabled: !!userId && customRulesToValidate.trim().length > 0, placeholderData: (previous) => previous },
+  );
   const save = trpc.proxySubscriptions.adminSetUserConfig.useMutation({
     onSuccess: () => {
       toast.success("订阅配置已保存");

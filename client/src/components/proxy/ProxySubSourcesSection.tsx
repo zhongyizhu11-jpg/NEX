@@ -3,6 +3,7 @@ import { getFormatLocale } from "@/i18n";
  * 外部订阅：用户把别处的订阅地址填进来，面板定时拉取并并进自己的订阅（或透传给客户端）。
  */
 
+import EmptyState from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { formatBytes } from "@shared/formatBytes";
 import { PROXY_SUB_SOURCE_MODES, PROXY_SUB_SOURCE_MODE_LABELS, type ProxySubSourceMode } from "@shared/proxySubSource";
-import { Plus, RefreshCw } from "lucide-react";
+import { Link2, Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -136,7 +137,7 @@ export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged 
       </CardHeader>
       <CardContent>
         {sources.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">还没有外部订阅。</p>
+          <EmptyState icon={<Link2 />} title="还没有外部订阅" description="把别处的订阅地址填进来，面板会定时拉取并并进你的订阅。" />
         ) : (
           <div className="space-y-2">
             {sources.map((source) => (
@@ -165,7 +166,7 @@ export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged 
                     size="sm"
                     variant="ghost"
                     onClick={async () => {
-                      const ok = await confirm({ title: `删除「${source.name}」？`, description: "它同步来的节点会一起删掉，绑在那些节点上的转发会解绑。", confirmText: "删除" });
+                      const ok = await confirm({ title: `删除「${source.name}」？`, description: "它同步来的节点会一起删掉，绑在那些节点上的转发会解绑。", confirmText: "删除", tone: "destructive" });
                       if (ok) remove.mutate({ id: source.id });
                     }}
                   >

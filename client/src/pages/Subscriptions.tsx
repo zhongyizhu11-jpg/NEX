@@ -560,9 +560,7 @@ export default function Subscriptions() {
                   )}
 
                   {isActive && Number(sub.trafficLimit || 0) > 0 && addons.length === 0 && (
-                    <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                      暂无可购买的附加流量包
-                    </div>
+                    <EmptyState icon={<Gauge />} title="暂无可购买的附加流量包" />
                   )}
                 </CardContent>
                 {isActive && currentAddonBytes > 0 && validUntil && (
@@ -671,9 +669,7 @@ export default function Subscriptions() {
                   </button>
                 ))}
                 {!isFreeRenew && paymentMethods.length === 0 && (
-                  <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    暂无在线支付方式。
-                  </div>
+                  <EmptyState icon={<CreditCard />} title="暂无在线支付方式" />
                 )}
               </div>
             </div>

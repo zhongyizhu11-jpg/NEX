@@ -5,6 +5,7 @@ import MobileInfoRow from "@/components/MobileInfoRow";
 import DashboardLayout from "@/components/DashboardLayout";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
 import DataSectionLoading from "@/components/DataSectionLoading";
+import EmptyState from "@/components/EmptyState";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -37,6 +38,7 @@ import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-ta
 import { Textarea } from "@/components/ui/textarea";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { mobileAuth } from "@/lib/mobileAuth";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
 import {
@@ -50,8 +52,7 @@ import {
   Trash2,
   WalletCards,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import QRCode from "qrcode";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 type PaymentConfigForm = {
@@ -277,14 +278,14 @@ export default function Payments() {
   const utils = trpc.useUtils();
   const confirmDialog = useConfirmDialog();
   const { data: config, isLoading } = trpc.payment.getConfig.useQuery(undefined, { placeholderData: (previousData) => previousData });
-  const { data: stats, isLoading: statsLoading } = trpc.payment.stats.useQuery(undefined, { refetchInterval: 30_000, placeholderData: (previousData) => previousData });
+  const { data: stats, isLoading: statsLoading } = trpc.payment.stats.useQuery(undefined, { refetchInterval: pollingInterval("slow"), placeholderData: (previousData) => previousData });
   const {
     data: orders,
     isLoading: ordersLoading,
     error: ordersError,
     isFetching: ordersFetching,
     refetch: refetchOrders,
-  } = trpc.payment.listOrders.useQuery({ limit: 100 }, { refetchInterval: 30_000, placeholderData: (previousData: any) => previousData });
+  } = trpc.payment.listOrders.useQuery({ limit: 100 }, { refetchInterval: pollingInterval("slow"), placeholderData: (previousData: any) => previousData });
   // 面板公开地址从 publicInfo 读，不为这一项拉整份 getSettings。
   const { panelPublicUrl } = usePanelFlags();
   const [form, setForm] = useState<PaymentConfigForm>(emptyForm);
@@ -295,39 +296,42 @@ export default function Payments() {
   // 测试下单 QR 对话框
   const [testQrOrder, setTestQrOrder] = useState<{ outTradeNo: string; qrCode: string } | null>(null);
   const [testQrDataUrl, setTestQrDataUrl] = useState<string | null>(null);
-  const testQrPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const queryOrderUtils = utils;
 
+  const testQrCode = testQrOrder?.qrCode;
   useEffect(() => {
-    if (!testQrOrder?.qrCode) { setTestQrDataUrl(null); return; }
-    QRCode.toDataURL(testQrOrder.qrCode, { width: 220, margin: 1, color: { dark: "#000", light: "#fff" } })
-      .then(setTestQrDataUrl)
-      .catch(() => setTestQrDataUrl(null));
-  }, [testQrOrder?.qrCode]);
+    if (!testQrCode) { setTestQrDataUrl(null); return; }
+    let cancelled = false;
+    // 二维码库只在测试下单时才用得上，不跟这一页一起进包（和 DashboardLayout 开双重验证那里一样）。
+    import("qrcode")
+      .then(({ default: QRCode }) => QRCode.toDataURL(testQrCode, { width: 220, margin: 1, color: { dark: "#000", light: "#fff" } }))
+      .then((url) => { if (!cancelled) setTestQrDataUrl(url); })
+      .catch(() => { if (!cancelled) setTestQrDataUrl(null); });
+    return () => { cancelled = true; };
+  }, [testQrCode]);
 
+  /*
+    等支付结果：原来是手写 setInterval 每 3 秒问一次，切到后台也照问。改成 useQuery 轮询，
+    页面不可见时 react-query 自己会停（见 lib/polling.ts）。查不到就下一轮再问，不报错。
+  */
+  const testQrOutTradeNo = testQrOrder?.outTradeNo;
+  const testQrStatusQuery = trpc.payment.queryOrder.useQuery(
+    { outTradeNo: testQrOutTradeNo || "" },
+    { enabled: !!testQrOutTradeNo, refetchInterval: pollingInterval("active"), refetchOnWindowFocus: false, retry: false },
+  );
+  const testQrStatus = testQrStatusQuery.data?.status;
   useEffect(() => {
-    if (!testQrOrder) {
-      if (testQrPollingRef.current) clearInterval(testQrPollingRef.current);
-      return;
+    if (!testQrOutTradeNo || !testQrStatus) return;
+    if (testQrStatus === "completed" || testQrStatus === "paid" || testQrStatus === "processing") {
+      setTestQrOrder(null);
+      toast.success("已支付");
+      utils.payment.listOrders.invalidate();
+      utils.payment.stats.invalidate();
+    } else if (testQrStatus === "expired" || testQrStatus === "failed" || testQrStatus === "cancelled") {
+      setTestQrOrder(null);
+      toast.error("订单已失效");
+      utils.payment.listOrders.invalidate();
     }
-    const poll = async () => {
-      try {
-        const result = await queryOrderUtils.client.payment.queryOrder.query({ outTradeNo: testQrOrder.outTradeNo });
-        if (result?.status === "completed" || result?.status === "paid" || result?.status === "processing") {
-          setTestQrOrder(null);
-          toast.success("已支付");
-          utils.payment.listOrders.invalidate();
-          utils.payment.stats.invalidate();
-        } else if (result?.status === "expired" || result?.status === "failed" || result?.status === "cancelled") {
-          setTestQrOrder(null);
-          toast.error("订单已失效");
-          utils.payment.listOrders.invalidate();
-        }
-      } catch { /* 轮询失败静默忽略 */ }
-    };
-    testQrPollingRef.current = setInterval(poll, 3000);
-    return () => { if (testQrPollingRef.current) clearInterval(testQrPollingRef.current); };
-  }, [testQrOrder?.outTradeNo]);
+  }, [testQrOutTradeNo, testQrStatus, utils]);
   const [activeTab, setActiveTab] = useUrlTab<PaymentTab>({
     values: PAYMENT_TABS,
     defaultValue: "basic",
@@ -975,9 +979,7 @@ export default function Payments() {
                   minHeight="min-h-[120px]"
                 />
               ) : (
-                <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  暂无支付订单
-                </div>
+                <EmptyState icon={<CreditCard />} title="暂无支付订单" />
               ))}
             </div>
             <div className="hidden overflow-x-auto md:block">

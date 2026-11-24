@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 
@@ -48,7 +48,8 @@ export function ProxyNodeShareDialog({
     [nodeIdsKey],
   );
 
-  const usersQuery = trpc.users.options.useQuery(undefined, { enabled: open });
+  // 用户名单一分钟内不重拉，和入站卡那边取同一份时的口径一致（两处 staleTime 不同会各拉各的）。
+  const usersQuery = trpc.users.options.useQuery(undefined, { enabled: open, staleTime: 60_000 });
   const sharesQuery = trpc.proxySubscriptions.nodeShares.useQuery(
     { nodeIds },
     { enabled: open && nodeIds.length > 0 },
@@ -117,7 +118,8 @@ export function ProxyNodeShareDialog({
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
-        <p className="text-xs text-muted-foreground">
+        {/* 这段本来就是弹窗的说明，标成 DialogDescription 读屏才会把它和标题连起来念。 */}
+        <DialogDescription className="text-xs text-muted-foreground">
           {credentialMode === "per-recipient" ? (
             <>
               选中的人，订阅里会直接多出这个节点，<span className="font-medium text-foreground">每人一份独立凭据</span>：
@@ -131,7 +133,7 @@ export function ProxyNodeShareDialog({
               节点仍然是你的；流量记在你名下，按端口计量，拆不开。
             </>
           )}
-        </p>
+        </DialogDescription>
 
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
