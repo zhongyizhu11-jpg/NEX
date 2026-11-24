@@ -74,6 +74,7 @@ Docker 场景下数据库地址可以按下面判断：
 | `FORWARDX_TRUST_PROXY` | `loopback` | 信任哪些反向代理传来的 `X-Forwarded-For` / `X-Forwarded-Proto` 等头：`loopback`（只信本机）、网段或地址（逗号分隔，如 `172.16.0.0/12`）、跳数（数字），或 `false` 一律不信。`true` / `*` 这类「全信」的写法按 `false` 处理。Docker 部署前面有宿主机上的 Nginx / Caddy 时要改，见[反向代理](./reverse-proxy.md)。安装脚本升级时会保留这一项 |
 | `FORWARDX_RUN_AS_ROOT` | 空 | Docker 镜像默认以 `forwardx`（uid 10001）运行；设为 `1` 让容器保持 root（挂了 `/var/run/docker.sock` 时自动保持 root，见[部署面板](./deploy-panel.md)） |
 | `FORWARDX_AGENT_ASSET_CACHE_DIR` | 数据目录下的 `agent-assets` | 面板替主机缓存 Agent 二进制（含按需下载的 gost 运行时、mita）的目录；默认跟数据库同一个数据目录，Docker 里是 `/data/agent-assets`。见[部署面板](./deploy-panel.md#agent-二进制默认按需下载离线用完整包) |
+| `FORWARDX_SQLITE_WAL_AUTOCHECKPOINT` | `10000` | SQLite 的 WAL 累积多少页做一次检查点（页 4 KB）。默认 10000 页（WAL 最多约 40 MB）比 SQLite 自带的 1000 页少约四分之一的磁盘写入；机器磁盘特别小可以调低 |
 | `FORWARDX_TRUSTED_ORIGINS` | 空 | 跨站写操作防护（CSRF）额外放行的浏览器来源，逗号分隔，可写完整来源（`https://ops.example.com`）或裸主机名。面板自己的域名（按请求 Host / 反代传来的 `X-Forwarded-Host` 比主机名）和手机 App 的固定源默认就放行；只有把面板 API 嵌进别的站点时才需要填。用 API 令牌（Bearer）认证的请求不受此限制 |
 
 ## 数据库连接池

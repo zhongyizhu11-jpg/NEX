@@ -814,6 +814,12 @@ async function connectDatabaseOnce(config: DatabaseConfig | null): Promise<Db | 
 function applySqlitePragmas(sqlite: Database.Database) {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("synchronous = NORMAL");
+  // WAL 多少页后做一次检查点。SQLite 默认 1000 页（4 MB）；流量上报把同一批计数页反复改写，检查点越勤，
+  // 同一页被复制回主库的次数越多。100 台主机 / 2000 条规则压测（2026-11-24，3 分钟窗口）：
+  // 1000 页时进程磁盘写入 2.0～2.4 GB/小时，10000 页（WAL 最多 40 MB）1.65 GB/小时，少约四分之一，
+  // 读写延迟没变化。FORWARDX_SQLITE_WAL_AUTOCHECKPOINT 可改（0 = 不自动做检查点，不建议）。
+  const walAutoCheckpoint = Number.parseInt(process.env.FORWARDX_SQLITE_WAL_AUTOCHECKPOINT || "", 10);
+  sqlite.pragma(`wal_autocheckpoint = ${Number.isFinite(walAutoCheckpoint) && walAutoCheckpoint >= 0 ? walAutoCheckpoint : 10000}`);
   sqlite.pragma("busy_timeout = 5000");
   sqlite.pragma("cache_size = -16000");
   sqlite.pragma("temp_store = MEMORY");
