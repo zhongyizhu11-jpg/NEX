@@ -1496,6 +1496,11 @@ func TestWireGuardRuntimeTCPAndUDPProxy(t *testing.T) {
 	// Stay below the real-time proxy queue limit. Queue saturation and dropping
 	// stale datagrams is covered separately and is intentional backpressure.
 	const burstPackets = wireGuardUDPProxyQueueSize / 2
+	// 这里只验证「一批都送到」：把新鲜度淘汰的窗口放大，否则 CI 机器一慢（排空 32 个包超过 25 ms），
+	// 正常的淘汰就会让这个用例偶发少一个包（2026-11 两次在 CI 上这样失败）。
+	previousMaxQueueDelay := wireGuardUDPProxyMaxQueueDelay
+	wireGuardUDPProxyMaxQueueDelay = 10 * time.Second
+	t.Cleanup(func() { wireGuardUDPProxyMaxQueueDelay = previousMaxQueueDelay })
 	_ = udpClient.SetDeadline(time.Now().Add(15 * time.Second))
 	for i := 0; i < burstPackets; i++ {
 		payload := []byte("burst-" + strconv.Itoa(i))
