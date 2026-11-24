@@ -128,9 +128,10 @@ for (const st of statements) {
   };
   collect(st, 0);
 }
-const afterRange = (node) => node.getStart(sf) >= rangeEnd;
+// 段外引用：段后的语句，以及段前声明的闭包里的引用（const 闭包晚于声明才被调用，运行时拿得到）
+const outsideRange = (node) => node.getStart(sf) >= rangeEnd || node.end <= rangeStart;
 function walkAfter(node) {
-  if (ts.isIdentifier(node) && afterRange(node) && !isPropertyName(node) && !isDeclName(node) && declaredInRange.has(node.text)) {
+  if (ts.isIdentifier(node) && outsideRange(node) && !isPropertyName(node) && !isDeclName(node) && declaredInRange.has(node.text)) {
     const symbol = symbolOfIdentifier(node); const decl = declNodeOf(symbol);
     if (decl && inRange(decl)) outputs.set(node.text, { decl });
   }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LINK_PROBE_FRESH_MS } from "@shared/linkProbePolicy";
+import { readRulesPageSource } from "../testing/rulesPageSource";
 import {
   preferLastKnownForwardRuleVisualStatus,
   resolveForwardRuleNotRunningReason,
@@ -237,7 +238,7 @@ test("路径上有机器掉线：哪怕几分钟前探测成功、入口机说�
 test("规则页把路径上的机器在线状态喂给状态判定，过期的延迟灰掉", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, "../pages/Rules.tsx"), "utf8");
+  const source = readRulesPageSource();
   assert.equal((source.match(/offlineHostNames: getRuleOfflineHostNames\(rule\)/g) || []).length, 2, "两处 resolveForwardRuleVisualStatus 都要带上掉线的机器");
   assert.match(source, /const getRuleOfflineHostNames = \(rule: any\): string\[\] => \{/);
   assert.match(source, /getTunnelHopIds\(tunnel\)\)[\s\S]{0,800}host\.isOnline === false/);

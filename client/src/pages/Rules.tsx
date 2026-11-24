@@ -19,7 +19,6 @@ import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseSubjectActions } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
-import { type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 
 import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
@@ -86,12 +85,7 @@ import {
   hasRuleProbeAfterInvalidation,
   updateRuleProbeCache,
 } from "@/lib/ruleProbeCache";
-import {
-  clearRuleStatusSnapshots,
-  readRuleStatusSnapshots,
-  writeRuleStatusSnapshots,
-  type RuleVisualStatusSnapshot,
-} from "@/lib/ruleStatusCache";
+import { clearRuleStatusSnapshots, writeRuleStatusSnapshots } from "@/lib/ruleStatusCache";
 import { batchOperationErrorMessage, chunkBatchItems, isBatchPortConflictError, runBatchOperations } from "@/lib/batchOperations";
 import { useRuleBatchJobSubmit } from "@/components/rules/useRuleBatchJobSubmit";
 import {
@@ -103,12 +97,7 @@ import {
   type RuleTransferFileRule,
 } from "@/lib/ruleTransfer";
 import { parseCompatibleRuleTransferText, validateNyanpassImportTarget, type CompatibleRuleFile, type ImportedRule } from "@/lib/nyanpassImport";
-import {
-  filterRuleEntryAddressesForDisplay,
-  getEntryAddressFamily as addressFamily,
-  resolveRuleEntryHost,
-  type EntryAddressFamily,
-} from "@/lib/ruleEntryDisplay";
+import { getEntryAddressFamily as addressFamily, type EntryAddressFamily } from "@/lib/ruleEntryDisplay";
 import { cn } from "@/lib/utils";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
@@ -157,15 +146,12 @@ import {
 import {
   BILLING_TIME_ZONE,
 } from "@shared/billingTime";
-import {
-  parseFailoverEndpoint,
-  parseFailoverTargets,
-} from "@shared/failoverTargets";
+import { parseFailoverTargets } from "@shared/failoverTargets";
 import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
-import { buildRuleCardDerivedProps, describeRuleLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources, type RuleChainLatencyLike } from "@/features/rules/ruleCardProps";
+import { buildRuleCardDerivedProps, describeRuleLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -281,16 +267,7 @@ import { Fragment, lazy, memo, Suspense, useState, useMemo, useEffect, useCallba
 import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
-
-import {
-  addHostNodeMeta,
-  addNodeMetaAliases,
-  findHostByAddress,
-  hostDisplayName,
-  hostNodeMeta,
-  targetGeoNodeMeta,
-} from "@/lib/linkTestNodeMeta";
-import { getTunnelExitNames, getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName } from "@/lib/tunnelDisplay";
+import { getTunnelHopIds, getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { StatusDot } from "@/components/network/StatusDot";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import { Sparkline } from "@/components/charts/Sparkline";
@@ -300,17 +277,19 @@ import {
   decideRuleFlowLayout,
   ruleVisualStateToHealth,
 } from "@/features/rules/ruleFlow";
-import {
-  preferLastKnownForwardRuleVisualStatus,
-  resolveForwardRuleNotRunningReason,
-  resolveForwardRuleVisualStatus,
-  resolveForwardRuleStopReason,
-} from "@/lib/forwardRuleStatus";
+import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, resolveForwardRuleStopReason } from "@/lib/forwardRuleStatus";
 import { buildLinkAvailabilityIndex } from "@shared/linkAvailability";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useStableRows } from "@/lib/stableRows";
 import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
+import { useSelfTestLinkTestNodeData } from "../features/rules/useSelfTestLinkTestNodeData";
+import { useTrafficByRule } from "../features/rules/useTrafficByRule";
+import { useRuleTransferDisplay } from "../features/rules/useRuleTransferDisplay";
+import { useRuleEntryAddresses } from "../features/rules/useRuleEntryAddresses";
+import { useRuleTransferResources } from "../features/rules/useRuleTransferResources";
+import { useRenderTunnelRoute } from "../features/rules/useRenderTunnelRoute";
+import { useRuleVisualStatuses } from "../features/rules/useRuleVisualStatuses";
 const SelfTestDialog = lazy(() => import("@/features/rules/SelfTestDialog"));
 const RuleTrafficGlobe = lazy(() => import("@/features/rules/RuleTrafficGlobe"));
 
@@ -415,7 +394,7 @@ type RuleFormData = {
 
 type ProxyProtocolVersion = 1 | 2;
 
-const defaultForm: RuleFormData = {
+export const defaultForm: RuleFormData = {
   hostId: null,
   name: "",
   routeMode: "local",
@@ -466,7 +445,7 @@ type RuleGroupType = keyof typeof desktopRuleTypeLabels;
 type RuleGroupCollapsedState = Partial<Record<RuleGroupType, boolean>>;
 type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleCategoryCounts = Record<RuleCategory, number>;
-type RuleTransferScopeType = Exclude<RuleCategory, "all">;
+export type RuleTransferScopeType = Exclude<RuleCategory, "all">;
 type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
 // state：批量启用 / 暂停 / 重启（上游 2.3.292），和删除、复制一样交给服务端任务（RuleBatchJobWidget 看进度）
 type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group" | "state";
@@ -738,7 +717,7 @@ function getRuleForwardGroupKind(rule: any, forwardGroupById: Map<number, any>):
   return mode === "chain" ? "chain" : "group";
 }
 
-function getRuleCategory(rule: any, forwardGroupById: Map<number, any>): Exclude<RuleCategory, "all"> {
+export function getRuleCategory(rule: any, forwardGroupById: Map<number, any>): Exclude<RuleCategory, "all"> {
   const groupKind = getRuleForwardGroupKind(rule, forwardGroupById);
   if (groupKind) return groupKind;
   return rule.forwardType === "gost" && rule.tunnelId ? "tunnel" : "local";
@@ -1673,8 +1652,8 @@ function getTunnelDisplay(tunnel: any | null | undefined, showNginxLabel = true)
 
 // 入口地址推导已移到 shared，服务端生成客户端订阅时复用同一实现，
 // 保证订阅里的节点地址和面板上显示的入口地址永远一致。
-type EntryAddress = HostEntryAddress;
-const pushUniqueEntryAddress = pushUniqueHostEntryAddress;
+export type EntryAddress = HostEntryAddress;
+export const pushUniqueEntryAddress = pushUniqueHostEntryAddress;
 export const formatAddressWithPort = formatHostAddressWithPort;
 /** 规则卡上的入口地址：端口段写成 `地址:20000-20100`（shared/portRange.ts）。 */
 /** 端口框原文里的段尾（20000-20100 → 20100）；单端口、没写完或写错都是 0。 */
@@ -1683,7 +1662,7 @@ function portSpanEndFromText(text: string | null): number {
   return spec && !("error" in spec) && spec.end > spec.start ? spec.end : 0;
 }
 
-const formatRuleEntryAddress = (host: string, rule: { sourcePort?: unknown; sourcePortEnd?: unknown }) => (
+export const formatRuleEntryAddress = (host: string, rule: { sourcePort?: unknown; sourcePortEnd?: unknown }) => (
   isPortRangeRule(rule)
     ? `${formatAddressWithPort(host, Number(rule.sourcePort))}-${ruleSourcePortEnd(rule)}`
     : formatAddressWithPort(host, Number(rule.sourcePort))
@@ -1693,7 +1672,7 @@ export function isForwardChainGroup(group: any | null | undefined) {
   return forwardGroupModeOf(group) === "chain";
 }
 
-function getForwardGroupRouteLabel(group: any | null | undefined) {
+export function getForwardGroupRouteLabel(group: any | null | undefined) {
   const mode = forwardGroupModeOf(group);
   if (mode === "port") return "端口转发";
   if (mode === "chain") return "转发链";
@@ -1780,7 +1759,7 @@ function resolveChainConnectHostForWarning(member: any, host: any | null | undef
   return publicAddr || stored;
 }
 
-function enabledHostMembers(group: any | null | undefined) {
+export function enabledHostMembers(group: any | null | undefined) {
   return [...(group?.members || [])]
     .filter((member: any) => member?.memberType !== "tunnel" && member?.isEnabled !== false && Number(member?.hostId || 0) > 0)
     .sort((a: any, b: any) => Number(a.priority || 0) - Number(b.priority || 0));
@@ -1914,7 +1893,7 @@ function isSelectableForwardRuleGroup(group: any | null | undefined) {
   return mode === "port" || mode === "failover" || mode === "chain";
 }
 
-function getForwardGroupKindLabel(group: any | null | undefined) {
+export function getForwardGroupKindLabel(group: any | null | undefined) {
   const mode = forwardGroupModeOf(group);
   if (mode === "port") return "端口转发";
   if (mode === "chain") return "转发链";
@@ -5009,75 +4988,8 @@ function RulesContent() {
   }, [dailyTrafficSummary, visibleRuleIdsForMetrics.length]);
   const totalTrafficSummaryRows = visibleRuleIdsForMetrics.length === 0 ? [] : totalTrafficSummary ?? stableTotalTrafficSummaryRows;
   const dailyTrafficSummaryRows = visibleRuleIdsForMetrics.length === 0 ? [] : dailyTrafficSummary ?? stableDailyTrafficSummaryRows;
-  const trafficByRule = useMemo(() => {
-    const m = new Map<number, {
-      bytesIn: number;
-      bytesOut: number;
-      connections: number;
-      latestLatencyMs: number | null;
-      latestLatencyIsTimeout: boolean;
-      latestLatencyAt: Date | string | null;
-      latestProbeFailure: string | null;
-      /** 负载均衡链路：几台出口报了到目标的情况、其中连得上的几台、规则卡上那一句（server/exitTargetHealth.ts） */
-      exitTargetTotal: number | null;
-      exitTargetOk: number | null;
-      exitTargetNote: string | null;
-      /** 负载均衡链路：入口报的在用出口（扛流量最多的排第一；2.3.537 起只在主出口切走时有，现在入口报了就有） */
-      exitTargetVia: string[] | null;
-      exitTargetViaHostIds: number[] | null;
-      /** 卡上的延迟是面板探的两段相加：在用那台出口、入口到它、它到目标（server/exitTargetHealth.ts 的 RuleChainLatencyView） */
-      latestLatencyChain: RuleChainLatencyLike | null;
-      /** 卡上这个延迟从哪来：live 入口实时、probe 定时探测、diagnosis 最近一次诊断（悬停写明） */
-      latestLatencySource: string | null;
-    }>();
-    dailyTrafficSummaryRows.forEach((t: any) => {
-      const rid = Number(t.ruleId);
-      const prev = m.get(rid);
-      if (prev) {
-        if (t.exitTargetTotal != null) {
-          prev.exitTargetTotal = Number(t.exitTargetTotal);
-          prev.exitTargetOk = t.exitTargetOk == null ? null : Number(t.exitTargetOk);
-          prev.exitTargetNote = t.exitTargetNote || null;
-        }
-        // 在用的出口：只有一台出口报了数据时 exitTargetTotal 是空的，照样要带上（2.3.539）
-        if (Array.isArray(t.exitTargetVia)) {
-          prev.exitTargetVia = t.exitTargetVia.map(String);
-          prev.exitTargetViaHostIds = Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null;
-        }
-        prev.bytesIn += Number(t.bytesIn) || 0;
-        prev.bytesOut += Number(t.bytesOut) || 0;
-        prev.connections += Number(t.connections) || 0;
-        const prevAt = prev.latestLatencyAt ? new Date(prev.latestLatencyAt).getTime() : 0;
-        const nextAt = t.latestLatencyAt ? new Date(t.latestLatencyAt).getTime() : 0;
-        if (nextAt > prevAt) {
-          prev.latestLatencyMs = t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs);
-          prev.latestLatencyIsTimeout = !!t.latestLatencyIsTimeout;
-          prev.latestLatencyAt = t.latestLatencyAt || null;
-          prev.latestProbeFailure = t.latestProbeFailure || null;
-          prev.latestLatencyChain = t.latestLatencyChain || null;
-          prev.latestLatencySource = t.latestLatencySource || null;
-        }
-      } else {
-        m.set(rid, {
-          bytesIn: Number(t.bytesIn) || 0,
-          bytesOut: Number(t.bytesOut) || 0,
-          connections: Number(t.connections) || 0,
-          latestLatencyMs: t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs),
-          latestLatencyIsTimeout: !!t.latestLatencyIsTimeout,
-          latestLatencyAt: t.latestLatencyAt || null,
-          latestProbeFailure: t.latestProbeFailure || null,
-          exitTargetTotal: t.exitTargetTotal == null ? null : Number(t.exitTargetTotal),
-          exitTargetOk: t.exitTargetOk == null ? null : Number(t.exitTargetOk),
-          exitTargetNote: t.exitTargetNote || null,
-          exitTargetVia: Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null,
-          exitTargetViaHostIds: Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null,
-          latestLatencyChain: t.latestLatencyChain || null,
-          latestLatencySource: t.latestLatencySource || null,
-        });
-      }
-    });
-    return m;
-  }, [dailyTrafficSummaryRows]);
+  const useTrafficByRuleResult = useTrafficByRule({ dailyTrafficSummaryRows });
+  const { trafficByRule } = useTrafficByRuleResult;
   useEffect(() => {
     if (dailyTrafficSummary === undefined) return;
     updateRuleProbeCache(user?.id, trafficByRule);
@@ -5524,83 +5436,8 @@ function RulesContent() {
     }
     return names;
   };
-  const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
-    const latest = stableProbeByRule.get(Number(rule.id));
-    // 负载均衡链路：各台出口到目标的情况（不进探测缓存，按这一次的汇总）
-    const exitTargets = trafficByRule.get(Number(rule.id));
-    const exitTargetFields = {
-      exitTargetOk: exitTargets?.exitTargetOk ?? null,
-      exitTargetNote: exitTargets?.exitTargetNote ?? null,
-    };
-    if (rule.forwardGroupId) {
-      const group = forwardGroupById.get(Number(rule.forwardGroupId));
-      const runtime = Array.isArray(group?.ruleRuntimeStatuses)
-        ? group.ruleRuntimeStatuses.find((item: any) => Number(item.templateRuleId) === Number(rule.id))
-        : null;
-      const rawGroupStatus = group
-        ? getForwardGroupConfigStatus(group)
-        : forwardGroupsFetched || forwardGroupsError
-          ? "unavailable"
-          : "pending";
-      const groupStatus = rawGroupStatus === "degraded" ? "available" : rawGroupStatus;
-      return resolveForwardRuleVisualStatus({
-        ruleEnabled: !!rule.isEnabled && !normalizeRuleLimitReason(rule.ruleLimitReason),
-        ruleRunning: !!rule.isRunning,
-        resourceAccessAllowed: rule.resourceAccessAllowed,
-        groupEnabled: group?.isEnabled !== false,
-        groupConfigStatus: groupStatus,
-        runtimeStatus: runtime?.status,
-        runningCount: runtime?.runningRuleCount,
-        expectedCount: runtime?.expectedRuleCount,
-        latestLatencyMs: latest?.latestLatencyMs,
-        latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
-        latestLatencyAt: latest?.latestLatencyAt,
-        latestProbeFailure: latest?.latestProbeFailure,
-        offlineHostNames: getRuleOfflineHostNames(rule),
-        ...exitTargetFields,
-      });
-    }
-    return resolveForwardRuleVisualStatus({
-      ruleEnabled: !!rule.isEnabled && !normalizeRuleLimitReason(rule.ruleLimitReason),
-      ruleRunning: !!rule.isRunning,
-      resourceAccessAllowed: rule.resourceAccessAllowed,
-      groupEnabled: true,
-      groupConfigStatus: "available",
-      latestLatencyMs: latest?.latestLatencyMs,
-      latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
-      latestLatencyAt: latest?.latestLatencyAt,
-      latestProbeFailure: latest?.latestProbeFailure,
-      offlineHostNames: getRuleOfflineHostNames(rule),
-      ...exitTargetFields,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule, trafficByRule, hosts, tunnels]);
-  const ruleVisualStatuses = useMemo(() => {
-    const statuses = new Map<number, {
-      current: ReturnType<typeof resolveForwardRuleVisualStatus>;
-      display: ReturnType<typeof resolveForwardRuleVisualStatus>;
-      lastKnown: RuleVisualStatusSnapshot | null;
-      invalidated: boolean;
-    }>();
-    const ruleIds = filteredRules
-      .map((rule: any) => Number(rule?.id || 0))
-      .filter((ruleId: number) => Number.isInteger(ruleId) && ruleId > 0);
-    const lastKnownByRule = readRuleStatusSnapshots(user?.id, ruleIds);
-    for (const rule of filteredRules) {
-      const ruleId = Number(rule?.id || 0);
-      if (!Number.isInteger(ruleId) || ruleId <= 0) continue;
-      const current = resolveRuleVisualStatus(rule);
-      const invalidated = invalidatedRuleProbeIdsRef.current.has(ruleId);
-      const lastKnown = invalidated ? null : lastKnownByRule.get(ruleId) || null;
-      statuses.set(ruleId, {
-        current,
-        lastKnown,
-        invalidated,
-        display: preferLastKnownForwardRuleVisualStatus(current, lastKnown),
-      });
-    }
-    return statuses;
-  }, [filteredRules, resolveRuleVisualStatus, ruleProbeCacheRevision, user?.id]);
+  const useRuleVisualStatusesResult = useRuleVisualStatuses({ stableProbeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules, user, invalidatedRuleProbeIdsRef, ruleProbeCacheRevision });
+  const { ruleVisualStatuses, resolveRuleVisualStatus } = useRuleVisualStatusesResult;
   const hasCachedRuleStatus = useMemo(
     () => Array.from(ruleVisualStatuses.values()).some((item) => !!item.lastKnown),
     [ruleVisualStatuses],
@@ -5660,43 +5497,8 @@ function RulesContent() {
       </span>
     );
   };
-  const renderTunnelRoute = (tunnel: any, compact = false) => {
-    const hopIds = getTunnelHopIds(tunnel);
-    const exitGroup = Number(tunnel?.exitGroupId || 0) > 0
-      ? forwardGroupById.get(Number(tunnel.exitGroupId))
-      : null;
-    const exitGroupName = exitGroup ? getForwardGroupSelectName(exitGroup) : "";
-    const exitNames = exitGroupName ? getTunnelExitNames(tunnel, hosts) : [];
-    const routeTitle = getTunnelRouteText(tunnel, hosts, exitGroupName);
-    return (
-      <div
-        className={`flex min-w-0 items-center gap-1.5 text-xs ${compact ? "flex-wrap" : "whitespace-nowrap"}`}
-        title={routeTitle}
-      >
-        {hopIds.map((hostId: number, index: number) => (
-          <Fragment key={`${tunnel?.id || "tunnel"}-${hostId}-${index}`}>
-            {index > 0 && <ArrowRight className="h-3 w-3 shrink-0" />}
-            <span
-              className={exitGroupName && index === hopIds.length - 1
-                ? (compact ? "min-w-0 max-w-full break-words" : "min-w-0 truncate")
-                : (compact ? "max-w-[8rem] truncate" : "truncate")}
-            >
-              {exitGroupName && index === hopIds.length - 1 ? (
-                <>
-                  {exitGroupName}
-                  {exitNames.length > 0 && (
-                    <span className="text-muted-foreground">
-                      {"\uFF1B\u51FA\u53E3\uFF1A"}{exitNames.join(" / ")}
-                    </span>
-                  )}
-                </>
-              ) : tunnelHopHostName(tunnel, hostId, hosts)}
-            </span>
-          </Fragment>
-        ))}
-      </div>
-    );
-  };
+  const useRenderTunnelRouteResult = useRenderTunnelRoute({ forwardGroupById, getForwardGroupSelectName, hosts });
+  const { renderTunnelRoute } = useRenderTunnelRouteResult;
 
   const getRuleEntryHost = (rule: any) => {
     const directHost = hosts?.find((h: any) => Number(h.id) === Number(rule.hostId));
@@ -5713,259 +5515,8 @@ function RulesContent() {
     return entryHost?.name || getHostName(Number(rule.hostId));
   };
 
-  const selfTestLinkTestNodeData = useMemo(() => {
-    const meta: Record<string, any> = {};
-    const rule = selfTestRuleDetail;
-    if (!rule) {
-      return { nodeMeta: meta, sourceLabel: selfTestRule?.name || "源节点", targetLabel: selfTestRule?.name || "目标", plannedSegments: [] as LinkTestPlannedSegment[] };
-    }
-
-    const hostById = new Map<number, any>((hosts || []).map((host: any) => [Number(host.id), host]));
-    const tunnel = rule.tunnelId ? tunnelById.get(Number(rule.tunnelId)) : null;
-    const tunnelHostById = new Map<number, any>();
-    if (tunnel) {
-      [
-        ...(Array.isArray((tunnel as any).hopHosts) ? (tunnel as any).hopHosts : []),
-        (tunnel as any).entryHost,
-        (tunnel as any).exitHost,
-        ...(Array.isArray((tunnel as any).loadBalanceExits) ? (tunnel as any).loadBalanceExits.map((exit: any) => exit?.host) : []),
-      ].forEach((host: any) => {
-        const id = Number(host?.id || 0);
-        if (id > 0) tunnelHostById.set(id, host);
-      });
-    }
-    const hostForRouteId = (hostId: number) => hostById.get(Number(hostId)) || tunnelHostById.get(Number(hostId));
-    const chainGroup = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    const chainEntryGroup = chainGroup && isForwardChainGroup(chainGroup) && Number(chainGroup.entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number(chainGroup.entryGroupId))
-      : null;
-    const chainEntryMembers = chainEntryGroup && forwardGroupModeOf(chainEntryGroup) === "entry" ? enabledHostMembers(chainEntryGroup) : [];
-    const tunnelEntryGroup = tunnel && Number((tunnel as any).entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number((tunnel as any).entryGroupId)) || (tunnel as any).entryGroup
-      : null;
-    const tunnelEntryMembers = tunnelEntryGroup && forwardGroupModeOf(tunnelEntryGroup) === "entry" ? enabledHostMembers(tunnelEntryGroup) : [];
-    const tunnelEntryMemberByHostId = new Map<number, any>();
-    tunnelEntryMembers.forEach((member: any) => {
-      const hostId = Number(member?.hostId || 0);
-      if (hostId > 0) tunnelEntryMemberByHostId.set(hostId, member);
-    });
-    const labelForRouteHostId = (hostId: number) => {
-      const host = hostForRouteId(hostId);
-      const member = tunnelEntryMemberByHostId.get(Number(hostId));
-      return hostDisplayName(host)
-        || String(member?.name || member?.remark || "").trim()
-        || (tunnel ? tunnelHopHostName(tunnel, hostId, hosts) : "")
-        || `主机 #${hostId}`;
-    };
-    const configuredRouteHostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
-    /*
-      负载均衡链路：诊断的路径画扛流量最多的那台出口（入口真实上报，和卡上的延迟、「经」同一台），诊断也是从它测的
-      （rules.selfTest）。它就是主出口时照旧（链路自己的延迟可以拿来填入口到出口那一段）。
-    */
-    const viaExitCandidate = tunnel ? Number(trafficByRule.get(Number(rule.id))?.exitTargetViaHostIds?.[0] || 0) : 0;
-    const viaExitHostId = viaExitCandidate > 0 && viaExitCandidate !== Number(configuredRouteHostIds[configuredRouteHostIds.length - 1] || 0) ? viaExitCandidate : 0;
-    const routeHostIds = viaExitHostId > 0 && configuredRouteHostIds.length >= 2
-      ? [...configuredRouteHostIds.slice(0, -1), viaExitHostId]
-      : configuredRouteHostIds;
-    routeHostIds.forEach((hostId: number, index: number) => {
-      const host = hostForRouteId(Number(hostId));
-      addHostNodeMeta(meta, host, [
-        index === 0 ? "入口" : "",
-        index === routeHostIds.length - 1 ? "出口" : "",
-        tunnel ? labelForRouteHostId(hostId) : "",
-        tunnel ? tunnelHopHostName(tunnel, hostId, hosts) : "",
-        `主机${hostId}`,
-        `主机 #${hostId}`,
-      ]);
-    });
-
-    const sourceHost = hostForRouteId(Number(routeHostIds[0] || rule.hostId || 0)) || getRuleEntryHost(rule);
-    const exitHost = hostForRouteId(Number(routeHostIds[routeHostIds.length - 1] || 0));
-    if (sourceHost) addHostNodeMeta(meta, sourceHost, ["入口", "源节点"]);
-    chainEntryMembers.forEach((entryMember: any) => {
-      const entryHost = hostForRouteId(Number(entryMember.hostId || 0));
-      addHostNodeMeta(meta, entryHost, [
-        "入口",
-        "源节点",
-        `主机${entryMember.hostId || ""}`,
-        `主机 #${entryMember.hostId || ""}`,
-      ]);
-    });
-    tunnelEntryMembers.forEach((entryMember: any) => {
-      const entryHostId = Number(entryMember.hostId || 0);
-      const entryHost = hostForRouteId(entryHostId);
-      addHostNodeMeta(meta, entryHost, [
-        "入口",
-        "源节点",
-        labelForRouteHostId(entryHostId),
-        entryMember.entryAddress,
-        `主机${entryHostId || ""}`,
-        `主机 #${entryHostId || ""}`,
-      ]);
-    });
-    if (exitHost) addHostNodeMeta(meta, exitHost, ["出口"]);
-
-    const targetIp = String(rule.targetIp || "").trim();
-    const targetText = formatAddressWithPort(targetIp || "-", Number(rule.targetPort || 0) || "-") || "目标";
-    const ruleLabel = String(rule.name || selfTestRule?.name || `规则 #${rule.id || "-"}`).trim();
-    const targetHost = findHostByAddress(hosts, targetIp);
-    if (targetHost) {
-      addHostNodeMeta(meta, targetHost);
-      const hostMeta = {
-        ...hostNodeMeta(targetHost),
-        label: ruleLabel,
-      };
-      addNodeMetaAliases(meta, [
-        ruleLabel,
-        targetIp,
-        targetText,
-        `目标 ${targetText}`,
-        `目标 ${targetIp}:${rule.targetPort || "-"}`,
-        "目标",
-        "目的节点",
-      ], hostMeta);
-    } else {
-      const targetGeo = targetGeoByAddress.get(normalizeAddressKey(targetIp));
-      const targetMeta = targetGeoNodeMeta(ruleLabel, targetIp || targetText, targetGeo);
-      addNodeMetaAliases(meta, [
-        ruleLabel,
-        targetIp,
-        targetText,
-        `目标 ${targetText}`,
-        `目标 ${targetIp}:${rule.targetPort || "-"}`,
-        "目标",
-        "目的节点",
-      ], targetMeta);
-    }
-
-    const routeHosts = routeHostIds
-      .map((hostId: number) => hostForRouteId(Number(hostId)))
-      .filter(Boolean);
-    const plannedSegments: LinkTestPlannedSegment[] = [];
-    const isChainRule = !!chainGroup && isForwardChainGroup(chainGroup);
-    const routeHopCount = Math.max(0, routeHostIds.length - 1);
-    const pathHopCount = isChainRule
-      ? (chainEntryMembers.length > 0 ? 1 : 0) + routeHopCount + 1
-      : routeHopCount;
-    if (chainEntryMembers.length > 0 && routeHosts[0]) {
-      const firstChainHost = routeHosts[0];
-      const firstChainHostId = Number(routeHostIds[0] || 0);
-      chainEntryMembers.forEach((entryMember: any) => {
-        const entryHostId = Number(entryMember.hostId || 0);
-        const entryHost = hostForRouteId(entryHostId);
-        plannedSegments.push({
-          from: hostDisplayName(entryHost) || `入口主机 #${entryMember.hostId || "-"}`,
-          to: hostDisplayName(firstChainHost),
-          fromHostId: entryHostId || null,
-          toHostId: firstChainHostId || null,
-          hopIndex: 0,
-          hopCount: pathHopCount,
-          fromMeta: meta[hostDisplayName(entryHost)] || meta[String(entryMember.hostId || "")],
-          toMeta: meta[hostDisplayName(firstChainHost)],
-        });
-      });
-    }
-    const tunnelLatencyMs = typeof (tunnel as any)?.latestLatencyMs === "number" && Number.isFinite((tunnel as any).latestLatencyMs)
-      ? Number((tunnel as any).latestLatencyMs)
-      : typeof (tunnel as any)?.lastLatencyMs === "number" && Number.isFinite((tunnel as any).lastLatencyMs)
-        ? Number((tunnel as any).lastLatencyMs)
-        : null;
-    const tunnelLatencyIsTimeout = !!(tunnel as any)?.latestLatencyIsTimeout || ((tunnel as any)?.lastTestStatus === "failed" && tunnelLatencyMs === null);
-    const nodeMetaForHostId = (hostId: number) => {
-      const host = hostForRouteId(hostId);
-      return meta[hostDisplayName(host)] || meta[labelForRouteHostId(hostId)] || meta[String(hostId)] || undefined;
-    };
-    const createTunnelPlannedSegment = (
-      fromHostId: number,
-      toHostId: number,
-      useTunnelLatencyFallback: boolean,
-      hopIndex: number,
-    ): LinkTestPlannedSegment => ({
-      from: labelForRouteHostId(fromHostId),
-      to: labelForRouteHostId(toHostId),
-      fromHostId: fromHostId || null,
-      toHostId: toHostId || null,
-      hopIndex,
-      hopCount: pathHopCount,
-      fromMeta: nodeMetaForHostId(fromHostId),
-      toMeta: nodeMetaForHostId(toHostId),
-      success: tunnelLatencyMs !== null && useTunnelLatencyFallback
-        ? true
-        : tunnelLatencyIsTimeout && useTunnelLatencyFallback
-          ? false
-          : undefined,
-      latencyMs: tunnelLatencyMs !== null && useTunnelLatencyFallback ? tunnelLatencyMs : null,
-      message: tunnelLatencyIsTimeout && useTunnelLatencyFallback ? "隧道段失败" : null,
-      method: null,
-      pending: false,
-    });
-    const tunnelEntryHostIds = tunnel
-      ? Array.from(new Set([
-        Number(routeHostIds[0] || (tunnel as any).entryHostId || 0),
-        ...tunnelEntryMembers.map((member: any) => Number(member?.hostId || 0)),
-      ].filter((hostId: number) => Number.isFinite(hostId) && hostId > 0)))
-      : [];
-    const hasTunnelMultiEntry = !!tunnel && tunnelEntryHostIds.length > 1;
-    if (hasTunnelMultiEntry) {
-      const lastHostId = Number(routeHostIds[routeHostIds.length - 1] || (tunnel as any).exitHostId || 0);
-      const restRouteHostIds = routeHostIds.filter((hostId: number) => !tunnelEntryHostIds.includes(Number(hostId)));
-      const nextHostId = Number(restRouteHostIds[0] || lastHostId || (tunnel as any).exitHostId || 0);
-      if (nextHostId > 0) {
-        tunnelEntryHostIds.forEach((entryHostId) => {
-          if (entryHostId !== nextHostId) {
-            plannedSegments.push(createTunnelPlannedSegment(entryHostId, nextHostId, false, 0));
-          }
-        });
-      }
-      for (let index = 0; index < restRouteHostIds.length - 1; index += 1) {
-        plannedSegments.push(createTunnelPlannedSegment(
-          Number(restRouteHostIds[index]),
-          Number(restRouteHostIds[index + 1]),
-          false,
-          index + 1,
-        ));
-      }
-    } else {
-      for (let index = 0; index < routeHostIds.length - 1; index += 1) {
-        // 换成在用的出口时，链路自己的延迟（入口到主出口量的）不能拿来填这一段
-        const singleTunnelSegment = routeHostIds.length - 1 === 1 && !(viaExitHostId > 0);
-        plannedSegments.push(createTunnelPlannedSegment(
-          Number(routeHostIds[index]),
-          Number(routeHostIds[index + 1]),
-          singleTunnelSegment,
-          index + (chainEntryMembers.length > 0 ? 1 : 0),
-        ));
-      }
-    }
-    const exitHostForTarget = routeHosts[routeHosts.length - 1] || sourceHost;
-    if (exitHostForTarget) {
-      const exitHostId = Number(exitHostForTarget.id || routeHostIds[routeHostIds.length - 1] || 0);
-      plannedSegments.push({
-        from: hostDisplayName(exitHostForTarget),
-        to: ruleLabel,
-        fromHostId: exitHostId || null,
-        toHostId: Number(targetHost?.id || 0) || null,
-        hopIndex: isChainRule ? Math.max(0, pathHopCount - 1) : null,
-        hopCount: isChainRule ? pathHopCount : null,
-        fromMeta: meta[hostDisplayName(exitHostForTarget)],
-        toMeta: meta[ruleLabel] || meta[targetText] || meta[targetIp],
-      });
-    }
-
-    return {
-      nodeMeta: meta,
-      sourceLabel: chainEntryMembers.length > 0
-        ? chainEntryMembers
-          .map((member: any) => hostDisplayName(hostForRouteId(Number(member.hostId || 0))) || `入口主机 #${member.hostId || "-"}`)
-          .filter(Boolean)
-          .join(" / ")
-        : tunnelEntryHostIds.length > 1
-          ? tunnelEntryHostIds.map((hostId) => labelForRouteHostId(hostId)).filter(Boolean).join(" / ")
-          : hostDisplayName(sourceHost) || getRuleEntryHostName(rule),
-      targetLabel: ruleLabel,
-      plannedSegments,
-    };
-  }, [forwardGroupById, getRuleEntryHost, hosts, selfTestRule?.name, selfTestRuleDetail, targetGeoByAddress, tunnelById]);
+  const useSelfTestLinkTestNodeDataResult = useSelfTestLinkTestNodeData({ selfTestRuleDetail, selfTestRule, hosts, tunnelById, forwardGroupById, trafficByRule, getRuleEntryHost, targetGeoByAddress, getRuleEntryHostName });
+  const { selfTestLinkTestNodeData } = useSelfTestLinkTestNodeDataResult;
 
   const getTransferResourceLabel = (type: RuleTransferScopeType, resource: any) => {
     if (!resource) return "";
@@ -5974,205 +5525,8 @@ function RulesContent() {
     return resource.name || `#${resource.id}`;
   };
 
-  const getTransferResourceSearchText = useCallback((type: RuleTransferScopeType, resource: any) => {
-    const values: any[] = [resource?.id];
-    if (type === "local") {
-      values.push(
-        resource?.name,
-        resource?.description,
-        resource?.displayRemark,
-        resource?.domain,
-        resource?.forwardType,
-        resource?.groupMode,
-        getForwardGroupKindLabel(resource),
-      );
-      (resource?.members || []).forEach((member: any) => {
-        values.push(member?.hostId, member?.entryAddress, member?.connectHost, member?.name);
-      });
-    } else if (type === "tunnel") {
-      values.push(
-        resource?.name,
-        getTunnelRouteText(resource, hosts || []),
-        resource?.mode,
-        resource?.type,
-        resource?.listenPort,
-        resource?.entryHostId,
-        resource?.exitHostId,
-      );
-    } else {
-      values.push(
-        resource?.name,
-        resource?.description,
-        resource?.domain,
-        resource?.groupType,
-        resource?.type,
-        resource?.mode,
-      );
-    }
-    return values.filter((value) => value !== undefined && value !== null && String(value).trim()).join(" ");
-  }, [hosts]);
-
-  const filterTransferResources = useCallback((resources: any[], type: RuleTransferScopeType, search: string) => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) return resources;
-    return resources.filter((resource: any) => getTransferResourceSearchText(type, resource).toLowerCase().includes(keyword));
-  }, [getTransferResourceSearchText]);
-  const filteredImportResources = useMemo(
-    () => filterTransferResources(importResources, importScopeType, importResourceSearch),
-    [filterTransferResources, importResourceSearch, importResources, importScopeType]
-  );
-  const selectedImportResource = useMemo(
-    () => importResources.find((resource: any) => String(resource.id) === importResourceId) || null,
-    [importResourceId, importResources]
-  );
-
-  const getTransferResourceStatusMeta = (type: RuleTransferScopeType, resource: any) => {
-    if (type === "tunnel") {
-      const state = tunnelAvailabilityById.get(Number(resource?.id || 0));
-      if (state?.status === "available") {
-        return {
-          label: "可用",
-          dotClassName: "bg-[var(--fx-healthy)]",
-          textClassName: "text-muted-foreground",
-        };
-      }
-      if (state?.status === "degraded" || state?.status === "pending") {
-        return {
-          label: state.status === "degraded" ? "部分可用" : "检测中",
-          dotClassName: "bg-[var(--fx-warn)]",
-          textClassName: "text-muted-foreground",
-        };
-      }
-      return {
-        label: state?.status === "disabled" ? "停用" : "不可用",
-        dotClassName: state?.status === "disabled" ? "bg-muted-foreground/60" : "bg-destructive",
-        textClassName: "text-muted-foreground",
-      };
-    }
-
-    const status = getForwardGroupConfigStatus(resource);
-    if (status === "available") {
-      return {
-        label: "可用",
-        dotClassName: "bg-[var(--fx-healthy)]",
-        textClassName: "text-muted-foreground",
-      };
-    }
-    if (status === "pending" || status === "degraded") {
-      return {
-        label: status === "degraded" ? "部分可用" : "检测中",
-        dotClassName: "bg-[var(--fx-warn)]",
-        textClassName: "text-muted-foreground",
-      };
-    }
-    if (status === "disabled") {
-      return {
-        label: "停用",
-        dotClassName: "bg-muted-foreground/60",
-        textClassName: "text-muted-foreground",
-      };
-    }
-    return {
-      label: "离线",
-      dotClassName: "bg-muted-foreground/60",
-      textClassName: "text-muted-foreground",
-    };
-  };
-
-  const renderTransferResourceOption = (type: RuleTransferScopeType, resource: any, options?: { showStatus?: boolean }) => {
-    const statusMeta = options?.showStatus ? getTransferResourceStatusMeta(type, resource) : null;
-    const statusBadge = statusMeta ? (
-      <span className="inline-flex shrink-0 items-center" title={statusMeta.label}>
-        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusMeta.dotClassName}`} aria-hidden="true" />
-        <span className="sr-only">{statusMeta.label}</span>
-      </span>
-    ) : null;
-
-    if (type === "local") {
-      const members = (resource?.members || []).filter((member: any) => member?.isEnabled !== false);
-      return (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-2">
-            {statusBadge}
-            <span className="truncate">{resource.name || `端口转发 #${resource.id}`}</span>
-          </span>
-          <span className="truncate text-xs text-muted-foreground">
-            {members.length > 0 ? members.map((member: any) => member.entryAddress || member.connectHost || (member.hostId ? `主机 #${member.hostId}` : "所属主机")).join(" / ") : getForwardGroupKindLabel(resource)}
-          </span>
-        </div>
-      );
-    }
-    if (type === "tunnel") {
-      return (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-2">
-            {statusBadge}
-            <span className="truncate">{resource.name || `#${resource.id}`}</span>
-          </span>
-          <span className="truncate text-xs text-muted-foreground">{getTunnelRouteText(resource, hosts || [])}</span>
-        </div>
-      );
-    }
-    return (
-      <span className="flex min-w-0 items-center gap-2">
-        {statusBadge}
-        <span className="truncate">{resource.name || `#${resource.id}`}</span>
-      </span>
-    );
-  };
-  const manualImportValidation = useMemo<{ ok: boolean; message: string; rules: RuleTransferFileRule[] }>(() => {
-    const lines = String(importManualText || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (lines.length === 0) {
-      return { ok: false, message: "请输入目标地址，每行一个 地址:端口", rules: [] };
-    }
-    if (lines.length > RULE_TRANSFER_MAX_IMPORT_COUNT) {
-      return { ok: false, message: `单次最多导入 ${RULE_TRANSFER_MAX_IMPORT_COUNT} 条规则`, rules: [] };
-    }
-    const rules: RuleTransferFileRule[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      // 这里每行只有一个地址（批量导入），所以用纯地址解析，
-      // 不要用主备那条「出站 [探测目标]」的行语法 —— 一行两个地址在这儿是错的。
-      const parsed = parseFailoverEndpoint(lines[index]);
-      if (!parsed) continue;
-      if ("error" in parsed) {
-        return { ok: false, message: `第 ${index + 1} 行：${parsed.error}`, rules: [] };
-      }
-      const targetIp = String(parsed.host || "").trim();
-      const targetPort = Number(parsed.port || 0);
-      if (!isValidTargetHost(targetIp)) {
-        return { ok: false, message: `第 ${index + 1} 行：地址格式不正确`, rules: [] };
-      }
-      if (!isValidForwardPort(targetPort)) {
-        return { ok: false, message: `第 ${index + 1} 行：端口必须在 1-65535 之间`, rules: [] };
-      }
-      rules.push({
-        name: formatAddressWithPort(targetIp, targetPort),
-        forwardType: defaultForm.forwardType,
-        protocol: defaultForm.protocol,
-        sourcePort: 0,
-        targetIp,
-        targetPort,
-        isEnabled: true,
-        telegramErrorNotifyEnabled: false,
-        proxyProtocolReceive: false,
-        proxyProtocolSend: false,
-        proxyProtocolExitReceive: false,
-        proxyProtocolExitSend: false,
-        proxyProtocolVersion: 1,
-        tcpFastOpen: false,
-        zeroCopy: false,
-        udpOverTcp: false,
-        udpOverTcpPort: 0,
-        failoverEnabled: false,
-        failoverStrategy: "fallback",
-        failoverTargets: [],
-        failoverSeconds: 60,
-        recoverSeconds: 120,
-        autoFailback: true,
-      });
-    }
-    return { ok: true, message: `已识别 ${rules.length} 条手动输入规则`, rules };
-  }, [defaultForm.forwardType, defaultForm.protocol, importManualText]);
+  const useRuleTransferResourcesResult = useRuleTransferResources({ hosts, importResources, importScopeType, importResourceSearch, importResourceId, tunnelAvailabilityById, getForwardGroupConfigStatus, importManualText });
+  const { selectedImportResource, manualImportValidation, filteredImportResources, renderTransferResourceOption } = useRuleTransferResourcesResult;
 
   /*
     ny / Nyanpass 导入（实验性）：粘贴 ny 导出的逐行 JSON，或者直接选 ny 的导出文件（文件导入会自动认出来）。
@@ -6408,154 +5762,8 @@ function RulesContent() {
         : null);
   };
 
-  const getTunnelEntryAddresses = (tunnel: any | null | undefined): EntryAddress[] => {
-    if (!tunnel) return [];
-    const rows: EntryAddress[] = [];
-    const entryGroup = Number(tunnel?.entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number(tunnel.entryGroupId)) || tunnel.entryGroup
-      : null;
-    const entryGroupDomain = String(entryGroup?.domain || "").trim();
-    if (entryGroupDomain) {
-      pushUniqueEntryAddress(rows, "入口组", entryGroupDomain);
-      return rows;
-    }
-    const entryMembers = entryGroup && forwardGroupModeOf(entryGroup) === "entry"
-      ? enabledHostMembers(entryGroup)
-      : [];
-    if (entryMembers.length > 0) {
-      const memberEntries = entryMembers.flatMap((member: any) => {
-        const host = getTunnelEntryHostForDisplay(tunnel, Number(member.hostId || 0));
-        return getHostEntryAddresses(host);
-      });
-      const memberDomain = memberEntries.find((entry) => entry.label === "DDNS")
-        || memberEntries.find((entry) => addressFamily(entry.value) === "hostname");
-      if (memberDomain) {
-        pushUniqueEntryAddress(rows, memberDomain.label, memberDomain.value);
-        return rows;
-      }
-      const firstEntryHost = getTunnelEntryHostForDisplay(tunnel, Number(entryMembers[0]?.hostId || 0));
-      for (const entry of getHostEntryAddresses(firstEntryHost)) {
-        pushUniqueEntryAddress(rows, entry.label, entry.value);
-      }
-      return rows;
-    }
-    const entryHostId = Number(tunnel?.entryHostId || getTunnelHopIds(tunnel)[0] || 0);
-    for (const entry of getHostEntryAddresses(getTunnelEntryHostForDisplay(tunnel, entryHostId))) {
-      pushUniqueEntryAddress(rows, entry.label, entry.value);
-    }
-    return rows;
-  };
-
-  const getMemberEntryHost = (member: any | null | undefined) => {
-    const hostId = Number(member?.hostId || 0);
-    if (hostId > 0) {
-      // Shared groups may expose the member host only through the ACL-filtered
-      // `member.host` payload. Keep that nested summary as a display fallback;
-      // otherwise a configured DDNS/domain entry is replaced by entryAddress
-      // (usually an IPv4 literal) for ordinary users.
-      return resolveRuleEntryHost(hosts, hostId, member?.host || null);
-    }
-    const tunnelId = Number(member?.tunnelId || 0);
-    if (tunnelId > 0) {
-      const tunnel = tunnelById.get(tunnelId);
-      const entryHostId = Number(tunnel?.entryHostId || 0);
-      return resolveRuleEntryHost(hosts, entryHostId, tunnel?.entryHost || member?.host || null);
-    }
-    return member?.host || null;
-  };
-
-  const pushMemberEntryAddresses = (rows: EntryAddress[], member: any | null | undefined) => {
-    const tunnelId = Number(member?.tunnelId || 0);
-    if (tunnelId > 0) {
-      const tunnelRows = getTunnelEntryAddresses(tunnelById.get(tunnelId));
-      for (const entry of tunnelRows) {
-        pushUniqueEntryAddress(rows, entry.label, entry.value);
-      }
-      if (tunnelRows.length > 0) return;
-    }
-    const entryHost = getMemberEntryHost(member);
-    for (const entry of getHostEntryAddresses(entryHost)) {
-      pushUniqueEntryAddress(rows, entry.label, entry.value);
-    }
-    pushUniqueEntryAddress(rows, "入口", member?.entryAddress);
-  };
-
-  /** 挂了入口组的端口转发（2.3.438 起）：入口是入口组里的主机。 */
-  const portEntryGroupOf = (group: any | null | undefined) => {
-    if (!group || forwardGroupModeOf(group) !== "port" || Number(group.entryGroupId || 0) <= 0) return null;
-    const entryGroup = forwardGroupById.get(Number(group.entryGroupId)) || group.entryGroup || null;
-    return entryGroup && forwardGroupModeOf(entryGroup) === "entry" ? entryGroup : null;
-  };
-  /** 资源下拉、规则卡上当作入口来数 / 来画的成员：挂了入口组就是入口组的主机。 */
-  const forwardGroupDisplayMembers = (group: any | null | undefined): any[] => {
-    const entryGroup = portEntryGroupOf(group);
-    return entryGroup ? enabledHostMembers(entryGroup) : (group?.members || []);
-  };
-
-  const getForwardGroupEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
-    if (!group) return [];
-    const rows: EntryAddress[] = [];
-    const portEntryGroup = portEntryGroupOf(group);
-    if (portEntryGroup) {
-      const entryDomain = String(portEntryGroup.domain || "").trim();
-      if (entryDomain) pushUniqueEntryAddress(rows, "入口组", entryDomain);
-      for (const member of enabledHostMembers(portEntryGroup)) pushMemberEntryAddresses(rows, member);
-      return rows;
-    }
-    const domain = String(group?.domain || "").trim();
-    if (domain) {
-      pushUniqueEntryAddress(rows, getForwardGroupRouteLabel(group), domain);
-      return rows;
-    }
-    const activeMemberId = Number(group?.activeMemberId || 0);
-    const members = [...(group?.members || [])]
-      .filter((member: any) => member?.isEnabled !== false)
-      .sort((a: any, b: any) => {
-        if (activeMemberId > 0) {
-          if (Number(a.id) === activeMemberId) return -1;
-          if (Number(b.id) === activeMemberId) return 1;
-        }
-        return Number(a.priority || 0) - Number(b.priority || 0);
-      });
-    // 多台入口的端口转发（2.3.437 起）每台都在监听，入口地址全列出来；转发组只列当前生效的那台。
-    const listAllMembers = forwardGroupModeOf(group) === "port" && members.length > 1;
-    for (const member of members) {
-      pushMemberEntryAddresses(rows, member);
-      if (rows.length > 0 && !listAllMembers) return rows;
-    }
-    return rows;
-  };
-
-  const getForwardChainEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
-    if (!group) return [];
-    const rows: EntryAddress[] = [];
-    const entryGroup = isForwardChainGroup(group) && group.entryGroupId
-      ? forwardGroupById.get(Number(group.entryGroupId)) || group.entryGroup
-      : null;
-    const domain = entryDomainForForwardGroup(group);
-    if (domain) {
-      pushUniqueEntryAddress(rows, "入口组", domain);
-      return rows;
-    }
-    const entryMembers = entryGroup && forwardGroupModeOf(entryGroup) === "entry"
-      ? enabledHostMembers(entryGroup)
-      : [];
-    if (entryMembers.length > 0) {
-      const memberDomain = entryMembers
-        .map((member: any) => getHostEntryAddresses(getMemberEntryHost(member)).find((entry) => addressFamily(entry.value) === "hostname"))
-        .find(Boolean);
-      if (memberDomain) {
-        pushUniqueEntryAddress(rows, memberDomain.label, memberDomain.value);
-        return rows;
-      }
-      const firstEntryMember = entryMembers[0];
-      pushMemberEntryAddresses(rows, firstEntryMember);
-      return rows;
-    }
-    const entryMember = (group.members || [])[0];
-    pushMemberEntryAddresses(rows, entryMember);
-    return rows;
-  };
+  const useRuleEntryAddressesResult = useRuleEntryAddresses({ forwardGroupById, getTunnelEntryHostForDisplay, hosts, tunnelById, entryDomainForForwardGroup });
+  const { getTunnelEntryAddresses, getForwardChainEntryAddresses, getForwardGroupEntryAddresses, portEntryGroupOf, forwardGroupDisplayMembers } = useRuleEntryAddressesResult;
 
   /*
     卡片上入口只写第一个地址（专属域名排第一），后面的挤成「+N」。用户要挑着复制 IP 或域名，
@@ -6885,104 +6093,8 @@ function RulesContent() {
     );
   };
 
-  const getRuleTransferDisplay = (rule: any) => {
-    if (Number(rule?.tlsInboundId || 0) > 0) {
-      // 共享 TLS 入站：入口是用户自己的域名 + 入站端口；sourcePort 只是本机回环端口，不给人看。
-      const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
-      const names = parseSniNameJson(rule.sniNames);
-      const port = Number(inbound?.port || 0);
-      const sniEntries = names.map((name) => ({
-        label: "SNI",
-        value: name,
-        text: port > 0 ? formatAddressWithPort(name, port) : name,
-        copyable: port > 0,
-      }));
-      const entryAddresses = sniEntries.length > 0 ? sniEntries : [{ label: "SNI", value: "", text: "SNI 未配置", copyable: false }];
-      return {
-        entryAddresses,
-        entryAddress: sniEntries.map((entry) => entry.text).join(" / "),
-        targetAddress: `${rule.targetIp}:${rule.targetPort}`,
-        entryTitle: `复制入口地址: ${sniEntries.map((entry) => entry.text).join(" / ")}`,
-        failoverCount: 0,
-        failoverEnabled: false,
-        routeLabel: "",
-      };
-    }
-    const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    const groupRouteLabel = getForwardGroupRouteLabel(group);
-    const groupEntry = isForwardChainGroup(group)
-      ? (entryDomainForForwardGroup(group) || group?.members?.[0]?.entryAddress || "")
-      : (group?.domain || group?.members?.[0]?.entryAddress || "");
-    const chainEntryItems = isForwardChainGroup(group) ? getForwardChainEntryAddresses(group) : [];
-    const groupEntryItems = rule.forwardGroupId && !isForwardChainGroup(group) ? getForwardGroupEntryAddresses(group) : [];
-    const entryItems = rule.forwardGroupId
-      ? (isForwardChainGroup(group) ? (chainEntryItems.length > 0 ? chainEntryItems : [{ label: "转发链", value: groupEntry }]) : (groupEntryItems.length > 0 ? groupEntryItems : [{ label: groupRouteLabel, value: groupEntry }]))
-      : (getRuleEntries(rule).length > 0
-        ? getRuleEntries(rule)
-        : [{ label: "入口", value: "" }]);
-    const resolvedEntryAddresses = filterRuleEntryAddressesForDisplay(entryItems)
-      .filter((entry) => String(entry.value || "").trim())
-      .map((entry) => ({
-        ...entry,
-        text: formatRuleEntryAddress(entry.value, rule),
-        copyable: true,
-      }));
-    const entryAddresses = resolvedEntryAddresses.length > 0
-      ? resolvedEntryAddresses
-      : [{ label: "入口", value: "", text: "入口地址暂不可用", copyable: false }];
-    const entryAddress = resolvedEntryAddresses.map((entry) => entry.text).join(" / ");
-    const targetAddress = `${rule.targetIp}:${formatRuleTargetPort(rule)}`;
-    const entryTitle = rule.forwardGroupId
-      ? `复制${groupRouteLabel}入口: ${entryAddress}`
-      : `复制入口地址: ${entryAddress}`;
-    const routeGroup = routeGroupOf(rule);
-    return {
-      entryAddresses,
-      entryAddress,
-      targetAddress,
-      entryTitle,
-      failoverCount: routeGroup ? routeGroup.paths.length : 0,
-      failoverEnabled: !!routeGroup,
-      routeLabel: routeGroup ? routeStrategyLabel(routeGroup.policy, true) : "",
-    };
-  };
-
-  /**
-   * 这条规则中间经过哪些节点。直连返回空数组。
-   *
-   * 隧道取它的跳点名，转发链取链上的主机名，转发组取组名 —— 组内部谁在跑是
-   * 组自己的事，规则这一层只需要说明「走的是这个组」。
-   */
-
-  const getRuleHopNames = (rule: any): string[] => {
-    const category = getRuleCategory(rule, forwardGroupById);
-    if (category === "tunnel") {
-      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
-      if (!tunnel) return [];
-      // 第一跳是入口机，卡片上已经是入口地址那一行了，「经」只列它后面经过的（中转和出口）。
-      const names = getTunnelHopIds(tunnel)
-        .slice(1)
-        .map((hostId: number) => String(tunnelHopHostName(tunnel, hostId, hosts) || "").trim())
-        .filter(Boolean);
-      /*
-        负载均衡的链路：出口那一段写入口报上来的在用出口（只走一台写名字，分给几台写「N 台出口」）；
-        还没报的写一共几台，不再只写主出口的名字（看着像只走它）。
-      */
-      const via = trafficByRule.get(Number(rule?.id))?.exitTargetVia;
-      const balanced = getTunnelLoadBalanceExitNames(tunnel, hosts).length > 0 ? getTunnelExitNames(tunnel, hosts).length : 0;
-      const exitText = via && via.length === 1 ? via[0] : via && via.length > 1 ? `${via.length} 台出口` : balanced > 1 ? `${balanced} 台出口` : null;
-      if (exitText && names.length > 0) return [...names.slice(0, -1), exitText];
-      return names;
-    }
-    const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
-    if (!group) return [];
-    if (category === "chain") {
-      return (Array.isArray(group.members) ? group.members : [])
-        .map((member: any) => String(hostById.get(Number(member?.hostId || 0))?.name || "").trim())
-        .filter(Boolean);
-    }
-    return [String(group.name || "").trim()].filter(Boolean);
-  };
+  const useRuleTransferDisplayResult = useRuleTransferDisplay({ tlsInboundById, forwardGroupById, entryDomainForForwardGroup, getForwardChainEntryAddresses, getForwardGroupEntryAddresses, getRuleEntries, tunnelById, hosts, trafficByRule, hostById });
+  const { getRuleTransferDisplay, getRuleHopNames } = useRuleTransferDisplayResult;
 
   /*
     卡片上的路径条：入口（资源名 + 地址）── 经过什么 ── 目标。
