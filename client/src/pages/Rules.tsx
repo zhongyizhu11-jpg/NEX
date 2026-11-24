@@ -223,6 +223,7 @@ import { useRuleTableTransferCells } from "../features/rules/useRuleTableTransfe
 import { useRuleStateBadges } from "../features/rules/useRuleStateBadges";
 import { useRuleTrafficSeries } from "../features/rules/useRuleTrafficSeries";
 import { useRuleSelectOptionHelpers } from "../features/rules/useRuleSelectOptionHelpers";
+import { useRuleTransferResourceLists } from "../features/rules/useRuleTransferResourceLists";
 const SelfTestDialog = lazy(() => import("@/features/rules/SelfTestDialog"));
 const RuleTrafficGlobe = lazy(() => import("@/features/rules/RuleTrafficGlobe"));
 
@@ -379,7 +380,7 @@ type RuleGroupCollapsedState = Partial<Record<RuleGroupType, boolean>>;
 type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleCategoryCounts = Record<RuleCategory, number>;
 export type RuleTransferScopeType = Exclude<RuleCategory, "all">;
-type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
+export type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
 // state：批量启用 / 暂停 / 重启（上游 2.3.292），和删除、复制一样交给服务端任务（RuleBatchJobWidget 看进度）
 type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group" | "state";
 type BatchEditFormData = Pick<RuleFormData, "routeMode" | "forwardType" | "tunnelId" | "forwardGroupId" | "targetIp" | "targetPort">;
@@ -400,7 +401,7 @@ const ruleTransferScopeOptions: Array<{ value: RuleTransferScopeType; label: str
 ];
 const importRuleTransferScopeOptions = ruleTransferScopeOptions;
 
-function parseRuleResourceFilter(value: unknown): { type: RuleTransferScopeType | null; id: number | null } {
+export function parseRuleResourceFilter(value: unknown): { type: RuleTransferScopeType | null; id: number | null } {
   const raw = String(value || "").trim();
   if (!raw || raw === "all") return { type: null, id: null };
   const [type, idText] = raw.split(":", 2);
@@ -627,7 +628,7 @@ function getStoredString(key: string, fallback: string) {
   }
 }
 
-function storeString(key: string, value: string) {
+export function storeString(key: string, value: string) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(key, value);
@@ -3178,50 +3179,8 @@ function RulesContent() {
     () => availableForwardGroups.filter((group: any) => isForwardChainGroup(group)),
     [availableForwardGroups]
   );
-  const availableFailoverForwardGroups = useMemo(
-    () => availableForwardGroups.filter((group: any) => forwardGroupModeOf(group) === "failover"),
-    [availableForwardGroups]
-  );
-  const transferPortGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => forwardGroupModeOf(group) === "port"),
-    [forwardGroups]
-  );
-  const transferChainGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => isForwardChainGroup(group)),
-    [forwardGroups]
-  );
-  const transferRuleGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => forwardGroupModeOf(group) === "failover"),
-    [forwardGroups]
-  );
-  const getRuleFilterResources = useCallback((type: RuleTransferScopeType): any[] => {
-    if (type === "local") return transferPortGroups;
-    if (type === "tunnel") return tunnels || [];
-    if (type === "chain") return transferChainGroups;
-    return transferRuleGroups;
-  }, [transferChainGroups, transferPortGroups, transferRuleGroups, tunnels]);
-  useEffect(() => {
-    const selected = parseRuleResourceFilter(filterResource);
-    if (!selected.type || !selected.id) return;
-    if (selected.type === "tunnel" ? !Array.isArray(tunnels) : !Array.isArray(forwardGroups)) return;
-    if (getRuleFilterResources(selected.type).some((resource: any) => Number(resource.id) === selected.id)) return;
-    setFilterResource("all");
-    storeString(filterResourceStorageKey, "all");
-  }, [filterResource, filterResourceStorageKey, getRuleFilterResources]);
-  const getTransferResources = useCallback((type: RuleTransferScopeType): any[] => {
-    if (type === "local") return transferPortGroups;
-    if (type === "tunnel") return tunnels || [];
-    if (type === "chain") return transferChainGroups;
-    return transferRuleGroups;
-  }, [tunnels, transferPortGroups, transferChainGroups, transferRuleGroups]);
-  const getImportResources = useCallback((type: RuleTransferScopeType): any[] => {
-    if (type === "local") return availablePortForwardGroups;
-    if (type === "tunnel") return supportedTunnels;
-    if (type === "chain") return availableForwardChainGroups;
-    return availableFailoverForwardGroups;
-  }, [availableFailoverForwardGroups, availableForwardChainGroups, availablePortForwardGroups, supportedTunnels]);
-  const exportResources = useMemo(() => getTransferResources(exportScopeType), [exportScopeType, getTransferResources]);
-  const importResources = useMemo(() => getImportResources(importScopeType), [getImportResources, importScopeType]);
+  const useRuleTransferResourceListsResult = useRuleTransferResourceLists({ availableForwardGroups, forwardGroups, tunnels, filterResource, setFilterResource, filterResourceStorageKey, availablePortForwardGroups, supportedTunnels, availableForwardChainGroups, exportScopeType, importScopeType });
+  const { availableFailoverForwardGroups, exportResources, importResources, getRuleFilterResources } = useRuleTransferResourceListsResult;
   useEffect(() => {
     const firstId = exportResources[0]?.id;
     if (!firstId) {
