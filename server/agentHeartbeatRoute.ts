@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
-import { loadAverageToStored, parseAgentLoadAverage } from "../shared/hostLoadAverage";
+import { parseAgentLoadAverage } from "../shared/hostLoadAverage";
 import {
   routeDeliveryStrategy,
   routeDestSpreadReady,
@@ -25,7 +25,7 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
-import { buildVlessEgressBridgePlan, collectVlessEgressBridges, planVlessEgressBridgePorts } from "./vlessEgress";
+import { buildVlessEgressBridgePlan, collectVlessEgressBridges } from "./vlessEgress";
 import { isVlessEgressAgentSupported } from "../shared/vlessEgress";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
@@ -39,29 +39,14 @@ import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentV
 import { resolveHostAgentAdvertisedPanelUrl } from "./hostAgentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
-import {
-  getForwardProtocolSettings,
-  isRuleProtocolEnabled,
-  isTunnelProtocolEnabled,
-} from "./forwardProtocolSettings";
-import {
-  agentHeartbeatGate,
-  agentStableHeartbeatPlanCache,
-  AGENT_METRICS_WATCH_INTERVAL_SECONDS,
-  buildBusyAgentHeartbeatResponse,
-  buildPresenceAgentHeartbeatResponse,
-  buildReportedRuntimeHeartbeatPatch,
-  rememberHostWaitingForTunnels,
-  selectAgentHeartbeatInterval,
-  shouldPersistAgentPresence,
-} from "./agentHeartbeatGate";
+import { isRuleProtocolEnabled, isTunnelProtocolEnabled } from "./forwardProtocolSettings";
+import { agentHeartbeatGate, agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, rememberHostWaitingForTunnels, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { anomalyAwareRuleMbps } from "./ops/trafficAnomalyThrottles";
 import { getHostWireGuardPlane, getTunnelRuntimeGeneration, getTunnelRuntimeTopologyStatus, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
-import { isIP } from "net";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
 import { hasQueuedRuleConnectionsTasks, hasRunningRuleConnectionsTasks, takeRuleConnectionsTasks } from "./ruleConnectionsAgentTasks";
@@ -70,7 +55,7 @@ import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTa
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest } from "./agentAuth";
-import { isHostLiveFocused, liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
+import { liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
 import { setBoundedMapValue } from "./boundedCache";
 import { onHostDeleted, onRuleDeleted } from "./entityCleanup";
@@ -81,27 +66,9 @@ import { noteAgentPrivateIpv4 } from "./agentPrivateAddress";
 import { gostTunnelTransportType, shouldReconcileGostRuntime, shouldReconcileNginxRuntime, tunnelRuleRuntimeForwardType } from "./tunnelRuntimePlan";
 import { effectiveTunnelProxyProtocolOptions, gostProxyProtocolMetadata, gostTunnelProxyProtocolPlan, resolveRuleProxyProtocolOptions } from "./gostProxyProtocol";
 import { planGostTunnelRuleProtocol } from "./gostTunnelProtocol";
-import {
-  buildCountingChainCmds,
-  buildCountingCleanupCmds,
-  buildKernelForwardTransitionCleanupCmds,
-  buildEntryBridgeConntrackFlushCmds,
-  buildIptablesForwardCleanupCmds,
-  buildManagedPortCleanupCmds,
-  buildNftCleanupCmds,
-  buildKernelForwardCmds,
-  gostRuntimeApiConfig,
-  gostRuntimeApiExecStart,
-  restartManagedServiceIfConfigChangedCmd,
-  restartMimicServiceIfConfigChangedCmd,
-  shQuote,
-  syncGostServiceIfConfigChangedCmd,
-  startManagedServiceCmd,
-  stopManagedServiceCmd,
-} from "./agentActionCommands";
+import { buildCountingChainCmds, buildCountingCleanupCmds, buildKernelForwardTransitionCleanupCmds, buildEntryBridgeConntrackFlushCmds, buildIptablesForwardCleanupCmds, buildManagedPortCleanupCmds, buildNftCleanupCmds, buildKernelForwardCmds, shQuote } from "./agentActionCommands";
 import { REALM_CONFIG_DIR, buildRealmConfigToml, buildRealmServiceUnit, buildSocatServiceUnit, endpointHostPort, realmConfigPathForPort, realmServiceNameForPort, realmTomlString, SOCAT_TRANSFER_BUFFER_FLAG, socatDialAddress, socatSocketOptions, socatServiceNameForPort } from "./forwardRuntimeConfigs";
-import { handleHostAddressChanged, hostIngressAddress } from "./hostAddressRuntime";
-import { syncHostDetectedAddressesSafely } from "./hostPublicAddressSync";
+import { hostIngressAddress } from "./hostAddressRuntime";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
 import {
@@ -123,76 +90,34 @@ import {
 } from "@shared/tunnelParallelStreams";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "@shared/hostIpv6Listen";
-import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
-import { recordHostRateSample } from "./hostRateBuckets";
+import { ensureLandingNodeHosts } from "./hostLoad";
 import { forwardXExitStrategy, fxpSupportsTargetAware } from "./tunnelExitStrategy";
 import { agentSupportsUnifiedBalance, balanceDetectForRuntime, exitGroupCapacities, exitGroupWeights, GOST_BALANCE_MAX_EXITS, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { planGostBalanceRules, type GostBalanceRulePlan } from "./gostBalancePlan";
 import { exitTargetExcludedHostIds, exitTargetUsableStatesForRule, tunnelBalanceDetect, tunnelBalancesExits } from "./exitTargetHealth";
-import {
-  getMimicLifecycleRevisionSignature,
-  latestConfigRevision,
-  recordConfigAuditEvent,
-  type MimicLifecycleResource,
-} from "./configAudit";
+import { getMimicLifecycleRevisionSignature, recordConfigAuditEvent, type MimicLifecycleResource } from "./configAudit";
 import { approveMimicInterfaceRemovals } from "./mimicRemovalGuard";
 import { mimicRuntimeLifecycles } from "./mimicRuntimeLifecycle";
 import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAddressSelection";
-import {
-  normalizeAgentLocalRuntimeState,
-  normalizeAgentStateSignatures,
-  normalizeMimicEnvironment,
-  normalizeRuntimeStateSignature,
-  stableStateSignature,
-  type AgentLocalRuntimeRuleState,
-  type AgentLocalRuntimeServiceState,
-  type AgentLocalRuntimeTunnelState,
-} from "./agentHeartbeatReport";
+import { normalizeAgentStateSignatures, normalizeRuntimeStateSignature, stableStateSignature, type AgentLocalRuntimeRuleState, type AgentLocalRuntimeServiceState, type AgentLocalRuntimeTunnelState } from "./agentHeartbeatReport";
 import { stableActionSignatureHash, stableDesiredStateHash, withDesiredStateConfigHash } from "./agentDesiredStateHash";
 // 这几个以前直接从本文件导出，测试和别的模块还按老路径引用。
 export { stableStateSignature, stableDesiredStateHash, withDesiredStateConfigHash };
 import { createResolvedTargetGate } from "./ruleTargetPolicy";
-import { buildForwardXMimicConfig } from "./mimicConfig";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
 import { getTrafficExcludedHostIds } from "./hostTrafficPolicy";
 import { groupRuleTrafficBlocked, planTunnelTrafficParticipation } from "./hostTrafficRuntimePlan";
-import { isEntryBridgeRuntimeRule, loadEntryBridgeRuntimeRules, markRuntimeRulesNotRunning, setRuntimeRuleRunning } from "./ruleEntryBridges";
+import { isEntryBridgeRuntimeRule, markRuntimeRulesNotRunning, setRuntimeRuleRunning } from "./ruleEntryBridges";
 import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
-import { recordHostRestartEvent } from "./ops/eventHooks";
-import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
-import { isSniRuntimeRule, planAgentSniInbounds, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
-import { recordAgentRuntimeStats } from "./ops/agentRuntime";
-import { evaluateRuleEgress, loadEgressRuntimeContext, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf } from "./ssEgress";
+import { isSniRuntimeRule, planAgentSniInbounds } from "./tlsInboundRuntime";
+import { evaluateRuleEgress, loadEgressRuntimeContext, tunnelEgressDialHostIdsOf } from "./ssEgress";
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
-import { hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
-import {
-  AGENT_DYNAMIC_CACHE_MAX,
-  AGENT_HOST_CACHE_MAX,
-  AGENT_ORPHAN_REMOVE_MIN_STREAK,
-  agentDesiredDispatchAuditHash,
-  agentOrphanPortStreakCache,
-  dnsRuntimeGenerations,
-  forgetAgentHeartbeatHost,
-  forgetAgentHeartbeatRule,
-  fxpEndpointStatusCache,
-  fxpUdpTargetSignatureCache,
-  invalidateAgentDesiredStateCache,
-  pruneAgentHeartbeatCaches,
-  resolvedIpCache,
-} from "./agentHeartbeatState";
-import {
-  addDnsWatch,
-  type AgentDnsWatch,
-  buildDnsChangeCleanup,
-  buildForwardTargetCleanup,
-  expireSharedResolvedIp,
-  failoverProxyHandlesTargetDns,
-  resolveTargetIpCached,
-} from "./agentHeartbeatDns";
-import { forwardXUDPTargetAddress, getSingboxAccelerator, isForwardXTunnelMode, isGostTunnelMode, legacyRealmCleanupCmds, legacySocatCleanupCmds, MIMIC_CONFIG_DIR, mimicFilterEndpoint, RUNTIME_BIN, RUNTIME_CONFIG_PATH, RUNTIME_SERVICE_NAME, runtimeBool, SHARED_GOST_FORWARD_TYPES, SHARED_RUNTIME_NOFILE, TUNNEL_RUNTIME_SERVICE_NAME, udpOverTcpEnabled } from "./agentHeartbeatRuntime";
+import { AGENT_DYNAMIC_CACHE_MAX, AGENT_HOST_CACHE_MAX, AGENT_ORPHAN_REMOVE_MIN_STREAK, agentDesiredDispatchAuditHash, agentOrphanPortStreakCache, forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, fxpUdpTargetSignatureCache, pruneAgentHeartbeatCaches } from "./agentHeartbeatState";
+import { addDnsWatch, expireSharedResolvedIp, resolveTargetIpCached } from "./agentHeartbeatDns";
+import { forwardXUDPTargetAddress, getSingboxAccelerator, isForwardXTunnelMode, isGostTunnelMode, legacyRealmCleanupCmds, legacySocatCleanupCmds, mimicFilterEndpoint, RUNTIME_SERVICE_NAME, runtimeBool, SHARED_GOST_FORWARD_TYPES, TUNNEL_RUNTIME_SERVICE_NAME, udpOverTcpEnabled } from "./agentHeartbeatRuntime";
 import {
   isNginxTunnelMode,
   NGINX_SERVICE_NAME,
@@ -229,19 +154,8 @@ import {
   shouldSendPluginSyncAction,
   shouldSendRuntimeSyncAction,
 } from "./agentHeartbeatDispatch";
-import {
-  agentPluginInventorySignature,
-  buildAgentStateResponseSections,
-  getOrphanPortStreaks,
-  isKernelForwardRule,
-  resolveAgentLocalRuntimeState,
-  settleStoppedRule,
-} from "./agentHeartbeatLocalState";
-import {
-  heartbeatIndicatesAgentReboot,
-  heartbeatTimestampMs,
-  resetAgentRuntimeStateForRecovery,
-} from "./agentHeartbeatRecovery";
+import { agentPluginInventorySignature, buildAgentStateResponseSections, getOrphanPortStreaks, isKernelForwardRule, settleStoppedRule } from "./agentHeartbeatLocalState";
+import { heartbeatTimestampMs, resetAgentRuntimeStateForRecovery } from "./agentHeartbeatRecovery";
 import {
   compactMimicFiltersForLog,
   logAgentHeartbeatSummary,
@@ -249,10 +163,12 @@ import {
   shouldLogMimicRuntimePlan,
 } from "./agentHeartbeatLogging";
 import { isPortRangeRule, ruleSourcePortEnd } from "@shared/portRange";
-import { resolveForwardChainTargets } from "./heartbeat/forwardChainTargets";
 import { buildForwardGroupProbes } from "./heartbeat/forwardGroupProbes";
 import { reconcileTunnelRuntimeReadiness } from "./heartbeat/tunnelRuntimeReadiness";
 import { buildProtocolPolicyHelpers } from "./heartbeat/protocolPolicyHelpers";
+import { resolveHostRuleTargets } from "./heartbeat/hostRuleTargets";
+import { loadHeartbeatRules } from "./heartbeat/loadRules";
+import { ingestHeartbeatHostState } from "./heartbeat/ingestHostState";
 // 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
@@ -493,319 +409,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const dnsChangedReports = Array.isArray(req.body?.dnsChanged) ? req.body.dnsChanged : [];
     const agentStateSignatures = normalizeAgentStateSignatures(req.body?.stateSignatures);
     const localRuntimeStateSignature = normalizeRuntimeStateSignature(req.body?.localStateSignature);
-    const localRuntimeState = resolveAgentLocalRuntimeState(
-      Number(host.id),
-      localRuntimeStateSignature,
-      normalizeAgentLocalRuntimeState(req.body?.localState),
-    );
-    const mimicEnvironment = normalizeMimicEnvironment(req.body?.mimicEnvironment);
-    // 共享 TLS 入站的监听状态随心跳带上来（不另开上报路径），只存内存，主机详情里显示。
-    if (Array.isArray(req.body?.sniInbounds)) recordTlsInboundRuntimeStatus(Number(host.id), req.body.sniInbounds);
-    // Agent 进程自己的运行状况（内存 / 协程 / GC / UDP 会话 / AES），同样只存内存（ops/agentRuntime.ts）。
-    recordAgentRuntimeStats(Number(host.id), req.body?.agentRuntime);
-    const fxpEndpointEvents = Array.isArray(req.body?.fxpEndpointEvents) ? req.body.fxpEndpointEvents.slice(0, 256) : [];
-    for (const rawEvent of fxpEndpointEvents) {
-      const tunnelId = Math.max(0, Math.floor(Number(rawEvent?.tunnelId || 0)));
-      const ruleId = Math.max(0, Math.floor(Number(rawEvent?.ruleId || 0)));
-      const role = normalizeAgentText(rawEvent?.role, 16) || "unknown";
-      const endpoint = normalizeAgentText(rawEvent?.endpoint, 256);
-      const status = normalizeAgentText(rawEvent?.status, 16);
-      if (!endpoint || (status !== "unhealthy" && status !== "recovered")) continue;
-      const key = `${host.id}:${role}:${tunnelId}:${ruleId}:${endpoint}`;
-      if (fxpEndpointStatusCache.get(key) === status) continue;
-      setBoundedMapValue(fxpEndpointStatusCache, key, status, AGENT_DYNAMIC_CACHE_MAX);
-      const startedAt = Number(rawEvent?.startedAt || 0);
-      const occurredAt = Number(rawEvent?.occurredAt || 0);
-      const durationMs = status === "recovered" && startedAt > 0 && occurredAt >= startedAt ? occurredAt - startedAt : 0;
-      const message = normalizeAgentText(rawEvent?.message, 512);
-      appendPanelLog(
-        status === "unhealthy" ? "warn" : "info",
-        `[FXPEndpoint] host=${host.id} role=${role} tunnel=${tunnelId} rule=${ruleId} endpoint=${endpoint} status=${status}${durationMs > 0 ? ` durationMs=${durationMs}` : ""}${message ? ` message=${message}` : ""}`,
-      );
-    }
-    const reportedMimicRuntimeServices = (localRuntimeState.state?.services || [])
-      .filter((service) => String(service.name || "").startsWith("mimic@"));
-    const mimicRuntimeStatus = reportedMimicRuntimeServices.length === 0
-      ? "not-configured"
-      : reportedMimicRuntimeServices.some((service) => !service.active)
-        ? "unavailable"
-        : reportedMimicRuntimeServices.some((service) => service.connectionState === "established")
-          ? "established"
-          : reportedMimicRuntimeServices.some((service) => service.connectionState === "connecting")
-            ? "connecting"
-            : reportedMimicRuntimeServices.some((service) => service.connectionState === "waiting")
-              ? "waiting"
-              : reportedMimicRuntimeServices.some((service) => service.connectionState === "idle")
-                ? "idle"
-                : "active";
-    const mimicRuntimeMessage = reportedMimicRuntimeServices
-      .map((service) => `${service.name}:${service.status || (service.active ? "active" : "unavailable")}${service.hooksReady === false ? ":hooks-not-detected" : ""}${service.message ? `:${service.message}` : ""}`)
-      .join(" | ") || null;
-    const dnsChangedIpByHost = new Map<string, string>();
-    const dnsChangedScopes = new Set<string>();
-    const dnsChangedTokenByScope = new Map<string, string>();
-    for (const report of dnsChangedReports) {
-      const name = String(report?.host || "").trim().toLowerCase();
-      const scope = String(report?.scope || "").trim();
-      const refId = Number(report?.refId || 0);
-      const nextIps = (Array.isArray(report?.new) ? report.new : [])
-        .map((value: unknown) => String(value || "").trim())
-        .filter((value: string) => !!value && isIP(value))
-        .sort();
-      const nextIp = nextIps[0];
-      if (name && nextIp) dnsChangedIpByHost.set(name, nextIp);
-      if (scope) {
-        const key = `${scope}:${Number.isFinite(refId) && refId > 0 ? refId : 0}`;
-        dnsChangedScopes.add(key);
-        dnsChangedTokenByScope.set(key, `${name}:${nextIps.join(",")}`);
-      }
-    }
-    const addressChanged = [
-      ["ip", reportedAddress.ip],
-      ["ipv4", reportedAddress.ipv4],
-      ["ipv6", reportedAddress.ipv6],
-    ].some(([key, value]) => String(value || "") !== String((host as any)[key as string] || ""));
-    const recoveredFromOffline = wasOnline === false;
-    const rebootDetected = heartbeatIndicatesAgentReboot(previousHost, uptime, agentBootId);
-    const previousProcessStartedAt = heartbeatTimestampMs(previousHost.agentProcessStartedAt);
-    const processIdChanged = agentProcessId > 0
-      && Number(previousHost.agentProcessId || 0) > 0
-      && agentProcessId !== Number(previousHost.agentProcessId || 0);
-    const processStartChanged = previousProcessStartedAt > 0
-      && agentProcessStartedAtSeconds > 0
-      && agentProcessStartedAtSeconds * 1000 !== previousProcessStartedAt;
-    // boot_id identifies the host, not the Agent process. A quick systemd
-    // restart can keep the same boot_id and even the same Unix second; the PID
-    // change is the primary signal, with start time as the PID-reuse fallback.
-    const processRestartDetected = processIdChanged || processStartChanged;
-    const recoveryTriggered = recoveredFromOffline || rebootDetected || processRestartDetected;
-    const effectiveAgentVersion = nextAgentVersion || String((host as any).agentVersion || "");
-
-    const busyHeartbeatHostStateChanged = !wasOnline
-      || recoveryTriggered
-      || addressChanged
-      || agentVersionChanged
-      || fxpVersionChanged
-      || agentDistributionChanged
-      || capabilitiesChanged
-      || runtimeVersionChanged
-      || ipv6ListenStoredChanged
-      || (!!nextCpuInfo && nextCpuInfo !== String(previousHost.cpuInfo || ""))
-      || (Number(memoryTotal || 0) > 0 && Number(memoryTotal) !== Number(previousHost.memoryTotal || 0))
-      || (!!agentBootId && agentBootId !== normalizeAgentText(previousHost.agentBootId, 128))
-      || (agentProcessId > 0 && agentProcessId !== Number(previousHost.agentProcessId || 0))
-      || (agentProcessStartedAtSeconds > 0 && Math.abs(agentProcessStartedAtSeconds * 1000 - previousProcessStartedAt) > 5_000)
-      || (agentLastReceivedRevision > 0 && agentLastReceivedRevision !== Number(previousHost.agentLastReceivedRevision || 0))
-      || (agentLastAppliedRevision > 0 && agentLastAppliedRevision !== Number(previousHost.agentLastAppliedRevision || 0))
-      || (!!agentLastReceivedHash && agentLastReceivedHash !== String(previousHost.agentLastReceivedHash || ""))
-      || (!!agentLastAppliedHash && agentLastAppliedHash !== String(previousHost.agentLastAppliedHash || ""))
-      || (!!mimicEnvironment && (
-        previousHost.mimicAvailable !== mimicEnvironment.available
-        || String(previousHost.mimicStatus || "") !== mimicEnvironment.status
-        || String(previousHost.mimicVersion || "") !== String(mimicEnvironment.version || "")
-        || String(previousHost.mimicMessage || "") !== String(mimicEnvironment.message || "")
-      ));
-    if (busyHeartbeat && !busyHeartbeatHostStateChanged) {
-      if (shouldPersistAgentPresence({ wasOnline, lastHeartbeat: previousHost.lastHeartbeat })) {
-        await db.touchHostHeartbeat(host.id);
-      }
-    } else await db.updateHostHeartbeat(host.id, {
-      agentVersion: nextAgentVersion || (host as any).agentVersion || null,
-      ...(nextFxpVersion ? { fxpVersion: nextFxpVersion } : {}),
-      ...(agentDistributionChanged ? { agentDistribution: reportedAgentDistribution } : {}),
-      ...(reportedCapabilities !== null ? { agentCapabilities: reportedCapabilities } : {}),
-      ...(reportedRuntimeVersion !== null ? { runtimeVersion: reportedRuntimeVersion || null } : {}),
-      ...(ipv6ListenStoredChanged ? { ipv6ListenAvailable: reportedIpv6Listen } : {}),
-      cpuInfo: nextCpuInfo || (host as any).cpuInfo || null,
-      memoryTotal: memoryTotal || (host as any).memoryTotal || null,
-      ...(agentBootId ? { agentBootId } : {}),
-      ...(agentBootedAtSeconds > 0 ? { agentBootedAt: new Date(agentBootedAtSeconds * 1000) } : {}),
-      ...(agentProcessId > 0 ? { agentProcessId } : {}),
-      ...(agentProcessStartedAtSeconds > 0 ? { agentProcessStartedAt: new Date(agentProcessStartedAtSeconds * 1000) } : {}),
-      ...(agentLastReceivedRevision > 0 ? { agentLastReceivedRevision } : {}),
-      ...(agentLastAppliedRevision > 0 ? { agentLastAppliedRevision } : {}),
-      ...(agentLastReceivedHash ? { agentLastReceivedHash } : {}),
-      ...(agentLastAppliedHash ? { agentLastAppliedHash } : {}),
-      ...buildReportedRuntimeHeartbeatPatch({
-        hasLocalRuntimeState: !!localRuntimeState.state,
-        mimicRuntimeStatus,
-        mimicRuntimeMessage,
-      }),
-      ...(recoveryTriggered ? {
-        agentRecoveryStartedAt: new Date(),
-        agentRecoveryCompletedAt: null,
-        agentRecoveryExpected: 0,
-        agentRecoveryReady: 0,
-      } : {}),
-      ...(mimicEnvironment ? {
-        mimicAvailable: mimicEnvironment.available,
-        mimicVersion: mimicEnvironment.version,
-        mimicStatus: mimicEnvironment.status,
-        mimicMessage: mimicEnvironment.message,
-        mimicCheckedAt: new Date(),
-      } : {}),
-    } as any);
-    // 地址单独写、带条件：用户刚好在这次心跳期间手改了地址时不盖掉它（见 applyAgentReportedHostAddress）
-    const addressApplied = addressChanged && await db.applyAgentReportedHostAddress(host.id, reportedAddress);
-    if (addressApplied) Object.assign(host as any, reportedAddress);
-    // Agent 2.2.255+ 上报的网卡全部公网地址（没带就不动），见 hostPublicAddressSync
-    await syncHostDetectedAddressesSafely(host, req.body);
-    if (agentDistributionChanged) {
-      appendPanelLog(
-        "info",
-        `[AgentUpgrade] host=${host.id} distribution=${String(host.agentDistribution || "-")} -> ${reportedAgentDistribution}`,
-      );
-      host.agentDistribution = reportedAgentDistribution;
-    }
-    if (fxpVersionChanged) {
-      appendPanelLog(
-        "info",
-        `[AgentUpgrade] host=${host.id} fxp=${String(previousHost.fxpVersion || "-")} -> ${nextFxpVersion}`,
-      );
-      (host as any).fxpVersion = nextFxpVersion;
-    }
-    if (capabilitiesChanged || runtimeVersionChanged) {
-      appendPanelLog(
-        "info",
-        `[AgentUpgrade] host=${host.id} runtime=${String(previousHost.runtimeVersion || "-")} -> ${reportedRuntimeVersion ?? String(previousHost.runtimeVersion || "-")} capabilities=${parseAgentCapabilities(previousHost.agentCapabilities).join(",") || "-"} -> ${parseAgentCapabilities(reportedCapabilities ?? previousHost.agentCapabilities).join(",") || "-"}`,
-      );
-      if (reportedCapabilities !== null) (host as any).agentCapabilities = reportedCapabilities;
-      if (reportedRuntimeVersion !== null) (host as any).runtimeVersion = reportedRuntimeVersion || null;
-      if (capabilitiesChanged && !agentVersionChanged) {
-        invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
-      }
-    }
-    if (ipv6ListenStoredChanged) {
-      host.ipv6ListenAvailable = reportedIpv6Listen;
-      if (ipv6ListenEffectiveChanged) {
-        appendPanelLog("info", `[AgentHost] host=${host.id} ipv6Listen=${reportedIpv6Listen}; realm/socat/nginx listeners switch to ${reportedIpv6Listen ? "dual-stack [::]" : "IPv4 0.0.0.0"}`);
-        if (!agentVersionChanged) invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
-      }
-    }
-    if (agentVersionChanged) {
-      invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
-      appendPanelLog(
-        "info",
-        `[AgentUpgrade] host=${host.id} version=${String(previousHost.agentVersion || "-")} -> ${nextAgentVersion}; desired state marked for resync`,
-      );
-    }
-    if (mimicEnvironment) {
-      Object.assign(host as any, {
-        mimicAvailable: mimicEnvironment.available,
-        mimicVersion: mimicEnvironment.version,
-        mimicStatus: mimicEnvironment.status,
-        mimicMessage: mimicEnvironment.message,
-        mimicCheckedAt: new Date(),
-      });
-      if (
-        previousHost.mimicAvailable !== mimicEnvironment.available
-        || String(previousHost.mimicStatus || "") !== mimicEnvironment.status
-        || String(previousHost.mimicVersion || "") !== String(mimicEnvironment.version || "")
-      ) {
-        appendPanelLog(
-          mimicEnvironment.available ? "info" : "warn",
-          `[Mimic] environment host=${host.id} name=${String((host as any).name || "-")} available=${mimicEnvironment.available} status=${mimicEnvironment.status} version=${mimicEnvironment.version || "-"}${mimicEnvironment.message ? ` message=${mimicEnvironment.message}` : ""}`,
-        );
-      }
-    }
-    if (recoveredFromOffline) {
-      void notifyHostOnlineIfNeeded(host).catch((error) => {
-        console.warn(`[HostStatus] Online notify failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    }
-    if (addressApplied) {
-      await handleHostAddressChanged(host.id, host, previousHost, "agent-address-changed");
-    }
-    // 事件时间线：机器重启 / Agent 重启（含升级后的重启）
-    recordHostRestartEvent(host, { reboot: rebootDetected, processRestart: processRestartDetected, upgradedTo: agentVersionChanged ? nextAgentVersion : null });
-    if (recoveryTriggered) {
-      const reason = recoveredFromOffline ? "agent-reconnected" : rebootDetected ? "agent-reboot-detected" : "agent-process-restarted";
-      await resetAgentRuntimeStateForRecovery(host.id, reason, {
-        preserveReportedRuntime: !!localRuntimeState.state && !localRuntimeState.requestLocalState,
-      });
-    }
-    if (dnsChangedReports.length > 0) {
-      appendPanelLog("info", `[AgentDNS] host=${host.id} reported DNS change for ${dnsChangedReports.length} watched name(s); rule-specific refresh only`);
-    }
-
-    // 30 秒内同一台只写一行（见 metricsRepository.insertHostMetricSampled）；有人正在看实时指标时每次都写。
-    await db.insertHostMetricSampled({
-      hostId: host.id,
-      cpuUsage: cpuUsage ?? null,
-      memoryUsage: memoryUsage ?? null,
-      memoryUsed: memoryUsed ?? null,
-      swapUsage: swapUsage ?? null,
-      swapUsed: swapUsed ?? null,
-      swapTotal: swapTotal ?? null,
-      networkIn: networkIn ?? null,
-      networkOut: networkOut ?? null,
-      diskUsage: diskUsage ?? null,
-      diskUsed: diskUsed ?? null,
-      diskTotal: diskTotal ?? null,
-      uptime: uptime ?? null,
-      tcpConnections: tcpConnections ?? null,
-      udpConnections: udpConnections ?? null,
-      // 库里存乘 100 的整数（没有浮点列），见 shared/hostLoadAverage.ts
-      loadAvg1: loadAverageToStored(loadAverage.load1),
-      loadAvg5: loadAverageToStored(loadAverage.load5),
-      loadAvg15: loadAverageToStored(loadAverage.load15),
-    }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
-    // 按 95 值计费的主机记 5 分钟桶（主机账本用）；别的主机这里直接返回（server/hostRateBuckets.ts）。
-    void recordHostRateSample(host, { atMs: Date.now(), networkIn: networkIn ?? null, networkOut: networkOut ?? null }).catch(() => undefined);
-    // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
-    observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
-    // 这台此刻的负载（CPU、带宽占用取大）：线路组给沿途经过它的路径带 loadPct（server/hostLoad.ts）。
-    recordHostLoadSample(host.id, { at: Date.now(), cpuUsage: cpuUsage ?? null, networkIn: networkIn ?? null, networkOut: networkOut ?? null }, hostBandwidthHintMbps(host));
-    // OOM / 服务崩溃（Agent ≥ 2.2.230 才报这两项）
-    observeHostHealthCounters(host, { bootId: agentBootId, oomKillCount: req.body?.oomKillCount, serviceRestarts: req.body?.serviceRestarts });
-    recordHostLiveSample(host.id, {
-      at: Date.now(),
-      source: "heartbeat",
-      cpuUsage: cpuUsage ?? null,
-      memoryUsage: memoryUsage ?? null,
-      memoryUsed: memoryUsed ?? null,
-      memoryTotal: memoryTotal ?? null,
-      swapUsage: swapUsage ?? null,
-      swapUsed: swapUsed ?? null,
-      swapTotal: swapTotal ?? null,
-      networkIn: networkIn ?? null,
-      networkOut: networkOut ?? null,
-      diskUsage: diskUsage ?? null,
-      diskUsed: diskUsed ?? null,
-      diskTotal: diskTotal ?? null,
-      uptime: uptime ?? null,
-      tcpConnections: tcpConnections ?? null,
-      udpConnections: udpConnections ?? null,
-      ...loadAverage,
-    });
-
-    if (busyHeartbeat) {
-      const panelUrl = await resolveHostAgentAdvertisedPanelUrl(host);
-      const metricsWatching = isHostMetricsWatching(host.id);
-      logAgentHeartbeatSummary({
-        hostId: logHostId,
-        hostName: logHostName,
-        expectedRules: 0,
-        reportedRules: Array.isArray(localRuntimeState.state?.rules) ? localRuntimeState.state.rules.length : 0,
-        reportedServices: Array.isArray(localRuntimeState.state?.services) ? localRuntimeState.state.services.length : 0,
-        actions: 0,
-        pendingApply: 0,
-        pendingRemove: 0,
-        recoveryPending: recoveryTriggered
-          || (!!previousHost.agentRecoveryStartedAt && !previousHost.agentRecoveryCompletedAt),
-        requestLocalState: localRuntimeState.requestLocalState,
-        stable: false,
-        metricsWatching,
-        nextInterval: metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : 5,
-      });
-      res.json(buildBusyAgentHeartbeatResponse({
-        panelUrl,
-        requestLocalState: localRuntimeState.requestLocalState,
-        metricsWatching,
-        trafficReportInterval: metricsWatching ? 10 : undefined,
-      }));
-      return;
-    }
+    const ingestHeartbeatHostStateResult = await ingestHeartbeatHostState({ host, localRuntimeStateSignature, req, dnsChangedReports, reportedAddress, wasOnline, previousHost, uptime, agentBootId, agentProcessId, agentProcessStartedAtSeconds, nextAgentVersion, agentVersionChanged, fxpVersionChanged, agentDistributionChanged, capabilitiesChanged, runtimeVersionChanged, ipv6ListenStoredChanged, nextCpuInfo, memoryTotal, agentLastReceivedRevision, agentLastAppliedRevision, agentLastReceivedHash, agentLastAppliedHash, busyHeartbeat, nextFxpVersion, reportedAgentDistribution, reportedCapabilities, reportedRuntimeVersion, reportedIpv6Listen, agentBootedAtSeconds, ipv6ListenEffectiveChanged, cpuUsage, memoryUsage, memoryUsed, swapUsage, swapUsed, swapTotal, networkIn, networkOut, diskUsage, diskUsed, diskTotal, tcpConnections, udpConnections, loadAverage, logHostId, logHostName, res });
+    if (ingestHeartbeatHostStateResult.done) return ;
+    const { mimicEnvironment, recoveryTriggered, addressApplied, localRuntimeState, fxpEndpointEvents, effectiveAgentVersion, dnsChangedScopes, dnsChangedTokenByScope, dnsChangedIpByHost, rebootDetected, processRestartDetected } = ingestHeartbeatHostStateResult;
 
     const reportedPluginInventoryForFastPath = getAgentPluginInventory(host.id);
     const pluginInventorySignature = agentPluginInventorySignature(reportedPluginInventoryForFastPath);
@@ -892,310 +498,16 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }
 
     // 获取该主机的转发规则
-    const [rawRules, hostTunnels, forwardProtocolSettings, configRevision, hostTlsInbounds] = await Promise.all([
-      db.getForwardRulesForAgent(host.id),
-      db.getTunnelsByHost(host.id),
-      getForwardProtocolSettings(),
-      latestConfigRevision(),
-      db.listTlsInboundsByHost(Number(host.id)),
-    ]);
-    /*
-      共享 TLS 入站上的规则：入站不在 / 停用 / Agent 太旧时按停用下发；要发 PROXY 头时守卫先收入站给的头。
-      见 server/tlsInboundRuntime.ts。普通规则原样通过（同一个对象）。
-    */
-    const tlsInboundById = new Map(hostTlsInbounds.map((inbound) => [inbound.id, inbound] as const));
-    const sniRuntimeView = <T extends Record<string, any>>(rule: T): T => sniRuleRuntimeView(rule, {
-      hostId: Number(host.id),
-      agentVersion: effectiveAgentVersion,
-      inboundById: tlsInboundById,
-    });
-    /*
-      Shadowsocks 出口（server/ssEgress.ts）：出口失效、落地入站没了、Agent 低于 2.2.226、要 UDP / SS2022
-      而入口机没报这项能力时规则按停用下发（绝不退回直连）；能跑的规则带上 egressRuntime，下面生成 gost 配置时挂出口链。只管这台主机自己的规则。
-    */
-    let egressRuntimeContext = await loadEgressRuntimeContext(rawRules as any[]);
-    // VLESS Reality 出口的本机 sing-box 桥接端口（server/vlessEgress.ts）：下面协议守卫分端口时当作已占用。
-    const vlessBridgePorts = await planVlessEgressBridgePorts(Number(host.id), rawRules, hostTunnels);
-    const egressRuntimeView = <T extends Record<string, any>>(rule: T): T => (Number(rule?.hostId) === Number(host.id)
-      ? ruleEgressRuntimeView(rule, {
-        entryHostId: Number(host.id),
-        entryAgentVersion: effectiveAgentVersion,
-        entryHostName: String((host as any).name || ""),
-        // 这次心跳刚报的能力（上面已经写回 host）：UDP / SS2022 出口只发给此刻撑得起的入口机。
-        entryAgentCapabilities: (host as any).agentCapabilities,
-        entryRuntimeVersion: (host as any).runtimeVersion,
-        context: egressRuntimeContext,
-        vlessBridgePorts,
-      })
-      : rule);
-    const gatedRules = (await gateForwardRulesForRuntime(rawRules as any[])).map(sniRuntimeView).map(egressRuntimeView);
-    /*
-      换隧道后旧入口的临时桥接（server/ruleEntryBridges）：合成成普通的 iptables 规则行接在
-      后面，下面整条下发流程原样生成动作、计数、孤儿清理。桥接到期或删掉后这一行消失，
-      Agent 上报的那个监听随即被当成孤儿撤掉。
-    */
-    const rules = [...gatedRules, ...await loadEntryBridgeRuntimeRules(Number(host.id), gatedRules)];
-    const actions: any[] = [];
-    const dnsWatches = new Map<string, AgentDnsWatch>();
-    const responseIssuedAt = Date.now();
-
-    // Prefer the explicit host setting. Current Agents also report the
-    // interface selected by the default route so mimic is not silently skipped.
-    const configuredHostInterface = normalizeNetworkInterface((host as any).networkInterface);
-    const hostInterface = configuredHostInterface || reportedDefaultNetworkInterface;
-    // 内核关了 IPv6 的机器（Agent 2.2.256+ 报 ipv6Listen=false）：realm / socat 只听 IPv4。没报过按有 IPv6，配置不变。
-    const hostIpv6Listen = hostIpv6ListenAvailable(host);
-    const mimicFiltersByInterface = new Map<string, Set<string>>();
-    const mimicLifecycleResources = new Map<string, MimicLifecycleResource>();
-    const reportedMimicInterfaces = new Set<string>();
-    const reportedMimicServicesByInterface = new Map<string, AgentLocalRuntimeServiceState>();
-    let mimicRequestedWithoutInterface = false;
-    const addMimicFilter = (
-      filter: string,
-      iface = hostInterface,
-      lifecycleResources: MimicLifecycleResource[] = [],
-    ) => {
-      const networkInterface = normalizeNetworkInterface(iface);
-      const text = String(filter || "").trim();
-      if (!text) return;
-      if (!networkInterface) {
-        mimicRequestedWithoutInterface = true;
-        return;
-      }
-      if (!mimicFiltersByInterface.has(networkInterface)) mimicFiltersByInterface.set(networkInterface, new Set());
-      mimicFiltersByInterface.get(networkInterface)!.add(text);
-      for (const resource of lifecycleResources) {
-        const resourceId = Math.floor(Number(resource.resourceId) || 0);
-        if (resourceId <= 0) continue;
-        mimicLifecycleResources.set(`${resource.resourceType}:${resourceId}`, {
-          resourceType: resource.resourceType,
-          resourceId,
-        });
-      }
-    };
-    const dnsChangedKey = (scope: string, refId: unknown) => `${scope}:${Number(refId) || 0}`;
-    const dnsChangedFor = (scope: string, refId: unknown) => dnsChangedScopes.has(dnsChangedKey(scope, refId));
-    const dnsRuntimeGeneration = (scope: string, refId: unknown) => {
-      return dnsRuntimeGenerations.generation(scope, refId, dnsChangedTokenByScope.get(dnsChangedKey(scope, refId)));
-    };
-    const buildMimicRuntimeSyncCmds = (lifecycleToken: string, dnsRefreshToken = "", approvedRemovals = new Map<string, string>()) => {
-      if (mimicRequestedWithoutInterface && !hostInterface) {
-        return {
-          commands: [`echo "[mimic] no usable network interface; configure the host network interface or upgrade the Agent so it can report the default interface"; exit 1`],
-          removalCommands: [] as string[],
-          rollbackCommands: [] as string[],
-        };
-      }
-      const cmds: string[] = [];
-      const removalCommands: string[] = [];
-      const rollbackCommands: string[] = [];
-      const activeIfaces = Array.from(mimicFiltersByInterface.keys()).sort();
-      const knownIfaces = new Set([
-        ...activeIfaces,
-        ...approvedRemovals.keys(),
-      ]);
-      for (const networkInterface of Array.from(knownIfaces).sort()) {
-        const desiredFilters = Array.from(mimicFiltersByInterface.get(networkInterface) || []).sort();
-        const filters = desiredFilters;
-        const configPath = `${MIMIC_CONFIG_DIR}/${networkInterface}.conf`;
-        const backupPath = `${configPath}.forwardx-backup`;
-        const backupActivePath = `${configPath}.forwardx-backup-active`;
-        const backupEnabledPath = `${configPath}.forwardx-backup-enabled`;
-        const dnsRefreshPath = `${configPath}.forwardx-dns-refresh`;
-        const xdpModePath = `${configPath}.forwardx-xdp-mode`;
-        const lifecyclePath = `${configPath}.forwardx-lifecycle`;
-        const configTempPath = `${configPath}.forwardx-new`;
-        const serviceName = `mimic@${networkInterface}`;
-        const bpfDropInPath = `/etc/systemd/system/${serviceName}.service.d/forwardx-bpf.conf`;
-        const bpfDropInDir = `/etc/systemd/system/${serviceName}.service.d`;
-        const serviceNameQuoted = shQuote(serviceName);
-        const serviceActiveCheck = `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl is-active --quiet ${serviceNameQuoted}.service; elif command -v rc-service >/dev/null 2>&1; then rc-service ${serviceNameQuoted} status >/dev/null 2>&1; elif [ -x /etc/init.d/${serviceName} ]; then /etc/init.d/${serviceName} status >/dev/null 2>&1; else false; fi`;
-        const serviceEnabledCheck = `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl is-enabled --quiet ${serviceNameQuoted}.service; elif command -v rc-update >/dev/null 2>&1; then rc-update show default 2>/dev/null | grep -q -F ${shQuote(serviceName)}; else false; fi`;
-        const enableRestoredService = `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl enable ${serviceNameQuoted}.service; elif command -v rc-update >/dev/null 2>&1; then rc-update add ${serviceNameQuoted} default; else echo "[mimic] cannot restore enabled state for ${serviceName} on unsupported init system"; exit 1; fi`;
-        const restartRestoredService = `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl restart ${serviceNameQuoted}.service; elif command -v rc-service >/dev/null 2>&1; then rc-service ${serviceNameQuoted} restart; elif [ -x /etc/init.d/${serviceName} ]; then /etc/init.d/${serviceName} restart; else echo "[mimic] cannot restore service ${serviceName} on unsupported init system"; exit 1; fi`;
-        if (filters.length === 0) {
-          removalCommands.push(
-            `if [ -f ${shQuote(configPath)} ] && grep -q '^# Managed by ForwardX$' ${shQuote(configPath)} 2>/dev/null; then ${stopManagedServiceCmd(serviceName)}; if [ -f ${shQuote(backupPath)} ]; then mv -f ${shQuote(backupPath)} ${shQuote(configPath)}; if [ -f ${shQuote(backupEnabledPath)} ]; then if ! { ${enableRestoredService}; }; then exit 1; fi; fi; if [ -f ${shQuote(backupActivePath)} ]; then if ! { ${restartRestoredService}; }; then exit 1; fi; fi; else rm -f ${shQuote(configPath)}; fi; rm -f ${shQuote(backupActivePath)} ${shQuote(backupEnabledPath)} ${shQuote(dnsRefreshPath)} ${shQuote(xdpModePath)} ${shQuote(lifecyclePath)} ${shQuote(configTempPath)} ${shQuote(`${configPath}.forwardx-last-good`)} ${shQuote(configPath)}.sha256 ${shQuote(bpfDropInPath)} 2>/dev/null || true; rmdir ${shQuote(bpfDropInDir)} 2>/dev/null || true; if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl daemon-reload 2>/dev/null || true; fi; fi; rm -f ${shQuote(xdpModePath)} ${shQuote(lifecyclePath)} 2>/dev/null || true`,
-          );
-          continue;
-        }
-        const config = buildForwardXMimicConfig(filters);
-        const encodedConfig = Buffer.from(config, "utf8").toString("base64");
-        cmds.push([
-          "set -e",
-          `if ! command -v mimic >/dev/null 2>&1; then echo "[mimic] mimic is not installed; install mimic and mimic-dkms to use UDP camouflage"; exit 1; fi`,
-          `if ! ip link show dev ${shQuote(networkInterface)} >/dev/null 2>&1; then echo "[mimic] network interface ${shQuote(networkInterface)} does not exist"; exit 1; fi`,
-          `mkdir -p ${shQuote(MIMIC_CONFIG_DIR)}`,
-          `if [ -f ${shQuote(configPath)} ] && ! grep -q '^# Managed by ForwardX$' ${shQuote(configPath)} 2>/dev/null && [ ! -f ${shQuote(backupPath)} ]; then if { ${serviceActiveCheck}; }; then : > ${shQuote(backupActivePath)}; else rm -f ${shQuote(backupActivePath)}; fi; if { ${serviceEnabledCheck}; }; then : > ${shQuote(backupEnabledPath)}; else rm -f ${shQuote(backupEnabledPath)}; fi; rm -f ${shQuote(`${configPath}.forwardx-last-good`)}; cp -p ${shQuote(configPath)} ${shQuote(backupPath)}; fi`,
-          `printf '%s' '${encodedConfig}' | base64 -d > ${shQuote(configTempPath)}`,
-          `printf '\\n' >> ${shQuote(configTempPath)}; mimic_filter_count=$(grep -c '^filter = ' ${shQuote(configTempPath)} 2>/dev/null || true); if [ "$mimic_filter_count" -le 0 ] || [ "$mimic_filter_count" -gt 32 ]; then rm -f ${shQuote(configTempPath)}; echo "[mimic] invalid filter count: $mimic_filter_count (supported 1-32)"; exit 1; fi; if [ -f ${shQuote(configPath)} ] && grep -q '^# Managed by ForwardX$' ${shQuote(configPath)} 2>/dev/null; then cp -p ${shQuote(configPath)} ${shQuote(`${configPath}.forwardx-last-good`)}; fi; mv -f ${shQuote(configTempPath)} ${shQuote(configPath)}; chmod 644 ${shQuote(configPath)}`,
-          `echo "[mimic] sync ${shQuote(networkInterface)} filters=$mimic_filter_count"`,
-          `if ! modprobe mimic 2>/dev/null; then echo "[mimic] kernel module could not be loaded"; exit 1; fi`,
-          `mimic_force_restart=0; if [ "$(cat ${shQuote(lifecyclePath)} 2>/dev/null || true)" != ${shQuote(lifecycleToken)} ]; then mimic_force_restart=1; fi`,
-          dnsRefreshToken
-            ? `mimic_old_hash=$(cat ${shQuote(configPath)}.sha256 2>/dev/null || true); if command -v sha256sum >/dev/null 2>&1; then mimic_new_hash=$(sha256sum ${shQuote(configPath)} 2>/dev/null | awk '{print "sha256:"$1}'); elif command -v cksum >/dev/null 2>&1; then mimic_new_hash=$(cksum ${shQuote(configPath)} 2>/dev/null | awk '{print "cksum:"$1":"$2}'); else mimic_new_hash="mtime:$(wc -c < ${shQuote(configPath)} 2>/dev/null):$(date -r ${shQuote(configPath)} +%s 2>/dev/null)"; fi; mimic_dns_restart=0; if { ${serviceActiveCheck}; } && [ "$mimic_new_hash" = "$mimic_old_hash" ] && [ "$(cat ${shQuote(dnsRefreshPath)} 2>/dev/null || true)" != ${shQuote(dnsRefreshToken)} ]; then mimic_dns_restart=1; fi`
-            : "mimic_dns_restart=0",
-          restartMimicServiceIfConfigChangedCmd(serviceName, configPath, networkInterface),
-          dnsRefreshToken
-            ? `if [ "$mimic_dns_restart" = "1" ] && [ "$mimic_needs_start" != "1" ]; then echo ${shQuote(`[mimic] DNS refresh ${dnsRefreshToken}`)}; ${startManagedServiceCmd(serviceName)}; fi; printf '%s' ${shQuote(dnsRefreshToken)} > ${shQuote(dnsRefreshPath)}`
-            : "",
-          `if ! mimic show ${shQuote(networkInterface)} >/dev/null 2>&1; then echo "[mimic] runtime hooks are unavailable on ${shQuote(networkInterface)}"; systemctl status ${shQuote(serviceName)}.service --no-pager -l 2>/dev/null || true; journalctl -u ${shQuote(serviceName)}.service -n 80 --no-pager 2>/dev/null || true; exit 1; fi`,
-          `mimic_lifecycle_tmp=${shQuote(`${lifecyclePath}.tmp`)}.$$; printf '%s' ${shQuote(lifecycleToken)} > "$mimic_lifecycle_tmp"; chmod 644 "$mimic_lifecycle_tmp"; mv -f "$mimic_lifecycle_tmp" ${shQuote(lifecyclePath)}`,
-        ].filter(Boolean).join("\n"));
-        rollbackCommands.push(`if [ -f ${shQuote(`${configPath}.forwardx-last-good`)} ]; then cp -p ${shQuote(`${configPath}.forwardx-last-good`)} ${shQuote(configPath)}; ${startManagedServiceCmd(serviceName)}; elif [ -f ${shQuote(backupPath)} ]; then ${stopManagedServiceCmd(serviceName)}; cp -p ${shQuote(backupPath)} ${shQuote(configPath)}; if [ -f ${shQuote(backupEnabledPath)} ]; then if ! { ${enableRestoredService}; }; then exit 1; fi; fi; if [ -f ${shQuote(backupActivePath)} ]; then if ! { ${restartRestoredService}; }; then exit 1; fi; fi; rm -f ${shQuote(backupPath)} ${shQuote(backupActivePath)} ${shQuote(backupEnabledPath)} ${shQuote(dnsRefreshPath)} ${shQuote(xdpModePath)} ${shQuote(configTempPath)} ${shQuote(configPath)}.sha256 2>/dev/null || true; else ${stopManagedServiceCmd(serviceName)}; rm -f ${shQuote(configPath)} ${shQuote(xdpModePath)} 2>/dev/null || true; fi`);
-      }
-      return { commands: cmds, removalCommands, rollbackCommands };
-    };
-
-    /** 包装一条只追加一次的 iptables 规则：先 -C 检查是否存在，不存在才 -A */
-    /**
-     * 为转发规则创建一对 mangle 计数链以跨转发方式采集准确流量。
-     * - FWX_IN_<port>：匹配 dport=<port> 的入站包（客户端→Agent）
-     * - FWX_OUT_<port>：匹配 sport=<port> 的出站包（Agent→客户端响应）
-     * 不设 RETURN，所以只作计数不影响路由。三种转发方式都会经过 mangle 表，覆盖 100% 路径。
-     */
-    const gostServiceName = RUNTIME_SERVICE_NAME;
-    /*
-      能力 gostApiSync（Agent ≥ 2.2.229、运行时 ≥ 3.2.6）的机器：gost.json 开 root 专用的 Unix 套接字 API，
-      ExecStart 包一层准备套接字目录，重启命令前加 API 同步标记 —— API 能做的改动不再重启共享进程（shared/gostRuntimeApi.ts）。
-      别的机器上配置、单元、命令和以前逐字节相同。
-    */
-    const gostApiSync = hostSupportsGostApiSync({ agentVersion: effectiveAgentVersion, agentCapabilities: (host as any).agentCapabilities });
-    const gostRuntimeExecStart = (service: string, configPath: string) => (
-      gostApiSync ? gostRuntimeApiExecStart(RUNTIME_BIN, service, configPath) : `${RUNTIME_BIN} -C ${configPath}`
-    );
-    const gostRuntimeApiSection = (service: string) => (gostApiSync ? { api: gostRuntimeApiConfig(service) } : {});
-    const gostRuntimeSyncCmd = (service: string, configPath: string) => (
-      gostApiSync ? syncGostServiceIfConfigChangedCmd(service, configPath) : restartManagedServiceIfConfigChangedCmd(service, configPath)
-    );
-    const gostServiceUnit = [
-      "[Unit]",
-      "Description=ForwardX unified runtime forwarder",
-      "After=network.target",
-      "StartLimitIntervalSec=60",
-      "StartLimitBurst=5",
-      "",
-      "[Service]",
-      "Type=simple",
-      `ExecStart=${gostRuntimeExecStart(gostServiceName, RUNTIME_CONFIG_PATH)}`,
-      "Restart=always",
-      "RestartSec=5",
-      // 这台机器上所有 gost 规则共用这一个进程，一条转发占两个句柄：65535 意味着
-      // 整机三万来个并发就到顶，新连接直接 accept 失败。
-      `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
-      "",
-      "[Install]",
-      "WantedBy=multi-user.target",
-      "",
-    ].join("\n");
+    const loadHeartbeatRulesResult = await loadHeartbeatRules({ host, effectiveAgentVersion, reportedDefaultNetworkInterface, dnsChangedScopes, dnsChangedTokenByScope });
+    const { rules, dnsWatches, dnsChangedFor, actions, hostInterface, hostTunnels, sniRuntimeView, egressRuntimeView, dnsRuntimeGeneration, responseIssuedAt, forwardProtocolSettings, vlessBridgePorts, addMimicFilter, gostRuntimeApiSection, gostRuntimeExecStart, gostRuntimeSyncCmd, gostServiceName, gostServiceUnit, reportedMimicInterfaces, reportedMimicServicesByInterface, hostIpv6Listen, mimicFiltersByInterface, mimicRequestedWithoutInterface, mimicLifecycleResources, configRevision, buildMimicRuntimeSyncCmds, hostTlsInbounds } = loadHeartbeatRulesResult;
+    let { egressRuntimeContext } = loadHeartbeatRulesResult;
     const agentHostRules = rules as any[];
     // DNS 预解析：将域名转换为 IP，缓存中比较检测变更
     const dnsChangedRuleIds = new Set<number>();
     const dnsPreviousIpByRuleId = new Map<number, string>();
     const resolvedTargetGate = createResolvedTargetGate(host as any);
-    const resolvedHostRuleTargets = await mapWithConcurrency(agentHostRules as any[], 32, async (rule: any) => {
-      if (!rule.targetIp) return null;
-      addDnsWatch(dnsWatches, rule.targetIp, "forward-rule-target", Number(rule.id));
-      const rawTargetIp = String(rule.targetIp || "").trim();
-      const previous = resolvedIpCache.get(Number(rule.id));
-      const forcedResolved = dnsChangedIpByHost.get(rawTargetIp.toLowerCase());
-      const resolved = forcedResolved || await resolveTargetIpCached(Number(rule.id), rawTargetIp);
-      return { rule, rawTargetIp, previous, forcedResolved, resolved };
-    });
-    for (const target of resolvedHostRuleTargets) {
-      if (!target) continue;
-      const { rule, rawTargetIp, previous, forcedResolved, resolved } = target;
-      if (forcedResolved) expireSharedResolvedIp(Number(rule.id));
-      if (dnsChangedFor("forward-rule-target", Number(rule.id)) && previous && previous.raw === rawTargetIp && previous.ip !== resolved) {
-        // IP 变更：标记为需要重新下发
-        dnsChangedRuleIds.add(rule.id);
-        dnsPreviousIpByRuleId.set(rule.id, previous.ip);
-      }
-      if (!forcedResolved) setBoundedMapValue(resolvedIpCache, rule.id, { raw: rawTargetIp, ip: resolved }, AGENT_DYNAMIC_CACHE_MAX);
-      // 保存原始值（域名），将 rule.targetIp 替换为解析后的 IP
-      (rule as any)._originalTargetIp = rule.targetIp;
-      rule.targetIp = resolved;
-      // 域名解析到了内网 / 环回，而这台机器不是规则主人的：不下发（见 ruleTargetPolicy）。
-      if (await resolvedTargetGate(rule, rawTargetIp, resolved)) {
-        rule.isEnabled = false;
-        (rule as any).resourceAccessDenied = true;
-      }
-    }
-
-    const resolveForwardChainTargetsResult = resolveForwardChainTargets({ dnsWatches, dnsChangedIpByHost });
-    const { resolveForwardChainTarget, getForwardChainGroup } = resolveForwardChainTargetsResult;
-
-    // 对 DNS 变更且正在运行的规则，先生成清理动作，再通过 isRunning=false 触发重新下发
-    for (const rule of agentHostRules as any[]) {
-      if (!dnsChangedRuleIds.has(rule.id)) continue;
-      if (!runtimeBool(rule.isEnabled) || !runtimeBool(rule.isRunning)) continue;
-      if (failoverProxyHandlesTargetDns(rule)) {
-        console.log(`[DNS] rule=${rule.id} target changed; failover proxy will resolve ${rule._originalTargetIp || rule.targetIp} without service reload`);
-        continue;
-      }
-      const oldIp = dnsPreviousIpByRuleId.get(rule.id) || rule._originalTargetIp || rule.targetIp;
-      const ruleResolvedIp = rule.targetIp; // 已经是新解析的 IP
-      const cleanupCmds = buildDnsChangeCleanup(rule, oldIp);
-      if (cleanupCmds.length > 0) {
-        actions.push({
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: ruleResolvedIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          networkInterface: hostInterface,
-          commands: cleanupCmds,
-        } as any);
-      }
-      // 重置 isRunning 让主循环生成 apply 动作
-      rule.isRunning = false;
-      console.log(`[DNS] rule=${rule.id} target changed: ${oldIp} → ${ruleResolvedIp}, re-applying`);
-    }
-
-    const chainTargetsByRuleId = new Map<number, { targetIp: string; targetPort: number; originalTargetIp?: string }>();
-    await mapWithConcurrency(agentHostRules as any[], 16, async (rule: any) => {
-      const chainTarget = await resolveForwardChainTarget(rule);
-      if (!chainTarget) return;
-      const oldTargetIp = String(rule.targetIp || "").trim();
-      const oldTargetPort = Number(rule.targetPort) || 0;
-      chainTargetsByRuleId.set(Number(rule.id), chainTarget);
-      if (oldTargetIp === chainTarget.targetIp && oldTargetPort === chainTarget.targetPort) return;
-      if (runtimeBool(rule.isEnabled) && runtimeBool(rule.isRunning)) {
-        actions.push({
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: oldTargetIp,
-          targetPort: oldTargetPort,
-          protocol: rule.protocol,
-          networkInterface: hostInterface,
-          commands: buildForwardTargetCleanup(rule, oldTargetIp, oldTargetPort),
-        } as any);
-        rule.isRunning = false;
-      }
-      rule.targetIp = chainTarget.targetIp;
-      rule.targetPort = chainTarget.targetPort;
-      (rule as any)._originalTargetIp = chainTarget.originalTargetIp || chainTarget.targetIp;
-      await db.updateForwardRule(Number(rule.id), {
-        targetIp: chainTarget.originalTargetIp || chainTarget.targetIp,
-        targetPort: chainTarget.targetPort,
-        isRunning: false,
-      } as any);
-      appendPanelLog("info", `[ForwardChain] rule=${rule.id} target=${chainTarget.targetIp}:${chainTarget.targetPort}${chainTarget.originalTargetIp && chainTarget.originalTargetIp !== chainTarget.targetIp ? ` resolvedFrom=${chainTarget.originalTargetIp}` : ""} source=chain-config`);
-    });
-    for (const rule of rules as any[]) {
-      const chainTarget = chainTargetsByRuleId.get(Number(rule.id));
-      if (!chainTarget) continue;
-      rule.targetIp = chainTarget.targetIp;
-      rule.targetPort = chainTarget.targetPort;
-      (rule as any)._originalTargetIp = chainTarget.originalTargetIp || chainTarget.targetIp;
-      if ((agentHostRules as any[]).some((item: any) => Number(item.id) === Number(rule.id) && !runtimeBool(item.isRunning))) {
-        rule.isRunning = false;
-      }
-    }
+    const resolveHostRuleTargetsResult = await resolveHostRuleTargets({ agentHostRules, dnsWatches, dnsChangedIpByHost, dnsChangedFor, dnsChangedRuleIds, dnsPreviousIpByRuleId, resolvedTargetGate, actions, hostInterface, rules });
+    const { getForwardChainGroup } = resolveHostRuleTargetsResult;
 
     const rawAgentAllRules = await db.getForwardRulesForAgentScope(
       Number(host.id),

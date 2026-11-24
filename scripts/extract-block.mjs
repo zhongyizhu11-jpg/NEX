@@ -344,8 +344,12 @@ if (!hasTopLevelReturn && !resultFields.length) callSite = `${indent}${callExpr}
 else {
   const lines = [`${indent}const ${fnName}Result = ${callExpr};`];
   if (hasTopLevelReturn) lines.push(`${indent}if (${fnName}Result.done) return ${returnsValue ? `${fnName}Result.value as never` : ""};`.replace(" as never", ""));
+  // 段内用 let 声明的输出，段后可能还会被重新赋值：调用处也用 let 接
+  const isLetDecl = (name) => { const d = outputs.get(name)?.decl; const list = d && ts.isVariableDeclaration(d) ? d.parent : d && ts.isBindingElement(d) ? (() => { let n = d; while (n && !ts.isVariableDeclaration(n)) n = n.parent; return n?.parent; })() : null; return !!list && ts.isVariableDeclarationList(list) && (list.flags & ts.NodeFlags.Let) !== 0; };
   const outs = outputRows.map((r) => r.name).filter((n) => !writeBack.includes(n));
-  if (outs.length) lines.push(`${indent}const { ${outs.join(", ")} } = ${fnName}Result;`);
+  const constOuts = outs.filter((n) => !isLetDecl(n)), letOuts = outs.filter(isLetDecl);
+  if (constOuts.length) lines.push(`${indent}const { ${constOuts.join(", ")} } = ${fnName}Result;`);
+  if (letOuts.length) lines.push(`${indent}let { ${letOuts.join(", ")} } = ${fnName}Result;`);
   for (const n of writeBack) lines.push(`${indent}${n} = ${fnName}Result.${n};`);
   callSite = lines.join("\n");
 }
