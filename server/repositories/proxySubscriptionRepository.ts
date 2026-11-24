@@ -26,7 +26,7 @@ import { shareProxyNodeRow } from "../../shared/proxyNodeShare";
 import { proxyInboundSupportsMultiUser } from "../../shared/proxyInbound";
 import { type ProxySubTokenFailureReason } from "../../shared/proxySubTokenStatus";
 import { getRuleEntryDomainRuntimeSettings } from "./ruleEntryDomainRepository";
-import { getSetting, setSetting } from "./settingsRepository";
+import { getCachedSetting, setSetting } from "./settingsRepository";
 import { getTrafficSummaryByRule, getUnreachableRuleIds } from "./metricsRepository";
 import { signalRuleEntryDomainChanged } from "../ruleEntryDomainSignals";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
@@ -983,10 +983,10 @@ export async function countProxySubTokensByUser(userId: number): Promise<number>
   const db = await getDb();
   if (!db) return 0;
   const rows = await db
-    .select({ id: proxySubTokens.id })
+    .select({ count: sql<number>`count(*)` })
     .from(proxySubTokens)
     .where(eq(proxySubTokens.userId, Number(userId)));
-  return rows.length;
+  return Number((rows as any[])[0]?.count || 0);
 }
 
 export async function getProxySubTokensByUser(userId: number) {
@@ -1059,16 +1059,6 @@ export async function updateProxySubToken(id: number, data: Partial<InsertProxyS
   invalidateProxySubCacheForUser(Number((row as any)?.userId || 0));
 }
 
-/** 最近一次拉取认出来的客户端，令牌行上展示用。 */
-export async function updateProxySubTokenClient(id: number, family: string, version: string) {
-  const db = await getDb();
-  if (!db) return;
-  await db
-    .update(proxySubTokens)
-    .set({ lastClientFamily: String(family || "").slice(0, 32) || null, lastClientVersion: String(version || "").slice(0, 32) || null } as any)
-    .where(eq(proxySubTokens.id, id));
-}
-
 export async function deleteProxySubToken(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1087,7 +1077,7 @@ export async function deleteProxySubToken(id: number) {
  * 新值，二十次拉取只涨一次。商家看这个数就是想知道「客户端到底拉没拉过、拉得勤不勤」，
  * 少记的那些正是最该看见的那部分。
  */
-export async function recordProxySubTokenAccess(id: number, info: { ip?: string; userAgent?: string }) {
+export async function recordProxySubTokenAccess(id: number, info: { ip?: string; userAgent?: string; clientFamily?: string; clientVersion?: string }) {
   const db = await getDb();
   if (!db) return;
   await db
@@ -1097,6 +1087,9 @@ export async function recordProxySubTokenAccess(id: number, info: { ip?: string;
       lastAccessAt: nowDate(),
       lastAccessIp: (info.ip || "").slice(0, 64) || null,
       lastAccessUserAgent: (info.userAgent || "").slice(0, 200) || null,
+      // 认出来的客户端（令牌行上展示用）顺带写在同一条里：原来是对同一行的第二条 UPDATE。
+      ...(info.clientFamily !== undefined ? { lastClientFamily: String(info.clientFamily || "").slice(0, 32) || null } : {}),
+      ...(info.clientVersion !== undefined ? { lastClientVersion: String(info.clientVersion || "").slice(0, 32) || null } : {}),
       /*
         拉成功了就把上一次被拒清掉。
         「现在到底行不行」是这一行要回答的唯一问题，而清掉比留着靠时间先后去比更准 ——
@@ -1390,7 +1383,8 @@ async function attachLandingPoolFamilyAddresses(db: NonNullable<Awaited<ReturnTy
 const HIDE_UNREACHABLE_KEY_PREFIX = "proxySubHideUnreachable:";
 
 export async function getProxySubHideUnreachable(userId: number): Promise<boolean> {
-  const value = await getSetting(`${HIDE_UNREACHABLE_KEY_PREFIX}${Number(userId)}`).catch(() => null);
+  // 每次组装订阅都要看一眼：走设置缓存，不单独点一条查询。
+  const value = await getCachedSetting(`${HIDE_UNREACHABLE_KEY_PREFIX}${Number(userId)}`).catch(() => null);
   return value !== "false";
 }
 

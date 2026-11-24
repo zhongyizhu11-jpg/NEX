@@ -100,7 +100,11 @@ export function invalidateProxySubCacheForUser(userId: unknown) {
   if (!Number.isInteger(id) || id <= 0) return;
   versions.set(id, versionOf(id) + 1);
   // 版本表本身也别无限长：一千个用户一千行很小，但要防着被随机 id 刷。
-  if (versions.size > 20_000) versions.clear();
+  if (versions.size > 20_000) {
+    versions.clear();
+    // 清表等于把每个用户的版本号归零，刚作废的老键就又能匹配上了；全局版本加一，让它们一起失效。
+    globalVersion += 1;
+  }
 }
 
 /** 全站都变了（设置、模板、规则集镜像……）。 */

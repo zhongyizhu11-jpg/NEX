@@ -154,15 +154,38 @@ export async function getSentSettingKeys(keys: string[]): Promise<Set<string>> {
 
 /** 批量读取所有系统设置 */
 export async function getAllSettings(): Promise<Record<string, string | null>> {
+  const values = await loadAllSettingsValues();
+  return values ? { ...values } : {};
+}
+
+/**
+ * 从设置缓存里按键取一个值。
+ *
+ * 订阅拉取这条路每次都要看 siteTitle、panelPublicUrl、「自动隐藏不通的节点」：原来一个走
+ * getAllSettings()（每次把整份映射拷一遍，只为取一个键），两个走 getSetting()（每次一条
+ * 主键查询，不经缓存）。这里直接从缓存着的那份映射里取，不拷贝、不额外查库；缓存 5 秒，
+ * 写入时作废（setSetting），所以管理员改完立刻生效。
+ *
+ * 日标记和运行时缓存不进那份映射（见 getAllSettings），对它们退回精确查询，口径和 getSetting 一样。
+ */
+export async function getCachedSetting(key: string): Promise<string | null> {
+  if (!affectsAllSettingsCache(key)) return getSetting(key);
+  const values = await loadAllSettingsValues();
+  if (!values) return null;
+  return values[key] ?? null;
+}
+
+/** 缓存里的那份映射本身（不拷贝）。只在这个文件里用：拿到的对象谁都不许改。 */
+async function loadAllSettingsValues(): Promise<Record<string, string | null> | null> {
   const db = await getDb();
-  if (!db) return {};
+  if (!db) return null;
   const now = Date.now();
   const cached = allSettingsCache;
   if (cached && cached.db === db && cached.expiresAt > now) {
-    return { ...cached.values };
+    return cached.values;
   }
   const activeLoad = allSettingsLoad;
-  if (activeLoad && activeLoad.db === db) return { ...await activeLoad.promise };
+  if (activeLoad && activeLoad.db === db) return activeLoad.promise;
 
   const generation = allSettingsGeneration;
   const promise = db.select().from(systemSettings).then((rows: Array<{ key: string; value: string | null }>) => {
@@ -180,7 +203,7 @@ export async function getAllSettings(): Promise<Record<string, string | null>> {
   });
   allSettingsLoad = { db, promise };
   try {
-    return { ...await promise };
+    return await promise;
   } finally {
     if (allSettingsLoad?.promise === promise) allSettingsLoad = null;
   }

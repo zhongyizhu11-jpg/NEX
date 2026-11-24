@@ -30,20 +30,35 @@ function recordHit(store: Map<string, number[]>, key: string, limit: number, now
   return { limited: false, retryAfterSeconds: 0 };
 }
 
+export type ProxySubRateLimitResult = { limited: boolean; retryAfterSeconds: number; scope: "token" | "ip" | null };
+
+/**
+ * 两段分开给：IP 那一段在查令牌之前就能判（只要设置），令牌那一段查到令牌行就判。
+ * 原来合在一起放在资格检查之后，被限的请求照样跑完了「查令牌、查主人、查套餐、算面板地址」
+ * 这一串重活 —— 限流本来就是为了省这些。
+ */
+export function checkProxySubIpRateLimit(input: { ip: string; ipLimit: number; now?: number }): ProxySubRateLimitResult {
+  const byIp = recordHit(ipHits, ipRateLimitScope(String(input.ip || "")) || "-", input.ipLimit, input.now ?? Date.now());
+  return { ...byIp, scope: byIp.limited ? "ip" : null };
+}
+
+export function checkProxySubTokenRateLimit(input: { tokenId: number; tokenLimit: number; now?: number }): ProxySubRateLimitResult {
+  const byToken = recordHit(tokenHits, String(input.tokenId), input.tokenLimit, input.now ?? Date.now());
+  return { ...byToken, scope: byToken.limited ? "token" : null };
+}
+
 export function checkProxySubRateLimit(input: {
   tokenId: number;
   ip: string;
   tokenLimit: number;
   ipLimit: number;
   now?: number;
-}): { limited: boolean; retryAfterSeconds: number; scope: "token" | "ip" | null } {
+}): ProxySubRateLimitResult {
   const now = input.now ?? Date.now();
   // 先看 IP：一个 IP 刷很多条令牌时，令牌各自没超、IP 超了，也该挡。
-  const byIp = recordHit(ipHits, ipRateLimitScope(String(input.ip || "")) || "-", input.ipLimit, now);
-  if (byIp.limited) return { ...byIp, scope: "ip" };
-  const byToken = recordHit(tokenHits, String(input.tokenId), input.tokenLimit, now);
-  if (byToken.limited) return { ...byToken, scope: "token" };
-  return { limited: false, retryAfterSeconds: 0, scope: null };
+  const byIp = checkProxySubIpRateLimit({ ip: input.ip, ipLimit: input.ipLimit, now });
+  if (byIp.limited) return byIp;
+  return checkProxySubTokenRateLimit({ tokenId: input.tokenId, tokenLimit: input.tokenLimit, now });
 }
 
 /*

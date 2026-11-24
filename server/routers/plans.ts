@@ -187,7 +187,6 @@ export const plansRouter = router({
   subscriptions: adminProcedure
     .input(z.object({ userId: z.number().optional() }).optional())
     .query(async ({ input }) => {
-      await db.expireUserSubscriptions();
       return db.listUserSubscriptions(input?.userId, { visibility: "admin" });
     }),
   subscriptionsPage: adminProcedure
@@ -197,7 +196,6 @@ export const plansRouter = router({
       pageSize: z.number().int().min(1).max(100).default(12),
     }))
     .query(async ({ input }) => {
-      await db.expireUserSubscriptions();
       return db.listUserSubscriptionsPage({
         ...input,
         excludeCancelled: true,
@@ -234,8 +232,11 @@ export const plansRouter = router({
       appendPanelLog("info", `[Plan] auto-renew ${input.autoRenew ? "on" : "off"} subscription=${input.id} user=${ctx.user.id}`);
       return { success: true };
     }),
+  /*
+    这里和上面的管理员列表原来每次读都先跑一遍全体用户的到期处理（扫表 + 逐用户事务）。
+    到期处理是调度器的活（server/scheduler.ts 定时跑），读列表的人不该替它干。
+  */
   mySubscriptions: protectedProcedure.query(async ({ ctx }) => {
-    await db.expireUserSubscriptions();
     return db.listUserSubscriptions(ctx.user.id, { visibility: "user" });
   }),
   assign: adminProcedure

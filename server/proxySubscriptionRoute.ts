@@ -28,7 +28,8 @@ import {
   type ProxySubPreparedBody,
 } from "./proxySubCache";
 import { proxySubVisitorCacheParts, resolveProxySubVisitorGeo } from "./proxySubVisitorGeo";
-import { checkProxySubRateLimit, proxySubMissBlockState, recordProxySubMiss } from "./proxySubRateLimit";
+import { checkProxySubIpRateLimit, checkProxySubTokenRateLimit, proxySubMissBlockState, recordProxySubMiss, type ProxySubRateLimitResult } from "./proxySubRateLimit";
+import { loadProxySubSettings, proxySubSettingsFingerprint } from "./proxySubSettings";
 import { clientIp } from "./clientIp";
 import { createKeyedSerial } from "./keyedSerial";
 import { notifyProxySubEvent } from "./proxySubNotify";
@@ -92,8 +93,8 @@ function logAccess(
   const tokenId = Number(context.token.id);
   const task = (async () => {
     if (detail.result === "ok") {
-      await db.recordProxySubTokenAccess(tokenId, info);
-      await db.updateProxySubTokenClient(tokenId, client.family, client.version);
+      // 次数、来路、认出来的客户端一条 UPDATE 写完（原来是两条，对同一行）。
+      await db.recordProxySubTokenAccess(tokenId, { ...info, clientFamily: client.family, clientVersion: client.version });
     } else if (detail.result !== "page") {
       await db.recordProxySubTokenFailure(tokenId, detail.result, info);
     }
@@ -130,6 +131,15 @@ function missBlocked(req: Request, res: Response, json = false): boolean {
   res.setHeader("Retry-After", String(state.retryAfterSeconds));
   if (json) res.status(429).json({ error: "too many requests" });
   else res.status(429).type("text/plain").send("请求太频繁，稍后再试");
+  return true;
+}
+
+/** 被限流：429 + Retry-After。挡住返回 true。不记任何东西（见 handleSubscription 里的说明）。 */
+function rateLimited(res: Response, limit: ProxySubRateLimitResult, json = false): boolean {
+  if (!limit.limited) return false;
+  res.setHeader("Retry-After", String(limit.retryAfterSeconds));
+  if (json) res.status(429).json({ error: "too many requests" });
+  else res.status(429).type("text/plain").send("拉取太频繁，稍后再试");
   return true;
 }
 
@@ -265,10 +275,13 @@ async function deviceGateLocked(req: Request, context: ProxySubTokenContext, cli
   });
   if (decision.allowed && decision.deviceKey) {
     // 在队里等登记写完再放下一个：不然下一个列设备时还看不到这一台。
+    // 刚列过设备，这一台在不在、上次什么时候来过都知道了，不让登记那边再查一遍。
+    const known = devices.find((device) => String(device.hwid) === decision.deviceKey);
     await db.touchProxySubDevice({
       tokenId: Number(token.id),
       userId: Number(token.userId),
       hwid: decision.deviceKey,
+      known: known ? { id: Number(known.id), lastSeenAt: known.lastSeenAt } : null,
       deviceOs: header(req, "x-device-os"),
       osVersion: header(req, "x-ver-os"),
       model: header(req, "x-device-model"),
@@ -347,6 +360,14 @@ async function handleSubscription(req: Request, res: Response, options: { param:
   const client = detectProxyClient(userAgent, req.query.flag);
   try {
     if (missBlocked(req, res)) return;
+    /*
+      限流先于一切重活。原来排在资格检查和面板地址之后：被限的请求照样查令牌、查主人、查套餐、
+      算面板地址，还往令牌行和访问日志各写一笔 —— 限流本来就是为了省这些。IP 那一段只要设置就能判，
+      令牌那一段查到令牌行就判。被限的一律不记（不写令牌行、不写日志、不发通知）：一个把间隔设成
+      十秒的客户端一天被限几千次，记下来只会把日志刷满。落地页同样过这道门（原来它不限流却每次全量组装）。
+    */
+    const limits = await loadProxySubSettings();
+    if (rateLimited(res, checkProxySubIpRateLimit({ ip: clientIp(req), ipLimit: limits.ipRateLimitPerMinute }))) return;
     const record = await findToken(options.param, options.byAlias);
     if (!record) {
       // 令牌根本不存在的那一种记不了：没有任何一行能挂上这笔记录。按 IP 记一次查空，防猜别名。
@@ -354,6 +375,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       notFound(res);
       return;
     }
+    if (rateLimited(res, checkProxySubTokenRateLimit({ tokenId: Number(record.id), tokenLimit: limits.rateLimitPerMinute }))) return;
     const gated = await gate(req, record, client);
     context = gated.context;
     if (!gated.ok) {
@@ -376,20 +398,6 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Robots-Tag", "noindex");
       res.status(200).type("text/html; charset=utf-8").send(html);
-      return;
-    }
-
-    // 限流：先于一切重活。
-    const limit = checkProxySubRateLimit({
-      tokenId: Number(token.id),
-      ip: clientIp(req),
-      tokenLimit: settings.rateLimitPerMinute,
-      ipLimit: settings.ipRateLimitPerMinute,
-    });
-    if (limit.limited) {
-      logAccess(req, context, client, { format: "", profile: false, result: "rate-limited", hwid: "", bytes: 0 });
-      res.setHeader("Retry-After", String(limit.retryAfterSeconds));
-      res.status(429).type("text/plain").send("拉取太频繁，稍后再试");
       return;
     }
 
@@ -447,7 +455,10 @@ async function handleSubscription(req: Request, res: Response, options: { param:
     // 「按访客就近」：访客在哪只查面板自带的离线库（终端用户的 IP 不发给第三方）；别的排序不查、缓存键也不变。
     const visitor = tokenOptions.sortMode === "nearest" ? await resolveProxySubVisitorGeo(clientIp(req)) : null;
     const cacheKey = proxySubCacheKey(Number(token.userId), [
-      "v1", token.id, format, rulePreset, profile, client.family, client.version, tokenOptions, scope, template?.id || 0, renderSettings, selfUrl,
+      "v1", token.id, format, rulePreset, profile, client.family, client.version, tokenOptions, scope, template?.id || 0,
+      // 设置只进一个指纹（loadProxySubSettings 算好的），不把整份设置（含两段最多 20 KB 的自定义规则）序列化进键。
+      // 镜像为 "panel" 时 renderSettings 的 rulesetMirror 换成了面板地址，单独补一格。
+      proxySubSettingsFingerprint(settings), renderSettings.rulesetMirror, selfUrl,
       // 信息节点带着用量，用量一直在变；进缓存键的是取整到 10 MB 的值，免得每次都不一样。
       infoNodesWanted(gated.context) ? Math.floor(gated.context.info.trafficUsed / 10_485_760) : -1,
       // 只有按访客就近时多一格：国家 + 取整到 1° 的经纬度，同城访客共用一份缓存。
@@ -634,12 +645,16 @@ proxySubscriptionRouter.get("/api/sub/:token", (req: Request, res: Response) => 
 proxySubscriptionRouter.get("/api/sub/:token/info", async (req: Request, res: Response) => {
   try {
     if (missBlocked(req, res, true)) return;
+    // 和订阅本身同一套限流、同一个位置（查令牌前后）：这一条每次也要组装一遍节点，不限的话一样能把面板拖慢。
+    const limits = await loadProxySubSettings();
+    if (rateLimited(res, checkProxySubIpRateLimit({ ip: clientIp(req), ipLimit: limits.ipRateLimitPerMinute }), true)) return;
     const record = await findToken(String(req.params.token || ""), false);
     if (!record) {
       recordProxySubMiss(clientIp(req));
       res.status(404).json({ error: "not found" });
       return;
     }
+    if (rateLimited(res, checkProxySubTokenRateLimit({ tokenId: Number(record.id), tokenLimit: limits.rateLimitPerMinute }), true)) return;
     const client = detectProxyClient(String(req.headers["user-agent"] || ""));
     const gated = await gate(req, record, client);
     if (!gated.ok) {
@@ -647,18 +662,6 @@ proxySubscriptionRouter.get("/api/sub/:token/info", async (req: Request, res: Re
       return;
     }
     const context = gated.context;
-    // 和订阅本身同一套限流：这一条每次也要组装一遍节点，不限的话一样能把面板拖慢。
-    const limit = checkProxySubRateLimit({
-      tokenId: Number(record.id),
-      ip: clientIp(req),
-      tokenLimit: context.settings.rateLimitPerMinute,
-      ipLimit: context.settings.ipRateLimitPerMinute,
-    });
-    if (limit.limited) {
-      res.setHeader("Retry-After", String(limit.retryAfterSeconds));
-      res.status(429).json({ error: "too many requests" });
-      return;
-    }
     const panelUrl = await resolvePanelUrl(req);
     const [deviceCount, built] = await Promise.all([
       db.countProxySubDevices(Number(record.id)),

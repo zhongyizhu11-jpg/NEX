@@ -20,7 +20,8 @@ export function normalizePanelUrl(value: string) {
 }
 
 export async function getConfiguredPanelUrl(): Promise<string> {
-  const configured = normalizePanelUrl((await db.getSetting("panelPublicUrl")) || "");
+  // 走设置缓存：订阅拉取、Agent 心跳这些高频路都要它，不该每次都去库里点一条。
+  const configured = normalizePanelUrl((await db.getCachedSetting("panelPublicUrl")) || "");
   return configured && /^https?:\/\//i.test(configured) ? configured : "";
 }
 

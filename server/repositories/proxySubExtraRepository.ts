@@ -19,7 +19,7 @@ import {
   type InsertProxySubSource,
   type InsertProxySubTemplate,
 } from "../../drizzle/schema";
-import { getDb, insertAndGetId, nowDate } from "../dbRuntime";
+import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, quoteDbIdentifier, rawAffectedRows } from "../dbRuntime";
 import { deleteExpiredHistoryRows } from "./historyRetention";
 import { normalizeProxySubAlias } from "../../shared/proxySubTokenScope";
 import { parseProxySubCustomGroupsJson, PROXY_SUB_TEMPLATE_TARGETS, type ProxySubTemplate, type ProxySubTemplateTarget } from "../../shared/proxySubTemplates";
@@ -136,6 +136,28 @@ export async function countProxySubDevices(tokenId: number) {
   return Number((rows as any[])[0]?.count || 0);
 }
 
+/** 一批令牌各有几台设备（令牌清单用）：一条 GROUP BY，不按令牌逐条数。没设备的令牌不在结果里。 */
+export async function countProxySubDevicesByTokens(tokenIds: readonly number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  const ids = Array.from(new Set(tokenIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  const rows = await db
+    .select({ tokenId: proxySubDevices.tokenId, count: sql<number>`count(*)` })
+    .from(proxySubDevices)
+    .where(inArray(proxySubDevices.tokenId, ids))
+    .groupBy(proxySubDevices.tokenId);
+  for (const row of rows as any[]) out.set(Number(row.tokenId), Number(row.count || 0));
+  return out;
+}
+
+/**
+ * 刚来过的设备不再刷 lastSeenAt：设备表是给人看「哪台多久没来」的，几分钟的误差没人在意，
+ * 省下的是每次拉取对设备表的一条 UPDATE。按 IP 退化统计的窗口按小时算，远大于这个数。
+ */
+const DEVICE_TOUCH_INTERVAL_MS = 5 * 60_000;
+
 /** 登记或刷新一台设备。返回是不是新的。 */
 export async function touchProxySubDevice(input: {
   tokenId: number;
@@ -146,41 +168,68 @@ export async function touchProxySubDevice(input: {
   model?: string;
   ip?: string;
   userAgent?: string;
+  /**
+   * 调用方刚列过这条令牌的设备时带上，省一次查询：这一台在清单里就给它的 id 和上次时间，
+   * 不在就给 null。不带（undefined）时自己查一次。
+   */
+  known?: { id: number; lastSeenAt: unknown } | null;
 }): Promise<{ isNew: boolean }> {
   const db = await getDb();
   if (!db) return { isNew: false };
   const hwid = String(input.hwid || "").slice(0, 80);
   if (!hwid) return { isNew: false };
-  const existing = await db
-    .select({ id: proxySubDevices.id })
-    .from(proxySubDevices)
-    .where(and(eq(proxySubDevices.tokenId, Number(input.tokenId)), eq(proxySubDevices.hwid, hwid)))
-    .limit(1);
+  const now = nowDate();
+  let known = input.known;
+  if (known === undefined) {
+    const existing = await db
+      .select({ id: proxySubDevices.id, lastSeenAt: proxySubDevices.lastSeenAt })
+      .from(proxySubDevices)
+      .where(and(eq(proxySubDevices.tokenId, Number(input.tokenId)), eq(proxySubDevices.hwid, hwid)))
+      .limit(1);
+    const row = (existing as any[])[0];
+    known = row ? { id: Number(row.id), lastSeenAt: row.lastSeenAt } : null;
+  }
   const patch = {
-    lastSeenAt: nowDate(),
+    lastSeenAt: now,
     lastIp: String(input.ip || "").slice(0, 64) || null,
     userAgent: String(input.userAgent || "").slice(0, 200) || null,
     ...(input.deviceOs ? { deviceOs: String(input.deviceOs).slice(0, 64) } : {}),
     ...(input.osVersion ? { osVersion: String(input.osVersion).slice(0, 64) } : {}),
     ...(input.model ? { model: String(input.model).slice(0, 120) } : {}),
   };
-  if ((existing as any[]).length > 0) {
-    await db.update(proxySubDevices).set(patch as any).where(eq(proxySubDevices.id, Number((existing as any[])[0].id)));
+  if (known) {
+    const lastSeen = known.lastSeenAt ? new Date(known.lastSeenAt as any).getTime() : 0;
+    if (lastSeen && now.getTime() - lastSeen < DEVICE_TOUCH_INTERVAL_MS) return { isNew: false };
+    await db.update(proxySubDevices).set(patch as any).where(eq(proxySubDevices.id, Number(known.id)));
     return { isNew: false };
   }
-  try {
-    await db.insert(proxySubDevices).values({
-      tokenId: Number(input.tokenId),
-      userId: Number(input.userId),
-      hwid,
-      firstSeenAt: nowDate(),
-      ...patch,
-    } as any);
-    return { isNew: true };
-  } catch {
-    // 并发下撞唯一键：另一路已经插进去了，按「不是新的」算。
-    return { isNew: false };
-  }
+  /*
+    新设备：插入时撞唯一键（并发的另一路、或调用方的清单旧了）就当没插。
+    原来是 INSERT 失败再 catch —— 结果一样，但 PostgreSQL 会把每次唯一键冲突记进服务端日志。
+  */
+  if (await insertProxySubDeviceIgnoringConflict({
+    tokenId: Number(input.tokenId),
+    userId: Number(input.userId),
+    hwid,
+    firstSeenAt: now,
+    ...patch,
+  })) return { isNew: true };
+  // 另一路刚插进去了：把这一次的来路补上去，按「不是新的」算。
+  await db.update(proxySubDevices).set(patch as any).where(and(eq(proxySubDevices.tokenId, Number(input.tokenId)), eq(proxySubDevices.hwid, hwid)));
+  return { isNew: false };
+}
+
+/** INSERT 一台设备，(tokenId, hwid) 已有就忽略。插进去了返回 true。三种库各自的写法，和 settingsRepository 的 claimSettingKey 一致。 */
+async function insertProxySubDeviceIgnoringConflict(values: Record<string, unknown>): Promise<boolean> {
+  const q = quoteDbIdentifier;
+  const columns = Object.keys(values).filter((key) => values[key] !== undefined);
+  const list = columns.map(q).join(", ");
+  const placeholders = columns.map(() => "?").join(", ");
+  const params = columns.map((key) => values[key]);
+  const result = getDatabaseKind() === "mysql"
+    ? await executeRaw(`INSERT IGNORE INTO ${q("proxy_sub_devices")} (${list}) VALUES (${placeholders})`, params)
+    : await executeRaw(`INSERT INTO ${q("proxy_sub_devices")} (${list}) VALUES (${placeholders}) ON CONFLICT (${q("tokenId")}, ${q("hwid")}) DO NOTHING`, params);
+  return rawAffectedRows(result) > 0;
 }
 
 export async function deleteProxySubDevice(id: number) {
@@ -211,7 +260,8 @@ export async function pruneStaleIpDevices(windowHours: number) {
   const result = await db
     .delete(proxySubDevices)
     .where(and(sql`${proxySubDevices.hwid} LIKE 'ip:%'`, lt(proxySubDevices.lastSeenAt, cutoff)));
-  return Number((result as any)?.rowsAffected ?? (result as any)?.changes ?? 0);
+  // 三种驱动的受影响行数字段各不一样（changes / affectedRows / rowCount），mysql2 还包在元组里；统一走 rawAffectedRows。
+  return rawAffectedRows(Array.isArray(result) ? result[0] : result);
 }
 
 // ==================== 模板 ====================
@@ -343,16 +393,20 @@ export async function deleteProxySubSource(id: number) {
 export async function listDueProxySubSources(now = Date.now(), limit = 20) {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db
+  /*
+    「到点没到点」在 SQL 里判，不先取一批再在 JS 里过滤：原来取 5 倍再筛，来源一多，前面几十条
+    「没到点但 lastFetchAt 最早」的会把真到点的挤出那一批，永远轮不到；PostgreSQL 上 NULL 排在最后，
+    从没拉过的更是最先被挤掉。时间列存的是秒，这里也按秒比；间隔的口径和原来 JS 里一样：
+    没填或 0 按 21600，最少 600。
+  */
+  const interval = sql`CASE WHEN COALESCE(${proxySubSources.intervalSec}, 0) <= 0 THEN 21600 WHEN ${proxySubSources.intervalSec} < 600 THEN 600 ELSE ${proxySubSources.intervalSec} END`;
+  const lastFetch = sql`COALESCE(${proxySubSources.lastFetchAt}, 0)`;
+  return db
     .select()
     .from(proxySubSources)
-    .where(eq(proxySubSources.isEnabled, true))
-    .orderBy(asc(proxySubSources.lastFetchAt), asc(proxySubSources.id))
-    .limit(Math.max(1, limit * 5));
-  return (rows as any[]).filter((row) => {
-    const last = row.lastFetchAt ? new Date(row.lastFetchAt).getTime() : 0;
-    return !last || now - last >= Math.max(600, Number(row.intervalSec) || 21600) * 1000;
-  }).slice(0, limit);
+    .where(and(eq(proxySubSources.isEnabled, true), sql`${lastFetch} + ${interval} <= ${Math.floor(now / 1000)}`))
+    .orderBy(lastFetch, asc(proxySubSources.id))
+    .limit(Math.max(1, limit));
 }
 
 export async function listProxyNodesBySource(sourceId: number) {
