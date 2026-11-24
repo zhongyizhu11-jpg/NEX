@@ -26,7 +26,7 @@ import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentV
 import { getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import { isRuleProtocolEnabled, isTunnelProtocolEnabled } from "./forwardProtocolSettings";
-import { agentHeartbeatGate, agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
+import { agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
@@ -66,7 +66,6 @@ import {
 import { buildForwardXWireGuardMimicFilters, isForwardXWireGuardV2 } from "./forwardXWireGuard";
 import { forwardXV3SpecFields, isForwardXV3Tunnel } from "@shared/forwardXV3";
 import { agentActionIssueTracker, agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
-import { tunnelProbeTopologyKey } from "./probeTopology";
 import { resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
 import { isTunnelRelayAggregate, isTunnelRelayFailover, isTunnelRelayHotStandby, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
 import {
@@ -92,16 +91,15 @@ export { stableStateSignature, stableDesiredStateHash, withDesiredStateConfigHas
 import { createResolvedTargetGate } from "./ruleTargetPolicy";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
 import { getTrafficExcludedHostIds } from "./hostTrafficPolicy";
-import { groupRuleTrafficBlocked, planTunnelTrafficParticipation } from "./hostTrafficRuntimePlan";
 import { isEntryBridgeRuntimeRule, markRuntimeRulesNotRunning } from "./ruleEntryBridges";
 import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
 import { isSniRuntimeRule } from "./tlsInboundRuntime";
-import { evaluateRuleEgress, loadEgressRuntimeContext, tunnelEgressDialHostIdsOf } from "./ssEgress";
-import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
-import { AGENT_DYNAMIC_CACHE_MAX, AGENT_HOST_CACHE_MAX, AGENT_ORPHAN_REMOVE_MIN_STREAK, agentDesiredDispatchAuditHash, agentOrphanPortStreakCache, forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, fxpUdpTargetSignatureCache, pruneAgentHeartbeatCaches } from "./agentHeartbeatState";
+import { loadEgressRuntimeContext } from "./ssEgress";
+import { normalizeRuleEgressType, parseAgentCapabilities } from "../shared/ssEgress";
+import { AGENT_DYNAMIC_CACHE_MAX, AGENT_HOST_CACHE_MAX, agentDesiredDispatchAuditHash, forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, fxpUdpTargetSignatureCache, pruneAgentHeartbeatCaches } from "./agentHeartbeatState";
 import { addDnsWatch, expireSharedResolvedIp, resolveTargetIpCached } from "./agentHeartbeatDns";
 import { forwardXUDPTargetAddress, isForwardXTunnelMode, isGostTunnelMode, legacyRealmCleanupCmds, legacySocatCleanupCmds, mimicFilterEndpoint, RUNTIME_SERVICE_NAME, runtimeBool, SHARED_GOST_FORWARD_TYPES, TUNNEL_RUNTIME_SERVICE_NAME, udpOverTcpEnabled } from "./agentHeartbeatRuntime";
 import {
@@ -126,8 +124,8 @@ import {
   pointTunnelEgressRule,
   tunnelExitRowsMatchNodes,
 } from "./agentHeartbeatTunnel";
-import { actionMayAffectRuntimeFamily, AGENT_PLUGIN_SYNC_RESEND_MS, isTunnelApplyBlockingProbe, ruleRuntimeIdentityKey, ruleRuntimePortIdentityKey, runtimePortProtocolKey, runtimeSyncReconcileDue, shouldSendDesiredState, shouldSendPluginSyncAction } from "./agentHeartbeatDispatch";
-import { agentPluginInventorySignature, buildAgentStateResponseSections, getOrphanPortStreaks, isKernelForwardRule, settleStoppedRule } from "./agentHeartbeatLocalState";
+import { actionMayAffectRuntimeFamily, isTunnelApplyBlockingProbe, ruleRuntimeIdentityKey, ruleRuntimePortIdentityKey, runtimePortProtocolKey, runtimeSyncReconcileDue, shouldSendDesiredState } from "./agentHeartbeatDispatch";
+import { agentPluginInventorySignature, buildAgentStateResponseSections, isKernelForwardRule, settleStoppedRule } from "./agentHeartbeatLocalState";
 import { resetAgentRuntimeStateForRecovery } from "./agentHeartbeatRecovery";
 import { logAgentHeartbeatSummary, shouldLogAgentRuntimeDrift } from "./agentHeartbeatLogging";
 import { isPortRangeRule, ruleSourcePortEnd } from "@shared/portRange";
@@ -146,6 +144,12 @@ import { queueMimicRuntimeSync } from "./heartbeat/mimicRuntimeSync";
 import { queueSingboxRuntimeSync } from "./heartbeat/singboxRuntimeSync";
 import { queueNginxRuntimeSync } from "./heartbeat/nginxRuntimeSync";
 import { queueGostRuntimeSync } from "./heartbeat/gostRuntimeSync";
+import { queuePluginSyncActions } from "./heartbeat/pluginSyncActions";
+import { protectActionPortsFromLocalState } from "./heartbeat/protectActionPorts";
+import { buildTunnelProbes } from "./heartbeat/tunnelProbes";
+import { blockRulesForTrafficExcludedHosts } from "./heartbeat/trafficExcludedHosts";
+import { validateTunnelEgressRules } from "./heartbeat/tunnelEgressRuleShape";
+import { acquireHeartbeatReconciliation } from "./heartbeat/acquireReconciliation";
 // 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
@@ -261,48 +265,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const compactMetrics = Array.isArray(req.body?.m) ? req.body.m : [];
     const busyHeartbeat = req.body?.busy === true || String(req.body?.busy || "").toLowerCase() === "true";
     const forceReconcile = req.body?.forceReconcile === true || String(req.body?.forceReconcile || "").toLowerCase() === "true";
-    if (!busyHeartbeat) {
-      releaseHeartbeatReconciliation = agentHeartbeatGate.tryAcquire(logHostId, { force: forceReconcile });
-      if (!releaseHeartbeatReconciliation) {
-        await db.touchHostHeartbeat(logHostId);
-        if (!wasOnline) {
-          await resetAgentRuntimeStateForRecovery(logHostId, "agent-reconnected-heartbeat-coalesced");
-          void notifyHostOnlineIfNeeded({ ...host, isOnline: true, lastHeartbeat: new Date() }).catch((error) => {
-            console.warn(`[HostStatus] Online notify failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
-          });
-        }
-        const panelMigration = await getPanelMigrationAgentDirective(logHostId);
-        const coalescedRequestLocalState = !!normalizeRuntimeStateSignature(req.body?.localStateSignature);
-        const coalescedRetrySeconds = agentHeartbeatGate.retryHintSeconds(logHostId);
-        logAgentHeartbeatSummary({
-          hostId: logHostId,
-          hostName: logHostName,
-          expectedRules: 0,
-          reportedRules: 0,
-          reportedServices: 0,
-          actions: 0,
-          pendingApply: 0,
-          pendingRemove: 0,
-          recoveryPending: !wasOnline,
-          requestLocalState: coalescedRequestLocalState,
-          coalesced: true,
-          stable: false,
-          nextInterval: coalescedRetrySeconds,
-        });
-        res.json({
-          success: true,
-          actions: [],
-          selfTests: [],
-          nextInterval: coalescedRetrySeconds,
-          requestLocalState: coalescedRequestLocalState,
-          compactReports: true,
-          presenceSupported: true,
-          reconciliationCoalesced: true,
-          panelMigration,
-        });
-        return;
-      }
-    }
+    const acquireHeartbeatReconciliationResult = await acquireHeartbeatReconciliation({ busyHeartbeat, releaseHeartbeatReconciliation, logHostId, forceReconcile, wasOnline, host, req, logHostName, res });
+    if (acquireHeartbeatReconciliationResult.done) return ;
+    releaseHeartbeatReconciliation = acquireHeartbeatReconciliationResult.releaseHeartbeatReconciliation;
     // 指标一律转成有限的非负数：Agent 在租户手里，传一段几 MB 的字符串进来，SQLite 会
     // 原样存成 TEXT，每次心跳都往 host_metrics 里塞，主机列表每次也要把它读出来。
     // 这些列都是整型（百分比几项是 INT，其余 BIGINT）：小数在 PG 上是 invalid input syntax for type
@@ -611,59 +576,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       list.push(rule);
       tunnelEgressRuleObjects.set(Number(rule.id), list);
     }
-    for (const [ruleId, objects] of tunnelEgressRuleObjects) {
-      const rule = objects[0];
-      if (objects.every((item) => runtimeBool(item.pendingDelete) || !runtimeBool(item.isEnabled))) continue;
-      const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-      if (!tunnel) {
-        holdTunnelEgressRule(objects, "shape_invalid");
-        continue;
-      }
-      const dialHostIds = tunnelEgressDialHostIdsOf(
-        tunnel,
-        tunnelHopsByTunnelId.get(Number(tunnel.id)) || [],
-        tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || [],
-      );
-      const selfDial = dialHostIds.includes(Number(host.id));
-      if (selfDial) {
-        const evaluation = evaluateRuleEgress(rule, {
-          entryHostId: Number(host.id),
-          entryAgentVersion: effectiveAgentVersion,
-          entryHostName: String((host as any).name || ""),
-          entryAgentCapabilities: (host as any).agentCapabilities,
-          entryRuntimeVersion: (host as any).runtimeVersion,
-          tunnelMode: tunnel.mode,
-          context: egressRuntimeContext,
-        });
-        if (!evaluation || !evaluation.runtime || ruleEgressStateBlocksDelivery(evaluation.state)) {
-          holdTunnelEgressRule(objects, evaluation?.state || "config_invalid");
-          continue;
-        }
-        tunnelEgressHelpers.set(ruleId, {
-          ruleId,
-          tunnel,
-          runtime: evaluation.runtime,
-          targetHost: String(rule._originalTargetIp || rule.targetIp || ""),
-          targetPort: Number(rule.targetPort || 0),
-          protocol: String(rule.protocol || "both"),
-          port: 0,
-        });
-        // 本机跑着这条规则的 SS 客户端：目标等分完端口再换（分守卫端口之后那一段），不用等别的出口。
-        continue;
-      }
-      const pending = dialHostIds.filter((exitHostId) => !hasTunnelExitPort(exitHostId, "egress", ruleId));
-      for (const exitHostId of pending) {
-        if (claimTunnelExitReportRequest(exitHostId)) pushAgentRefresh(exitHostId, "tunnel-exit-ports-needed");
-      }
-      const port = dialHostIds.length > 0 && pending.length === 0
-        ? tunnelExitPortFor("egress", ruleId, dialHostIds, 0, { whenRuleMissing: "none" })
-        : null;
-      if (!port) {
-        holdTunnelEgressRule(objects, "pending");
-        continue;
-      }
-      pointTunnelEgressRule(objects, port);
-    }
+    validateTunnelEgressRules({ tunnelEgressRuleObjects, tunnelById, tunnelHopsByTunnelId, tunnelExitNodesByTunnelId, host, effectiveAgentVersion, egressRuntimeContext, tunnelEgressHelpers });
     const dnsRuntimeRefreshToken = dnsChangedReports.length > 0
       ? `${responseIssuedAt}:${Array.from(dnsChangedScopes).sort().join(",") || Array.from(dnsChangedIpByHost.keys()).sort().join(",")}`
       : "";
@@ -782,77 +695,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const trafficExcludedHosts = await getTrafficExcludedHostIds();
     // 线路组路径的「此刻不该走」提示要读每台机器在不在线、在不在维护（十秒快照）。
     await ensureRouteNodeHealthFresh();
-    if (trafficExcludedHosts.size > 0) {
-      const blockForTraffic = (rule: any) => {
-        rule.isEnabled = false;
-        rule.resourceAccessDenied = true;
-        rule.hostTrafficExcluded = true;
-      };
-      const groupById = new Map<number, any>();
-      for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
-        const groupId = Number(rule.forwardGroupId || 0);
-        if (groupId > 0 && !groupById.has(groupId)) groupById.set(groupId, await db.getForwardGroupById(groupId));
-        const group = groupById.get(groupId);
-        const chainHostIds = String(group?.groupMode) === "chain"
-          ? (group.members || []).filter((member: any) => runtimeBool(member.isEnabled, true)).map((member: any) => Number(member.hostId))
-          : [];
-        if (groupRuleTrafficBlocked(rule, trafficExcludedHosts, chainHostIds)) blockForTraffic(rule);
-        // 组成员用的是固定出口 / 链式中转的隧道：出口或中转被暂停，这条子规则也走不通。
-        const memberTunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-        const memberHops = memberTunnel ? tunnelHopsByTunnelId.get(Number(memberTunnel.id)) || [] : [];
-        const blockedFixedExit = memberTunnel && !Number(memberTunnel.exitGroupId) && !runtimeBool(memberTunnel.loadBalanceEnabled)
-          && trafficExcludedHosts.has(Number(memberTunnel.exitHostId));
-        const blockedTransit = memberTunnel && !isTunnelRelayFailover(memberTunnel, memberHops)
-          && memberHops.slice(1, -1).some((hop: any) => trafficExcludedHosts.has(Number(hop.hostId)));
-        if (groupId > 0 && (blockedFixedExit || blockedTransit)) blockForTraffic(rule);
-      }
-      for (const tunnel of hostTunnels as any[]) {
-        const tunnelId = Number(tunnel.id);
-        const originalHops = tunnelHopsByTunnelId.get(tunnelId) || [];
-        const originalExits = tunnelExitNodesByTunnelId.get(tunnelId) || [];
-        const plan = planTunnelTrafficParticipation(tunnel, originalHops, originalExits,
-          tunnelEntryHostIdsByTunnelId.get(tunnelId) || [], trafficExcludedHosts);
-        if (Number(tunnel.entryGroupId) > 0 && trafficExcludedHosts.has(Number(host.id))) {
-          // 入口组隧道的规则存着原主人的 hostId、却装在每个入口上：按「当前这台 Agent」拦，
-          // 不按存着的 hostId；全局的出口规则留给别的入口用。
-          for (const rule of agentHostRules as any[]) {
-            if (Number(rule.tunnelId) === tunnelId) blockForTraffic(rule);
-          }
-        }
-        // 出口组 / 多出口的 NEX 隧道：这台被暂停时明确撤掉它原来的出口监听（只改主出口的运行时
-        // 副本，老 Agent 上那个监听会一直留着）。
-        if (String(tunnel.mode) === "forwardx" && (Number(tunnel.exitGroupId) > 0 || runtimeBool(tunnel.loadBalanceEnabled)) && trafficExcludedHosts.has(Number(host.id))) {
-          const localExit = Number(tunnel.exitHostId) === Number(host.id) ? tunnel
-            : originalExits.find((node: any) => Number(node.hostId) === Number(host.id));
-          if (localExit && Number(localExit.listenPort) > 0 && isTunnelRuntimeHostReady(tunnelId, Number(host.id))) {
-            actions.push({
-              tunnelId, ruleId: 0, statusType: "tunnel", op: "remove", forwardType: "forwardx-tunnel",
-              sourcePort: Number(localExit.listenPort), targetIp: host.ip, targetPort: Number(localExit.listenPort), protocol: "both", commands: [],
-              // V3 的出口进程身份带着 v3（Agent 的 fxpServerID），撤的时候要说清楚是哪个版本。
-              fxp: { role: "exit", tunnelId, ruleId: 0, listenPort: Number(localExit.listenPort), ...(isForwardXV3Tunnel(tunnel) ? { transportVersion: "v3" } : {}) },
-            } as any);
-          }
-        }
-        if (plan.promotedExit) {
-          // GOST 在每个出口上给每条规则分的端口不一样：提上来的出口要用它自己的那组映射，不能沿用原主出口的端口。
-          for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
-            if (Number(rule.tunnelId) !== tunnelId) continue;
-            const mapping = (tunnelExitRowsByRuleId.get(Number(rule.id)) || [])
-              .find((row: any) => Number(row.exitNodeId) === Number(plan.promotedExit.id));
-            if (mapping) rule.tunnelExitPort = Number(mapping.tunnelExitPort);
-          }
-        }
-        Object.assign(tunnel, plan.tunnel);
-        tunnelHopsByTunnelId.set(tunnelId, plan.hops);
-        tunnelExitNodesByTunnelId.set(tunnelId, plan.exits);
-        tunnelEntryHostIdsByTunnelId.set(tunnelId, plan.entryHostIds);
-        if (!runtimeBool(tunnel.isEnabled)) {
-          for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
-            if (Number(rule.tunnelId) === tunnelId) blockForTraffic(rule);
-          }
-        }
-      }
-    }
+    await blockRulesForTrafficExcludedHosts({ trafficExcludedHosts, agentHostRules, agentAllRules, tunnelById, tunnelHopsByTunnelId, hostTunnels, tunnelExitNodesByTunnelId, tunnelEntryHostIdsByTunnelId, host, actions, tunnelExitRowsByRuleId });
     // realm/socat/gost 进程命令使用原始 targetIp（域名形式），以便工具自身解析 DNS，
     // iptables/nftables/计数链使用已解析的 IP（rule.targetIp 已被替换为解析后的值）。
     const processTarget = (rule: any) => (rule as any)._originalTargetIp || rule.targetIp;
@@ -1943,85 +1786,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         });
       }
     }
-    const tunnelProbes = (await Promise.all((hostTunnels as any[])
-      .filter((tunnel: any) => runtimeBool(tunnel.isEnabled) && isTunnelProtocolEnabled(forwardProtocolSettings, tunnel))
-      .map(async (tunnel: any) => {
-        const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
-        const topologyKey = tunnelProbeTopologyKey(
-          tunnel,
-          Array.isArray(hops) ? hops : [],
-          tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || [],
-        );
-        if (Array.isArray(hops) && hops.length >= 3) {
-          const hostIdx = hops.findIndex((hop: any) => Number(hop.hostId) === Number(host.id));
-          const currentHostIsEntry = isCurrentHostTunnelEntry(tunnel);
-          if (!currentHostIsEntry && (hostIdx < 0 || hostIdx >= hops.length - 1)) return null;
-          const routeHostIdx = currentHostIsEntry ? 0 : hostIdx;
-          const relayFailover = tunnelRelayUsesParallelRelays(tunnel, hops);
-          const probeTargets = relayFailover && currentHostIsEntry
-            ? tunnelRelayCandidates(hops).map((hop: any, index: number) => ({ hop, index: index + 1 }))
-            : [{ hop: relayFailover ? hops[hops.length - 1] : hops[routeHostIdx + 1], index: routeHostIdx + 1 }];
-          const probes = await Promise.all(probeTargets.map(async ({ hop: nextHop, index: targetIndex }: any) => {
-            const targetIp = await getHopDialAddress(nextHop, tunnel);
-            const targetPort = Number(nextHop?.listenPort) || 0;
-            if (!targetIp || targetPort <= 0) return null;
-            const relayCandidateIndex = relayFailover ? (currentHostIsEntry ? targetIndex : hostIdx) : 0;
-            return {
-              tunnelId: tunnel.id,
-              targetIp,
-              targetPort,
-              protocol: "tcp",
-              hopIndex: relayFailover ? (currentHostIsEntry ? 0 : 1) : routeHostIdx,
-              hopCount: relayFailover ? 2 : hops.length - 1,
-              ...(relayFailover ? {
-                seriesKey: `relay-${relayCandidateIndex}`,
-                seriesLabel: `中转 ${relayCandidateIndex}`,
-              } : {}),
-              probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:hop:${routeHostIdx}/${hops.length - 1}:target:${targetIndex}:${String(targetIp).toLowerCase()}:${targetPort}`,
-              topologyKey,
-              wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(Number(nextHop?.hostId || 0)) : undefined,
-            };
-          }));
-          return probes.filter(Boolean);
-        }
-        if (!isCurrentHostTunnelEntry(tunnel)) return null;
-        const primaryEndpoint = tunnelExitEndpointById.get(tunnel.id);
-        const baseProbe = {
-          tunnelId: tunnel.id,
-          targetIp: primaryEndpoint?.host || "",
-          targetPort: Number(primaryEndpoint?.port) || 0,
-          protocol: "tcp",
-          probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:direct:${String(primaryEndpoint?.host || "").toLowerCase()}:${Number(primaryEndpoint?.port) || 0}`,
-          topologyKey,
-          wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(Number(tunnel.exitHostId || 0)) : undefined,
-        };
-        if (!runtimeBool((tunnel as any).loadBalanceEnabled)) return baseProbe;
-        const probes: any[] = [];
-        if (baseProbe.targetIp && baseProbe.targetPort > 0) {
-          probes.push({
-            ...baseProbe,
-            seriesKey: "primary",
-            seriesLabel: "主出口",
-            probeKey: `${baseProbe.probeKey}:primary`,
-          });
-        }
-        const extraRoutes = await forwardXExtraExitRoutes(tunnel);
-        extraRoutes.forEach((route, index) => {
-          if (!route.host || Number(route.port) <= 0) return;
-          probes.push({
-            tunnelId: tunnel.id,
-            targetIp: route.host,
-            targetPort: Number(route.port) || 0,
-            protocol: "tcp",
-            seriesKey: `exit-${index + 2}`,
-            seriesLabel: `出口 ${index + 2}`,
-            probeKey: `tunnel:${Number(tunnel.id)}:host:${Number(host.id)}:direct:${String(route.host).toLowerCase()}:${Number(route.port) || 0}:exit-${index + 2}`,
-            topologyKey,
-            wireGuardPeerId: isForwardXWireGuardV2(tunnel) ? String(Number((route as any).hostId || 0)) : undefined,
-          });
-        });
-        return probes;
-      }))).flat().filter((probe: any) => probe && probe.targetIp && probe.targetPort > 0);
+    const buildTunnelProbesResult = await buildTunnelProbes({ hostTunnels, forwardProtocolSettings, tunnelHopsByTunnelId, tunnelExitNodesByTunnelId, host, isCurrentHostTunnelEntry, getHopDialAddress, tunnelExitEndpointById, forwardXExtraExitRoutes });
+    const { tunnelProbes } = buildTunnelProbesResult;
     const emptyProtocolPolicy = { blockHttp: false, blockSocks: false, blockTls: false };
     const hostProtocolPolicyById = new Map<number, typeof emptyProtocolPolicy>([
       [Number(host.id), protocolPolicyFromHost(host)],
@@ -3044,87 +2810,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
     const collectHeartbeatRunningRulesResult = await collectHeartbeatRunningRules({ tunnelExitRules, tunnelById, tunnelProtocolPolicy, emptyProtocolPolicy, tunnelProxyProtocolPlan, isForwardXTunnel, failoverTargetEndpoint, guardRules, guardListenPort, proxyProtocolVersion, nginxTunnelExitRules, currentHostTunnelExitPortsForRule, protectActiveRulePort, addRunningRule, failoverForCurrentHost, failoverProxyPort, agentAllRules, forwardProtocolSettings, forwardXSchedulerFailover, tunnelHopsByTunnelId, host, getHopDialAddress, runningRules, expectedRulePorts, expectedRuleIdentityKeys, expectedRulePortIdentityKeys });
     const { hostProxyInbounds } = collectHeartbeatRunningRulesResult;
-    if (hasReportedRuntimeState) {
-      const ruleActionPorts = new Set<string>();
-      const ruleActionPortIdentityKeys = new Set<string>();
-      const applyPortsByRuleId = new Map<number, Set<number>>();
-      const tunnelActionPorts = new Set<number>();
-      for (const action of actions) {
-        const port = Number(action?.sourcePort || 0);
-        if (port <= 0) continue;
-        const statusType = String(action?.statusType || "");
-        const ruleId = Number(action?.ruleId || 0);
-        const tunnelId = Number(action?.tunnelId || 0);
-        if (ruleId > 0 || statusType === "rule") {
-          ruleActionPorts.add(runtimePortProtocolKey(port, action?.protocol));
-          ruleActionPortIdentityKeys.add(ruleRuntimePortIdentityKey(ruleId, port));
-          if (action?.op === "apply" && ruleId > 0) {
-            const applyPorts = applyPortsByRuleId.get(ruleId) || new Set<number>();
-            applyPorts.add(port);
-            applyPortsByRuleId.set(ruleId, applyPorts);
-          }
-        } else if (tunnelId > 0 || statusType === "tunnel") {
-          tunnelActionPorts.add(port);
-        }
-      }
-      // 稳定身份护栏：一个上报端口的 ruleId 若属于面板已知、启用、未删除的规则
-      // （无论本机自有还是跨主机隧道 entry/exit/hop 规则），说明该端口很可能是合法的，
-      // 只是本轮运行态推导（如出口端口计算）出现了瞬时缺口。对这类端口施加迟滞：
-      // 必须连续多轮心跳都判为孤儿才真正拆除，杜绝与 apply 形成抖动死循环。
-      const knownEnabledRuleIds = new Set<number>();
-      for (const rule of agentAllRules as any[]) {
-        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
-        const ruleId = Number(rule.id || 0);
-        if (ruleId > 0) knownEnabledRuleIds.add(ruleId);
-      }
-      const orphanStreaks = getOrphanPortStreaks(Number(host.id));
-      const seenOrphanKeys = new Set<string>();
-      for (const localRule of reportedLocalRules) {
-        const port = Number(localRule.port || 0);
-        if (port <= 0) continue;
-        const localRuntimeKey = runtimePortProtocolKey(port, localRule.protocol || "both");
-        const reportedRuleId = Number(localRule.ruleId || 0);
-        const localIdentityKey = ruleRuntimeIdentityKey(reportedRuleId, port, localRule.protocol || "both");
-        const localPortIdentityKey = ruleRuntimePortIdentityKey(reportedRuleId, port);
-        const expectedIdentity = !!localIdentityKey && expectedRuleIdentityKeys.has(localIdentityKey);
-        const expectedPortIdentity = !!localPortIdentityKey && expectedRulePortIdentityKeys.has(localPortIdentityKey);
-        if (expectedIdentity || expectedPortIdentity || (!reportedRuleId && expectedRulePorts.has(localRuntimeKey)) || ruleActionPorts.has(localRuntimeKey) || (!!localPortIdentityKey && ruleActionPortIdentityKeys.has(localPortIdentityKey))) continue;
-        // A replacement apply for this same rule proves that an old listener was
-        // superseded by an edit. Remove it in this batch; without that concrete
-        // replacement, retain orphan hysteresis for transient runtime gaps.
-        const replacementPorts = applyPortsByRuleId.get(reportedRuleId);
-        const supersededByRuleEdit = !!replacementPorts
-          && (replacementPorts.size > 1 || !replacementPorts.has(port));
-        const guarded = !supersededByRuleEdit
-          && reportedRuleId > 0
-          && knownEnabledRuleIds.has(reportedRuleId);
-        const orphanKey = localIdentityKey || `unknown:${localRuntimeKey}`;
-        if (guarded) {
-          seenOrphanKeys.add(orphanKey);
-          const streak = (orphanStreaks.get(orphanKey) || 0) + 1;
-          orphanStreaks.set(orphanKey, streak);
-          if (streak < AGENT_ORPHAN_REMOVE_MIN_STREAK) {
-            appendPanelLog("info", `[AgentReconcile] host=${host.id} port=${port} protocol=${normalizeForwardRuleProtocol(localRule.protocol, "both")} rule=${reportedRuleId} suspected-orphan streak=${streak}/${AGENT_ORPHAN_REMOVE_MIN_STREAK}; defer removal (identity known, likely transient runtime gap)`);
-            continue;
-          }
-          appendPanelLog("warn", `[AgentReconcile] host=${host.id} port=${port} protocol=${normalizeForwardRuleProtocol(localRule.protocol, "both")} rule=${reportedRuleId} orphan confirmed after ${streak} heartbeats; removing`);
-        }
-        actions.push(buildGenericLocalRuleRemovalAction(localRule));
-        ruleActionPorts.add(localRuntimeKey);
-        orphanStreaks.delete(orphanKey);
-      }
-      // 端口一旦重新匹配上规则（不再进入上面的孤儿分支），清零其迟滞计数。
-      for (const orphanKey of Array.from(orphanStreaks.keys())) {
-        if (!seenOrphanKeys.has(orphanKey)) orphanStreaks.delete(orphanKey);
-      }
-      if (orphanStreaks.size === 0) agentOrphanPortStreakCache.delete(Number(host.id));
-      for (const localTunnel of localTunnelsByPort.values()) {
-        const port = Number(localTunnel.port || 0);
-        if (port <= 0 || expectedTunnelPorts.has(port) || tunnelActionPorts.has(port)) continue;
-        actions.push(buildGenericLocalTunnelRemovalAction(localTunnel));
-        tunnelActionPorts.add(port);
-      }
-    }
+    protectActionPortsFromLocalState({ hasReportedRuntimeState, actions, agentAllRules, host, reportedLocalRules, expectedRuleIdentityKeys, expectedRulePortIdentityKeys, expectedRulePorts, buildGenericLocalRuleRemovalAction, localTunnelsByPort, expectedTunnelPorts, buildGenericLocalTunnelRemovalAction });
 
     const forwardGroupProbeMap = new Map<string, any>();
     const forwardGroupProbeTopology = await db.getForwardGroupProbeTopologyForHost(Number(host.id));
@@ -3192,42 +2878,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const pluginSyncTasks = await buildPluginHostAssetSyncActions(Number(host.id));
     const reportedPluginInventory = reportedPluginInventoryForFastPath;
     let pluginSyncActionQueued = false;
-    for (const pluginSyncTask of pluginSyncTasks) {
-      const reportedPluginVersion = reportedPluginInventory?.versions.get(pluginSyncTask.pluginId) || "";
-      const syncConfirmed = !!reportedPluginInventory && (pluginSyncTask.expectAbsent
-        ? !reportedPluginInventory.versions.has(pluginSyncTask.pluginId)
-          && !reportedPluginInventory.syncSignatures.has(pluginSyncTask.pluginId)
-        : reportedPluginVersion === pluginSyncTask.pluginVersion
-          && reportedPluginInventory.syncSignatures.get(pluginSyncTask.pluginId) === pluginSyncTask.syncSignature);
-      if (syncConfirmed) continue;
-      const pluginSyncAction = {
-        statusType: "runtime",
-        ruleId: 0,
-        tunnelId: 0,
-        pluginId: pluginSyncTask.pluginId,
-        op: "apply",
-        forwardType: pluginSyncTask.forwardType,
-        sourcePort: 0,
-        targetIp: "",
-        targetPort: 0,
-        protocol: "tcp",
-        knownRunning: false,
-        reportStatus: true,
-        failureMessage: `插件 ${pluginSyncTask.pluginId} 资源同步失败，请检查 Agent 日志`,
-        commands: pluginSyncTask.commands,
-      } as any;
-      const repairResendMs = reportedPluginInventory && reportedPluginVersion !== pluginSyncTask.pluginVersion
-        ? 5_000
-        : AGENT_PLUGIN_SYNC_RESEND_MS;
-      if (!deferActionsForLocalState && shouldSendPluginSyncAction(Number(host.id), pluginSyncAction, responseIssuedAt, repairResendMs)) {
-        actions.push(pluginSyncAction);
-        pluginSyncActionQueued = true;
-        appendPanelLog(
-          "info",
-          `[Plugin] sync queued plugin=${pluginSyncTask.pluginId} usageView=${pluginSyncTask.usageViewId} host=${host.id} name=${String(host.name || "-")}`,
-        );
-      }
-    }
+    const queuePluginSyncActionsResult = queuePluginSyncActions({ pluginSyncTasks, reportedPluginInventory, deferActionsForLocalState, host, responseIssuedAt, actions, pluginSyncActionQueued });
+    pluginSyncActionQueued = queuePluginSyncActionsResult.pluginSyncActionQueued;
 
     const dnsRuntimeChanged = dnsChangedReports.length > 0;
     const gostRuntimeConfigChanged = actions.some((action) => actionMayAffectRuntimeFamily(action, SHARED_GOST_FORWARD_TYPES)) || dnsRuntimeChanged;

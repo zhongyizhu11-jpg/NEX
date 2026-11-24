@@ -19,6 +19,7 @@
   - 不带 --apply 只打印分析结果（会传什么、返回什么、类型长什么样）。
   - --hook：抽成 React 自定义 hook（函数名以 use 开头、不加 async 判断、调用处直接调用）。
   抽完要手动跑：pnpm exec tsc --noEmit；相关测试；pnpm lint。类型长到离谱或打成 any 的地方要手动收拾。
+  注意：回写变量只在正常返回时写回；段里 throw 或 done 返回时外层拿不到段内的赋值，涉及锁 / 释放函数的段要人工核对。
 */
 import fs from "node:fs";
 import path from "node:path";
