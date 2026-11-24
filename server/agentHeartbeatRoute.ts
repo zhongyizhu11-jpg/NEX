@@ -22,21 +22,16 @@ import { classifyHeartbeatAgentDistribution, normalizeAgentDistribution } from "
 import { isForwardxAgentMigrationEnabled, shouldQueueForwardxAgentMigration } from "./forwardxAgentMigration";
 import { getIpChangeProbeTasksForHost, hasPendingIpChangeProbeDelivery } from "./ipChange/runtime";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
-import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
-import { buildVlessEgressBridgePlan, collectVlessEgressBridges } from "./vlessEgress";
-import { isVlessEgressAgentSupported } from "../shared/vlessEgress";
-import { singboxAssetRelayBase } from "./singboxAssets";
-import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import { isRuleProtocolEnabled, isTunnelProtocolEnabled } from "./forwardProtocolSettings";
-import { agentHeartbeatGate, agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, rememberHostWaitingForTunnels, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
+import { agentHeartbeatGate, agentStableHeartbeatPlanCache, AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildPresenceAgentHeartbeatResponse, selectAgentHeartbeatInterval, shouldPersistAgentPresence } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { anomalyAwareRuleMbps } from "./ops/trafficAnomalyThrottles";
-import { getTunnelRuntimeGeneration, getTunnelRuntimeTopologyStatus, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
+import { getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
@@ -98,7 +93,7 @@ import { createResolvedTargetGate } from "./ruleTargetPolicy";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
 import { getTrafficExcludedHostIds } from "./hostTrafficPolicy";
 import { groupRuleTrafficBlocked, planTunnelTrafficParticipation } from "./hostTrafficRuntimePlan";
-import { isEntryBridgeRuntimeRule, markRuntimeRulesNotRunning, setRuntimeRuleRunning } from "./ruleEntryBridges";
+import { isEntryBridgeRuntimeRule, markRuntimeRulesNotRunning } from "./ruleEntryBridges";
 import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
@@ -108,7 +103,7 @@ import { evaluateRuleEgress, loadEgressRuntimeContext, tunnelEgressDialHostIdsOf
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
 import { AGENT_DYNAMIC_CACHE_MAX, AGENT_HOST_CACHE_MAX, AGENT_ORPHAN_REMOVE_MIN_STREAK, agentDesiredDispatchAuditHash, agentOrphanPortStreakCache, forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, fxpUdpTargetSignatureCache, pruneAgentHeartbeatCaches } from "./agentHeartbeatState";
 import { addDnsWatch, expireSharedResolvedIp, resolveTargetIpCached } from "./agentHeartbeatDns";
-import { forwardXUDPTargetAddress, getSingboxAccelerator, isForwardXTunnelMode, isGostTunnelMode, legacyRealmCleanupCmds, legacySocatCleanupCmds, mimicFilterEndpoint, RUNTIME_SERVICE_NAME, runtimeBool, SHARED_GOST_FORWARD_TYPES, TUNNEL_RUNTIME_SERVICE_NAME, udpOverTcpEnabled } from "./agentHeartbeatRuntime";
+import { forwardXUDPTargetAddress, isForwardXTunnelMode, isGostTunnelMode, legacyRealmCleanupCmds, legacySocatCleanupCmds, mimicFilterEndpoint, RUNTIME_SERVICE_NAME, runtimeBool, SHARED_GOST_FORWARD_TYPES, TUNNEL_RUNTIME_SERVICE_NAME, udpOverTcpEnabled } from "./agentHeartbeatRuntime";
 import {
   isNginxTunnelMode,
   NGINX_SERVICE_NAME,
@@ -117,7 +112,7 @@ import {
 } from "./agentHeartbeatNginx";
 import { allocateProtocolGuardPorts, cleanupGuardBackendCmds, PROTOCOL_GUARD_LEGACY_SPAN, PROTOCOL_GUARD_PORT_MAX, PROTOCOL_GUARD_PORT_MIN, protocolPolicyFromHost, realmGuardConfigPathForPort, selectProtocolGuardProxyProtocol, shouldReconcileProtocolGuardBackend, shouldUseProtocolGuard } from "./agentHeartbeatProtocolGuard";
 import { buildAccessLimitCleanupCmds, buildAccessLimitCmds } from "./agentHeartbeatAccessLimits";
-import type { HeartbeatRequestContext, HeartbeatTunnelRow, TunnelEgressHelper } from "./agentHeartbeatContext";
+import type { HeartbeatRequestContext, TunnelEgressHelper } from "./agentHeartbeatContext";
 import { createGostRuntimePlan } from "./agentHeartbeatGostPlan";
 import { createDisabledRuleRemovalBuilder } from "./agentHeartbeatRuleRemoval";
 import { createForwardXWireGuardPlanner } from "./agentHeartbeatWireGuardPlan";
@@ -131,15 +126,10 @@ import {
   pointTunnelEgressRule,
   tunnelExitRowsMatchNodes,
 } from "./agentHeartbeatTunnel";
-import { actionMayAffectRuntimeFamily, AGENT_PLUGIN_SYNC_RESEND_MS, isTunnelApplyBlockingProbe, ruleRuntimeIdentityKey, ruleRuntimePortIdentityKey, runtimePortProtocolKey, runtimeSyncReconcileDue, shouldSendDesiredState, shouldSendPluginSyncAction, shouldSendRuntimeSyncAction } from "./agentHeartbeatDispatch";
+import { actionMayAffectRuntimeFamily, AGENT_PLUGIN_SYNC_RESEND_MS, isTunnelApplyBlockingProbe, ruleRuntimeIdentityKey, ruleRuntimePortIdentityKey, runtimePortProtocolKey, runtimeSyncReconcileDue, shouldSendDesiredState, shouldSendPluginSyncAction } from "./agentHeartbeatDispatch";
 import { agentPluginInventorySignature, buildAgentStateResponseSections, getOrphanPortStreaks, isKernelForwardRule, settleStoppedRule } from "./agentHeartbeatLocalState";
 import { resetAgentRuntimeStateForRecovery } from "./agentHeartbeatRecovery";
-import {
-  compactMimicFiltersForLog,
-  logAgentHeartbeatSummary,
-  shouldLogAgentRuntimeDrift,
-  shouldLogMimicRuntimePlan,
-} from "./agentHeartbeatLogging";
+import { logAgentHeartbeatSummary, shouldLogAgentRuntimeDrift } from "./agentHeartbeatLogging";
 import { isPortRangeRule, ruleSourcePortEnd } from "@shared/portRange";
 import { buildForwardGroupProbes } from "./heartbeat/forwardGroupProbes";
 import { reconcileTunnelRuntimeReadiness } from "./heartbeat/tunnelRuntimeReadiness";
@@ -151,6 +141,11 @@ import { planTunnelExitPortsAndSni } from "./heartbeat/tunnelExitPortsAndSni";
 import { orderHeartbeatActions } from "./heartbeat/orderActions";
 import { resolveAgentUpgradeDirective } from "./heartbeat/agentUpgradeDirective";
 import { collectHeartbeatRunningRules } from "./heartbeat/runningRules";
+import { restoreTunnelRulesFromLocalState } from "./heartbeat/restoreTunnelRulesFromLocalState";
+import { queueMimicRuntimeSync } from "./heartbeat/mimicRuntimeSync";
+import { queueSingboxRuntimeSync } from "./heartbeat/singboxRuntimeSync";
+import { queueNginxRuntimeSync } from "./heartbeat/nginxRuntimeSync";
+import { queueGostRuntimeSync } from "./heartbeat/gostRuntimeSync";
 // 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
@@ -164,10 +159,10 @@ onRuleDeleted(forgetAgentHeartbeatRule);
 
 const agentCacheCleanupTimer = setInterval(() => pruneAgentHeartbeatCaches(), 10 * 60 * 1000);
 agentCacheCleanupTimer.unref?.();
-const AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS = 60 * 1000;
-const AGENT_GOST_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
+export const AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS = 60 * 1000;
+export const AGENT_GOST_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
 const AGENT_NGINX_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
-const AGENT_MIMIC_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
+export const AGENT_MIMIC_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
 const VERBOSE_AGENT_ACTIONS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_ACTIONS || ""));
 
 export function registerAgentHeartbeatRoute(agentRouter: Router) {
@@ -3334,46 +3329,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       responseIssuedAt,
       gostReconcileInterval,
     );
-    if (!deferActionsForLocalState && (
-      gostRuntimeConfigChanged
-      || gostRuntimeServiceUnhealthy
-      || runtimeSyncBootstrap
-      || gostPeriodicReconcileDue
-    )) {
-      const runtimeSyncAction = {
-        statusType: "runtime",
-        ruleId: 0,
-        tunnelId: 0,
-        op: "apply",
-        forwardType: "gost-runtime-sync",
-        sourcePort: 0,
-        targetIp: "",
-        targetPort: 0,
-        protocol: "tcp",
-        knownRunning: false,
-        forceRuntimeSync: gostRuntimeConfigChanged
-          || gostRuntimeServiceUnhealthy
-          || runtimeSyncBootstrap
-          || gostPeriodicReconcileDue,
-        commands: await buildGostRuntimeSyncCmds(),
-        managedConfigs: gostManagedConfigs,
-      } as any;
-      const runtimeRepairResendMs = gostRuntimeServiceUnhealthy
-        ? AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS
-        : gostReconcileInterval;
-      if (shouldSendRuntimeSyncAction(
-        Number(host.id),
-        runtimeSyncAction,
-        gostRuntimeConfigChanged || runtimeSyncBootstrap,
-        responseIssuedAt,
-        runtimeRepairResendMs,
-      )) {
-        actions.push(runtimeSyncAction);
-        if (reportedGostHasWork && !gostDesiredRelevant) {
-          appendPanelLog("warn", `[GostRuntime] stale shared runtime cleanup queued host=${host.id} name=${String(host.name || "-")}`);
-        }
-      }
-    }
+    await queueGostRuntimeSync({ deferActionsForLocalState, gostRuntimeConfigChanged, gostRuntimeServiceUnhealthy, runtimeSyncBootstrap, gostPeriodicReconcileDue, buildGostRuntimeSyncCmds, gostManagedConfigs, gostReconcileInterval, host, responseIssuedAt, actions, reportedGostHasWork, gostDesiredRelevant });
     const nginxReconcileCandidate = shouldReconcileNginxRuntime({
       configChanged: nginxRuntimeConfigChanged,
       serviceUnhealthy: nginxRuntimeServiceUnhealthy,
@@ -3391,46 +3347,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       nginxReconcileInterval,
     );
     const nginxModelMayHaveChanged = reportedNginxHasWork && managedPortTopologyChanged;
-    if (!deferActionsForLocalState && (
-      nginxRuntimeConfigChanged
-      || nginxRuntimeServiceUnhealthy
-      || runtimeSyncBootstrap
-      || nginxModelMayHaveChanged
-      || nginxPeriodicReconcileDue
-    )) {
-      const nginxRuntimePlan = await getNginxRuntimeSyncPlan();
-      const nginxRuntimeSyncAction = {
-        statusType: "runtime",
-        ruleId: 0,
-        tunnelId: 0,
-        op: "apply",
-        forwardType: "nginx-runtime-sync",
-        sourcePort: 0,
-        targetIp: "",
-        targetPort: 0,
-        protocol: "tcp",
-        knownRunning: false,
-        forceRuntimeSync: true,
-        preCommands: nginxRuntimePlan.preCommands,
-        commands: nginxRuntimePlan.commands,
-        managedConfigs: nginxRuntimePlan.managedConfigs,
-      } as any;
-      const runtimeRepairResendMs = nginxRuntimeServiceUnhealthy
-        ? AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS
-        : nginxReconcileInterval;
-      if (shouldSendRuntimeSyncAction(
-        Number(host.id),
-        nginxRuntimeSyncAction,
-        nginxRuntimeConfigChanged || runtimeSyncBootstrap,
-        responseIssuedAt,
-        runtimeRepairResendMs,
-      )) {
-        actions.push(nginxRuntimeSyncAction);
-        if (reportedNginxHasWork && !nginxDesiredRelevant) {
-          appendPanelLog("warn", `[NginxRuntime] stale shared runtime cleanup queued host=${host.id} name=${String(host.name || "-")}`);
-        }
-      }
-    }
+    await queueNginxRuntimeSync({ deferActionsForLocalState, nginxRuntimeConfigChanged, nginxRuntimeServiceUnhealthy, runtimeSyncBootstrap, nginxModelMayHaveChanged, nginxPeriodicReconcileDue, getNginxRuntimeSyncPlan, nginxReconcileInterval, host, responseIssuedAt, actions, reportedNginxHasWork, nginxDesiredRelevant });
     /**
      * 落地节点：把这台主机上启用中的入站合成一份 sing-box 配置推下去。
      *
@@ -3440,234 +3357,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      * 对从没装过 sing-box 的主机是无害的空操作，而 shouldSendRuntimeSyncAction
      * 会按签名去重，所以只会真正下发一次。
      */
-    if (!deferActionsForLocalState) {
-      // 分流（按服务 / 域名从别的落地出去）：出口在这里现挑，解锁检测结果变了下次心跳就跟着变。
-      const inboundRoutes = await resolveHostInboundRoutes(Number(host.id), hostProxyInbounds).catch((error) => {
-        appendPanelLog("warn", `[SingboxRouting] resolve failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
-        return new Map<number, any[]>();
-      });
-      const singboxPlan = buildSingboxRuntimePlan({
-        inbounds: hostProxyInbounds.map((row) => ({
-          inbound: row.inbound,
-          // 用行 id 做 tag：改名不该让 sing-box 认为这是另一个入站。
-          tag: `inbound-${row.id}`,
-          ...(inboundRoutes.has(row.id) ? { routes: inboundRoutes.get(row.id) } : {}),
-        })),
-        accelerator: await getSingboxAccelerator(),
-        panelRelayBase: singboxAssetRelayBase(panelUrl),
-      });
-      const singboxAction = {
-        statusType: "runtime",
-        ruleId: 0,
-        tunnelId: 0,
-        op: "apply",
-        forwardType: "singbox-runtime-sync",
-        sourcePort: 0,
-        targetIp: "",
-        targetPort: 0,
-        protocol: "tcp",
-        knownRunning: false,
-        forceRuntimeSync: true,
-        preCommands: singboxPlan.preCommands,
-        commands: singboxPlan.commands,
-        managedConfigs: singboxPlan.managedConfigs,
-      } as any;
-      if (shouldSendRuntimeSyncAction(
-        Number(host.id),
-        singboxAction,
-        runtimeSyncBootstrap,
-        responseIssuedAt,
-        AGENT_GOST_RUNTIME_RECONCILE_MS,
-      )) {
-        actions.push(singboxAction);
-      }
-      /*
-        VLESS Reality 出口的本机桥接（server/vlessEgress.ts）：单独一个 sing-box 服务，规则改了不打断上面的落地入站。
-        只发给 2.2.255 起的 Agent（旧 Agent 上这类规则本来就按停用下发，也就没有桥接）；没有桥接时发一份收尾。
-      */
-      if (isVlessEgressAgentSupported(effectiveAgentVersion)) {
-        const bridgePlan = buildVlessEgressBridgePlan({
-          bridges: collectVlessEgressBridges(rules, Number(host.id)),
-          accelerator: await getSingboxAccelerator(),
-          panelRelayBase: singboxAssetRelayBase(panelUrl),
-        });
-        const bridgeAction = {
-          statusType: "runtime",
-          ruleId: 0,
-          tunnelId: 0,
-          op: "apply",
-          forwardType: "singbox-egress-runtime-sync",
-          sourcePort: 0,
-          targetIp: "",
-          targetPort: 0,
-          protocol: "tcp",
-          knownRunning: false,
-          forceRuntimeSync: true,
-          preCommands: bridgePlan.preCommands,
-          commands: bridgePlan.commands,
-          managedConfigs: bridgePlan.managedConfigs,
-        };
-        if (shouldSendRuntimeSyncAction(Number(host.id), bridgeAction, runtimeSyncBootstrap, responseIssuedAt, AGENT_GOST_RUNTIME_RECONCILE_MS)) {
-          actions.push(bridgeAction);
-        }
-      }
-    }
-    if (!deferActionsForLocalState && mimicRuntimeSyncWanted) {
-      const mimicDnsRefreshToken = anyTunnelDnsRefresh(
-        (hostTunnels as any[]).filter((tunnel: any) => tunnelNeedsMimic(tunnel)),
-      ) ? dnsRuntimeRefreshToken : "";
-      const mimicLogIfaces = Array.from(new Set([
-        ...(hostInterface ? [hostInterface] : []),
-        ...Array.from(mimicFiltersByInterface.keys()),
-        ...Array.from(reportedMimicInterfaces),
-      ])).sort();
-      const mimicLogPlan = mimicLogIfaces.map((iface) => {
-        const filters = Array.from(mimicFiltersByInterface.get(iface) || []).sort();
-        const reported = reportedMimicServicesByInterface.get(iface);
-        const active = reported ? (reported.active ? "yes" : "no") : "-";
-        const hooks = reported ? (reported.hooksReady === true ? "ready" : reported.hooksReady === false ? "missing" : "unknown") : "-";
-        const state = reported ? String(reported.connectionState || reported.status || "unknown") : "-";
-        return `${iface}{desired=${filters.length ? compactMimicFiltersForLog(filters) : "-"} reported=${reported ? "yes" : "no"} active=${active} hooks=${hooks} state=${state}}`;
-      }).join(" ");
-      const mimicLogSignature = JSON.stringify({
-        hostInterface,
-        requestedWithoutInterface: mimicRequestedWithoutInterface,
-        dnsRefresh: !!mimicDnsRefreshToken,
-        plan: mimicLogPlan,
-      });
-      if (shouldLogMimicRuntimePlan(Number(host.id), mimicLogSignature)) {
-        appendPanelLog("info", `[Mimic] runtime plan host=${host.id} iface=${hostInterface || "-"} requestedWithoutInterface=${mimicRequestedWithoutInterface} dnsRefresh=${!!mimicDnsRefreshToken} ${mimicLogPlan || "plan=-"}`);
-      }
-      const mimicCommandPlan = buildMimicRuntimeSyncCmds(
-        mimicRuntimeLifecycleToken,
-        mimicDnsRefreshToken,
-        approvedMimicRemovals,
-      );
-      const mimicRuntimeSyncAction = {
-        statusType: "runtime",
-        ruleId: 0,
-        tunnelId: 0,
-        op: "apply",
-        forwardType: "mimic-runtime-sync",
-        sourcePort: 0,
-        targetIp: "",
-        targetPort: 0,
-        protocol: "udp",
-        knownRunning: false,
-        forceRuntimeSync: true,
-        reportStatus: true,
-        requiresMimicEnvironment: mimicFiltersByInterface.size > 0 || mimicRequestedWithoutInterface,
-        failureMessage: "mimic UDP 混淆同步失败，请检查主机网卡、mimic/mimic-dkms 环境和 Agent 日志",
-        commands: mimicCommandPlan.commands,
-        removalCommands: mimicCommandPlan.removalCommands,
-        removalToken: Array.from(approvedMimicRemovals.entries()).sort().map(([iface, token]) => `${iface}:${token}`).join(","),
-        rollbackCommands: mimicCommandPlan.rollbackCommands,
-      } as any;
-      if (shouldSendRuntimeSyncAction(
-        Number(host.id),
-        mimicRuntimeSyncAction,
-        false,
-        responseIssuedAt,
-        mimicRuntimeServiceUnhealthy || mimicRuntimeTopologyMismatch || runtimeSyncBootstrap
-          ? AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS
-          : AGENT_MIMIC_RUNTIME_RECONCILE_MS,
-      )) {
-        actions.push(mimicRuntimeSyncAction);
-      }
-    }
+    await queueSingboxRuntimeSync({ deferActionsForLocalState, host, hostProxyInbounds, panelUrl, runtimeSyncBootstrap, responseIssuedAt, actions, effectiveAgentVersion, rules });
+    queueMimicRuntimeSync({ deferActionsForLocalState, mimicRuntimeSyncWanted, anyTunnelDnsRefresh, hostTunnels, tunnelNeedsMimic, dnsRuntimeRefreshToken, hostInterface, mimicFiltersByInterface, reportedMimicInterfaces, reportedMimicServicesByInterface, mimicRequestedWithoutInterface, host, buildMimicRuntimeSyncCmds, mimicRuntimeLifecycleToken, approvedMimicRemovals, responseIssuedAt, mimicRuntimeServiceUnhealthy, mimicRuntimeTopologyMismatch, runtimeSyncBootstrap, actions });
 
-    if (hasReportedRuntimeState) {
-      /*
-        隧道入口规则也按本机监听恢复：主机地址变了、短暂掉线、面板重启都会把这台机器的运行状态清掉
-        （resetAgentRuntimeStateForHost），普通规则下一次心跳就按本机监听恢复了，隧道规则以前被排除在外，
-        只能等 Agent 再报一次 —— 可 Agent 那边配置没变、不会重下发，于是流量照通、面板一直写「没在运行」
-        （动态 IP 的机器隔几分钟就来一次）。现在：本机上这条规则的监听对得上（转发类型按隧道算：FXP 隧道是
-        forwardx，传输版本 V1 / V2 / V3 也要对上），并且它走的隧道已经报了在跑，就一起恢复。
-        守卫、内核直通这类本机形态不一样的对不上，照旧等 Agent 报。
-
-        隧道本身（tunnels.isRunning）也一样被清：这台是入口时 resetAgentRuntimeStateForHost 连它走的隧道一起
-        写成没在运行，可出口那台什么都没变 —— FXP 隧道的出口动作只看「出口报过的运行状态」（内存里的
-        tunnelRuntimeStatus，只清地址变了的那台），不会重下发、出口也就不会再报；规则这边又要等隧道在跑，
-        两头互相等，只能碰运气等入口的隧道测速把隧道写回来（2026-11 联调：隔几分钟清一次，规则 8 一直没恢复）。
-        所以：单跳隧道（没有中转）在这台是入口、出口那台报过的运行状态还在（自它上次报告以来出口没被清过、
-        隧道没改过），就按出口的报告把隧道恢复成在运行，规则接着按上面的条件恢复。出口没报过、报的是没在跑、
-        或者是多跳隧道，照旧等各自的上报。
-      */
-      const exitConfirmedTunnelIds = new Set<number>();
-      const tunnelExitRuntimeConfirmed = (tunnel: HeartbeatTunnelRow) => {
-        const tunnelId = Number(tunnel?.id || 0);
-        if (
-          tunnelId <= 0
-          || !runtimeBool(tunnel?.isEnabled)
-          || !isTunnelProtocolEnabled(forwardProtocolSettings, tunnel)
-          || (tunnelHopsByTunnelId.get(tunnelId) || []).length > 0
-          || !isCurrentHostTunnelEntry(tunnel)
-          || Number(tunnel?.exitHostId || 0) === Number(host.id)
-        ) return false;
-        const extraExitHostIds = (tunnelExitNodesByTunnelId.get(tunnelId) || [])
-          .filter((node) => runtimeBool(node?.isEnabled, true))
-          .map((node) => Number(node?.hostId || 0))
-          .filter((hostId: number) => hostId > 0);
-        return getTunnelRuntimeTopologyStatus(tunnelId, {
-          entryHostIds: tunnelEntryHostIds(tunnel),
-          hopHostIds: [],
-          primaryExitHostId: Number(tunnel.exitHostId || 0),
-          extraExitHostIds,
-          relayMode: String(tunnel.relayMode || "chain"),
-          loadBalanceEnabled: runtimeBool(tunnel.loadBalanceEnabled),
-          loadBalanceStrategy: String(tunnel.loadBalanceStrategy || "none"),
-        }).running;
-      };
-      for (const tunnel of hostTunnels) {
-        if (!tunnel || runtimeBool(tunnel.isRunning) || !tunnelExitRuntimeConfirmed(tunnel)) continue;
-        exitConfirmedTunnelIds.add(Number(tunnel.id));
-      }
-      if (exitConfirmedTunnelIds.size > 0) {
-        await mapWithConcurrency(Array.from(exitConfirmedTunnelIds), 8, async (tunnelId: number) => {
-          await db.updateTunnelRunningStatus(tunnelId, true);
-          const tunnel = tunnelById.get(tunnelId);
-          if (tunnel) tunnel.isRunning = true;
-        });
-        appendPanelLog(
-          "info",
-          `[AgentReconcile] host=${host.id} recovered tunnel running state from exit runtime reports tunnels=${Array.from(exitConfirmedTunnelIds).join(",")}`,
-        );
-      }
-      // 本机监听对得上、就差隧道没在跑的规则：记下在等哪几条隧道，隧道一回来就作废稳定快路径（见 agentHeartbeatGate）。
-      const waitingTunnelIds = new Set<number>();
-      const recoverableRules = (rules as any[]).filter((rule: any) => {
-        if (
-          !rule
-          || !runtimeBool(rule.isEnabled)
-          || runtimeBool(rule.pendingDelete)
-          || runtimeBool(rule.isRunning)
-          || Number(rule.sourcePort || 0) <= 0
-        ) return false;
-        if (!rule.tunnelId) return localRuleMatches(rule, String(rule.forwardType || ""), Number(rule.sourcePort));
-        const ruleTunnel = tunnelById.get(rule.tunnelId);
-        if (!ruleTunnel || !runtimeBool(ruleTunnel.isEnabled)) return false;
-        const expectedForwardType = rule.forwardType === "gost"
-          ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
-          : rule.forwardType;
-        const localMatches = localRuleMatches(rule, String(expectedForwardType || ""), Number(rule.sourcePort));
-        if (!runtimeBool(ruleTunnel.isRunning)) {
-          if (localMatches) waitingTunnelIds.add(Number(ruleTunnel.id));
-          return false;
-        }
-        return localMatches;
-      });
-      rememberHostWaitingForTunnels(host.id, waitingTunnelIds);
-      if (recoverableRules.length > 0) {
-        await mapWithConcurrency(recoverableRules, 16, async (rule: any) => {
-          await setRuntimeRuleRunning(Number(rule.id), true);
-          rule.isRunning = true;
-        });
-        appendPanelLog(
-          "info",
-          `[AgentReconcile] host=${host.id} recovered running state from local listeners rules=${recoverableRules.map((rule: any) => Number(rule.id)).join(",")}`,
-        );
-      }
-    }
+    await restoreTunnelRulesFromLocalState({ hasReportedRuntimeState, forwardProtocolSettings, tunnelHopsByTunnelId, isCurrentHostTunnelEntry, host, tunnelExitNodesByTunnelId, tunnelEntryHostIds, hostTunnels, tunnelById, rules, localRuleMatches });
 
     /*
       规则换回还留着桥接的机器：这个端口的 conntrack 里还有被桥接 DNAT 出去的老流（换之前就连着
