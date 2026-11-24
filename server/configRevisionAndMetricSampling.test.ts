@@ -19,6 +19,7 @@ test("latestConfigRevision skips dispatch rows and reads through the (action, id
     const [{ id: deleteId }] = await query("SELECT MAX(id) AS id FROM config_audit_events WHERE action = 'delete'");
     assert.equal(await audit.latestConfigRevision(), Number(deleteId));
 
+    skipUnless("sqlite"); // 下面读的是 SQLite 的查询计划
     const plan = await query("EXPLAIN QUERY PLAN SELECT id FROM config_audit_events WHERE action = ? ORDER BY id DESC LIMIT 1", ["update"]);
     const detail = plan.map((row) => String(row.detail)).join(" | ");
     assert.match(detail, /idx_config_audit_events_action_id/, detail);

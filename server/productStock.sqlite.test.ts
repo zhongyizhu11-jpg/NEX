@@ -17,7 +17,7 @@ const WORKER = String.raw`
   console.info = () => {}; console.warn = () => {}; console.log = () => {};
   const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
   const runtime = await import(url("server/dbRuntime.ts"));
-  await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+  await runtime.connectDatabase(JSON.parse(process.env.FORWARDX_TEST_DB_CONFIG));
   const billing = await import(url("server/repositories/billingRepository.ts"));
   const rules = await import(url("server/repositories/forwardRuleRepository.ts"));
   await runtime.queryRaw("SELECT 1");
