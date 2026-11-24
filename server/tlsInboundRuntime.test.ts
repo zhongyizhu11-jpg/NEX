@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { readHeartbeatRouteSource } from "./testing/heartbeatSource";
 
 import { buildAgentSniInbounds, recordTlsInboundRuntimeStatus, getTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import type { TlsInboundRow } from "./repositories/tlsInboundRepository";
@@ -124,7 +125,7 @@ test("Agent 报上来的监听状态只存内存", () => {
 });
 
 test("心跳接上了：sniInbounds 是一个状态段，SNI 规则一律走守卫并只听回环", () => {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatRoute.ts"), "utf8");
+  const source = readHeartbeatRouteSource();
   // 状态段的名单在 agentHeartbeatReport.ts（上报规整那一步）
   const reportSource = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatReport.ts"), "utf8");
   const sectionNames = /const AGENT_STATE_SECTION_NAMES = \[([\s\S]*?)\] as const;/.exec(reportSource)?.[1] || "";

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { readHeartbeatRouteSource } from "./testing/heartbeatSource";
 
 import {
   buildAgentSniInbounds,
@@ -162,7 +163,7 @@ test("老 Agent 永远确认不了（不下发版本号）", () => {
 });
 
 test("心跳接上了：隧道入口（FXP / gost / nginx）在 SNI 规则上只听回环，内核直通不接 SNI 规则", () => {
-  const route = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatRoute.ts"), "utf8");
+  const route = readHeartbeatRouteSource();
   const gost = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatGostPlan.ts"), "utf8");
   const nginx = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatNginxPlan.ts"), "utf8");
   assert.match(route, /isSniRuntimeRule\(rule\) \? \{ listenHost: "127\.0\.0\.1" \} : \{\}/);
