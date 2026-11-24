@@ -168,7 +168,7 @@ async function backfillPostgresqlLastAutoTrafficReset(pool: pg.Pool) {
   await pool.query(
     `WITH claimed AS (
        INSERT INTO "system_settings" ("key", value, "updatedAt")
-       VALUES ($1, '1', EXTRACT(EPOCH FROM NOW())::INT)
+       VALUES ($1, '1', FLOOR(EXTRACT(EPOCH FROM NOW()))::INT)
        ON CONFLICT ("key") DO NOTHING
        RETURNING "key"
      )
@@ -1079,12 +1079,17 @@ export function getDatabaseTableDefs(): readonly TableDef[] {
 
 type SchemaKind = "mysql" | "sqlite" | "postgresql";
 
+const POSTGRESQL_EPOCH_NOW_SQL = "FLOOR(EXTRACT(EPOCH FROM NOW()))::INT";
+const POSTGRESQL_EPOCH_NOW_DEFAULT = ` DEFAULT (${POSTGRESQL_EPOCH_NOW_SQL})`;
+
 function defaultSql(kind: SchemaKind, value: ColumnDef["default"], columnType?: ColumnType) {
   if (value === undefined || value === null) return "";
   if (kind === "mysql" && (columnType === "text" || columnType === "longtext")) return "";
   if (value === "now") {
     if (kind === "mysql") return " DEFAULT (UNIX_TIMESTAMP())";
-    if (kind === "postgresql") return " DEFAULT (EXTRACT(EPOCH FROM NOW())::INT)";
+    // FLOOR：numeric 转 INT 是四舍五入，不加 FLOOR 时建行时刻会比应用自己算的 Math.floor(Date.now() / 1000)
+    // 大 1 秒（半数情况），同一秒内「下单早于绑定」这类比较就会判反。SQLite unixepoch()、MySQL UNIX_TIMESTAMP() 都是取整。
+    if (kind === "postgresql") return POSTGRESQL_EPOCH_NOW_DEFAULT;
     return " DEFAULT (unixepoch())";
   }
   if (typeof value === "boolean") {
@@ -1176,6 +1181,26 @@ async function upgradePostgresqlBigintColumns(pool: pg.Pool) {
   }
 }
 
+/*
+ * 老库里 epoch 列的默认值是没加 FLOOR 的 EXTRACT(EPOCH FROM NOW())::INT（见 defaultSql）。
+ * 启动时把所有「默认当前时刻」的 epoch 列的默认值换掉；information_schema 里的默认值文本只在还是老写法时才改，重启不重复做。
+ */
+async function repairPostgresqlEpochDefaults(pool: pg.Pool) {
+  const targets: Array<[string, string]> = [];
+  for (const table of tables) for (const column of table.columns) if (column.type === "epoch" && column.default === "now") targets.push([table.name, column.name]);
+  if (targets.length === 0) return;
+  const result = await pool.query(
+    'SELECT table_name AS "tableName", column_name AS "columnName", column_default AS "columnDefault" FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ANY($1::text[]) AND column_name = ANY($2::text[])',
+    [Array.from(new Set(targets.map(([table]) => table))), Array.from(new Set(targets.map(([, column]) => column)))],
+  );
+  const wanted = new Set(targets.map(([table, column]) => `${table}.${column}`));
+  for (const row of result?.rows || []) {
+    const current = String(row.columnDefault || "");
+    if (!wanted.has(`${row.tableName}.${row.columnName}`) || !/EXTRACT\(EPOCH FROM/i.test(current) || /floor/i.test(current)) continue;
+    await pool.query(`ALTER TABLE ${quoteIdentifierFor("postgresql", row.tableName)} ALTER COLUMN ${quoteIdentifierFor("postgresql", row.columnName)} SET DEFAULT ${POSTGRESQL_EPOCH_NOW_SQL}`).catch(() => undefined);
+  }
+}
+
 function mysqlKey(table: string, prefix: string, cols: string[]) {
   const name = quoteIdentifierFor("mysql", `${prefix}_${table}_${cols.join("_")}`.slice(0, 60));
   const expr = cols.map((col) => {
@@ -1250,9 +1275,10 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
     }
   }
   await upgradePostgresqlBigintColumns(pool);
+  await repairPostgresqlEpochDefaults(pool);
   for (const [key, value] of seedSettings) {
     await pool.query(
-      'INSERT INTO system_settings ("key", value, "updatedAt") VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::INT) ON CONFLICT ("key") DO NOTHING',
+      'INSERT INTO system_settings ("key", value, "updatedAt") VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM NOW()))::INT) ON CONFLICT ("key") DO NOTHING',
       [key, value],
     );
   }
