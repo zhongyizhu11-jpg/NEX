@@ -45,8 +45,10 @@ jobs:
                   CFBundleDisplayName: Netcatty
                   CFBundleDevelopmentRegion: zh_CN
                   CFBundleLocalizations: [zh-Hans]
-                  CFBundleShortVersionString: "1.0"
-                  CFBundleVersion: "1"
+                  CFBundleShortVersionString: "1.1"
+                  CFBundleVersion: "2"
+                  UIApplicationSceneManifest:
+                    UIApplicationSupportsMultipleScenes: true
                   UILaunchScreen: {}
                   UIStatusBarHidden: true
                   UISupportedInterfaceOrientations:
@@ -88,7 +90,7 @@ jobs:
                       ZStack {
                           Color.black.ignoresSafeArea()
                           if let url = validURL(loginURL) {
-                              WebView(url: url, onReset: { loginURL = "" })
+                              MainView(url: url, onReset: { loginURL = "" })
                           } else {
                               SetupView(loginURL: $loginURL)
                           }
@@ -153,13 +155,56 @@ jobs:
               }
           }
 
+          // 主界面：网页 + 连接中提示
+          struct MainView: View {
+              let url: URL
+              let onReset: () -> Void
+              @State private var loading = true
+              @State private var slow = false
+
+              var body: some View {
+                  ZStack {
+                      WebView(url: url, onReset: onReset, onLoaded: { loading = false })
+                      if loading {
+                          VStack(spacing: 16) {
+                              ProgressView()
+                                  .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                  .scaleEffect(1.5)
+                              Text("正在连接 \(url.host ?? "")…")
+                                  .foregroundColor(.white)
+                              if slow {
+                                  Text("连接比较慢，可以继续等待，或检查登录链接")
+                                      .font(.footnote)
+                                      .foregroundColor(.gray)
+                                  Button(action: onReset) {
+                                      Text("修改登录链接")
+                                          .padding(.horizontal, 20)
+                                          .padding(.vertical, 10)
+                                          .background(Color.blue)
+                                          .foregroundColor(.white)
+                                          .cornerRadius(10)
+                                  }
+                              }
+                          }
+                          .padding(24)
+                          .frame(maxWidth: .infinity, maxHeight: .infinity)
+                          .background(Color.black)
+                      }
+                  }
+                  .onAppear {
+                      DispatchQueue.main.asyncAfter(deadline: .now() + 8) { slow = true }
+                  }
+              }
+          }
+
           // 网页容器
           struct WebView: UIViewRepresentable {
               let url: URL
               let onReset: () -> Void
+              let onLoaded: () -> Void
 
               func makeCoordinator() -> Coordinator {
-                  Coordinator(url: url, onReset: onReset)
+                  Coordinator(url: url, onReset: onReset, onLoaded: onLoaded)
               }
 
               func makeUIView(context: Context) -> WKWebView {
@@ -185,11 +230,20 @@ jobs:
               final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
                   let url: URL
                   let onReset: () -> Void
+                  let onLoaded: () -> Void
                   weak var web: WKWebView?
 
-                  init(url: URL, onReset: @escaping () -> Void) {
+                  init(url: URL, onReset: @escaping () -> Void, onLoaded: @escaping () -> Void) {
                       self.url = url
                       self.onReset = onReset
+                      self.onLoaded = onLoaded
+                  }
+
+                  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+                      // 登录跳转页加载完不算，等真正的页面出来再隐藏“连接中”
+                      if !(webView.url?.path.hasPrefix("/login-") ?? false) {
+                          onLoaded()
+                      }
                   }
 
                   func reload() {
