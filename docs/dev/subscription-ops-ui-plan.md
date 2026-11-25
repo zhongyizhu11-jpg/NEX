@@ -73,3 +73,16 @@
 - 页面：ClientSubscriptions 块 155.8 kB、Payments 块 32.0 kB，qrcode 独立成 25.8 kB 共享块；入站列表不再每个键击重算；搜索与规则校验防抖；7 处破坏性确认补上红色 tone 并进测试。
 - 弹窗：Users 权限弹窗存空 bug 修掉并钉住测试；5 处一次性密钥弹窗收成 SecretRevealDialog（不可误关）；DialogDescription 守门测试上线（零例外）；4 个弹窗模块懒加载。
 - 顺带发现并修掉：PostgreSQL 的 epoch 默认值四舍五入（见 docs/dev/postgres-baseline.md）。
+
+## 六、第二批结果（2026-11-25）
+
+- 订阅后端：同一用户换格式 / 换令牌的订阅构建从 6 条语句降到 0 条（按用户的上下文缓存）；源同步按源串行、整体在事务里、只写变了的节点，老竞态留下的重复行会在下次同步时清掉；手动同步最多 2 个并发、正在同步的直接返回 `status: "running"`；访问日志批量写；用户给的正则先过 shared/safeRegex；设置批量写一条 upsert；模板列表进内存。
+- 页面：ClientSubscriptions 2702 → 1452 行，三个弹窗各自持有状态、预览弹窗懒加载（页面块 155.8 → 134.8 kB，预览 25.2 kB 按需），在弹窗里打字不再重画节点列表；行开关全部乐观化并定向失效；Payments 订单服务端分页、只渲染一种列表；AdminSubscriptions 统一分页去掉大白卡；lib/queryPresets 共享查询预设。
+- 弹窗：确认框支持异步 onConfirm（pending、禁关、就地报错）与 details 槽，11 处手写确认收掉；FormDialog（回车提交、未保存保护）用在三个表单，Rules / ForwardGroups / Hosts 长编辑器有了未保存保护；DeleteWithImpactDialog、useDialogTarget；Users 3100 → 1726 行，权限弹窗懒加载并按资源类型门控查询。
+
+剩下没做的（第三批候选）：
+1. proxy_nodes (sourceId, sourceKey) 唯一索引 + 去重回填（SQLite 建索引不容错，要一起做）。
+2. Rules 批量管理弹窗（约 770 行）先抽 hook 再懒加载；ForwardGroups / Hosts 编辑弹窗单独懒加载；Hosts 批量升级确认改走确认框。
+3. 客户端按 `result.status`（running / queued）给手动同步不同的提示。
+4. 字节上限的渲染结果缓存；套餐更新对订户的扇出改后台任务；到期处理补 (status, expiresAt) 索引已加，扫表语句本身可再看。
+5. 一处要手动看一眼：Rules 编辑器打开后若有查询驱动的回填晚于 1.2 秒，关闭时可能多问一次「放弃修改？」。
