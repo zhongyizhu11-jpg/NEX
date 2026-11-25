@@ -1,7 +1,7 @@
 import { copyTextToClipboard } from "@/lib/clipboard";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { PaymentOrdersCard } from "@/components/payments/PaymentOrdersCard";
-import { formatMoney } from "@/components/payments/paymentOrderFormat";
+import { formatMoneyCents as formatMoney } from "@shared/formatMoney";
 import DashboardLayout from "@/components/DashboardLayout";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
 import DataSectionLoading from "@/components/DataSectionLoading";

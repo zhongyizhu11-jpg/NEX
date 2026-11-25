@@ -792,7 +792,7 @@ export function ProxySubTokenDevicesDialog({ open, onOpenChange, tokenId, tokenN
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto">
           {rows.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">还没有设备来拉过。</p>
+            <EmptyState title="还没有设备来拉过" description="客户端用这条地址拉过一次之后，这里会按设备（或来源 IP）列出来。" />
           ) : (
             <Table>
               <TableHeader>
@@ -850,7 +850,7 @@ export function ProxySubTokenPreviewDialog({ open, onOpenChange, tokenId, tokenN
           {data && data.deviceLimit > 0 ? <Badge variant="outline">设备上限 {data.deviceLimit}</Badge> : null}
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain text-sm">
-          {query.isLoading ? <p className="text-muted-foreground">计算中…</p> : null}
+          {query.isLoading ? <DataSectionLoading label="正在生成预览" minHeight="min-h-[120px]" /> : null}
           {data?.customRuleErrors.length ? (
             <div className="rounded-md border border-[var(--fx-warn)] p-2 text-xs">
               <p className="font-medium">自定义规则里有写坏的行（已跳过）：</p>

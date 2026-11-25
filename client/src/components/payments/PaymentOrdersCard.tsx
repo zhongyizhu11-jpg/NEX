@@ -30,7 +30,8 @@ import { isPaymentOrderDeletable } from "@shared/paymentOrderDeletion";
 import { CreditCard, Trash2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { PAYMENT_ORDER_STATUS_LABELS, formatDate, formatMoney, paymentTypeLabel, providerLabel, statusBadge } from "./paymentOrderFormat";
+import { formatMoneyCents as formatMoney } from "@shared/formatMoney";
+import { PAYMENT_ORDER_STATUS_LABELS, formatDate, paymentTypeLabel, providerLabel, statusBadge } from "./paymentOrderFormat";
 
 /**
  * 一行订单在这里用到的字段。payment 路由的输出类型推不出来（和原来页面里 `(order: any)` 是同一个原因），

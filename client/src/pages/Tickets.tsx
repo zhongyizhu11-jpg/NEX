@@ -590,7 +590,7 @@ function TicketThread({ mode, ticketId, onChanged, onMissing }: {
             />
             <div className="flex items-center justify-between gap-2">
               <span className={cn("text-xs text-muted-foreground", contentLength > TICKET_CONTENT_MAX_LENGTH && "text-[var(--fx-down-text)]")}>
-                {contentLength.toLocaleString()} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString()}
+                {contentLength.toLocaleString(getFormatLocale())} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString(getFormatLocale())}
                 <span className="max-md:hidden"> · Ctrl / ⌘ + Enter 发送</span>
               </span>
               <Button size="sm" className="gap-1.5" disabled={replying || contentLength === 0} onClick={sendReply}>
@@ -679,7 +679,7 @@ function CreateTicketDialog({ open, onOpenChange, pending, onSubmit }: {
               className="min-h-40 text-sm"
               placeholder="只支持纯文本，不能上传附件。"
             />
-            <p className="text-xs text-muted-foreground">{content.trim().length.toLocaleString()} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">{content.trim().length.toLocaleString(getFormatLocale())} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString(getFormatLocale())}</p>
           </FormField>
         </div>
         <DialogFooter>

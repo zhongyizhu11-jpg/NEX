@@ -1,4 +1,5 @@
 import { getFormatLocale } from "@/i18n";
+import { formatDateTime } from "@/lib/formatTime";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
@@ -36,10 +37,7 @@ function speed(value?: number | null) {
 }
 
 function dateTime(value?: string | Date | null) {
-  if (!value) return "---";
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "---";
-  return date.toLocaleString();
+  return formatDateTime(value, "---");
 }
 
 function billingDateTime(value?: string | Date | null) {

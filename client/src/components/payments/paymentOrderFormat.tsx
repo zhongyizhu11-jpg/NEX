@@ -1,22 +1,17 @@
 /**
- * 支付订单在界面上怎么写：金额、时间、通道 / 支付方式的中文名、状态徽章。
+ * 支付订单在界面上怎么写：时间、通道 / 支付方式的中文名、状态徽章。
  *
  * 原来都写在 Payments 页面文件里；订单记录拆成独立组件（PaymentOrdersCard）之后，
  * 概览条（已支付金额）和订单卡两边都要用，放到这里一份。
+ * 金额不在这里：走 shared/formatMoney 的 formatMoneyCents，和钱包 / 账单页同一种写法
+ * （原来这边写「12.34 CNY」、那边写「¥12.34」，同一笔钱两个页面两个样）。
  */
 
 import { Badge } from "@/components/ui/badge";
-
-export function formatMoney(amountCents?: number | null, currency = "CNY") {
-  const value = Number(amountCents || 0) / 100;
-  return `${value.toFixed(2)} ${currency.toUpperCase()}`;
-}
+import { formatDateTime } from "@/lib/formatTime";
 
 export function formatDate(value: unknown) {
-  if (!value) return "-";
-  const date = value instanceof Date ? value : new Date(value as string | number);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString();
+  return formatDateTime(value, "-");
 }
 
 export function paymentTypeLabel(value: string) {

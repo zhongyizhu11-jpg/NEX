@@ -1,6 +1,7 @@
 import { FormField } from "@/components/ui/form-field";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError, { DataTableErrorRow } from "@/components/DataSectionError";
+import { formatDateTime } from "@/lib/formatTime";
 import { ledgerTone } from "@/lib/ledgerTone";
 import MobileInfoRow from "@/components/MobileInfoRow";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
@@ -23,9 +24,11 @@ import { OptimisticSwitch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
+import { useIsMobile } from "@/hooks/useMobile";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import AdminReferralPanel from "@/components/referral/AdminReferralPanel";
 import { BillingExportButton } from "@/components/billing/BillingExportButton";
+import { optionsQuery } from "@/lib/queryPresets";
 import { trpc } from "@/lib/trpc";
 import { CreditCard, Download, Eye, EyeOff, Gift, Package, ReceiptText, Shuffle, TicketPercent, Trash2, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState, type ElementType } from "react";
@@ -46,7 +49,7 @@ const BILLING_TAB_ITEMS = [
 const BILLING_TAB_STORAGE_KEY = "forwardx.billing.tab";
 
 function dateText(value?: string | Date | null) {
-  return value ? new Date(value).toLocaleString() : "不限";
+  return formatDateTime(value, "不限");
 }
 
 function randomBillingCode(prefix = "") {
@@ -128,6 +131,8 @@ function ledgerIcon(item: any) {
 }
 
 export default function Billing() {
+  // 手机 / 桌面只渲染一种列表（原来两套都画、靠 md:hidden 藏一套，DOM 翻倍）。断点仍是 768。
+  const isMobile = useIsMobile();
   const utils = trpc.useUtils();
   const confirmDialog = useConfirmDialog();
   const [activeTab, setActiveTab] = useUrlTab<BillingTab>({
@@ -150,15 +155,13 @@ export default function Billing() {
     placeholderData: (previousData) => previousData,
   });
   const { data: users = [] } = trpc.users.options.useQuery(undefined, {
+    ...optionsQuery,
     enabled: activeTab === "ledger",
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
     placeholderData: (previousData: any) => previousData,
   });
   const { data: plans = [] } = trpc.plans.options.useQuery(undefined, {
+    ...optionsQuery,
     enabled: activeTab === "redeem" || activeTab === "discount",
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
     placeholderData: (previousData: any) => previousData,
   });
   const subscriptionPageQuery = trpc.plans.subscriptionsPage.useQuery({
@@ -607,128 +610,131 @@ export default function Billing() {
                   <DataSectionLoading label="正在加载账单流水" />
                 ) : (
                   <>
-                <div className="grid gap-3 md:hidden">
-                  {visibleLedger.map((item: any) => {
-                    const Icon = ledgerIcon(item);
-                    const relatedInfo = item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-");
-                    return (
-                      <div key={item.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex min-w-0 items-start gap-3">
-                            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted/30">
-                              <Icon className="h-4 w-4 text-muted-foreground" />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="break-words text-sm font-medium">{item.title}</p>
-                              <p className="mt-0.5 break-words text-xs text-muted-foreground">{item.description || "-"}</p>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1">
-                            <div className={`text-right text-sm font-medium ${ledgerTone(item)}`}>
-                              {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
-                            </div>
-                            {item.kind === "subscription" && item.status === "cancelled" && (
-                              <Button
-                                type="button"
-                                size="icon"
-                                variant="ghost"
-                                className="h-8 w-8 text-destructive"
-                                title="删除已取消订阅"
-                                aria-label="删除已取消订阅"
-                                onClick={() => void confirmDeleteCancelledSubscription(item)}
-                                disabled={deleteCancelledSubscription.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
-                          <MobileInfoRow label="用户">{item.name || item.username || `#${item.userId}`}</MobileInfoRow>
-                          <MobileInfoRow label="类型"><Badge variant="outline">{item.category}</Badge></MobileInfoRow>
-                          <MobileInfoRow label="状态">
-                            <Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{item.statusLabel || item.status}</Badge>
-                          </MobileInfoRow>
-                          <MobileInfoRow label="关联" valueClassName="font-mono text-xs text-muted-foreground">{relatedInfo}</MobileInfoRow>
-                          <MobileInfoRow label="时间">{dateText(item.createdAt)}</MobileInfoRow>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {/* 收款记录读不到时说「暂无」，等于告诉店主「没人付过钱」。 */}
-                  {visibleLedger.length === 0 && (ledgerError ? (
-                    <DataSectionError label="账单流水" error={ledgerError} retrying={ledgerFetching} onRetry={() => { void refetchLedger(); }} minHeight="min-h-[120px]" />
-                  ) : (
-                    <EmptyState icon={<ReceiptText />} title="暂无账单流水" />
-                  ))}
-                </div>
-                <div className="hidden overflow-x-auto md:block">
-                  <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>用户</TableHead>
-                      <TableHead>项目</TableHead>
-                      <TableHead>类型</TableHead>
-                      <TableHead>金额</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>关联信息</TableHead>
-                      <TableHead>时间</TableHead>
-                      <TableHead className="w-12"><span className="sr-only">操作</span></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                {isMobile ? (
+                  <div className="grid gap-3">
                     {visibleLedger.map((item: any) => {
                       const Icon = ledgerIcon(item);
+                      const relatedInfo = item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-");
                       return (
-                        <TableRow key={item.id}>
-                          <TableCell>{item.name || item.username || `#${item.userId}`}</TableCell>
-                          <TableCell>
-                            <div className="flex min-w-60 items-start gap-3">
+                        <div key={item.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-start gap-3">
                               <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted/30">
                                 <Icon className="h-4 w-4 text-muted-foreground" />
                               </div>
                               <div className="min-w-0">
-                                <p className="truncate text-sm font-medium">{item.title}</p>
-                                <p className="truncate text-xs text-muted-foreground">{item.description || "-"}</p>
+                                <p className="break-words text-sm font-medium">{item.title}</p>
+                                <p className="mt-0.5 break-words text-xs text-muted-foreground">{item.description || "-"}</p>
                               </div>
                             </div>
-                          </TableCell>
-                          <TableCell><Badge variant="outline">{item.category}</Badge></TableCell>
-                          <TableCell className={ledgerTone(item)}>
-                            {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
-                          </TableCell>
-                          <TableCell><Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{item.statusLabel || item.status}</Badge></TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-")}</TableCell>
-                          <TableCell>{dateText(item.createdAt)}</TableCell>
-                          <TableCell>
-                            {item.kind === "subscription" && item.status === "cancelled" && (
-                              <Button
-                                type="button"
-                                size="icon"
-                                variant="ghost"
-                                className="h-8 w-8 text-destructive"
-                                title="删除已取消订阅"
-                                aria-label="删除已取消订阅"
-                                onClick={() => void confirmDeleteCancelledSubscription(item)}
-                                disabled={deleteCancelledSubscription.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <div className={`text-right text-sm font-medium ${ledgerTone(item)}`}>
+                                {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
+                              </div>
+                              {item.kind === "subscription" && item.status === "cancelled" && (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-destructive"
+                                  title="删除已取消订阅"
+                                  aria-label="删除已取消订阅"
+                                  onClick={() => void confirmDeleteCancelledSubscription(item)}
+                                  disabled={deleteCancelledSubscription.isPending}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
+                            <MobileInfoRow label="用户">{item.name || item.username || `#${item.userId}`}</MobileInfoRow>
+                            <MobileInfoRow label="类型"><Badge variant="outline">{item.category}</Badge></MobileInfoRow>
+                            <MobileInfoRow label="状态">
+                              <Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{item.statusLabel || item.status}</Badge>
+                            </MobileInfoRow>
+                            <MobileInfoRow label="关联" valueClassName="font-mono text-xs text-muted-foreground">{relatedInfo}</MobileInfoRow>
+                            <MobileInfoRow label="时间">{dateText(item.createdAt)}</MobileInfoRow>
+                          </div>
+                        </div>
                       );
                     })}
+                    {/* 收款记录读不到时说「暂无」，等于告诉店主「没人付过钱」。 */}
                     {visibleLedger.length === 0 && (ledgerError ? (
-                      <DataTableErrorRow colSpan={8} label="账单流水" error={ledgerError} retrying={ledgerFetching} onRetry={() => { void refetchLedger(); }} />
+                      <DataSectionError label="账单流水" error={ledgerError} retrying={ledgerFetching} onRetry={() => { void refetchLedger(); }} minHeight="min-h-[120px]" />
                     ) : (
-                      <TableRow>
-                        <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">暂无账单流水</TableCell>
-                      </TableRow>
+                      <EmptyState icon={<ReceiptText />} title="暂无账单流水" />
                     ))}
-                  </TableBody>
-                </Table>
-                </div>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>用户</TableHead>
+                        <TableHead>项目</TableHead>
+                        <TableHead>类型</TableHead>
+                        <TableHead>金额</TableHead>
+                        <TableHead>状态</TableHead>
+                        <TableHead>关联信息</TableHead>
+                        <TableHead>时间</TableHead>
+                        <TableHead className="w-12"><span className="sr-only">操作</span></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleLedger.map((item: any) => {
+                        const Icon = ledgerIcon(item);
+                        return (
+                          <TableRow key={item.id}>
+                            <TableCell>{item.name || item.username || `#${item.userId}`}</TableCell>
+                            <TableCell>
+                              <div className="flex min-w-60 items-start gap-3">
+                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted/30">
+                                  <Icon className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium">{item.title}</p>
+                                  <p className="truncate text-xs text-muted-foreground">{item.description || "-"}</p>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell><Badge variant="outline">{item.category}</Badge></TableCell>
+                            <TableCell className={ledgerTone(item)}>
+                              {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
+                            </TableCell>
+                            <TableCell><Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>{item.statusLabel || item.status}</Badge></TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">{item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-")}</TableCell>
+                            <TableCell>{dateText(item.createdAt)}</TableCell>
+                            <TableCell>
+                              {item.kind === "subscription" && item.status === "cancelled" && (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 text-destructive"
+                                  title="删除已取消订阅"
+                                  aria-label="删除已取消订阅"
+                                  onClick={() => void confirmDeleteCancelledSubscription(item)}
+                                  disabled={deleteCancelledSubscription.isPending}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {visibleLedger.length === 0 && (ledgerError ? (
+                        <DataTableErrorRow colSpan={8} label="账单流水" error={ledgerError} retrying={ledgerFetching} onRetry={() => { void refetchLedger(); }} />
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">暂无账单流水</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  </div>
+                )}
                 <PersistentPagination pagination={ledgerPagination} itemName="条账单" />
                   </>
                 )}
@@ -747,55 +753,58 @@ export default function Billing() {
                   <DataSectionLoading label="正在加载订阅记录" />
                 ) : (
                   <>
-                <div className="grid gap-3 md:hidden">
-                  {subscriptions.map((sub: any) => (
-                    <div key={sub.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="break-words text-sm font-medium">{sub.name || sub.username || `用户 #${sub.userId}`}</p>
-                          <p className="mt-1 break-words text-xs text-muted-foreground">{sub.planName || `套餐 #${sub.planId}`}</p>
+                {isMobile ? (
+                  <div className="grid gap-3">
+                    {subscriptions.map((sub: any) => (
+                      <div key={sub.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-medium">{sub.name || sub.username || `用户 #${sub.userId}`}</p>
+                            <p className="mt-1 break-words text-xs text-muted-foreground">{sub.planName || `套餐 #${sub.planId}`}</p>
+                          </div>
+                          <Badge variant="outline" className="shrink-0">{sub.source === "payment" ? "购买" : "后台分配"}</Badge>
                         </div>
-                        <Badge variant="outline" className="shrink-0">{sub.source === "payment" ? "购买" : "后台分配"}</Badge>
+                        <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
+                          <MobileInfoRow label="端口段">{sub.portRangeStart}-{sub.portRangeEnd}</MobileInfoRow>
+                          <MobileInfoRow label="到期时间">{formatDateTime(sub.expiresAt, "永久")}</MobileInfoRow>
+                        </div>
                       </div>
-                      <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
-                        <MobileInfoRow label="端口段">{sub.portRangeStart}-{sub.portRangeEnd}</MobileInfoRow>
-                        <MobileInfoRow label="到期时间">{sub.expiresAt ? new Date(sub.expiresAt).toLocaleString() : "永久"}</MobileInfoRow>
-                      </div>
-                    </div>
-                  ))}
-                  {subscriptions.length === 0 && (
-                    <EmptyState icon={<Package />} title="暂无订阅记录" />
-                  )}
-                </div>
-                <div className="hidden overflow-x-auto md:block">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>用户</TableHead>
-                        <TableHead>套餐</TableHead>
-                        <TableHead>端口段</TableHead>
-                        <TableHead>来源</TableHead>
-                        <TableHead>到期时间</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {subscriptions.map((sub: any) => (
-                        <TableRow key={sub.id}>
-                          <TableCell>{sub.name || sub.username || `用户 #${sub.userId}`}</TableCell>
-                          <TableCell>{sub.planName || `套餐 #${sub.planId}`}</TableCell>
-                          <TableCell>{sub.portRangeStart}-{sub.portRangeEnd}</TableCell>
-                          <TableCell><Badge variant="outline">{sub.source === "payment" ? "购买" : "后台分配"}</Badge></TableCell>
-                          <TableCell>{sub.expiresAt ? new Date(sub.expiresAt).toLocaleString() : "永久"}</TableCell>
-                        </TableRow>
-                      ))}
-                      {subscriptions.length === 0 && (
+                    ))}
+                    {subscriptions.length === 0 && (
+                      <EmptyState icon={<Package />} title="暂无订阅记录" />
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
                         <TableRow>
-                          <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">暂无订阅记录</TableCell>
+                          <TableHead>用户</TableHead>
+                          <TableHead>套餐</TableHead>
+                          <TableHead>端口段</TableHead>
+                          <TableHead>来源</TableHead>
+                          <TableHead>到期时间</TableHead>
                         </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
+                      </TableHeader>
+                      <TableBody>
+                        {subscriptions.map((sub: any) => (
+                          <TableRow key={sub.id}>
+                            <TableCell>{sub.name || sub.username || `用户 #${sub.userId}`}</TableCell>
+                            <TableCell>{sub.planName || `套餐 #${sub.planId}`}</TableCell>
+                            <TableCell>{sub.portRangeStart}-{sub.portRangeEnd}</TableCell>
+                            <TableCell><Badge variant="outline">{sub.source === "payment" ? "购买" : "后台分配"}</Badge></TableCell>
+                            <TableCell>{formatDateTime(sub.expiresAt, "永久")}</TableCell>
+                          </TableRow>
+                        ))}
+                        {subscriptions.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">暂无订阅记录</TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
                   </>
                 )}
               </CardContent>
@@ -814,46 +823,49 @@ export default function Billing() {
                   <DataSectionLoading label="正在加载余额流水" />
                 ) : (
                   <>
-                <div className="grid gap-3 md:hidden">
-                  {transactions.map((tx: any) => (
-                    <div key={tx.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="break-words text-sm font-medium">{tx.name || tx.username || `#${tx.userId}`}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">{dateText(tx.createdAt)}</p>
-                        </div>
-                        <div className={`shrink-0 text-right text-sm font-medium ${Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}`}>{money(tx.amountCents)}</div>
-                      </div>
-                      <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
-                        <MobileInfoRow label="类型"><Badge variant="outline">{tx.typeLabel || balanceTypeLabel(tx.type)}</Badge></MobileInfoRow>
-                        <MobileInfoRow label="余额">{money(tx.balanceAfterCents)}</MobileInfoRow>
-                        <MobileInfoRow label="说明">{tx.description || "-"}</MobileInfoRow>
-                      </div>
-                    </div>
-                  ))}
-                  {transactions.length === 0 && (transactionsError ? (
-                    <DataSectionError label="余额流水" error={transactionsError} retrying={transactionsFetching} onRetry={() => { void refetchTransactions(); }} minHeight="min-h-[120px]" />
-                  ) : (
-                    <EmptyState icon={<WalletCards />} title="暂无余额流水" />
-                  ))}
-                </div>
-                <div className="hidden overflow-x-auto md:block">
-                  <Table>
-                  <TableHeader><TableRow><TableHead>用户</TableHead><TableHead>类型</TableHead><TableHead>金额</TableHead><TableHead>余额</TableHead><TableHead>说明</TableHead><TableHead>时间</TableHead></TableRow></TableHeader>
-                  <TableBody>
+                {isMobile ? (
+                  <div className="grid gap-3">
                     {transactions.map((tx: any) => (
-                      <TableRow key={tx.id}>
-                        <TableCell>{tx.name || tx.username || `#${tx.userId}`}</TableCell>
-                        <TableCell><Badge variant="outline">{tx.typeLabel || balanceTypeLabel(tx.type)}</Badge></TableCell>
-                        <TableCell className={Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}>{money(tx.amountCents)}</TableCell>
-                        <TableCell>{money(tx.balanceAfterCents)}</TableCell>
-                        <TableCell>{tx.description || "-"}</TableCell>
-                        <TableCell>{dateText(tx.createdAt)}</TableCell>
-                      </TableRow>
+                      <div key={tx.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-medium">{tx.name || tx.username || `#${tx.userId}`}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">{dateText(tx.createdAt)}</p>
+                          </div>
+                          <div className={`shrink-0 text-right text-sm font-medium ${Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}`}>{money(tx.amountCents)}</div>
+                        </div>
+                        <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
+                          <MobileInfoRow label="类型"><Badge variant="outline">{tx.typeLabel || balanceTypeLabel(tx.type)}</Badge></MobileInfoRow>
+                          <MobileInfoRow label="余额">{money(tx.balanceAfterCents)}</MobileInfoRow>
+                          <MobileInfoRow label="说明">{tx.description || "-"}</MobileInfoRow>
+                        </div>
+                      </div>
                     ))}
-                  </TableBody>
-                </Table>
-                </div>
+                    {transactions.length === 0 && (transactionsError ? (
+                      <DataSectionError label="余额流水" error={transactionsError} retrying={transactionsFetching} onRetry={() => { void refetchTransactions(); }} minHeight="min-h-[120px]" />
+                    ) : (
+                      <EmptyState icon={<WalletCards />} title="暂无余额流水" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                    <TableHeader><TableRow><TableHead>用户</TableHead><TableHead>类型</TableHead><TableHead>金额</TableHead><TableHead>余额</TableHead><TableHead>说明</TableHead><TableHead>时间</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {transactions.map((tx: any) => (
+                        <TableRow key={tx.id}>
+                          <TableCell>{tx.name || tx.username || `#${tx.userId}`}</TableCell>
+                          <TableCell><Badge variant="outline">{tx.typeLabel || balanceTypeLabel(tx.type)}</Badge></TableCell>
+                          <TableCell className={Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}>{money(tx.amountCents)}</TableCell>
+                          <TableCell>{money(tx.balanceAfterCents)}</TableCell>
+                          <TableCell>{tx.description || "-"}</TableCell>
+                          <TableCell>{dateText(tx.createdAt)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  </div>
+                )}
                 <PersistentPagination pagination={transactionPagination} itemName="条流水" />
                   </>
                 )}
@@ -868,14 +880,14 @@ export default function Billing() {
                 <CardDescription>一次性兑换套餐或余额。</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-4">
-                <div className="space-y-2 md:col-span-2">
+                <FormField className="space-y-2 md:col-span-2">
                   <Label>兑换码</Label>
                   <div className="flex gap-2">
                     <Input value={redeemCode} onChange={(e) => setRedeemCode(normalizeCodeInput(e.target.value))} placeholder="留空自动生成" />
                     <Button type="button" variant="outline" onClick={() => setRedeemCode(randomBillingCode("FXR"))}><Shuffle className="mr-2 h-4 w-4" /> 随机</Button>
                   </div>
                   <p className="text-xs text-muted-foreground">选填；留空时生成随机码。</p>
-                </div>
+                </FormField>
                 <FormField className="space-y-2"><Label>类型</Label><Select value={redeemType} onValueChange={(v: "plan" | "balance") => setRedeemType(v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="plan">套餐期限</SelectItem><SelectItem value="balance">余额</SelectItem></SelectContent></Select></FormField>
                 {redeemType === "plan" ? (
                   <>
@@ -931,64 +943,67 @@ export default function Billing() {
                   <DataSectionLoading label="正在加载兑换码" />
                 ) : (
                   <>
-                <div className="grid gap-3 md:hidden">
-                  {filteredRedemptionCodes.map((code: any) => {
-                    const content = code.type === "plan" ? `${code.planName || `套餐 #${code.planId}`} / ${code.durationDays || 30} 天` : money(code.amountCents);
-                    const usage = code.usedAt ? `${code.usedByUsername || code.usedByUserId} 于 ${dateText(code.usedAt)}` : "未使用";
-                    return (
-                      <div key={code.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            className="mt-1"
-                            checked={selectedRedemptionSet.has(Number(code.id))}
-                            onChange={(event) => toggleRedemptionCode(Number(code.id), event.target.checked)}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="min-w-0 break-all font-mono text-sm font-medium">{code.code}</p>
-                              <Button variant="ghost" size="icon" aria-label="删除兑换码" className="-mr-2 -mt-2 shrink-0 text-destructive" disabled={deleteRedemptionCode.isPending} onClick={() => void confirmDeleteRedemptionCode(code)}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                            <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
-                              <MobileInfoRow label="类型"><Badge variant="outline">{code.type === "plan" ? "套餐" : "余额"}</Badge></MobileInfoRow>
-                              <MobileInfoRow label="内容">{content}</MobileInfoRow>
-                              <MobileInfoRow label="有效期">{dateText(code.startsAt)} - {dateText(code.expiresAt)}</MobileInfoRow>
-                              <MobileInfoRow label="使用">{usage}</MobileInfoRow>
+                {isMobile ? (
+                  <div className="grid gap-3">
+                    {filteredRedemptionCodes.map((code: any) => {
+                      const content = code.type === "plan" ? `${code.planName || `套餐 #${code.planId}`} / ${code.durationDays || 30} 天` : money(code.amountCents);
+                      const usage = code.usedAt ? `${code.usedByUsername || code.usedByUserId} 于 ${dateText(code.usedAt)}` : "未使用";
+                      return (
+                        <div key={code.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={selectedRedemptionSet.has(Number(code.id))}
+                              onChange={(event) => toggleRedemptionCode(Number(code.id), event.target.checked)}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="min-w-0 break-all font-mono text-sm font-medium">{code.code}</p>
+                                <Button variant="ghost" size="icon" aria-label="删除兑换码" className="-mr-2 -mt-2 shrink-0 text-destructive" disabled={deleteRedemptionCode.isPending} onClick={() => void confirmDeleteRedemptionCode(code)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
+                                <MobileInfoRow label="类型"><Badge variant="outline">{code.type === "plan" ? "套餐" : "余额"}</Badge></MobileInfoRow>
+                                <MobileInfoRow label="内容">{content}</MobileInfoRow>
+                                <MobileInfoRow label="有效期">{dateText(code.startsAt)} - {dateText(code.expiresAt)}</MobileInfoRow>
+                                <MobileInfoRow label="使用">{usage}</MobileInfoRow>
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                  {filteredRedemptionCodes.length === 0 && (
-                    <EmptyState icon={<Gift />} title="暂无兑换码" />
-                  )}
-                </div>
-                <div className="hidden overflow-x-auto md:block">
-                  <Table>
-                  <TableHeader><TableRow><TableHead className="w-12"><input type="checkbox" checked={allFilteredRedemptionSelected} onChange={(event) => toggleAllFilteredRedemptionCodes(event.target.checked)} disabled={filteredRedemptionCodes.length === 0} /></TableHead><TableHead>兑换码</TableHead><TableHead>类型</TableHead><TableHead>内容</TableHead><TableHead>有效期</TableHead><TableHead>使用情况</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
-                  <TableBody>
-                    {filteredRedemptionCodes.map((code: any) => (
-                      <TableRow key={code.id}>
-                        <TableCell><input type="checkbox" checked={selectedRedemptionSet.has(Number(code.id))} onChange={(event) => toggleRedemptionCode(Number(code.id), event.target.checked)} /></TableCell>
-                        <TableCell className="font-mono break-all">{code.code}</TableCell>
-                        <TableCell><Badge variant="outline">{code.type === "plan" ? "套餐" : "余额"}</Badge></TableCell>
-                        <TableCell>{code.type === "plan" ? `${code.planName || `套餐 #${code.planId}`} / ${code.durationDays || 30} 天` : money(code.amountCents)}</TableCell>
-                        <TableCell>{dateText(code.startsAt)} - {dateText(code.expiresAt)}</TableCell>
-                        <TableCell>{code.usedAt ? `${code.usedByUsername || code.usedByUserId} 于 ${dateText(code.usedAt)}` : "未使用"}</TableCell>
-                        <TableCell className="text-right"><Button variant="ghost" size="icon" aria-label="删除兑换码" className="text-destructive" disabled={deleteRedemptionCode.isPending} onClick={() => void confirmDeleteRedemptionCode(code)}><Trash2 className="h-4 w-4" /></Button></TableCell>
-                      </TableRow>
-                    ))}
+                      );
+                    })}
                     {filteredRedemptionCodes.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">暂无兑换码</TableCell>
-                      </TableRow>
+                      <EmptyState icon={<Gift />} title="暂无兑换码" />
                     )}
-                  </TableBody>
-                </Table>
-                </div>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                    <TableHeader><TableRow><TableHead className="w-12"><input type="checkbox" checked={allFilteredRedemptionSelected} onChange={(event) => toggleAllFilteredRedemptionCodes(event.target.checked)} disabled={filteredRedemptionCodes.length === 0} /></TableHead><TableHead>兑换码</TableHead><TableHead>类型</TableHead><TableHead>内容</TableHead><TableHead>有效期</TableHead><TableHead>使用情况</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {filteredRedemptionCodes.map((code: any) => (
+                        <TableRow key={code.id}>
+                          <TableCell><input type="checkbox" checked={selectedRedemptionSet.has(Number(code.id))} onChange={(event) => toggleRedemptionCode(Number(code.id), event.target.checked)} /></TableCell>
+                          <TableCell className="font-mono break-all">{code.code}</TableCell>
+                          <TableCell><Badge variant="outline">{code.type === "plan" ? "套餐" : "余额"}</Badge></TableCell>
+                          <TableCell>{code.type === "plan" ? `${code.planName || `套餐 #${code.planId}`} / ${code.durationDays || 30} 天` : money(code.amountCents)}</TableCell>
+                          <TableCell>{dateText(code.startsAt)} - {dateText(code.expiresAt)}</TableCell>
+                          <TableCell>{code.usedAt ? `${code.usedByUsername || code.usedByUserId} 于 ${dateText(code.usedAt)}` : "未使用"}</TableCell>
+                          <TableCell className="text-right"><Button variant="ghost" size="icon" aria-label="删除兑换码" className="text-destructive" disabled={deleteRedemptionCode.isPending} onClick={() => void confirmDeleteRedemptionCode(code)}><Trash2 className="h-4 w-4" /></Button></TableCell>
+                        </TableRow>
+                      ))}
+                      {filteredRedemptionCodes.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">暂无兑换码</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                  </div>
+                )}
                   </>
                 )}
               </CardContent>
@@ -1003,14 +1018,14 @@ export default function Billing() {
                 <CardDescription>购买套餐时抵扣。</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-4">
-                <div className="space-y-2 md:col-span-2">
+                <FormField className="space-y-2 md:col-span-2">
                   <Label>折扣码</Label>
                   <div className="flex gap-2">
                     <Input value={discountCode} onChange={(e) => setDiscountCode(normalizeCodeInput(e.target.value))} placeholder="例如 SALE2026" />
                     <Button type="button" variant="outline" onClick={() => setDiscountCode(randomBillingCode("FXD"))}><Shuffle className="mr-2 h-4 w-4" /> 随机</Button>
                   </div>
                   <p className="text-xs text-muted-foreground">可手动填写或随机生成。</p>
-                </div>
+                </FormField>
                 <FormField className="space-y-2"><Label>类型</Label><Select value={discountType} onValueChange={(v: "percent" | "amount") => setDiscountType(v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="percent">百分比</SelectItem><SelectItem value="amount">固定金额</SelectItem></SelectContent></Select></FormField>
                 <FormField className="space-y-2"><Label>{discountType === "percent" ? "折扣百分比" : "抵扣金额"}</Label><Input type="number" min={1} max={discountType === "percent" ? 100 : undefined} value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} /></FormField>
                 <FormField className="space-y-2"><Label>可用次数</Label><Input type="number" min={0} value={discountMaxUses} onChange={(e) => setDiscountMaxUses(e.target.value)} placeholder="0=不限" /></FormField>
@@ -1024,7 +1039,8 @@ export default function Billing() {
                 </div>
                 <div className="space-y-2 md:col-span-4">
                   <Label>适用套餐</Label>
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {/* 一组按钮，不是一个控件：Label 绑不上，给组一个名字让读屏知道这几个按钮是选套餐的。 */}
+                  <div role="group" aria-label="适用套餐" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <button type="button" onClick={() => setDiscountPlanIds([])} className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${discountPlanIds.length === 0 ? "border-primary bg-primary/10 text-primary" : "border-border/60 bg-background/60 hover:bg-muted/60"}`}>全部套餐</button>
                     {plans.map((plan: any) => {
                       const checked = discountPlanIds.includes(Number(plan.id));
@@ -1046,53 +1062,56 @@ export default function Billing() {
                   <DataSectionLoading label="正在加载折扣码" />
                 ) : (
                   <>
-                <div className="grid gap-3 md:hidden">
-                  {discountCodes.map((code: any) => {
-                    const status = discountStatus(code);
-                    const planNames = code.planIds?.length ? code.planIds.map((id: number) => (plans as any[]).find((plan: any) => Number(plan.id) === Number(id))?.name || `#${id}`).join("、") : "全部套餐";
-                    return (
-                      <div key={code.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="min-w-0 break-all font-mono text-sm font-medium">{code.code}</p>
-                          <Button variant="ghost" size="icon" aria-label="删除折扣码" className="-mr-2 -mt-2 shrink-0 text-destructive" disabled={deleteDiscountCode.isPending} onClick={() => void confirmDeleteDiscountCode(code)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                        <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
-                          <MobileInfoRow label="优惠">{code.discountType === "percent" ? `${code.discountValue}%` : money(code.discountValue)}</MobileInfoRow>
-                          <MobileInfoRow label="套餐">{planNames}</MobileInfoRow>
-                          <MobileInfoRow label="状态"><Badge variant={status === "生效中" ? "default" : "secondary"}>{status}</Badge></MobileInfoRow>
-                          <MobileInfoRow label="次数">{code.usedCount || 0} / {code.maxUses || "不限"}</MobileInfoRow>
-                          <MobileInfoRow label="有效期">{dateText(code.startsAt)} - {dateText(code.expiresAt)}</MobileInfoRow>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {discountCodes.length === 0 && (
-                    <EmptyState icon={<TicketPercent />} title="暂无折扣码" />
-                  )}
-                </div>
-                <div className="hidden overflow-x-auto md:block">
-                  <Table>
-                  <TableHeader><TableRow><TableHead>折扣码</TableHead><TableHead>优惠</TableHead><TableHead>适用套餐</TableHead><TableHead>状态</TableHead><TableHead>次数</TableHead><TableHead>有效期</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
-                  <TableBody>
+                {isMobile ? (
+                  <div className="grid gap-3">
                     {discountCodes.map((code: any) => {
                       const status = discountStatus(code);
+                      const planNames = code.planIds?.length ? code.planIds.map((id: number) => (plans as any[]).find((plan: any) => Number(plan.id) === Number(id))?.name || `#${id}`).join("、") : "全部套餐";
                       return (
-                        <TableRow key={code.id}>
-                          <TableCell className="font-mono break-all">{code.code}</TableCell>
-                          <TableCell>{code.discountType === "percent" ? `${code.discountValue}%` : money(code.discountValue)}</TableCell>
-                          <TableCell>{code.planIds?.length ? code.planIds.map((id: number) => (plans as any[]).find((plan: any) => Number(plan.id) === Number(id))?.name || `#${id}`).join("、") : "全部套餐"}</TableCell>
-                          <TableCell><Badge variant={status === "生效中" ? "default" : "secondary"}>{status}</Badge></TableCell>
-                          <TableCell>{code.usedCount || 0} / {code.maxUses || "不限"}</TableCell>
-                          <TableCell>{dateText(code.startsAt)} - {dateText(code.expiresAt)}</TableCell>
-                          <TableCell className="text-right"><Button variant="ghost" size="icon" aria-label="删除折扣码" className="text-destructive" disabled={deleteDiscountCode.isPending} onClick={() => void confirmDeleteDiscountCode(code)}><Trash2 className="h-4 w-4" /></Button></TableCell>
-                        </TableRow>
+                        <div key={code.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="min-w-0 break-all font-mono text-sm font-medium">{code.code}</p>
+                            <Button variant="ghost" size="icon" aria-label="删除折扣码" className="-mr-2 -mt-2 shrink-0 text-destructive" disabled={deleteDiscountCode.isPending} onClick={() => void confirmDeleteDiscountCode(code)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="mt-3 space-y-2 border-t border-border/40 pt-3">
+                            <MobileInfoRow label="优惠">{code.discountType === "percent" ? `${code.discountValue}%` : money(code.discountValue)}</MobileInfoRow>
+                            <MobileInfoRow label="套餐">{planNames}</MobileInfoRow>
+                            <MobileInfoRow label="状态"><Badge variant={status === "生效中" ? "default" : "secondary"}>{status}</Badge></MobileInfoRow>
+                            <MobileInfoRow label="次数">{code.usedCount || 0} / {code.maxUses || "不限"}</MobileInfoRow>
+                            <MobileInfoRow label="有效期">{dateText(code.startsAt)} - {dateText(code.expiresAt)}</MobileInfoRow>
+                          </div>
+                        </div>
                       );
                     })}
-                  </TableBody>
-                </Table>
-                </div>
+                    {discountCodes.length === 0 && (
+                      <EmptyState icon={<TicketPercent />} title="暂无折扣码" />
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                    <TableHeader><TableRow><TableHead>折扣码</TableHead><TableHead>优惠</TableHead><TableHead>适用套餐</TableHead><TableHead>状态</TableHead><TableHead>次数</TableHead><TableHead>有效期</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {discountCodes.map((code: any) => {
+                        const status = discountStatus(code);
+                        return (
+                          <TableRow key={code.id}>
+                            <TableCell className="font-mono break-all">{code.code}</TableCell>
+                            <TableCell>{code.discountType === "percent" ? `${code.discountValue}%` : money(code.discountValue)}</TableCell>
+                            <TableCell>{code.planIds?.length ? code.planIds.map((id: number) => (plans as any[]).find((plan: any) => Number(plan.id) === Number(id))?.name || `#${id}`).join("、") : "全部套餐"}</TableCell>
+                            <TableCell><Badge variant={status === "生效中" ? "default" : "secondary"}>{status}</Badge></TableCell>
+                            <TableCell>{code.usedCount || 0} / {code.maxUses || "不限"}</TableCell>
+                            <TableCell>{dateText(code.startsAt)} - {dateText(code.expiresAt)}</TableCell>
+                            <TableCell className="text-right"><Button variant="ghost" size="icon" aria-label="删除折扣码" className="text-destructive" disabled={deleteDiscountCode.isPending} onClick={() => void confirmDeleteDiscountCode(code)}><Trash2 className="h-4 w-4" /></Button></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                  </div>
+                )}
                   </>
                 )}
               </CardContent>

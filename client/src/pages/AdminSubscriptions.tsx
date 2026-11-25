@@ -7,6 +7,7 @@
 
 import DashboardLayout from "@/components/DashboardLayout";
 import DataSectionLoading from "@/components/DataSectionLoading";
+import EmptyState from "@/components/EmptyState";
 import QueryErrorState, { QueryErrorRow, failedQueryState } from "@/components/QueryErrorState";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -307,7 +308,7 @@ function TemplatesTab() {
       {failedQueryState(query) ? (
         <QueryErrorState label="模板" minHeight="min-h-[120px]" {...failedQueryState(query)!} />
       ) : templates.length === 0 ? (
-        <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">还没有模板，所有人用内置的开头部分。</CardContent></Card>
+        <EmptyState icon={<FileCode2 />} title="还没有模板" description="所有人用内置的开头部分。需要改端口、DNS、TUN 这些时再建。" />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {templates.map((template) => (

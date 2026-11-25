@@ -1,6 +1,7 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import AddSelfServiceHostDialog from "@/components/hosts/AddSelfServiceHostDialog";
 import DataSectionLoading from "@/components/DataSectionLoading";
+import EmptyState from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
@@ -8,7 +9,7 @@ import { formatBytes, formatCpuPercent, formatUptime } from "@/components/hosts/
 import { ProxyNodeRow, proxyNodeMetaText } from "@/components/proxy/ProxyNodeRow";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
-import { Plus, Terminal, Trash2 } from "lucide-react";
+import { Plus, Server, Terminal, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -169,9 +170,7 @@ export default function MyHostsSection() {
       {hostsQuery.isLoading ? (
         <DataSectionLoading />
       ) : myHosts.length === 0 ? (
-        <p className="py-4 text-center text-xs text-muted-foreground">
-          还没有自己的机器。加一台之后，把它给出的命令粘进那台机器的 SSH 装上 Agent，就能在上面开自己的节点。
-        </p>
+        <EmptyState icon={<Server />} title="还没有自己的机器" description="加一台之后，把它给出的命令粘进那台机器的 SSH 装上 Agent，就能在上面开自己的节点。" />
       ) : (
         <div className="space-y-1.5">
           {myHosts.map((host) => (
@@ -185,6 +184,7 @@ export default function MyHostsSection() {
                 />
               }
               name={host.name}
+              label={String(host.name || "")}
               meta={proxyNodeMetaText([
                 host.ip,
                 host.isOnline ? "在线" : "离线",

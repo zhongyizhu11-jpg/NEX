@@ -922,6 +922,7 @@ function ProxyInboundsSection({
                           key={spec.key}
                           leading={spec.leading}
                           name={spec.name}
+                          label={spec.sortName}
                           tag={spec.tag}
                           meta={spec.meta}
                           detail={spec.detail}
@@ -1563,6 +1564,7 @@ function ProxyInboundsSection({
                   size="icon"
                   className="h-7 w-7 shrink-0"
                   title="复制"
+                  aria-label={`复制${item.userName || item.name}的链接`}
                   onClick={async () => {
                     const ok = await copyTextFromElement(linkTextRefs.current[item.userId] || null, item.link);
                     if (ok) toast.success("链接已复制，粘进客户端即可");

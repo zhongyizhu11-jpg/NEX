@@ -99,6 +99,7 @@ const ACCENT_BORDERS: Record<ProxyNodeRowAccent, string> = {
 export const ProxyNodeRow = memo(function ProxyNodeRow({
   leading,
   name,
+  label,
   tag,
   meta,
   detail,
@@ -111,6 +112,8 @@ export const ProxyNodeRow = memo(function ProxyNodeRow({
   /** 状态点之类的前置标记。 */
   leading?: ReactNode;
   name: ReactNode;
+  /** 纯文本名字，给「⋯」按钮取无障碍名用（name 多半是带徽章的节点，读屏念不出来）。不传时 name 是字符串就用它。 */
+  label?: string;
   /** 名字后面那一个徽章。只放长度有上限的东西，协议名这种。 */
   tag?: ReactNode;
   /** 第二行：协议、地址、端口、停用、分享人数……一句话说完，超长就截断（点开看全文）。 */
@@ -187,7 +190,7 @@ export const ProxyNodeRow = memo(function ProxyNodeRow({
       {actions.length > 0 ? (
         <DropdownMenu open={open} onOpenChange={setOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="更多操作">
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="更多操作" aria-label={`${label || (typeof name === "string" ? name : "")} 更多操作`.trim()}>
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>

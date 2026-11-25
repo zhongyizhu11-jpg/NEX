@@ -1,4 +1,3 @@
-import { getFormatLocale } from "@/i18n";
 /**
  * 外部订阅：用户把别处的订阅地址填进来，面板定时拉取并并进自己的订阅（或透传给客户端）。
  */
@@ -14,12 +13,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { formatDateTime } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { formatBytes } from "@shared/formatBytes";
 import { PROXY_SUB_SOURCE_MODES, PROXY_SUB_SOURCE_MODE_LABELS, type ProxySubSourceMode } from "@shared/proxySubSource";
 import { Link2, Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { proxySubSourceCreateToast, proxySubSourceSyncToast, type ProxySubSourceSyncToast } from "./proxySubSourceSyncToast";
 
 const INTERVALS: Array<{ value: number; label: string }> = [
   { value: 600, label: "10 分钟" },
@@ -31,9 +32,11 @@ const INTERVALS: Array<{ value: number; label: string }> = [
 ];
 
 function timeText(value: unknown): string {
-  if (!value) return "从没拉过";
-  const date = new Date(value as any);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString(getFormatLocale(), { hour12: false }) : "—";
+  return value ? formatDateTime(value) : "从没拉过";
+}
+
+function showSyncToast(message: ProxySubSourceSyncToast) {
+  toast[message.tone](message.text);
 }
 
 export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged }: { allowed: boolean; maxPerUser: number; onChanged?: () => void }) {
@@ -54,8 +57,7 @@ export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged 
   };
   const create = trpc.proxySubscriptions.createSource.useMutation({
     onSuccess: (result) => {
-      if (result.sync.ok) toast.success(`已添加，同步到 ${result.sync.nodeCount} 个节点`);
-      else toast.warning(`已添加，但第一次拉取失败：${result.sync.error}`);
+      showSyncToast(proxySubSourceCreateToast(result.sync));
       setDialogOpen(false);
       refresh();
     },
@@ -78,9 +80,8 @@ export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged 
   });
   const sync = trpc.proxySubscriptions.syncSource.useMutation({
     onSuccess: (result) => {
-      if (!result.ok) toast.error(`拉取失败：${result.error}`);
-      else if (result.unchanged) toast.success("上游没变化");
-      else toast.success(`同步完成：+${result.added} 更新 ${result.updated} 移除 ${result.removed}`);
+      // 正在跑 / 排队了也会走到这里（ok: true、零计数），提示由 helper 分辨，别念「+0 更新 0」。
+      showSyncToast(proxySubSourceSyncToast(result));
       refresh();
     },
     onError: (error) => toast.error(error.message || "同步失败"),
@@ -158,7 +159,7 @@ export default function ProxySubSourcesSection({ allowed, maxPerUser, onChanged 
                 </div>
                 <div className="flex items-center gap-1">
                   <Switch aria-label={`${source.name} 启用`} checked={!!source.isEnabled} onCheckedChange={(checked) => update.mutate({ id: source.id, isEnabled: checked })} />
-                  <Button size="sm" variant="ghost" onClick={() => sync.mutate({ id: source.id })} disabled={sync.isPending} title="立刻拉取一次">
+                  <Button size="sm" variant="ghost" onClick={() => sync.mutate({ id: source.id })} disabled={sync.isPending} title="立刻拉取一次" aria-label={`立刻拉取「${source.name}」`}>
                     <RefreshCw className={`h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} />
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => openEdit(source)}>编辑</Button>
