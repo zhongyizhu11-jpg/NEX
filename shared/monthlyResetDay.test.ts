@@ -61,7 +61,9 @@ test("还没到重置日就不该触发", () => {
 });
 
 test("用户管理的重置日选择不再卡在 28 号", () => {
-  const source = fs.readFileSync(new URL("../client/src/pages/Users.tsx", import.meta.url), "utf8");
+  // 重置日选择在「流量与权限设置」弹窗里，弹窗已从 Users.tsx 抽成独立组件；两处一起看
+  const source = ["../client/src/pages/Users.tsx", "../client/src/components/users/UserTrafficSettingsDialog.tsx"]
+    .map((file) => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
   assert.doesNotMatch(source, /length: 28\b/);
   assert.doesNotMatch(source, /\.day, 28\)/);
   assert.match(source, /Array\.from\(\{ length: MONTHLY_RESET_MAX_DAY \}/);

@@ -123,8 +123,8 @@ test("入站上有规则（暂停的也算）不能删；默认规则必须是�
     await asDefault(adminRule);
     // 删主机时入站和名字一起清掉。
     await db.deleteHost(10);
-    assert.equal((await query("SELECT COUNT(*) AS c FROM host_tls_inbounds"))[0].c, 0);
-    assert.equal((await query("SELECT COUNT(*) AS c FROM rule_sni_names"))[0].c, 0);
+    assert.equal(Number((await query("SELECT COUNT(*) AS c FROM host_tls_inbounds"))[0].c), 0);
+    assert.equal(Number((await query("SELECT COUNT(*) AS c FROM rule_sni_names"))[0].c), 0);
   `);
 });
 

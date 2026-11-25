@@ -1,5 +1,4 @@
 import { getFormatLocale } from "@/i18n";
-import { FormField } from "@/components/ui/form-field";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -7,24 +6,26 @@ import MyHostsSection from "@/components/proxy/MyHostsSection";
 import ProxyInboundsSection from "@/components/proxy/ProxyInboundsSection";
 import { proxyNodeMetaText, type ProxyNodeRowSpec } from "@/components/proxy/ProxyNodeRow";
 import { ProxyNodeShareDialog } from "@/components/proxy/ProxyNodeShareDialog";
+import { ProxyNodeEditDialog, type ProxyNodeEditable } from "@/components/proxy/ProxyNodeEditDialog";
+import { ProxySubTokenCreateDialog } from "@/components/proxy/ProxySubTokenCreateDialog";
+import { ProxyPreviewRenameDialog, type ProxyPreviewRenameTarget } from "@/components/proxy/ProxyPreviewRenameDialog";
+import { NODE_GROUP_MODE_STORAGE_KEY, readStoredGroupMode, writeStoredPref } from "@/components/proxy/proxyNodeViewPrefs";
+import { summarizeProxyPreview } from "@/components/proxy/proxyPreviewSummary";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
+import EmptyState from "@/components/EmptyState";
 import { SummaryStrip } from "@/components/entity/SummaryStrip";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ScrollFade } from "@/components/ui/scroll-fade";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
 import { pollingInterval } from "@/lib/polling";
+import { configQuery } from "@/lib/queryPresets";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
 import {
@@ -37,14 +38,6 @@ import {
   PROXY_SUBSCRIPTION_FORMAT_LABELS,
   type ProxySubscriptionFormat,
 } from "@shared/proxySubscription";
-import {
-  PROXY_NODE_AUTO_GROUPS,
-  PROXY_NODE_DEFAULT_AUTO_GROUP,
-  PROXY_NODE_AUTO_GROUP_HINTS,
-  PROXY_NODE_AUTO_GROUP_LABELS,
-  normalizeProxyNodeAutoGroup,
-  type ProxyNodeAutoGroup,
-} from "@shared/proxySubscriptionPlan";
 import {
   PROXY_RULE_PRESETS,
   PROXY_RULE_PRESET_HINTS,
@@ -70,11 +63,8 @@ import {
 } from "@shared/proxyClientImport";
 import { summarizeProxyNodeHealthCounts, type ProxyNodeHealth } from "@shared/proxyNodeHealth";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
-import { bytesFromGb, gbFromBytes } from "@shared/trafficGb";
-import { MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { ProxyNodeQuotaDetail, ProxyNodeQuotaToggle } from "@/components/proxy/ProxyNodeQuotaCells";
 import {
-  normalizeProxyNodeGroupMode,
   PROXY_NODE_GROUP_MODES,
   PROXY_NODE_GROUP_MODE_LABELS,
   type ProxyNodeGroupMode,
@@ -87,7 +77,6 @@ import {
   ChevronDown,
   Copy,
   Eye,
-  EyeOff,
   Globe,
   KeyRound,
   Layers,
@@ -96,7 +85,6 @@ import {
   Server,
   TriangleAlert,
   Pencil,
-  Plug,
   Plus,
   QrCode,
   Rocket,
@@ -121,7 +109,6 @@ import { useLocation } from "wouter";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { NodeExitDialog, type ExitCheckSubject } from "@/components/proxy/ExitQualityView";
 import { LandingPoolMembersDetail, LandingPoolMembersToggle, type LandingPoolMemberLine } from "@/components/proxy/LandingPoolMembers";
-import { PreviewRouteDetail } from "@/components/proxy/PreviewRouteDetail";
 import {
   ProxySubTokenDevicesDialog,
   ProxySubTokenEditDialog,
@@ -131,11 +118,20 @@ import {
 } from "@/components/proxy/ProxySubTokenDialogs";
 import ProxySubSourcesSection from "@/components/proxy/ProxySubSourcesSection";
 import ProxyNodeReorderDialog from "@/components/proxy/ProxyNodeReorderDialog";
-import { proxySubRegionLabel } from "@shared/proxySubRegion";
 import { PROXY_SUB_IP_VERSIONS, PROXY_SUB_IP_VERSION_LABELS, type ProxySubIpVersion } from "@shared/proxySubIpVersion";
-import QRCode from "qrcode";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+
+/*
+  「订阅内容」弹窗有五百多行、只在点开时才用：单独一个包，点开再下载。
+  页面自己仍然取 preview 这份数据（概览条上的数字要它），弹窗打开后吃同一份缓存。
+*/
+const ProxySubscriptionPreviewDialog = lazy(() => import("@/components/proxy/ProxySubscriptionPreviewDialog"));
+/*
+  节点列表还没回来时的兜底。写成模块级常量而不是 `?? []`：后者每次渲染都是新数组，
+  传给排序弹窗等子组件后，它们按引用比较的 effect / memo 每帧都会重跑一遍。
+*/
+const EMPTY_NODES: never[] = [];
 
 /**
  * 每个客户端一个可辨识的图案 + 各自的品牌色。
@@ -217,38 +213,6 @@ async function copyText(value: string, message: string) {
   );
 }
 
-const NODE_GROUP_MODE_STORAGE_KEY = "forwardx.proxyNodes.groupMode";
-const NODE_COLLAPSED_STORAGE_KEY = "forwardx.proxyNodes.collapsed";
-
-function readStoredGroupMode(): ProxyNodeGroupMode {
-  if (typeof window === "undefined") return "none";
-  try {
-    return normalizeProxyNodeGroupMode(window.localStorage.getItem(NODE_GROUP_MODE_STORAGE_KEY));
-  } catch {
-    return "none";
-  }
-}
-
-/** 折叠起来的分组键。存不上也不影响用，只是下次进来又是展开的。 */
-function readStoredCollapsed(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(NODE_COLLAPSED_STORAGE_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeStored(key: string, value: string) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // 隐私模式下写不进去，忽略即可 —— 这只是个记住偏好的便利。
-  }
-}
-
 const NODE_HEALTH_STYLES: Record<ProxyNodeHealth["state"], string> = {
   online: "bg-[var(--fx-healthy)]",
   offline: "bg-[var(--fx-down)]",
@@ -277,35 +241,6 @@ function ProxyNodeHealthDot({ health }: { health?: ProxyNodeHealth | null }) {
 }
 
 /**
- * 订阅内容的两类条目。
- *
- * 中转在前：那是主力 —— 直连条目只有开了「加进订阅」的节点才有，通常只有一两条，
- * 而且落地 IP 直接暴露在订阅里，放后面不容易被误当成常规入口。
- */
-const PREVIEW_GROUPS = [
-  { key: "relay", label: "中转" },
-  { key: "direct", label: "直连" },
-] as const;
-
-/**
- * 子块小标题：一行文字 + 一条细横线。
- *
- * 「订阅内容」这张卡里原本有五个子块，各用一种样式 —— 彩色框、虚线框、灰底框、
- * 纯标题。样式不同会让人以为它们是不同性质的东西，其实都只是「订阅里的一部分」。
- * 统一成同一条线之后，视觉重量交还给内容本身。
- */
-function SectionLabel({ children, count }: { children: React.ReactNode; count?: number }) {
-  return (
-    <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-      <span>{children}</span>
-      {count !== undefined ? <span className="tabular-nums">({count})</span> : null}
-      <span className="h-px flex-1 bg-border" />
-    </div>
-  );
-}
-
-
-/**
  * 令牌行上那句「最近一次被拒」。
  *
  * 只在**最近一次确实是失败**时出现（成功之后就不再挂着，见 proxySubTokenStatus）。
@@ -331,7 +266,8 @@ export default function ClientSubscriptionsPage() {
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
 
-  const permissionQuery = trpc.proxySubscriptions.permission.useQuery();
+  // 权限和公开设置变得慢，半分钟内按缓存走（lib/queryPresets）。
+  const permissionQuery = trpc.proxySubscriptions.permission.useQuery(undefined, configQuery);
   const allowed = permissionQuery.data?.allowed ?? true;
 
   /**
@@ -345,19 +281,14 @@ export default function ClientSubscriptionsPage() {
   });
   const tokensQuery = trpc.proxySubscriptions.listTokens.useQuery();
   // 用户看得到的订阅设置：备用域名、默认外观、能不能加外部订阅。
-  const subSettingsQuery = trpc.proxySubscriptions.settingsPublic.useQuery();
+  const subSettingsQuery = trpc.proxySubscriptions.settingsPublic.useQuery(undefined, configQuery);
+  /*
+    订阅内容这份数据不轮询，进页面取一次就够。弹窗没打开也要取：概览条上的「客户端线路」
+    「待处理」两个数字和节点行上的「不在订阅里」都从它算；弹窗打开后用同一个查询键，吃这份缓存。
+  */
   const previewQuery = trpc.proxySubscriptions.preview.useQuery();
-  const hideUnreachableQuery = trpc.proxySubscriptions.hideUnreachable.useQuery();
-  const setHideUnreachableMutation = trpc.proxySubscriptions.setHideUnreachable.useMutation({
-    onSuccess: () => {
-      void utils.proxySubscriptions.hideUnreachable.invalidate();
-      void utils.proxySubscriptions.preview.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "保存失败"),
-  });
 
   const [nodeGroupMode, setNodeGroupMode] = useState<ProxyNodeGroupMode>(readStoredGroupMode);
-  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(readStoredCollapsed);
   /** 「订阅内容」收成弹窗：它是预览，不是这一页的常驻内容。 */
   const [previewOpen, setPreviewOpen] = useState(false);
   /** 「我的机器」也收成弹窗：它是自建节点的前置条件，不是并列的一段。 */
@@ -365,28 +296,15 @@ export default function ClientSubscriptionsPage() {
   /** 展开了套餐详情的节点。只在本次会话里记着 —— 这是个随手看一眼的动作，不值得持久化。 */
   const [expandedQuotaIds, setExpandedQuotaIds] = useState<number[]>([]);
 
-  const [nodeDialogOpen, setNodeDialogOpen] = useState(false);
-  const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
-  const [nodeName, setNodeName] = useState("");
-  const [nodeLink, setNodeLink] = useState("");
-  const [nodeAutoGroup, setNodeAutoGroup] = useState<ProxyNodeAutoGroup>("url-test");
-  // 默认关：开了之后落地 IP 会出现在每一条订阅地址里。
-  const [nodeIncludeDirect, setNodeIncludeDirect] = useState(false);
-  // 0 表示不经由任何前置。
-  const [nodeFrontProxyId, setNodeFrontProxyId] = useState(0);
-  /** 落地机的套餐规格。带宽用 Mbps，总流量用 GB —— 机房就是按这两个单位卖的。 */
-  const [nodeBandwidthMbps, setNodeBandwidthMbps] = useState("");
-  const [nodeTrafficLimitGb, setNodeTrafficLimitGb] = useState("");
-  const [nodeTrafficUsedGb, setNodeTrafficUsedGb] = useState("");
-  const [nodeTrafficAutoReset, setNodeTrafficAutoReset] = useState(false);
-  const [nodeTrafficResetDay, setNodeTrafficResetDay] = useState("1");
+  /*
+    三个弹窗（节点、新建链接、改名）的表单状态都在各自的组件里（components/proxy/*Dialog）。
+    页面只记「开着没有、编辑的是哪条」—— 原来十几个输入框的 useState 挂在这里，弹窗里每敲
+    一个键整页重画一遍，节点列表跟着重排。
+  */
+  const [nodeDialog, setNodeDialog] = useState<{ open: boolean; node: ProxyNodeEditable | null }>({ open: false, node: null });
   // 订阅内容里改名：转发派生的条目改规则上的显示名，直连条目改模板名。
-  const [renaming, setRenaming] = useState<
-    { kind: "relay" | "direct"; ruleId: number; templateId: number; name: string } | null
-  >(null);
-  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState<ProxyPreviewRenameTarget | null>(null);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
-  const [tokenName, setTokenName] = useState("");
   // 一键订阅面板默认折叠，同一时间只展开一个，免得页面被撑得很长。
   const [importOpenTokenId, setImportOpenTokenId] = useState<number | null>(null);
   const [importKind, setImportKind] = useState<ProxySubscriptionKind>("nodes");
@@ -405,40 +323,31 @@ export default function ClientSubscriptionsPage() {
   }, [platform, showAllClients]);
   const hiddenCount = PROXY_CLIENT_TARGETS.length - visibleTargets.length;
 
-  const refresh = () => {
-    void utils.proxySubscriptions.listNodes.invalidate();
-    void utils.proxySubscriptions.listTokens.invalidate();
-    void utils.proxySubscriptions.preview.invalidate();
-  };
+  /**
+   * 失效按影响范围分两份，不再一把全失效。
+   *
+   * 节点变了 → listNodes + preview（订阅内容由节点和转发算出来）；令牌变了 → 只有 listTokens。
+   * 原来每个写操作都把三个一起重取：拨一下行开关多发两个请求，令牌那张卡还会跟着闪一下。
+   * 返回 promise 是给乐观开关用的：mutateAsync 等到重取落地才算完，开关跑完一轮不会按旧值闪一下。
+   */
+  const invalidateNodes = useCallback(() => Promise.all([
+    utils.proxySubscriptions.listNodes.invalidate(),
+    utils.proxySubscriptions.preview.invalidate(),
+  ]), [utils]);
+  const invalidateTokens = useCallback(() => utils.proxySubscriptions.listTokens.invalidate(), [utils]);
+  // 子组件的 onSaved / onChanged 这类位置要的是 () => void。
+  const refreshNodes = useCallback(() => { void invalidateNodes(); }, [invalidateNodes]);
+  const refreshTokens = useCallback(() => { void invalidateTokens(); }, [invalidateTokens]);
 
-  const createNode = trpc.proxySubscriptions.createNode.useMutation({
-    onSuccess: (result: any) => {
-      toast.success("客户端节点已添加");
-      /**
-       * 顺手接上的那些转发要说出来。
-       *
-       * 先有转发、后加节点是很常见的顺序，这时面板会把已经指向它的转发一并加进
-       * 订阅 —— 不吭声的话，他下次打开订阅会发现凭空多了几条线路。
-       */
-      const adopted = Number(result?.adoptedRuleCount || 0);
-      if (adopted > 0) {
-        toast.info(`顺手把 ${adopted} 条指向它的转发加进了订阅`, {
-          description: "不想要的话，在「预览订阅」里逐条关掉。",
-        });
-      }
-      setNodeDialogOpen(false);
-      refresh();
-    },
-    onError: (error) => toast.error(error.message),
-  });
+  /*
+    这个 updateNode 只给行上的开关用（启用 / 直连进订阅）。弹窗里的「保存」有自己的实例 ——
+    原来共用一个，拨一下开关也会弹「客户端节点已更新」、还把正开着的弹窗关掉。
+  */
   const updateNode = trpc.proxySubscriptions.updateNode.useMutation({
-    onSuccess: () => {
-      toast.success("客户端节点已更新");
-      setNodeDialogOpen(false);
-      refresh();
-    },
+    onSuccess: invalidateNodes,
     onError: (error) => toast.error(error.message),
   });
+  const updateNodeAsync = updateNode.mutateAsync;
   const deleteNode = trpc.proxySubscriptions.deleteNode.useMutation({
     onSuccess: (result) => {
       /**
@@ -449,65 +358,20 @@ export default function ClientSubscriptionsPage() {
       if (result.releasedRules > 0) notes.push(`${result.releasedRules} 条转发已解绑（转发本身继续运行）`);
       if (result.releasedPlans > 0) notes.push(`${result.releasedPlans} 个套餐已移除该节点`);
       toast.success(notes.length > 0 ? `节点已删除，${notes.join("；")}` : "节点已删除");
-      refresh();
+      void invalidateNodes();
     },
     onError: (error) => toast.error(error.message),
   });
-  const bindRule = trpc.proxySubscriptions.bindRule.useMutation({
-    onSuccess: () => {
-      toast.success("已加入订阅");
-      refresh();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-  /**
-   * 「指向已经变了」那张卡上直接改绑。
-   *
-   * 同一个 bindRule 接口，分开一个实例只为了提示语：那边是「加入订阅」，这边是
-   * 「改绑」或「移出」—— 用户在订阅这一屏就把事办了，不必再去转发页找这条规则。
-   */
-  const rebindRule = trpc.proxySubscriptions.bindRule.useMutation({
-    onSuccess: (_data, variables) => {
-      toast.success(variables.proxyNodeId === null ? "已移出订阅" : "已改绑落地节点");
-      refresh();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-  const setRuleVisible = trpc.proxySubscriptions.setRuleVisible.useMutation({
-    onSuccess: () => refresh(),
-    onError: (error) => toast.error(error.message),
-  });
-  // 自动选路组里每条入口的「进组」开关（2.3.545，用户：4 台 HKT 只想用两台）
-  const setRuleAutoGroupMember = trpc.proxySubscriptions.setRuleAutoGroupMember.useMutation({
-    onSuccess: () => refresh(),
-    onError: (error) => toast.error(error.message),
-  });
-  const setRuleNodeName = trpc.proxySubscriptions.setRuleNodeName.useMutation({
-    onSuccess: () => {
-      toast.success("节点名已更新");
-      setRenaming(null);
-      refresh();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-  const createToken = trpc.proxySubscriptions.createToken.useMutation({
-    onSuccess: () => {
-      toast.success("订阅链接已创建");
-      setTokenDialogOpen(false);
-      setTokenName("");
-      refresh();
-    },
-    onError: (error) => toast.error(error.message),
-  });
+  const deleteNodeMutate = deleteNode.mutate;
   const updateToken = trpc.proxySubscriptions.updateToken.useMutation({
-    onSuccess: () => refresh(),
+    onSuccess: invalidateTokens,
     onError: (error) => toast.error(error.message),
   });
   const rotateToken = trpc.proxySubscriptions.rotateToken.useMutation({
     onSuccess: (result) => {
       if (result.warning) toast.warning(result.warning);
       else toast.success("订阅地址已重置，旧地址和短链接立即失效");
-      refresh();
+      void invalidateTokens();
     },
     onError: (error) => toast.error(error.message),
   });
@@ -516,6 +380,7 @@ export default function ClientSubscriptionsPage() {
       title: "重置这个订阅地址？",
       description: "只更换订阅地址本身，不会重置流量。旧地址和短链接立即失效，已经导入过的客户端都要重新填写新地址。",
       confirmText: "重置地址",
+      tone: "destructive",
     });
     if (ok) rotateToken.mutate({ id });
   };
@@ -526,13 +391,14 @@ export default function ClientSubscriptionsPage() {
       // 不说清这一点，用户会以为删了地址就等于断网。
       description: "只是这条地址失效：用它的客户端拉不到更新，但已经导入的节点照常能连。要让某台设备彻底断开，去落地节点上「重置凭据」（其他设备要重新拉订阅）。",
       confirmText: "删除",
+      tone: "destructive",
     });
     if (ok) deleteToken.mutate({ id });
   };
   const deleteToken = trpc.proxySubscriptions.deleteToken.useMutation({
     onSuccess: () => {
       toast.success("订阅链接已删除");
-      refresh();
+      void invalidateTokens();
     },
     onError: (error) => toast.error(error.message),
   });
@@ -560,7 +426,9 @@ export default function ClientSubscriptionsPage() {
       return;
     }
     let cancelled = false;
-    QRCode.toDataURL(qrTarget.url, { width: 480, margin: 1, color: { dark: "#000000", light: "#ffffff" } })
+    // 二维码库只在点开二维码时才用得上，不跟这一页一起进包（和 DashboardLayout 开双重验证那里一样）。
+    import("qrcode")
+      .then(({ default: QRCode }) => QRCode.toDataURL(qrTarget.url, { width: 480, margin: 1, color: { dark: "#000000", light: "#ffffff" } }))
       .then((value) => {
         if (!cancelled) setQrDataUrl(value);
       })
@@ -572,19 +440,7 @@ export default function ClientSubscriptionsPage() {
     };
   }, [qrTarget]);
 
-  const nodes = nodesQuery.data ?? [];
-  /**
-   * 预览里直连条目的开关写的是节点模板的「直连也放进订阅」（includeDirect）。
-   * 只有自己的节点能改；被别的节点当前置代理引用的，订阅里必须出现，不给关。
-   */
-  const ownNodeById = useMemo(
-    () => new Map((nodes as any[]).filter((node) => !node.sharedFrom).map((node) => [Number(node.id), node])),
-    [nodes],
-  );
-  const frontReferencedNodeIds = useMemo(
-    () => new Set((nodes as any[]).map((node) => Number(node.frontProxyId || 0)).filter((id) => id > 0)),
-    [nodes],
-  );
+  const nodes = nodesQuery.data ?? EMPTY_NODES;
   /** 一个节点都没有的时候，订阅链接那张卡要改口告诉他先去加节点。 */
   const nodeCount = (nodes as any[]).length;
   const tokens = tokensQuery.data ?? [];
@@ -593,23 +449,16 @@ export default function ClientSubscriptionsPage() {
 
   /** 从节点这边发起分享。粘进来的节点只有一份凭据，所以就是一个列表。 */
   const [shareNode, setShareNode] = useState<{ id: number; name: string } | null>(null);
-  const [nodeAdvancedOpen, setNodeAdvancedOpen] = useState(false);
-  const [nodeRemark, setNodeRemark] = useState("");
-  /** 手工指定的地区（国家码）；空 = 按机器位置 / 名字猜。 */
-  const [nodeCountryCode, setNodeCountryCode] = useState("");
   // 令牌的几个弹窗：编辑、预览、拉取记录、设备；节点排序。
   const [editingToken, setEditingToken] = useState<ProxySubTokenLike | null>(null);
   const [previewToken, setPreviewToken] = useState<{ id: number; name: string } | null>(null);
   // 节点菜单「出口检测」：自建传入站 id，粘贴传节点 id。
   const [exitCheck, setExitCheck] = useState<{ subject: ExitCheckSubject; name: string } | null>(null);
-  // 订阅内容里展开看线路的那一条（rule-<id> / direct-<模板 id>）。
-  const [expandedPreviewKey, setExpandedPreviewKey] = useState<string | null>(null);
   const openInboundExitCheck = useCallback((inboundId: number, name: string) => setExitCheck({ subject: { inboundId }, name }), []);
+  const openNodeExitCheck = useCallback((nodeId: number, name: string) => setExitCheck({ subject: { nodeId }, name }), []);
   const [logsToken, setLogsToken] = useState<{ id: number; name: string } | null>(null);
   const [devicesToken, setDevicesToken] = useState<{ id: number; name: string } | null>(null);
   const [reorderOpen, setReorderOpen] = useState(false);
-  /** 对外标注：分享出去时对方看得到的那一句。备注是自己看的，两回事。 */
-  const [nodePublicLabel, setNodePublicLabel] = useState("");
 
   /**
    * 「落地节点」这一段只列粘进来的，不列自建节点派生出来的那些。
@@ -627,21 +476,6 @@ export default function ClientSubscriptionsPage() {
     () => (nodes as any[]).filter((node) => !Number(node?.inboundId || 0) || node?.sharedFrom),
     [nodes],
   );
-  /**
-   * 模板 id → 那一条直连要标什么。订阅内容那边只有 templateId，标注在节点行上。
-   *
-   * 对外标注优先：分享进来的节点被抹掉了备注（那是对方的账本），只剩这一句 ——
-   * 而它恰恰是收方最需要的（这条线是家宽还是 IEPL）。自己的节点两个都在时也用它：
-   * 「订阅内容」这一屏说的是客户端会拿到什么，那是对外的口径。
-   */
-  const remarkByTemplateId = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const node of nodes as any[]) {
-      const label = String(node?.publicLabel || "").trim() || String(node?.remark || "").trim();
-      if (label) map.set(Number(node.id), label);
-    }
-    return map;
-  }, [nodes]);
 
   /**
    * 入站 id → 它派生节点的探测结果。
@@ -689,47 +523,20 @@ export default function ClientSubscriptionsPage() {
     [pastedNodes, inboundHealthStates],
   );
 
-  /**
-   * 折叠着的「高级」里设了什么。
-   *
-   * 收起来省地方，但不能省到让人以为配置没了 —— 所以设过的那几项直接写在折叠条上。
-   * 只写非默认的：默认值写出来是噪音，而这一行的全部价值就是「有没有东西被我藏起来」。
-   */
-  const advancedSummary = useMemo(() => {
-    const parts: string[] = [];
-    if (nodeAutoGroup !== PROXY_NODE_DEFAULT_AUTO_GROUP) {
-      parts.push(PROXY_NODE_AUTO_GROUP_LABELS[nodeAutoGroup]);
-    }
-    if (nodeFrontProxyId > 0) {
-      const front = (nodes as any[]).find((item: any) => Number(item.id) === nodeFrontProxyId);
-      parts.push(`经由 ${front?.name || `#${nodeFrontProxyId}`}`);
-    }
-    return parts.join(" · ");
-  }, [nodeAutoGroup, nodeFrontProxyId, nodes]);
-
-  const toggleQuota = (id: number) => {
+  const toggleQuota = useCallback((id: number) => {
     setExpandedQuotaIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
-  };
+  }, []);
 
-  const isGroupCollapsed = (key: string) => collapsedGroups.includes(key);
-  const toggleGroup = (key: string) => {
-    setCollapsedGroups((prev) => {
-      const next = prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key];
-      writeStored(NODE_COLLAPSED_STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  };
   const groupModeOptions = useMemo(
     () => PROXY_NODE_GROUP_MODES.map((mode) => ({ value: mode, label: PROXY_NODE_GROUP_MODE_LABELS[mode] })),
     [],
   );
 
-  /**
-   * 粘贴进来的、以及别人分享来的节点，组装成行规格交给「我的节点」那张卡。
-   *
-   * 开关写的是这条 proxy_nodes 记录自己的 isEnabled，跟自建那一路写派生节点的
-   * includeDirect 是两回事 —— 所以两路各自组装，列表只负责排版。
-   */
+  const preview = previewQuery.data;
+  /** 订阅内容分成几段（和「订阅内容」弹窗同一份算法）：这一页只用到数字和两个 id 集合。 */
+  const previewSummary = useMemo(() => summarizeProxyPreview(preview), [preview]);
+  const { pendingCount, pendingSubtitle, relayNodes: relayPreviewNodes, directNodes: directPreviewNodes } = previewSummary;
+
   /**
    * 客户端里根本看不到的那些节点（服务端算的，它才知道谁被引用了）。
    *
@@ -738,10 +545,8 @@ export default function ClientSubscriptionsPage() {
    * 粘来的节点开了直连，没有转发照样在订阅里。
    */
   const unusedNodeIds = useMemo(
-    () => new Set(((previewQuery.data?.warnings ?? []) as any[])
-      .filter((item) => item?.reason === "node-unused")
-      .map((item) => Number(item.nodeId))),
-    [previewQuery.data],
+    () => new Set(previewSummary.unusedNodes.map((item) => Number(item.nodeId))),
+    [previewSummary],
   );
   const unusedInboundIds = useMemo(() => {
     const ids = new Set<number>();
@@ -760,10 +565,8 @@ export default function ClientSubscriptionsPage() {
    * 状态点已经在说了。
    */
   const hostOfflineNodeIds = useMemo(
-    () => new Set(((previewQuery.data?.warnings ?? []) as any[])
-      .filter((item) => item?.reason === "host-never-online")
-      .map((item) => Number(item.nodeId))),
-    [previewQuery.data],
+    () => new Set(previewSummary.hostOfflineNodes.map((item) => Number(item.nodeId))),
+    [previewSummary],
   );
   const hostOfflineInboundIds = useMemo(() => {
     const ids = new Set<number>();
@@ -774,6 +577,38 @@ export default function ClientSubscriptionsPage() {
     return ids;
   }, [nodes, hostOfflineNodeIds]);
 
+  /*
+    传给 ProxyInboundsSection（memo 过）的回调全部 useCallback：它和里面的 ProxyNodeRow 只在
+    props 真变了才重画。这一页因为别的原因重画（开关弹窗、二维码）时，节点列表不动。
+  */
+  const openCreateNode = useCallback(() => setNodeDialog({ open: true, node: null }), []);
+  const openEditNode = useCallback((node: ProxyNodeEditable) => setNodeDialog({ open: true, node }), []);
+  const openPreview = useCallback(() => setPreviewOpen(true), []);
+  const openHosts = useCallback(() => setHostsOpen(true), []);
+  const changeGroupMode = useCallback((mode: ProxyNodeGroupMode) => {
+    setNodeGroupMode(mode);
+    writeStoredPref(NODE_GROUP_MODE_STORAGE_KEY, mode);
+  }, []);
+  const confirmDeleteNode = useCallback(async (node: { id: number; ruleCount?: number }) => {
+    const ruleCount = Number(node.ruleCount || 0);
+    const ok = await confirm({
+      title: "删除这个客户端节点？",
+      description: ruleCount > 0
+        ? `${ruleCount} 条转发会被解绑，不再出现在订阅里。转发本身继续运行，不受影响。`
+        : "该节点没有被任何转发绑定。",
+      confirmText: "删除",
+      tone: "destructive",
+    });
+    if (ok) deleteNodeMutate({ id: node.id });
+  }, [confirm, deleteNodeMutate]);
+
+  /**
+   * 粘贴进来的、以及别人分享来的节点，组装成行规格交给「我的节点」那张卡。
+   *
+   * 开关写的是这条 proxy_nodes 记录自己的 isEnabled，跟自建那一路写派生节点的
+   * includeDirect 是两回事 —— 所以两路各自组装，列表只负责排版。
+   * 行上的开关是乐观的：拨下去当场变，请求失败弹回（updateNode 的 onError 会提示）。
+   */
   const pastedRowSpecs = useMemo<ProxyNodeRowSpec[]>(() => pastedNodes.map((node: any) => {
     const quotaExpanded = expandedQuotaIds.includes(Number(node.id));
     /*
@@ -813,11 +648,11 @@ export default function ClientSubscriptionsPage() {
         ) : null,
         inline: <LandingPoolMembersToggle ready={pool.ready} total={pool.members} expanded={quotaExpanded} onToggle={() => toggleQuota(Number(node.id))} />,
         toggle: pool.directDomain ? (
-          <Switch aria-label={`${node.name} 直连进订阅`}
+          <OptimisticSwitch aria-label={`${node.name} 直连进订阅`}
             className="shrink-0 scale-90"
             checked={!!node.includeDirect}
             title={node.includeDirect ? `订阅里有一条直连（${pool.directDomain}），关掉就只走中转` : "订阅里加一条直连（走域名）"}
-            onCheckedChange={(checked) => updateNode.mutate({ id: node.id, includeDirect: checked })}
+            onCheckedChangeAsync={(checked) => updateNodeAsync({ id: node.id, includeDirect: checked })}
           />
         ) : null,
         actions: [
@@ -867,11 +702,11 @@ export default function ClientSubscriptionsPage() {
         />
       ),
       toggle: node.sharedFrom ? null : (
-        <Switch aria-label={`${node.name} 启用`}
+        <OptimisticSwitch aria-label={`${node.name} 启用`}
           className="shrink-0 scale-90"
           checked={!!node.isEnabled}
           title="停用后它的直连和经它中转的线路都不进订阅；只想藏直连，去「预览订阅」里关那一条"
-          onCheckedChange={(checked) => updateNode.mutate({ id: node.id, isEnabled: checked })}
+          onCheckedChangeAsync={(checked) => updateNodeAsync({ id: node.id, isEnabled: checked })}
         />
       ),
       /* 分享进来的节点对收方是只读的：服务端本来就按 userId 挡着，这里把入口一并
@@ -885,164 +720,19 @@ export default function ClientSubscriptionsPage() {
             onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }),
           }]
           : []),
-        { key: "exit", label: "出口检测", icon: Globe, onSelect: () => setExitCheck({ subject: { nodeId: Number(node.id) }, name: String(node.name || "") }) },
+        { key: "exit", label: "出口检测", icon: Globe, onSelect: () => openNodeExitCheck(Number(node.id), String(node.name || "")) },
         { key: "edit", label: "编辑", icon: Pencil, onSelect: () => openEditNode(node) },
         {
           key: "delete",
           label: "删除",
           icon: Trash2,
           destructive: true,
-          onSelect: async () => {
-            const ok = await confirm({
-              title: "删除这个客户端节点？",
-              description: node.ruleCount > 0
-                ? `${node.ruleCount} 条转发会被解绑，不再出现在订阅里。转发本身继续运行，不受影响。`
-                : "该节点没有被任何转发绑定。",
-              confirmText: "删除",
-            });
-            if (ok) deleteNode.mutate({ id: node.id });
-          },
+          onSelect: () => { void confirmDeleteNode(node); },
         },
       ],
     };
-  }), [pastedNodes, unusedNodeIds, expandedQuotaIds, isAdmin]);
+  }), [pastedNodes, unusedNodeIds, expandedQuotaIds, isAdmin, navigate, toggleQuota, updateNodeAsync, openNodeExitCheck, openEditNode, confirmDeleteNode]);
 
-  const changeGroupMode = (mode: ProxyNodeGroupMode) => {
-    setNodeGroupMode(mode);
-    writeStored(NODE_GROUP_MODE_STORAGE_KEY, mode);
-  };
-  const preview = previewQuery.data;
-
-  const previewNodes = useMemo(() => (preview?.nodes ?? []) as any[], [preview]);
-  const directPreviewNodes = useMemo(
-    () => previewNodes.filter((node) => node?.kind === "direct"),
-    [previewNodes],
-  );
-  const relayPreviewNodes = useMemo(
-    () => previewNodes.filter((node) => node?.kind !== "direct"),
-    [previewNodes],
-  );
-
-  /** 自己的节点里，有两条以上入口、选路方式却是「不生成」的：自动选路组那段要给它们留一行改回去。 */
-  const offGroupOwners = useMemo(() => {
-    const counts = new Map<number, number>();
-    for (const node of previewNodes) {
-      const id = Number(node?.templateId || 0);
-      if (id > 0) counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    return Array.from(counts.entries())
-      .filter(([id, count]) => count >= 2 && normalizeProxyNodeAutoGroup(ownNodeById.get(id)?.autoGroup) === "off")
-      .map(([id, count]) => ({ owner: ownNodeById.get(id), count }));
-  }, [previewNodes, ownNodeById]);
-
-  /**
-   * 选路方式不是「不生成」、入口也够两条，组却没生成：是「进组」开关关得只剩一台了。
-   * 组没了卡片也没了的话开关就再也找不回来，所以这种落地留一张卡，开关照常。
-   */
-  const trimmedGroupOwners = useMemo(() => {
-    const counts = new Map<number, number>();
-    for (const node of previewNodes) {
-      const id = Number(node?.templateId || 0);
-      if (id > 0 && node?.kind !== "direct") counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    const generated = new Set((preview?.groups ?? []).map((group) => Number(group.templateId || 0)));
-    return Array.from(counts.entries())
-      .filter(([id, count]) => count >= 2 && !generated.has(id) && !!ownNodeById.get(id) && normalizeProxyNodeAutoGroup(ownNodeById.get(id)?.autoGroup) !== "off")
-      .map(([id]) => ownNodeById.get(id)!);
-  }, [preview, previewNodes, ownNodeById]);
-  /** 一个落地的自动选路组卡片里的入口清单：每条一个「进组」开关；直连那条没有开关；暂时不通的灰着。 */
-  const renderGroupMembers = (templateId: number, mode: ProxyNodeAutoGroup, weighted: boolean) => {
-    const entries = previewNodes.filter((node) => Number(node?.templateId) === templateId);
-    const relays = entries.filter((node) => node?.kind !== "direct");
-    const unreachable = (preview?.skipped ?? []).filter((item) => item.reason === "unreachable" && Number((item as { templateId?: number }).templateId) === templateId);
-    const inGroup = entries.filter((node) => node?.autoGroupMember !== false && (mode !== "load-balance" || node?.kind !== "direct"));
-    const left = relays.length - relays.filter((node) => node?.autoGroupMember !== false).length;
-    return (
-      <>
-        <ul className="mt-1.5 divide-y divide-border/60 border-t border-border/60">
-          {entries.map((node) => (
-            <li key={`${node.kind}-${node.ruleId}`} className="flex items-center gap-2 py-1.5">
-              <span className="min-w-0 flex-1 truncate text-foreground">
-                {node.name}
-                {node.kind === "direct"
-                  ? <span className="text-muted-foreground"> · 落地直连{mode === "load-balance" ? "，负载均衡不带它" : ""}</span>
-                  : node.hostName ? <span className="text-muted-foreground"> · {node.hostName}</span> : null}
-              </span>
-              {node.kind !== "direct" ? (
-                <Switch
-                  aria-label={`${node.name} 进组`}
-                  className="shrink-0 scale-90"
-                  checked={node.autoGroupMember !== false}
-                  disabled={setRuleAutoGroupMember.isPending}
-                  onCheckedChange={(checked) => setRuleAutoGroupMember.mutate({ ruleId: Number(node.ruleId), member: checked })}
-                />
-              ) : null}
-            </li>
-          ))}
-          {unreachable.map((item) => (
-            <li key={`unreachable-${item.ruleId}`} className="flex items-center gap-2 py-1.5 opacity-70">
-              <span className="min-w-0 flex-1 truncate">
-                {item.nodeName || item.ruleName}
-                <span className="text-[var(--fx-warn-text)]"> · 暂时不通，通了自动回来</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-1">
-          {inGroup.length >= 2
-            ? `组里 ${inGroup.length} 台：${inGroup.map((node) => node.name).join(" / ")}`
-            : `组里只剩 ${inGroup.length} 台，不够两台不生成组`}
-          {left > 0 ? ` · 另 ${left} 条入口只做裸节点，客户端里还能手动选` : ""}
-          {weighted ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
-        </p>
-      </>
-    );
-  };
-  // 只有「已隐藏」需要一键恢复，其他原因要用户自己去改转发或模板。
-  const hiddenRules = useMemo(
-    () => (preview?.skipped ?? []).filter((item) => item.reason === "hidden"),
-    [preview],
-  );
-  /**
-   * 绑定已经对不上的那些：转发的目标不再是它绑的那个节点。
-   *
-   * 这条节点仍然在订阅里 —— 静默少一条是这套面板反复踩过的坑，而这类判断也不可能
-   * 百分之百准。但它必须显眼：订阅里那条带的是这个落地的凭据，地址却写的是转发入口，
-   * 入口通向别处时，客户端就会把凭据递给那台别的机器。
-   */
-  const driftedRules = useMemo(
-    () => (preview?.warnings ?? []).filter((item: any) => item.reason === "target-mismatch"),
-    [preview],
-  );
-  /**
-   * 谁都没用的节点：没开直连，也没有任何转发绑到它上面 —— 客户端里根本没有它。
-   *
-   * 「我的节点」那一列里它看着好好的，这是当初「转发不绑节点就不进订阅、页面上还看不出」
-   * 那个坑从节点这一侧再犯一次。
-   */
-  const unusedNodes = useMemo(
-    () => (preview?.warnings ?? []).filter((item: any) => item.reason === "node-unused"),
-    [preview],
-  );
-  /** 机器还没连上面板的那些节点 —— 发出去了，但现在连不上。 */
-  const hostOfflineNodes = useMemo(
-    () => (preview?.warnings ?? []).filter((item: any) => item.reason === "host-never-online"),
-    [preview],
-  );
-  const unboundRules = useMemo(
-    () => (preview?.skipped ?? []).filter((item) => item.reason === "unbound"),
-    [preview],
-  );
-  const otherSkipped = useMemo(
-    () => (preview?.skipped ?? []).filter((item) => item.reason !== "hidden" && item.reason !== "unbound"),
-    [preview],
-  );
-  /**
-   * 「待处理」那张卡上的数字：这一页所有要你动手的事加起来。
-   *
-   * 三件事分别躺在预览弹窗的三段里，各自都不显眼。合成一个数摆到最上面，才回答得了
-   * 「我现在有没有东西要管」—— 进这一页时脑子里其实只有这一个问题。
-   */
   /**
    * 在线情况怎么说。规矩在 shared/proxyNodeHealth 里：**没探测过不是在线** ——
    * 拿「离线为 0」当「全在线」，一个刚建好、一次都没探测过的面板会写着「节点全在线」。
@@ -1051,99 +741,6 @@ export default function ClientSubscriptionsPage() {
     () => summarizeProxyNodeHealthCounts({ total: nodeCount, online: onlineNodeCount, offline: offlineNodeCount }),
     [nodeCount, onlineNodeCount, offlineNodeCount],
   );
-  const pendingCount = unboundRules.length + driftedRules.length + unusedNodes.length + hostOfflineNodes.length;
-  const pendingSubtitle = pendingCount === 0
-    ? "都对上了"
-    : [
-      unboundRules.length > 0 ? `${unboundRules.length} 条差节点` : "",
-      driftedRules.length > 0 ? `${driftedRules.length} 条指向已变` : "",
-      unusedNodes.length > 0 ? `${unusedNodes.length} 个没进订阅` : "",
-      hostOfflineNodes.length > 0 ? `${hostOfflineNodes.length} 个机器没连上` : "",
-    ].filter(Boolean).join(" · ");
-
-  const enabledNodes = useMemo(() => nodes.filter((node: any) => node.isEnabled), [nodes]);
-
-  const openCreateNode = () => {
-    setEditingNodeId(null);
-    setNodeName("");
-    setNodeRemark("");
-    setNodeCountryCode("");
-    setNodePublicLabel("");
-    setNodeLink("");
-    setNodeAutoGroup(PROXY_NODE_DEFAULT_AUTO_GROUP);
-    setNodeIncludeDirect(false);
-    setNodeFrontProxyId(0);
-    setNodeBandwidthMbps("");
-    setNodeTrafficLimitGb("");
-    setNodeTrafficUsedGb("");
-    setNodeTrafficAutoReset(false);
-    setNodeTrafficResetDay("1");
-    setNodeAdvancedOpen(false);
-    setNodeDialogOpen(true);
-  };
-
-  const openEditNode = (node: any) => {
-    setEditingNodeId(node.id);
-    setNodeName(String(node.name || ""));
-    setNodeRemark(String(node.remark || ""));
-    setNodeCountryCode(String(node.countryCode || ""));
-    setNodePublicLabel(String(node.publicLabel || ""));
-    setNodeLink(String(node.sourceLink || ""));
-    setNodeAutoGroup(normalizeProxyNodeAutoGroup(node.autoGroup));
-    setNodeIncludeDirect(!!node.includeDirect);
-    setNodeFrontProxyId(Number(node.frontProxyId || 0));
-    setNodeBandwidthMbps(Number(node.bandwidthMbps || 0) > 0 ? String(node.bandwidthMbps) : "");
-    setNodeTrafficLimitGb(gbFromBytes(node.trafficLimit));
-    setNodeTrafficUsedGb(gbFromBytes(node.trafficUsed));
-    setNodeTrafficAutoReset(!!node.trafficAutoReset);
-    setNodeTrafficResetDay(String(Number(node.trafficResetDay || 1)));
-    /*
-      高级一律收着，配过的人也收着。
-
-      原来是「不是默认值就自动展开」，出发点是别让人以为配置丢了。但那等于
-      「谁配过谁的弹窗就永远长一截」—— 而改名字、换链接这种日常操作天天做，
-      选路和前置代理配一次就不动了。
-
-      不展开也不让人起疑，靠的是把里头设了什么写在折叠条上（见下面的 advancedSummary）：
-      看得见就不会以为丢了，这比整段摊开便宜得多。
-    */
-    setNodeAdvancedOpen(false);
-    setNodeDialogOpen(true);
-  };
-
-  const submitNode = () => {
-    const name = nodeName.trim();
-    const link = nodeLink.trim();
-    if (!name) {
-      toast.error("请填写节点名称");
-      return;
-    }
-    if (!link) {
-      toast.error("请粘贴落地机的节点链接");
-      return;
-    }
-    const payload = {
-      name,
-      remark: nodeRemark.trim() || null,
-      publicLabel: nodePublicLabel.trim() || null,
-      countryCode: nodeCountryCode.trim().toUpperCase() || null,
-      link,
-      autoGroup: nodeAutoGroup,
-      includeDirect: nodeIncludeDirect,
-      frontProxyId: nodeFrontProxyId,
-      bandwidthMbps: Math.max(0, Math.floor(Number(nodeBandwidthMbps) || 0)),
-      trafficLimit: bytesFromGb(nodeTrafficLimitGb),
-      trafficAutoReset: nodeTrafficAutoReset,
-      trafficResetDay: Math.min(MONTHLY_RESET_MAX_DAY, Math.max(1, Math.floor(Number(nodeTrafficResetDay) || 1))),
-    };
-    if (editingNodeId) {
-      // 已用量只在编辑时能改：新建时还没有任何用量，给个输入框只会让人以为要填。
-      updateNode.mutate({ id: editingNodeId, ...payload, trafficUsed: bytesFromGb(nodeTrafficUsedGb) });
-    } else {
-      createNode.mutate(payload);
-    }
-  };
-
   // 权限查询未回来时先不下结论，避免闪一下「无权限」再闪回正常。
   if (permissionQuery.isLoading) {
     return (
@@ -1281,10 +878,7 @@ export default function ClientSubscriptionsPage() {
             <Button
               className="shrink-0"
               size="sm"
-              onClick={() => {
-                setTokenName("");
-                setTokenDialogOpen(true);
-              }}
+              onClick={() => setTokenDialogOpen(true)}
             >
               <Plus className="mr-1 h-4 w-4" />
               新建链接
@@ -1302,12 +896,13 @@ export default function ClientSubscriptionsPage() {
                 onRetry={() => { void tokensQuery.refetch(); }}
               />
             ) : tokens.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                还没有订阅链接。
-                {nodeCount > 0
+              <EmptyState
+                icon={<Link2 />}
+                title="还没有订阅链接"
+                description={nodeCount > 0
                   ? "新建一个，然后把地址导入客户端。"
                   : "先在下面加节点 —— 自己机器上开一个，或者粘一条别处的链接 —— 再回来建链接。"}
-              </p>
+              />
             ) : (
               <div className="fx-sub-token-list space-y-4">
                 {tokens.map((token: any) => {
@@ -1343,9 +938,10 @@ export default function ClientSubscriptionsPage() {
                         {token.remark ? <span className="text-xs text-muted-foreground">· {token.remark}</span> : null}
                       </div>
                       <div className="flex items-center gap-2">
-                        <Switch aria-label={`${token.name} 启用`}
+                        {/* 乐观开关：拨下去当场变，失败弹回；只让令牌列表重取（见 invalidateTokens）。 */}
+                        <OptimisticSwitch aria-label={`${token.name} 启用`}
                           checked={!!token.isEnabled}
-                          onCheckedChange={(checked) => updateToken.mutate({ id: token.id, isEnabled: checked })}
+                          onCheckedChangeAsync={(checked) => updateToken.mutateAsync({ id: token.id, isEnabled: checked })}
                         />
                         {/* 光写"重置"配个刷新图标，在订阅面板里只会被读成"重置流量"。
                             补上宾语并换成钥匙图标：这个按钮的代价是所有已导入的客户端都要重填。 */}
@@ -1699,9 +1295,9 @@ export default function ClientSubscriptionsPage() {
           inboundLeading={inboundLeading}
           notInSubscriptionInboundIds={unusedInboundIds}
           hostNeverOnlineInboundIds={hostOfflineInboundIds}
-          onOpenPreview={() => setPreviewOpen(true)}
+          onOpenPreview={openPreview}
           previewAlertCount={pendingCount}
-          onOpenHosts={isAdmin ? undefined : () => setHostsOpen(true)}
+          onOpenHosts={isAdmin ? undefined : openHosts}
           onlineCount={onlineNodeCount}
           offlineCount={offlineNodeCount}
           onExitCheck={openInboundExitCheck}
@@ -1718,7 +1314,7 @@ export default function ClientSubscriptionsPage() {
         <ProxySubSourcesSection
           allowed={!!subSettingsQuery.data?.externalSourcesAllowed}
           maxPerUser={subSettingsQuery.data?.externalSourceMaxPerUser || 0}
-          onChanged={refresh}
+          onChanged={refreshNodes}
         />
       </div>
 
@@ -1729,14 +1325,14 @@ export default function ClientSubscriptionsPage() {
         nodes={nodes as any[]}
         settings={subSettingsQuery.data || null}
         isAdmin={isAdmin}
-        onSaved={refresh}
+        onSaved={refreshTokens}
         onPreview={setPreviewToken}
       />
       <NodeExitDialog subject={exitCheck?.subject ?? null} name={exitCheck?.name || ""} onOpenChange={(open) => { if (!open) setExitCheck(null); }} />
       <ProxySubTokenPreviewDialog open={!!previewToken} onOpenChange={(open) => { if (!open) setPreviewToken(null); }} tokenId={previewToken?.id || null} tokenName={previewToken?.name || ""} />
       <ProxySubTokenLogsDialog open={!!logsToken} onOpenChange={(open) => { if (!open) setLogsToken(null); }} tokenId={logsToken?.id || null} tokenName={logsToken?.name || ""} />
       <ProxySubTokenDevicesDialog open={!!devicesToken} onOpenChange={(open) => { if (!open) setDevicesToken(null); }} tokenId={devicesToken?.id || null} tokenName={devicesToken?.name || ""} />
-      <ProxyNodeReorderDialog open={reorderOpen} onOpenChange={setReorderOpen} nodes={nodes as any[]} onSaved={refresh} />
+      <ProxyNodeReorderDialog open={reorderOpen} onOpenChange={setReorderOpen} nodes={nodes} onSaved={refreshNodes} />
 
       {/*
         订阅内容：从常驻卡片改成弹窗。
@@ -1745,512 +1341,16 @@ export default function ClientSubscriptionsPage() {
         仍然保持常取而不是等弹窗打开才取，是因为「还没加入订阅的转发」这个提醒
         要显示在按钮的角标上（previewAlertCount），否则收进弹窗就等于藏掉了。
       */}
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>订阅内容</DialogTitle>
-            <DialogDescription className="text-xs">
-              客户端拉到的就是这些。
-              {(preview?.nodes.length ?? 0) > 0 ? (
-                <>
-                  {" "}共 {preview!.nodes.length} 条
-                  {relayPreviewNodes.length > 0 ? ` · 中转 ${relayPreviewNodes.length}` : ""}
-                  {directPreviewNodes.length > 0 ? ` · 直连 ${directPreviewNodes.length}` : ""}
-                </>
-              ) : null}
-            </DialogDescription>
-          </DialogHeader>
-          <ScrollFade className="min-h-0 flex-1 overflow-y-auto pr-1">
-            {/*
-              客户端测延迟只测到入口，后面断了照样显示几十毫秒，负载均衡组还会把连接分给它。
-              开着的话，端到端探测连续不通的转发暂时不放进订阅，通了自动回来。
-            */}
-            <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">自动隐藏不通的节点</p>
-                <p data-fx-help="" className="mt-0.5 text-xs text-muted-foreground">
-                  端到端探测连续 3 次不通的转发暂时移出订阅，通了自动回来。客户端更新订阅后生效。
-                </p>
-              </div>
-              <Switch
-                aria-label="自动隐藏不通的节点"
-                checked={hideUnreachableQuery.data?.enabled ?? true}
-                disabled={hideUnreachableQuery.isLoading || setHideUnreachableMutation.isPending}
-                onCheckedChange={(enabled) => setHideUnreachableMutation.mutate({ enabled })}
-              />
-            </div>
-            {previewQuery.isLoading ? (
-              <DataSectionLoading />
-            ) : previewQuery.error && !preview ? (
-              <DataSectionError
-                label="订阅内容"
-                error={previewQuery.error}
-                retrying={previewQuery.isFetching}
-                onRetry={() => { void previewQuery.refetch(); }}
-              />
-            ) : (
-              <div className="space-y-4">
-                {(preview?.nodes.length ?? 0) === 0 ? (
-                  <p className="py-4 text-center text-sm text-muted-foreground">
-                    订阅里还没有节点。先在「我的节点」里加一个 —— 自己机器上开一个，或者粘一条别处的链接。
-                    指向它的转发会自动跟着进来。
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    {PREVIEW_GROUPS.map((group) => {
-                      const groupNodes = group.key === "direct" ? directPreviewNodes : relayPreviewNodes;
-                      if (groupNodes.length === 0) return null;
-                      const collapsed = isGroupCollapsed(group.key);
-                      return (
-                        <div key={group.key} className="space-y-1.5">
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-1.5 text-xs font-medium text-muted-foreground"
-                            onClick={() => toggleGroup(group.key)}
-                            aria-expanded={!collapsed}
-                          >
-                            <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`} />
-                            <span>{group.label}</span>
-                            <span className="tabular-nums">({groupNodes.length})</span>
-                            <span className="h-px flex-1 bg-border" />
-                          </button>
-                          {collapsed ? null : (
-                            <div className="space-y-1.5">
-                              {groupNodes.map((node: any) => {
-                      // 直连条目不来自转发规则，ruleId 都是 0 —— 拿它当 key 会互相撞。
-                      const direct = node.kind === "direct";
-                      return (
-                      <div key={direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`} className="overflow-hidden rounded-md border">
-                      <div className="flex items-center gap-2 px-2.5 py-1.5">
-                        {/* 点名字那一块展开这条线路：入口 → 中转 → 落地，和落地出口（PreviewRouteDetail）。 */}
-                        <button
-                          type="button"
-                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          aria-expanded={expandedPreviewKey === (direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`)}
-                          title="看这条线路怎么走"
-                          onClick={() => {
-                            const key = direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`;
-                            setExpandedPreviewKey((current) => (current === key ? null : key));
-                          }}
-                        >
-                        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expandedPreviewKey === (direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`) ? "" : "-rotate-90"}`} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate text-sm font-medium leading-tight">{node.name}</span>
-                            {/*
-                              有备注就显示备注。原来一律标「直连」—— 这一段本来就叫
-                              「直连」，每条都写一遍等于没说，还占着唯一能放信息的位置。
-                            */}
-                            {direct && (
-                              <Badge variant="outline" size="sm" className="shrink-0 font-normal">
-                                {remarkByTemplateId.get(Number(node.templateId)) || "直连"}
-                              </Badge>
-                            )}
-                            {/* 开了线路组的转发：订阅里只有这一个入口，面板在几条线路之间切（中转机上的那几段不单独出节点）。 */}
-                            {!direct && node.lineGroup && (
-                              <Badge variant="outline" size="sm" className="shrink-0 font-normal" title="一个入口，面板在几条线路之间自动切">线路组</Badge>
-                            )}
-                          </div>
-                          <p className="truncate text-[11px] leading-tight text-muted-foreground">
-                            {node.address}:{node.port}
-                          </p>
-                        </div>
-                        </button>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7"
-                            title="改这个节点在订阅里显示的名字"
-                            onClick={() => {
-                              setRenaming({
-                                kind: direct ? "direct" : "relay",
-                                ruleId: node.ruleId,
-                                templateId: node.templateId,
-                                name: node.name,
-                              });
-                              setRenameValue(node.name);
-                            }}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          {/*
-                            中转条目的开关是这条转发的「进不进订阅」；直连条目的开关是节点模板的
-                            「直连也放进订阅」—— 关掉只藏直连，经它中转的线路照常在。
-                            分享来的节点改不了；被当前置代理引用的必须在订阅里，开关锁住。
-                          */}
-                          {!direct ? (
-                            <Switch
-                              aria-label={`${node.name} 进订阅`}
-                              className="scale-90"
-                              checked
-                              title="关掉只是不进订阅，转发照常运行"
-                              onCheckedChange={() => setRuleVisible.mutate({ ruleId: node.ruleId, visible: false })}
-                            />
-                          ) : ownNodeById.has(Number(node.templateId)) ? (
-                            <Switch
-                              aria-label={`${node.name} 直连放进订阅`}
-                              className="scale-90"
-                              checked
-                              disabled={frontReferencedNodeIds.has(Number(node.templateId)) || updateNode.isPending}
-                              title={frontReferencedNodeIds.has(Number(node.templateId))
-                                ? "它是别的节点的前置代理，订阅里必须有它"
-                                : "关掉只藏这条直连，经它中转的线路照常在订阅里"}
-                              onCheckedChange={() => updateNode.mutate({ id: Number(node.templateId), includeDirect: false })}
-                            />
-                          ) : null}
-                        </div>
-                      </div>
-                      {expandedPreviewKey === (direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`) ? (
-                        <PreviewRouteDetail ruleId={Number(node.ruleId || 0)} nodeId={Number(node.templateId || 0)} direct={direct} address={`${node.address}:${node.port}`} />
-                      ) : null}
-                      </div>
-                      );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {hostOfflineNodes.length > 0 && (
-                  <div className="space-y-2">
-                    <SectionLabel count={hostOfflineNodes.length}>机器还没连上面板</SectionLabel>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      这几台机器的 Agent 从没连上过 —— 配置下发不下去，节点虽然在订阅里，客户端现在连不上。
-                      去「我的机器」拿安装命令，在那台机器上装好 Agent 就行。
-                    </p>
-                    {hostOfflineNodes.map((item: any) => (
-                      <div
-                        key={`host-offline-${item.nodeId}`}
-                        className="space-y-1 rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn)]/[0.06] px-2.5 py-2"
-                      >
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--fx-warn-text)]" />
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.nodeName}</span>
-                        </div>
-                        <p className="break-all text-xs text-muted-foreground">
-                          开在「{item.targetText}」上，这台机器的 Agent 还没装
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {unusedNodes.length > 0 && (
-                  <div className="space-y-2">
-                    <SectionLabel count={unusedNodes.length}>这些节点还没进订阅</SectionLabel>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      它们没开直连，也没有任何转发指向它们 —— 客户端里看不到。
-                      给它建一条转发（目标填它的地址端口，会自动认出来），或者打开右边的开关让直连进订阅。
-                    </p>
-                    {unusedNodes.map((item: any) => (
-                      <div
-                        key={`unused-${item.nodeId}`}
-                        className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5"
-                      >
-                        <Plug className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate text-sm">{item.nodeName}</span>
-                        <span className="shrink-0 truncate font-mono text-[11px] text-muted-foreground">{item.nodeText}</span>
-                        {ownNodeById.has(Number(item.nodeId)) ? (
-                          <Switch
-                            aria-label={`${item.nodeName} 直连放进订阅`}
-                            className="shrink-0 scale-90"
-                            checked={false}
-                            disabled={updateNode.isPending}
-                            title="打开后订阅里多一条它自己的地址"
-                            onCheckedChange={() => updateNode.mutate({ id: Number(item.nodeId), includeDirect: true })}
-                          />
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {driftedRules.length > 0 && (
-                  <div className="space-y-2">
-                    <SectionLabel count={driftedRules.length}>指向已经变了</SectionLabel>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      这几条转发的目标已经不是它绑的那个节点了。线路还在订阅里，但客户端连过去是
-                      拿着原来那个落地的凭据去连新目标 —— 在这里改绑成现在真正通向的那个节点，
-                      或者把转发的目标改回去；这条转发不再通向任何落地的话，就移出订阅。
-                    </p>
-                    {driftedRules.map((item) => {
-                      /*
-                        目标正好是某个节点的地址端口时，那个节点就是答案：单独点出来，
-                        一下就能改过去，不用在下拉里翻。
-                      */
-                      const matched = enabledNodes.find((node: any) =>
-                        Number(node.id) !== Number(item.nodeId)
-                        && `${String(node.address || "").toLowerCase()}:${Number(node.port)}` === String(item.targetText || "").toLowerCase());
-                      const busy = rebindRule.isPending && rebindRule.variables?.ruleId === item.ruleId;
-                      return (
-                        <div
-                          key={`drift-${item.ruleId}`}
-                          className="space-y-1.5 rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn)]/[0.06] px-2.5 py-2"
-                        >
-                          <div className="flex items-center gap-2">
-                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--fx-warn-text)]" />
-                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.ruleName}</span>
-                          </div>
-                          <p className="break-all text-xs text-muted-foreground">
-                            绑的是「{item.nodeName}」（{item.nodeText}），现在指向 {item.targetText}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                            <Select
-                              value={String(item.nodeId)}
-                              disabled={busy}
-                              onValueChange={(value) => {
-                                if (value === String(item.nodeId)) return;
-                                rebindRule.mutate({
-                                  ruleId: item.ruleId,
-                                  proxyNodeId: value === "__unbind" ? null : Number(value),
-                                });
-                              }}
-                            >
-                              <SelectTrigger aria-label={`${item.ruleName} 改绑落地节点`} className="h-8 w-40 shrink-0 text-xs">
-                                <SelectValue placeholder="改绑落地节点" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {enabledNodes.map((node: any) => (
-                                  <SelectItem key={node.id} value={String(node.id)}>
-                                    {node.name}
-                                  </SelectItem>
-                                ))}
-                                <SelectItem value="__unbind">移出订阅（解绑）</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            {matched ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-8 text-xs"
-                                disabled={busy}
-                                onClick={() => rebindRule.mutate({ ruleId: item.ruleId, proxyNodeId: Number(matched.id) })}
-                              >
-                                目标就是「{matched.name}」，改绑过去
-                              </Button>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {hiddenRules.length > 0 && (
-                  <div className="space-y-2">
-                    <SectionLabel count={hiddenRules.length}>被你关掉的</SectionLabel>
-                    {hiddenRules.map((item) => (
-                      <div
-                        key={item.ruleId}
-                        className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5"
-                      >
-                        <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        {/* 和上面节点同一种叫法（规则名，订阅里改过的用改过的）；两者不一样时规则名放在下面一行 */}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate text-sm text-muted-foreground">{item.nodeName || item.ruleName}</span>
-                            {item.lineGroup && <Badge variant="outline" size="sm" className="shrink-0 font-normal">线路组</Badge>}
-                          </div>
-                          {item.nodeName && item.nodeName !== item.ruleName && (
-                            <p className="truncate text-[11px] leading-tight text-muted-foreground">转发「{item.ruleName}」</p>
-                          )}
-                        </div>
-                        <Switch aria-label={`${item.nodeName || item.ruleName} 放回订阅`}
-                          className="shrink-0 scale-90"
-                          checked={false}
-                          onCheckedChange={() => setRuleVisible.mutate({ ruleId: item.ruleId, visible: true })}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {((preview?.groups.length ?? 0) > 0 || offGroupOwners.length > 0 || trimmedGroupOwners.length > 0) && (
-                  <div className="space-y-1.5">
-                    <SectionLabel>
-                      <Zap className="mr-1 inline h-3 w-3" />
-                      自动选路组（Clash 与 sing-box）
-                    </SectionLabel>
-                    {/*
-                      这些组不是谁手动建的：一个落地节点有两条以上入口（直连 + 转发、或几条转发）时，按这个节点的
-                      「选路方式」自动生成（新节点默认「自动选最快」）。不写清楚的话，看着像是面板自己改了设置。
-                    */}
-                    <p className="text-xs text-muted-foreground">
-                      一个落地有两条以上入口时，按这个节点的「选路方式」自动生成，新节点默认「自动选最快」。右边可以直接改成主备、负载均衡或不生成。每条入口后面的开关决定进不进组：关掉的照样进订阅，只是不进这个组。
-                    </p>
-                    {preview!.groups.map((group) => {
-                      const owner = group.templateId ? nodes.find((node) => Number(node.id) === Number(group.templateId)) : null;
-                      // 自建节点（从自己机器的入站派生）没有节点链接，不能走「编辑客户端节点」那个框：就地改选路方式。
-                      const editable = !!owner && !owner.sharedFrom;
-                      const members = group.members.map((member, index) => (
-                        group.type === "load-balance" && Array.isArray(group.weights) && group.weights[index]
-                          ? `${member}×${group.weights[index]}`
-                          : member
-                      )).join(" / ");
-                      const modeLabel = group.type === "url-test" ? "自动选最快" : group.type === "load-balance" ? "负载均衡" : "主备切换";
-                      return (
-                        <div key={group.name} className="rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">
-                          <div className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{group.name}</span>
-                            {editable ? (
-                              <Select
-                                value={normalizeProxyNodeAutoGroup(owner.autoGroup)}
-                                onValueChange={(value) => updateNode.mutate({ id: Number(owner.id), autoGroup: value as ProxyNodeAutoGroup })}
-                                disabled={updateNode.isPending}
-                              >
-                                <SelectTrigger aria-label={`「${String(owner.name || "")}」的选路方式`} className="h-7 w-32 shrink-0 text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {PROXY_NODE_AUTO_GROUPS.map((mode) => (
-                                    <SelectItem key={mode} value={mode}>{PROXY_NODE_AUTO_GROUP_LABELS[mode]}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <span className="shrink-0">{modeLabel}</span>
-                            )}
-                          </div>
-                          {editable ? renderGroupMembers(Number(owner.id), group.type as ProxyNodeAutoGroup, group.type === "load-balance" && Array.isArray(group.weights)) : (
-                            <p className="mt-0.5 truncate">
-                              {members}
-                              {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {trimmedGroupOwners.map((owner) => (
-                      <div key={`trimmed-${owner.id}`} className="rounded-md border border-dashed px-2.5 py-1.5 text-xs text-muted-foreground">
-                        <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{String(owner.name || "")}</span>
-                          <Select
-                            value={normalizeProxyNodeAutoGroup(owner.autoGroup)}
-                            onValueChange={(value) => updateNode.mutate({ id: Number(owner.id), autoGroup: value as ProxyNodeAutoGroup })}
-                            disabled={updateNode.isPending}
-                          >
-                            <SelectTrigger aria-label={`「${String(owner.name || "")}」的选路方式`} className="h-7 w-32 shrink-0 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {PROXY_NODE_AUTO_GROUPS.map((mode) => (
-                                <SelectItem key={mode} value={mode}>{PROXY_NODE_AUTO_GROUP_LABELS[mode]}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {renderGroupMembers(Number(owner.id), normalizeProxyNodeAutoGroup(owner.autoGroup), false)}
-                      </div>
-                    ))}
-                    {/*
-                      选了「不生成」，组就从上面消失了 —— 下拉也跟着没了，想改回来只能去节点里找。
-                      所以有两条以上入口、却设成不生成的自己的节点，在这里留一行，照样能改回去。
-                    */}
-                    {offGroupOwners.map(({ owner, count }) => (
-                      <div key={`off-${owner.id}`} className="rounded-md border border-dashed px-2.5 py-1.5 text-xs text-muted-foreground">
-                        <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{String(owner.name || "")}</span>
-                          <Select
-                            value="off"
-                            onValueChange={(value) => updateNode.mutate({ id: Number(owner.id), autoGroup: value as ProxyNodeAutoGroup })}
-                            disabled={updateNode.isPending}
-                          >
-                            <SelectTrigger aria-label={`「${String(owner.name || "")}」的选路方式`} className="h-7 w-32 shrink-0 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {PROXY_NODE_AUTO_GROUPS.map((mode) => (
-                                <SelectItem key={mode} value={mode}>{PROXY_NODE_AUTO_GROUP_LABELS[mode]}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <p className="mt-0.5 truncate">没有生成组，{count} 条入口在客户端里各是一个节点</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {unboundRules.length > 0 && (
-                  <div className="space-y-2">
-                    {/*
-                      这一段和下面那段原来叫「还没加入订阅的转发」和「未进入订阅的
-                      转发」—— 两个名字几乎一样，说的却是两件事：这一段**选个节点就能
-                      进来**，下面那段是**进不来**。名字要让人一眼分得出哪个该动手。
-                    */}
-                    <SectionLabel count={unboundRules.length}>差一个落地节点</SectionLabel>
-                    <p className="text-xs text-muted-foreground">
-                      {enabledNodes.length === 0
-                        ? "这些转发还没说清楚通往哪个落地节点，所以进不了订阅。先加一个节点，它们就能一起认上来。"
-                        : "这些转发还没说清楚通往哪个落地节点，所以进不了订阅。选一个就好；目标地址正好是你某个节点时，以后新建的转发会自动认出来。"}
-                    </p>
-                    {/*
-                      一个节点都还没有的时候，逐行摆一个选不了的下拉，等于把同一句
-                      「请先添加落地节点」重复几十遍 —— 真正该做的那一件事（去加个节点）
-                      反而被挤到看不见的地方。这种时候只把名字列出来：要动的手只有一次，
-                      不是几十次。
-                    */}
-                    {enabledNodes.length === 0 ? (
-                      <ul className="space-y-1">
-                        {unboundRules.map((item) => (
-                          <li key={item.ruleId} className="truncate text-xs text-muted-foreground">
-                            {item.ruleName}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : unboundRules.map((item) => (
-                      <div
-                        key={item.ruleId}
-                        className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-sm">{item.ruleName}</span>
-                        <Select
-                          value=""
-                          onValueChange={(value) => bindRule.mutate({
-                            ruleId: item.ruleId,
-                            proxyNodeId: Number(value),
-                          })}
-                        >
-                          <SelectTrigger aria-label={`${item.ruleName} 选择落地节点`} className="h-8 w-36 shrink-0 text-xs">
-                            <SelectValue placeholder="选择落地节点" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {enabledNodes.map((node: any) => (
-                              <SelectItem key={node.id} value={String(node.id)}>
-                                {node.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {otherSkipped.length > 0 && (
-                  <div className="space-y-1.5">
-                    <SectionLabel count={otherSkipped.length}>这些进不了订阅</SectionLabel>
-                    <ul className="space-y-1">
-                      {otherSkipped.map((item) => (
-                        <li key={item.ruleId} className="text-xs text-muted-foreground">
-                          {item.ruleName} —— {item.label}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </ScrollFade>
-          <DialogFooter className="shrink-0 border-t pt-3">
-            <Button variant="outline" onClick={() => setPreviewOpen(false)}>关闭</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {previewOpen && (
+        <Suspense fallback={null}>
+          <ProxySubscriptionPreviewDialog
+            open={previewOpen}
+            onOpenChange={setPreviewOpen}
+            nodes={nodes}
+            onRename={setRenaming}
+          />
+        </Suspense>
+      )}
 
       {/* 「我的机器」：自建节点的前置条件，收进弹窗，不再占一张常驻卡片。 */}
       <Dialog open={hostsOpen} onOpenChange={setHostsOpen}>
@@ -2277,355 +1377,17 @@ export default function ClientSubscriptionsPage() {
         title={shareNode ? `分享「${shareNode.name}」` : "分享这个节点"}
       />
 
-      <Dialog open={nodeDialogOpen} onOpenChange={setNodeDialogOpen}>
-        {/* DialogContent 默认 max-h + overflow-hidden，内容超出直接裁掉、滚不动。
-            改成 flex 列、正文单独一层可滚 —— 项目里其他长弹窗都是这个写法。 */}
-        <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>{editingNodeId ? "编辑客户端节点" : "添加客户端节点"}</DialogTitle>
-            <DialogDescription className="text-xs">只替换地址和端口，凭据不变。</DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
-            <div className="space-y-2">
-              <Label htmlFor="proxy-node-name">节点名称</Label>
-              <Input
-                id="proxy-node-name"
-                value={nodeName}
-                onChange={(event) => setNodeName(event.target.value)}
-                placeholder="例如 HKT 落地"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="proxy-node-remark">备注</Label>
-              <Input
-                id="proxy-node-remark"
-                value={nodeRemark}
-                onChange={(event) => setNodeRemark(event.target.value)}
-                placeholder="例如 给张三的 / 这条快到期"
-                maxLength={12}
-              />
-              <p data-fx-help="" className="text-xs text-muted-foreground">
-                只给你自己看。分享出去的节点，对方看不到这一句。
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="proxy-node-public-label">对外标注</Label>
-              <Input
-                id="proxy-node-public-label"
-                value={nodePublicLabel}
-                onChange={(event) => setNodePublicLabel(event.target.value)}
-                placeholder="例如 家宽 / IEPL / 深港专线"
-                maxLength={12}
-              />
-              {/*
-                和备注分开是因为它们服务两种人。
+      {/* 三个表单弹窗各自管自己的输入状态：在里面打字不会重画这一页（见 components/proxy/ProxyNodeEditDialog）。 */}
+      <ProxyNodeEditDialog
+        open={nodeDialog.open}
+        onOpenChange={(open) => setNodeDialog((prev) => ({ ...prev, open }))}
+        node={nodeDialog.node}
+        nodes={nodes}
+      />
 
-                备注是主人自己的账本（「给张三的」「便宜线」），泄给租户会出事；
-                对外标注是线路本身的属性（「家宽」「IEPL」）—— 恰恰是租户最想知道、
-                而只有主人说得出的那件事。合成一个字段，两种用途只能二选一：
-                要么泄露账本，要么租户看到的永远是一个没有信息量的「直连」。
-              */}
-              <p data-fx-help="" className="text-xs text-muted-foreground">
-                会顶掉「订阅内容」里那个「直连」标签，分享出去的人也看得到。不进订阅。
-              </p>
-            </div>
-            <FormField className="space-y-2">
-              <Label>直连也放进订阅</Label>
-              <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
-                <p className="min-w-0 text-xs text-muted-foreground">
-                  订阅里额外给出这个节点自己的地址；关掉只藏直连，经它中转的线路照常在。
-                  {nodeIncludeDirect ? (
-                    <span className="mt-1 block text-[var(--fx-warn-text)]">
-                      该节点 IP 会出现在每条订阅地址里。
-                    </span>
-                  ) : null}
-                </p>
-                <Checkbox
-                  checked={nodeIncludeDirect}
-                  onCheckedChange={setNodeIncludeDirect}
-                  className="mt-0.5 shrink-0"
-                />
-              </div>
-            </FormField>
-            <div className="space-y-2 rounded-lg border p-3">
-              <Label>这台落地机的套餐</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <FormField className="min-w-0 space-y-1">
-                  <Label className="text-xs text-muted-foreground">带宽（Mbps）</Label>
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    value={nodeBandwidthMbps}
-                    onChange={(event) => setNodeBandwidthMbps(event.target.value)}
-                    placeholder="500"
-                  />
-                </FormField>
-                <FormField className="min-w-0 space-y-1">
-                  <Label className="text-xs text-muted-foreground">总流量（GB）</Label>
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    value={nodeTrafficLimitGb}
-                    onChange={(event) => setNodeTrafficLimitGb(event.target.value)}
-                    placeholder="1000"
-                  />
-                </FormField>
-              </div>
-              {editingNodeId ? (
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">已用流量（GB）</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      value={nodeTrafficUsedGb}
-                      onChange={(event) => setNodeTrafficUsedGb(event.target.value)}
-                      placeholder="0"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="shrink-0"
-                      onClick={() => setNodeTrafficUsedGb("")}
-                    >
-                      清零
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    面板自己会累加，这里只是用来跟机房的账单对齐。
-                    <span className="mt-1 block text-[var(--fx-warn-text)]">
-                      面板只数得到经转发规则走过的流量 —— 订阅里的「直连」条目和这台机器上跑的别的服务都不计入，
-                      所以这个数只会比机房账单小，不会大。
-                    </span>
-                  </p>
-                </div>
-              ) : null}
-              <div className="flex items-center justify-between gap-3 pt-1">
-                <div className="min-w-0">
-                  <Label className="text-xs">每月自动清零</Label>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {nodeTrafficAutoReset ? (
-                    <Input aria-label="每月自动清零日期"
-                      type="number"
-                      inputMode="numeric"
-                      className="h-8 w-16"
-                      value={nodeTrafficResetDay}
-                      onChange={(event) => setNodeTrafficResetDay(event.target.value)}
-                    />
-                  ) : null}
-                  <Checkbox aria-label="每月自动清零" checked={nodeTrafficAutoReset} onCheckedChange={setNodeTrafficAutoReset} />
-                </div>
-              </div>
-            </div>
-            {/*
-              自动选路和前置代理都是少数人才用的东西，平铺在这里会把「改个名字、
-              换条链接」这种日常操作推到第二屏。所以一律收着 —— 配过的人也收着。
+      <ProxySubTokenCreateDialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen} />
 
-              代价是「我设过的东西看不见了」，所以折叠条上直接写出里头设了什么。
-              摊开是为了让人看见，而看见并不非得摊开。
-            */}
-            <div className="space-y-2">
-              <button
-                type="button"
-                className="flex w-full items-center gap-1.5 text-xs font-medium text-muted-foreground"
-                onClick={() => setNodeAdvancedOpen((prev) => !prev)}
-                aria-expanded={nodeAdvancedOpen}
-              >
-                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${nodeAdvancedOpen ? "" : "-rotate-90"}`} />
-                <span>高级</span>
-                {!nodeAdvancedOpen && advancedSummary ? (
-                  <span className="min-w-0 truncate font-normal text-foreground/70">{advancedSummary}</span>
-                ) : null}
-                <span className="h-px flex-1 bg-border" />
-              </button>
-              {nodeAdvancedOpen ? (
-                <div className="space-y-4 pt-1">
-                  <FormField className="space-y-2">
-                    <Label>地区</Label>
-                    <Input
-                      value={nodeCountryCode}
-                      onChange={(event) => setNodeCountryCode(event.target.value)}
-                      maxLength={2}
-                      placeholder="国家码，如 HK、JP；留空自动猜"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {nodeCountryCode.trim().length === 2
-                        ? proxySubRegionLabel(nodeCountryCode.trim().toUpperCase()) || "不认识这个国家码"
-                        : "订阅里的国旗、地区组、按地区排序都看它。留空时按机器位置或名字里的关键字（香港 / HK / 🇭🇰）猜。"}
-                    </p>
-                  </FormField>
-                  <FormField className="space-y-2">
-                    <Label>自动选路</Label>
-                    <Select
-                      value={nodeAutoGroup}
-                      onValueChange={(value) => setNodeAutoGroup(value as ProxyNodeAutoGroup)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PROXY_NODE_AUTO_GROUPS.map((mode) => (
-                          <SelectItem key={mode} value={mode}>
-                            {PROXY_NODE_AUTO_GROUP_LABELS[mode]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      多条中转指向这个落地时，订阅里额外生成一个选路组。
-                      {PROXY_NODE_AUTO_GROUP_HINTS[nodeAutoGroup]}
-                    </p>
-                  </FormField>
-                  <FormField className="space-y-2">
-                    <Label>前置代理</Label>
-                    <Select
-                      value={String(nodeFrontProxyId)}
-                      onValueChange={(value) => setNodeFrontProxyId(Number(value))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="不经由" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="0">不经由</SelectItem>
-                        {nodes
-                          .filter((item: any) => Number(item.id) !== editingNodeId)
-                          .map((item: any) => (
-                            <SelectItem key={item.id} value={String(item.id)}>
-                              {item.name}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      连接先经由它建立。
-                      {nodeFrontProxyId > 0 ? (
-                        <span className="mt-1 block text-[var(--fx-warn-text)]">
-                          Loon 与 QX 需在客户端里手连一次。
-                        </span>
-                      ) : null}
-                    </p>
-                  </FormField>
-                </div>
-              ) : null}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="proxy-node-link">节点链接</Label>
-              <Textarea
-                id="proxy-node-link"
-                value={nodeLink}
-                onChange={(event) => setNodeLink(event.target.value)}
-                placeholder={'vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// anytls:// socks://\nSnell 没有链接，粘 Surge 那行：名字 = snell, 地址, 端口, psk=密钥, version=4\n或粘贴 JSON：{"type":"vless","server":"...","server_port":443,...}'}
-                rows={5}
-                className="font-mono text-xs"
-              />
-            </div>
-          </div>
-          {/*
-            footer 要自己占住位置：shrink-0 挡住被正文压扁，border-t 把它和可滚的
-            正文分开 —— 不然滚到底时按钮和最后一行字糊在一起，看着像叠上去的。
-          */}
-          <DialogFooter className="shrink-0 border-t pt-3">
-            <Button variant="outline" onClick={() => setNodeDialogOpen(false)}>
-              取消
-            </Button>
-            <Button onClick={submitNode} disabled={createNode.isPending || updateNode.isPending}>
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新建订阅链接</DialogTitle>
-            <DialogDescription className="text-xs">
-              建议一台设备一条。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="proxy-token-name">用途</Label>
-            <Input
-              id="proxy-token-name"
-              value={tokenName}
-              onChange={(event) => setTokenName(event.target.value)}
-              placeholder="例如 我的手机"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTokenDialogOpen(false)}>
-              取消
-            </Button>
-            <Button
-              onClick={() => {
-                const name = tokenName.trim();
-                if (!name) {
-                  toast.error("请填写用途，方便以后分清是哪台设备");
-                  return;
-                }
-                // 格式与预设都在「一键订阅」面板里就地调整，创建时走服务端默认。
-                createToken.mutate({ name });
-              }}
-              disabled={createToken.isPending}
-            >
-              创建
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!renaming} onOpenChange={(open) => !open && setRenaming(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>改节点名</DialogTitle>
-            <DialogDescription className="text-xs">
-              只影响这个节点在订阅里显示的名字，转发规则本身不受影响。
-              {renaming?.kind === "direct" ? "这是直连条目，改的是节点模板的名字。" : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="proxy-rename">节点名</Label>
-            <Input
-              id="proxy-rename"
-              value={renameValue}
-              onChange={(event) => setRenameValue(event.target.value)}
-              maxLength={64}
-              autoFocus
-            />
-            {renaming?.kind === "relay" && (
-              <p data-fx-help="" className="text-xs text-muted-foreground">
-                留空恢复默认名（由主机名和转发名自动拼出）。
-              </p>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenaming(null)}>
-              取消
-            </Button>
-            <Button
-              disabled={setRuleNodeName.isPending || updateNode.isPending}
-              onClick={() => {
-                if (!renaming) return;
-                const name = renameValue.trim();
-                if (renaming.kind === "direct") {
-                  // 直连条目的名字就是模板名，落到模板上。
-                  if (!name) {
-                    toast.error("节点模板的名字不能为空");
-                    return;
-                  }
-                  updateNode.mutate({ id: renaming.templateId, name });
-                  setRenaming(null);
-                  return;
-                }
-                setRuleNodeName.mutate({ ruleId: renaming.ruleId, name });
-              }}
-            >
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ProxyPreviewRenameDialog target={renaming} onClose={() => setRenaming(null)} />
 
       <Dialog open={!!qrTarget} onOpenChange={(open) => !open && setQrTarget(null)}>
         {/* DialogContent 是 grid，子项默认 min-width:auto —— 底下那条不可断行的长地址

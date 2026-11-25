@@ -59,3 +59,29 @@
 
 外部调用方不用改：原来从 `telegramBot.ts` 导入的名字那里仍 `export { … } from "./telegramXxx"` 转发。往这几个文件加东西时守住方向：低层不 import 高层；常量和纯函数往下放。两处初始化期的跨文件引用（`aiInteractionRateLimiter`、`telegramUpdateDispatcher` 用到 `telegramText` 的常量）之所以安全，是因为 `telegramText.ts` 是叶子，先于一切被求值。
 
+
+## 心跳路由的渐进拆分（2026-11）
+
+`server/agentHeartbeatRoute.ts` 原来是一个 5791 行的处理器（一个 try 块、508 条顶层语句）。现在按心跳处理的阶段把一段段搬进 `server/heartbeat/`，每个文件一个导出函数，接一个「上下文对象」（原来函数里的局部变量）、回一个结果对象；主文件剩 2914 行，行为不变（50 个心跳相关测试文件照旧）。搬动用 `scripts/extract-block.mjs`（基于 TypeScript 检查器算输入 / 输出 / 回写，生成模块和调用处，见文件头的用法说明）。
+
+按处理顺序：
+
+| 阶段 | 文件 |
+| --- | --- |
+| 合并门（抢不到就回最小应答） | `acquireReconciliation.ts` |
+| 稳定计划快路径 | `stablePlanFastPath.ts` |
+| 主机状态入库 | `ingestHostState.ts` |
+| 规则 / DNS 监视 / 动作 / 隧道 / 出口上下文加载 | `loadRules.ts` |
+| 隧道出口规则形状校验、流量排除主机 | `tunnelEgressRuleShape.ts`、`trafficExcludedHosts.ts` |
+| 链式转发目标、主机规则目标 | `forwardChainTargets.ts`、`hostRuleTargets.ts` |
+| 协议策略助手 | `protocolPolicyHelpers.ts` |
+| 拨号地址、ForwardX 传输、出口选择、Mimic 过滤这些闭包工厂 | `dialAddressHelpers.ts`、`forwardXTransportHelpers.ts`、`exitSelectionHelpers.ts`、`mimicFilterHelpers.ts` |
+| 隧道探测、线路组探测、隧道运行时就绪 | `tunnelProbes.ts`、`forwardGroupProbes.ts`、`tunnelRuntimeReadiness.ts` |
+| 运行中规则汇总、端口保护、按本机监听恢复隧道规则 | `runningRules.ts`、`protectActionPorts.ts`、`restoreTunnelRulesFromLocalState.ts` |
+| Agent 升级指令、插件同步 | `agentUpgradeDirective.ts`、`pluginSyncActions.ts` |
+| 四类运行时同步动作 | `gostRuntimeSync.ts`、`nginxRuntimeSync.ts`、`singboxRuntimeSync.ts`、`mimicRuntimeSync.ts` |
+| 动作排序、隧道出口端口与 SNI | `orderActions.ts`、`tunnelExitPortsAndSni.ts` |
+
+还留在主文件里的：规则主循环（730 行、53 个输入，闭包之间互相晚绑定，整体搬不动，要先把它用到的声明理顺）、故障切换一组闭包（依赖后面才声明的 gostBalancePlans）。读源码断言的测试用 `server/testing/heartbeatSource.ts` 的 `readHeartbeatRouteSource()` 把主文件和 `server/heartbeat/*.ts` 拼成一份看。
+
+规则页（`client/src/pages/Rules.tsx`）同样在拆：派生计算和渲染助手按主题搬进 `client/src/features/rules/use*.ts(x)` 这些 hook（10089 → 8590 行），读源码的测试用 `client/src/testing/rulesPageSource.ts`。

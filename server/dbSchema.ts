@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import type { Pool } from "mysql2/promise";
+import type { Pool, RowDataPacket } from "mysql2/promise";
 import { quoteIdentifierFor } from "./dbRuntime";
 import type Database from "better-sqlite3";
 import type pg from "pg";
-import { getDatabaseKind, getPool, getPostgresPool, getSqlite } from "./dbRuntime";
+import { getDatabaseKind, getPool, getPostgresPool, getSqlite, type DatabaseKind } from "./dbRuntime";
 import { OPS_TABLE_DEFS } from "./ops/opsTables";
 import { IP_CHANGE_TABLE_DEFS } from "./ipChange/tables";
 import { HOST_REPLACE_TABLE_DEFS } from "./hostReplace/tables";
@@ -168,7 +168,7 @@ async function backfillPostgresqlLastAutoTrafficReset(pool: pg.Pool) {
   await pool.query(
     `WITH claimed AS (
        INSERT INTO "system_settings" ("key", value, "updatedAt")
-       VALUES ($1, '1', EXTRACT(EPOCH FROM NOW())::INT)
+       VALUES ($1, '1', FLOOR(EXTRACT(EPOCH FROM NOW()))::INT)
        ON CONFLICT ("key") DO NOTHING
        RETURNING "key"
      )
@@ -983,7 +983,7 @@ const tables: TableDef[] = [
   { name: "subscription_plan_proxy_nodes", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("nodeId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "nodeId"]] },
   { name: "subscription_plan_forward_groups", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
   { name: "subscription_plan_traffic_addons", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("trafficBytes", "bigint", { notNull: true, default: 0 }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("isActive", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["planId", "isActive"], ["planId", "sortOrder"]] },
-  { name: "user_subscriptions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("planId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "active" }), c("source", "varchar", { length: 32, notNull: true, default: "admin" }), c("paymentOrderNo", "text"), c("planSnapshot", "text"), c("durationDays", "int"), c("portRangeStart", "int"), c("portRangeEnd", "int"), c("nextTrafficResetAt", "epoch"), c("lastTrafficResetAt", "epoch"), c("userDismissedAt", "epoch"), c("adminDismissedAt", "epoch"), c("startedAt", "epoch", { notNull: true, default: "now" }), c("expiresAt", "epoch"), c("autoRenew", "bool", { notNull: true, default: false }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "status", "expiresAt"], ["planId"], ["paymentOrderNo"]] },
+  { name: "user_subscriptions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("planId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "active" }), c("source", "varchar", { length: 32, notNull: true, default: "admin" }), c("paymentOrderNo", "text"), c("planSnapshot", "text"), c("durationDays", "int"), c("portRangeStart", "int"), c("portRangeEnd", "int"), c("nextTrafficResetAt", "epoch"), c("lastTrafficResetAt", "epoch"), c("userDismissedAt", "epoch"), c("adminDismissedAt", "epoch"), c("startedAt", "epoch", { notNull: true, default: "now" }), c("expiresAt", "epoch"), c("autoRenew", "bool", { notNull: true, default: false }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "status", "expiresAt"], ["status", "expiresAt"], ["planId"], ["paymentOrderNo"]] },
   { name: "user_traffic_addons", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("subscriptionId", "int", { notNull: true }), c("planId", "int", { notNull: true }), c("addonId", "int"), c("trafficBytes", "bigint", { notNull: true, default: 0 }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("source", "varchar", { length: 32, notNull: true, default: "user" }), c("status", "varchar", { length: 32, notNull: true, default: "active" }), c("operatorUserId", "int"), c("description", "text"), c("cycleResetAt", "epoch"), c("expiresAt", "epoch"), c("expiredAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "status", "expiresAt"], ["subscriptionId", "status"], ["addonId"]] },
   { name: "balance_transactions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("type", "varchar", { length: 32, notNull: true }), c("amountCents", "bigint", { notNull: true }), c("balanceAfterCents", "bigint", { notNull: true }), c("description", "text"), c("operatorUserId", "int"), c("paymentOrderNo", "text"), c("redemptionCodeId", "int"), c("createdAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "createdAt"], ["paymentOrderNo"]] },
   { name: "traffic_billing_configs", columns: [c("id", "id"), c("resourceType", "varchar", { length: 16, notNull: true }), c("resourceId", "int", { notNull: true }), c("enabled", "bool", { notNull: true, default: true }), c("requiresPermission", "bool", { notNull: true, default: false }), c("description", "text"), c("pricePerGbCents", "bigint", { notNull: true, default: 0 }), c("pricePerGbMilliCents", "bigint", { notNull: true, default: 0 }), c("multiplier", "int", { notNull: true, default: 100 }), c("stockLimit", "int", { notNull: true, default: 0 }), c("maxRulesPerUser", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["resourceType", "resourceId"]], indexes: [["enabled"], ["requiresPermission"]] },
@@ -1079,12 +1079,17 @@ export function getDatabaseTableDefs(): readonly TableDef[] {
 
 type SchemaKind = "mysql" | "sqlite" | "postgresql";
 
+const POSTGRESQL_EPOCH_NOW_SQL = "FLOOR(EXTRACT(EPOCH FROM NOW()))::INT";
+const POSTGRESQL_EPOCH_NOW_DEFAULT = ` DEFAULT (${POSTGRESQL_EPOCH_NOW_SQL})`;
+
 function defaultSql(kind: SchemaKind, value: ColumnDef["default"], columnType?: ColumnType) {
   if (value === undefined || value === null) return "";
   if (kind === "mysql" && (columnType === "text" || columnType === "longtext")) return "";
   if (value === "now") {
     if (kind === "mysql") return " DEFAULT (UNIX_TIMESTAMP())";
-    if (kind === "postgresql") return " DEFAULT (EXTRACT(EPOCH FROM NOW())::INT)";
+    // FLOOR：numeric 转 INT 是四舍五入，不加 FLOOR 时建行时刻会比应用自己算的 Math.floor(Date.now() / 1000)
+    // 大 1 秒（半数情况），同一秒内「下单早于绑定」这类比较就会判反。SQLite unixepoch()、MySQL UNIX_TIMESTAMP() 都是取整。
+    if (kind === "postgresql") return POSTGRESQL_EPOCH_NOW_DEFAULT;
     return " DEFAULT (unixepoch())";
   }
   if (typeof value === "boolean") {
@@ -1176,6 +1181,203 @@ async function upgradePostgresqlBigintColumns(pool: pg.Pool) {
   }
 }
 
+/*
+ * 老库里 epoch 列的默认值是没加 FLOOR 的 EXTRACT(EPOCH FROM NOW())::INT（见 defaultSql）。
+ * 启动时把所有「默认当前时刻」的 epoch 列的默认值换掉；information_schema 里的默认值文本只在还是老写法时才改，重启不重复做。
+ */
+async function repairPostgresqlEpochDefaults(pool: pg.Pool) {
+  const targets: Array<[string, string]> = [];
+  for (const table of tables) for (const column of table.columns) if (column.type === "epoch" && column.default === "now") targets.push([table.name, column.name]);
+  if (targets.length === 0) return;
+  const result = await pool.query(
+    'SELECT table_name AS "tableName", column_name AS "columnName", column_default AS "columnDefault" FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ANY($1::text[]) AND column_name = ANY($2::text[])',
+    [Array.from(new Set(targets.map(([table]) => table))), Array.from(new Set(targets.map(([, column]) => column)))],
+  );
+  const wanted = new Set(targets.map(([table, column]) => `${table}.${column}`));
+  for (const row of result?.rows || []) {
+    const current = String(row.columnDefault || "");
+    if (!wanted.has(`${row.tableName}.${row.columnName}`) || !/EXTRACT\(EPOCH FROM/i.test(current) || /floor/i.test(current)) continue;
+    await pool.query(`ALTER TABLE ${quoteIdentifierFor("postgresql", row.tableName)} ALTER COLUMN ${quoteIdentifierFor("postgresql", row.columnName)} SET DEFAULT ${POSTGRESQL_EPOCH_NOW_SQL}`).catch(() => undefined);
+  }
+}
+
+/*
+ * proxy_nodes 的 (sourceId, sourceKey) 唯一索引与去重回填。
+ *
+ * 外部订阅同步来的节点靠 (sourceId, sourceKey) 认身份。同步串行化之前，两次同步并发跑会把同一个
+ * 上游节点插成两行；同步里虽然会把多出来的当成「上游去掉的」清掉，但只有下一次同步跑到才清，
+ * 中间订阅里就是重的。库里有了唯一索引，这种行根本插不进去。
+ *
+ * 建索引前先去重：老库里已经有重复行时，SQLite 的 CREATE UNIQUE INDEX 直接报错，面板起不来。
+ * 做法是先试着建（已经有了或库里没重复行就一步完成，不扫表）；建不成再去重、再建一次。
+ * 去重留 id 最小的那一行，别的行上挂着的转发规则（forward_rules.proxyNodeId）、分享
+ * （proxy_node_shares）、套餐绑定（subscription_plan_proxy_nodes）都改指到留下的那一行；分享和套餐绑定
+ * 有自己的唯一键（nodeId+userId / planId+nodeId），留下的那一行已经有同样一条时就删掉重复的绑定，
+ * 不丢用户已经拿到的东西。索引仍然建不成（比如 MySQL 上 text 列只能按前 191 个字符建唯一键，
+ * 两个只在后面不同的键撞上）只记一条警告，照样启动 —— 同步里按 (sourceId, sourceKey) 的去重还在兜底。
+ *
+ * 手工加的节点 sourceKey 是 NULL：三种库的唯一索引都把 NULL 当成互不相等（MySQL 的 UNIQUE 允许多个
+ * NULL；PostgreSQL 默认 NULLS DISTINCT；SQLite 同样），所以不受这条索引约束，也不参与去重。
+ */
+function indexName(prefix: string, table: string, cols: string[]) {
+  return `${prefix}_${table}_${cols.join("_")}`.slice(0, 60);
+}
+
+const PROXY_NODE_SOURCE_UNIQUE_COLUMNS = ["sourceId", "sourceKey"];
+export const PROXY_NODE_SOURCE_UNIQUE_INDEX = indexName("uniq", "proxy_nodes", PROXY_NODE_SOURCE_UNIQUE_COLUMNS);
+
+/** 建表路径用的最小查询接口：占位符统一写 ?，PostgreSQL 的实现自己换成 $n。 */
+type SchemaQuery = (sql: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
+
+async function dedupeProxyNodeSourceRows(kind: DatabaseKind, query: SchemaQuery): Promise<number> {
+  const q = (id: string) => quoteIdentifierFor(kind, id);
+  const nodes = q("proxy_nodes");
+  const groups = await query(
+    `SELECT ${q("sourceId")} AS ${q("sourceId")}, ${q("sourceKey")} AS ${q("sourceKey")}, MIN(${q("id")}) AS ${q("keepId")} FROM ${nodes} WHERE ${q("sourceKey")} IS NOT NULL GROUP BY ${q("sourceId")}, ${q("sourceKey")} HAVING COUNT(*) > 1`,
+  );
+  let removed = 0;
+  for (const group of groups) {
+    const keepId = Number(group.keepId);
+    const duplicateRows = await query(
+      `SELECT ${q("id")} AS ${q("id")} FROM ${nodes} WHERE ${q("sourceId")} = ? AND ${q("sourceKey")} = ? AND ${q("id")} <> ?`,
+      [group.sourceId, group.sourceKey, keepId],
+    );
+    const duplicateIds = duplicateRows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+    if (duplicateIds.length === 0) continue;
+    const marks = duplicateIds.map(() => "?").join(", ");
+    // 转发规则上没有别的唯一键，直接改指向。
+    await query(`UPDATE ${q("forward_rules")} SET ${q("proxyNodeId")} = ? WHERE ${q("proxyNodeId")} IN (${marks})`, [keepId, ...duplicateIds]);
+    // 分享与套餐绑定：留下的那一行已经有同一个对象的绑定时，重复的那条删掉；否则改指向。
+    for (const [table, partner] of [["proxy_node_shares", "userId"], ["subscription_plan_proxy_nodes", "planId"]] as const) {
+      const bindings = await query(
+        `SELECT ${q("id")} AS ${q("id")}, ${q("nodeId")} AS ${q("nodeId")}, ${q(partner)} AS ${q("partner")} FROM ${q(table)} WHERE ${q("nodeId")} IN (${marks}, ?)`,
+        [...duplicateIds, keepId],
+      );
+      const taken = new Set(bindings.filter((row) => Number(row.nodeId) === keepId).map((row) => String(row.partner)));
+      for (const row of bindings) {
+        if (Number(row.nodeId) === keepId) continue;
+        if (taken.has(String(row.partner))) {
+          await query(`DELETE FROM ${q(table)} WHERE ${q("id")} = ?`, [row.id]);
+        } else {
+          taken.add(String(row.partner));
+          await query(`UPDATE ${q(table)} SET ${q("nodeId")} = ? WHERE ${q("id")} = ?`, [keepId, row.id]);
+        }
+      }
+    }
+    await query(`DELETE FROM ${nodes} WHERE ${q("id")} IN (${marks})`, duplicateIds);
+    removed += duplicateIds.length;
+  }
+  return removed;
+}
+
+function isUniqueViolation(kind: DatabaseKind, error: unknown): boolean {
+  const code = String((error as { code?: unknown })?.code ?? "");
+  const message = String((error as { message?: unknown })?.message ?? "");
+  if (kind === "postgresql") return code === "23505";
+  if (kind === "mysql") return code === "ER_DUP_ENTRY" || Number((error as { errno?: unknown })?.errno) === 1062;
+  return code === "SQLITE_CONSTRAINT_UNIQUE" || /UNIQUE constraint failed/i.test(message);
+}
+
+/**
+ * 三种库共用的流程：试建 → 撞到重复行就去重再建 → 还不行只警告。
+ * createIndex 在索引已经存在时要静默成功（SQLite / PostgreSQL 用 IF NOT EXISTS，MySQL 先查 information_schema）。
+ */
+async function ensureProxyNodeSourceUniqueIndex(kind: DatabaseKind, createIndex: () => Promise<void>, transaction: (work: (query: SchemaQuery) => Promise<number>) => Promise<number>) {
+  try {
+    await createIndex();
+    return;
+  } catch (error) {
+    if (!isUniqueViolation(kind, error)) {
+      console.warn(`[schema] proxy_nodes 唯一索引 ${PROXY_NODE_SOURCE_UNIQUE_INDEX} 没建成（不影响启动）:`, error instanceof Error ? error.message : error);
+      return;
+    }
+  }
+  try {
+    const removed = await transaction((query) => dedupeProxyNodeSourceRows(kind, query));
+    if (removed > 0) console.info(`[schema] proxy_nodes 按 (sourceId, sourceKey) 去重：删掉 ${removed} 行重复节点，绑定已改指到保留的那一行`);
+    await createIndex();
+  } catch (error) {
+    console.warn(`[schema] proxy_nodes 唯一索引 ${PROXY_NODE_SOURCE_UNIQUE_INDEX} 没建成（不影响启动，同步里按身份键去重兜底）:`, error instanceof Error ? error.message : error);
+  }
+}
+
+async function ensureMysqlProxyNodeSourceUniqueIndex(pool: Pool) {
+  const key = mysqlKey("proxy_nodes", "uniq", PROXY_NODE_SOURCE_UNIQUE_COLUMNS);
+  await ensureProxyNodeSourceUniqueIndex("mysql", async () => {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'proxy_nodes' AND INDEX_NAME = ? LIMIT 1",
+      [PROXY_NODE_SOURCE_UNIQUE_INDEX],
+    );
+    if (Array.isArray(rows) && rows.length > 0) return;
+    await pool.query(`ALTER TABLE ${quoteIdentifierFor("mysql", "proxy_nodes")} ADD UNIQUE INDEX ${key.name} (${key.expr})`);
+  }, async (work) => {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await work(async (sqlText, params = []) => {
+        const [rows] = await connection.query(sqlText, params);
+        return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : [];
+      });
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback().catch(() => undefined);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  });
+}
+
+async function ensurePostgresqlProxyNodeSourceUniqueIndex(pool: pg.Pool) {
+  await ensureProxyNodeSourceUniqueIndex("postgresql", async () => {
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifierFor("postgresql", PROXY_NODE_SOURCE_UNIQUE_INDEX)} ON ${quoteIdentifierFor("postgresql", "proxy_nodes")} (${PROXY_NODE_SOURCE_UNIQUE_COLUMNS.map((col) => quoteIdentifierFor("postgresql", col)).join(", ")})`,
+    );
+  }, async (work) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await work(async (sqlText, params = []) => {
+        let index = 0;
+        const result = await client.query(sqlText.replace(/\?/g, () => `$${++index}`), params);
+        return result.rows as Array<Record<string, unknown>>;
+      });
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+}
+
+async function ensureSqliteProxyNodeSourceUniqueIndex(sqlite: Database.Database) {
+  await ensureProxyNodeSourceUniqueIndex("sqlite", async () => {
+    sqlite.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifierFor("sqlite", PROXY_NODE_SOURCE_UNIQUE_INDEX)} ON ${quoteIdentifierFor("sqlite", "proxy_nodes")} (${PROXY_NODE_SOURCE_UNIQUE_COLUMNS.map((col) => quoteIdentifierFor("sqlite", col)).join(", ")})`,
+    );
+  }, async (work) => {
+    // 建表阶段还没有别的连接在用这条句柄，手动 BEGIN / COMMIT 就够（better-sqlite3 的 transaction() 不接 async）。
+    sqlite.exec("BEGIN");
+    try {
+      const result = await work(async (sqlText, params = []) => {
+        const statement = sqlite.prepare(sqlText);
+        if (statement.reader) return statement.all(...params) as Array<Record<string, unknown>>;
+        statement.run(...params);
+        return [];
+      });
+      sqlite.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { sqlite.exec("ROLLBACK"); } catch { /* 事务可能已经关了 */ }
+      throw error;
+    }
+  });
+}
+
 function mysqlKey(table: string, prefix: string, cols: string[]) {
   const name = quoteIdentifierFor("mysql", `${prefix}_${table}_${cols.join("_")}`.slice(0, 60));
   const expr = cols.map((col) => {
@@ -1214,6 +1416,7 @@ async function ensureMysqlSchema(pool: Pool) {
       await pool.query(`ALTER TABLE ${quoteIdentifierFor("mysql", table.name)} ADD ${uniquePrefix === "uniq" ? "UNIQUE " : ""}INDEX ${key.name} (${key.expr})`).catch(() => undefined);
     }
   }
+  await ensureMysqlProxyNodeSourceUniqueIndex(pool);
   await upgradeMysqlBigintColumns(pool);
   for (const [key, value] of seedSettings) {
     await pool.execute(
@@ -1223,10 +1426,6 @@ async function ensureMysqlSchema(pool: Pool) {
   }
   await backfillMysqlLastAutoTrafficReset(pool);
   await backfillMysqlTunnelSecrets(pool);
-}
-
-function indexName(prefix: string, table: string, cols: string[]) {
-  return `${prefix}_${table}_${cols.join("_")}`.slice(0, 60);
 }
 
 async function ensurePostgresqlSchema(pool: pg.Pool) {
@@ -1249,10 +1448,12 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${quoteIdentifierFor("postgresql", table.name)} (${cols.map((col) => quoteIdentifierFor("postgresql", col)).join(", ")})`).catch(() => undefined);
     }
   }
+  await ensurePostgresqlProxyNodeSourceUniqueIndex(pool);
   await upgradePostgresqlBigintColumns(pool);
+  await repairPostgresqlEpochDefaults(pool);
   for (const [key, value] of seedSettings) {
     await pool.query(
-      'INSERT INTO system_settings ("key", value, "updatedAt") VALUES ($1, $2, EXTRACT(EPOCH FROM NOW())::INT) ON CONFLICT ("key") DO NOTHING',
+      'INSERT INTO system_settings ("key", value, "updatedAt") VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM NOW()))::INT) ON CONFLICT ("key") DO NOTHING',
       [key, value],
     );
   }
@@ -1260,7 +1461,7 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
   await backfillPostgresqlTunnelSecrets(pool);
 }
 
-function ensureSqliteSchema(sqlite: Database.Database) {
+async function ensureSqliteSchema(sqlite: Database.Database) {
   for (const table of tables) {
     const columns = table.columns.map((column) => columnSql("sqlite", column)).filter(Boolean);
     const unique = (table.unique || []).map((cols) => `UNIQUE (${cols.map((col) => quoteIdentifierFor("sqlite", col)).join(", ")})`);
@@ -1279,6 +1480,7 @@ function ensureSqliteSchema(sqlite: Database.Database) {
       sqlite.exec(`CREATE ${uniquePrefix}INDEX IF NOT EXISTS ${indexName} ON ${quoteIdentifierFor("sqlite", table.name)} (${cols.map((col) => quoteIdentifierFor("sqlite", col)).join(", ")})`);
     }
   }
+  await ensureSqliteProxyNodeSourceUniqueIndex(sqlite);
   for (const [key, value] of seedSettings) {
     sqlite.prepare(
       "INSERT OR IGNORE INTO system_settings (key, value, updatedAt) VALUES (?, ?, unixepoch())",
@@ -1290,7 +1492,7 @@ function ensureSqliteSchema(sqlite: Database.Database) {
 
 export async function ensureDatabaseSchema(target?: Pool | pg.Pool | Database.Database) {
   if (target && "prepare" in target) {
-    ensureSqliteSchema(target as Database.Database);
+    await ensureSqliteSchema(target as Database.Database);
     return;
   }
   if (target && "getConnection" in target) {
@@ -1305,7 +1507,7 @@ export async function ensureDatabaseSchema(target?: Pool | pg.Pool | Database.Da
   if (kind === "sqlite") {
     const sqlite = getSqlite();
     if (!sqlite) throw new Error("SQLite database is not connected");
-    ensureSqliteSchema(sqlite);
+    await ensureSqliteSchema(sqlite);
     return;
   }
   if (kind === "postgresql") {

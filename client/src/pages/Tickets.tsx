@@ -12,6 +12,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Inbox, LifeBuoy, Loader2, Lock, P
 import { toast } from "sonner";
 
 import DashboardLayout from "@/components/DashboardLayout";
+import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -27,7 +28,9 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsMobile } from "@/hooks/useMobile";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { cn } from "@/lib/utils";
 import {
   normalizeTicketContent,
@@ -68,8 +71,9 @@ type TicketMessage = {
   createdAt: Date | string | null;
 };
 
-const LIST_POLL_MS = 30_000;
-const THREAD_POLL_MS = 10_000;
+// 列表半分钟一轮，打开的那条工单十秒一轮：对方回了消息要能较快看见，列表没那么急。
+const LIST_POLL_MS = pollingInterval("slow");
+const THREAD_POLL_MS = pollingInterval("log");
 
 const STATUS_FILTER_OPTIONS: Array<{ value: StatusFilterValue; label: string }> = [
   { value: "all", label: "全部状态" },
@@ -134,15 +138,6 @@ function shortTime(value: Date | string | null | undefined) {
 function readTicketIdFromSearch(search: string) {
   const id = Number(new URLSearchParams(search).get("id"));
   return Number.isInteger(id) && id > 0 ? id : null;
-}
-
-function useDebouncedValue<T>(value: T, delayMs: number) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-  return debounced;
 }
 
 export default function Tickets({ mode = "user" }: { mode?: Mode }) {
@@ -303,7 +298,8 @@ export default function Tickets({ mode = "user" }: { mode?: Mode }) {
                 {list.isLoading && !list.data ? (
                   <DataSectionLoading label="正在加载工单" minHeight="min-h-[160px]" />
                 ) : list.isError && !list.data ? (
-                  <EmptyState icon={<Inbox />} title="工单加载失败" description={list.error?.message || "请稍后重试"} />
+                  // 没读到不是「没有」：说失败、给重试，别画成一块空状态。
+                  <DataSectionError label="工单列表" error={list.error} retrying={list.isFetching} onRetry={() => { void list.refetch(); }} minHeight="min-h-[160px]" />
                 ) : items.length === 0 ? (
                   <EmptyState
                     icon={<Inbox />}
@@ -594,7 +590,7 @@ function TicketThread({ mode, ticketId, onChanged, onMissing }: {
             />
             <div className="flex items-center justify-between gap-2">
               <span className={cn("text-xs text-muted-foreground", contentLength > TICKET_CONTENT_MAX_LENGTH && "text-[var(--fx-down-text)]")}>
-                {contentLength.toLocaleString()} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString()}
+                {contentLength.toLocaleString(getFormatLocale())} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString(getFormatLocale())}
                 <span className="max-md:hidden"> · Ctrl / ⌘ + Enter 发送</span>
               </span>
               <Button size="sm" className="gap-1.5" disabled={replying || contentLength === 0} onClick={sendReply}>
@@ -683,7 +679,7 @@ function CreateTicketDialog({ open, onOpenChange, pending, onSubmit }: {
               className="min-h-40 text-sm"
               placeholder="只支持纯文本，不能上传附件。"
             />
-            <p className="text-xs text-muted-foreground">{content.trim().length.toLocaleString()} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">{content.trim().length.toLocaleString(getFormatLocale())} / {TICKET_CONTENT_MAX_LENGTH.toLocaleString(getFormatLocale())}</p>
           </FormField>
         </div>
         <DialogFooter>

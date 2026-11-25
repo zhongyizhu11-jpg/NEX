@@ -24,7 +24,7 @@ const setup = String.raw`
 test("a rule create that fails half-way leaves no rule row and frees its ports", () => {
   runInDatabase(String.raw`
     // 规则行写进去之后、把隧道标记成待下发时失败
-    await exec('CREATE TRIGGER fail_tunnel_mark BEFORE UPDATE ON tunnels WHEN NEW."isRunning" = 0 BEGIN SELECT RAISE(ABORT, ' + "'injected failure'" + '); END');
+    await failWrite("fail_tunnel_mark", { table: "tunnels", event: "UPDATE", when: 'NEW."isRunning" = 0' });
     const input = {
       hostId: 1, name: "half", forwardType: "gost", protocol: "tcp", gostMode: "direct",
       tunnelId: 10, sourcePort: 40001, targetIp: "198.51.100.9", targetPort: 443,
@@ -37,7 +37,7 @@ test("a rule create that fails half-way leaves no rule row and frees its ports",
     assert.equal(Number((await query("SELECT isRunning FROM tunnels WHERE id = 10"))[0].isRunning), 1);
 
     // 端口没被占着：去掉故障后同一个端口马上能建
-    await exec("DROP TRIGGER fail_tunnel_mark");
+    await dropFailWrite("fail_tunnel_mark", "tunnels");
     const created = await caller.create(input);
     assert.equal(created.sourcePort, 40001);
     const rows = await query('SELECT id, "sourcePort", "tunnelExitPort" FROM forward_rules');
@@ -68,7 +68,7 @@ test("a rule update that fails half-way leaves the stored rule unchanged", () =>
     );
     // 一条遗留的出口映射：保存时要清掉它，清的时候失败
     await exec('INSERT INTO forward_rule_tunnel_exits (id, "ruleId", "tunnelId", "exitNodeId", "exitSeq", "exitHostId", "tunnelExitPort") VALUES (1, 20, 10, 1, 1, 2, 50000)');
-    await exec("CREATE TRIGGER fail_exit_clear BEFORE DELETE ON forward_rule_tunnel_exits BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+    await failWrite("fail_exit_clear", { table: "forward_rule_tunnel_exits", event: "DELETE" });
     const auditBefore = await count("SELECT COUNT(*) AS n FROM config_audit_events");
     await assert.rejects(() => caller.update({ id: 20, name: "after", targetPort: 8443 }), /injected failure/);
     const [rule] = await query('SELECT name, "targetPort", "isRunning" FROM forward_rules WHERE id = 20');
@@ -77,7 +77,7 @@ test("a rule update that fails half-way leaves the stored rule unchanged", () =>
     assert.equal(Number(rule.isRunning), 1);
     assert.equal(await count("SELECT COUNT(*) AS n FROM config_audit_events"), auditBefore);
 
-    await exec("DROP TRIGGER fail_exit_clear");
+    await dropFailWrite("fail_exit_clear", "forward_rule_tunnel_exits");
     const result = await caller.update({ id: 20, name: "after", targetPort: 8443 });
     assert.equal(result.success, true);
     assert.equal(result.reset, true);

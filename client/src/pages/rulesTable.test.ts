@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
+import { readRulesPageSource } from "../testing/rulesPageSource";
 
 /**
  * 规则表格（标准布局重构工作包一）：列定义只写一遍（ruleTableColumns），colgroup、表头、单元格都从
  * 按列设置（显示哪些、顺序、列宽，上游 2.3.287）落下来的 shownRuleTableColumns 出；
  * 不再按管理员 / 排序各写一个 1610～1764px 的最小宽度。守在源码上。
  */
-const source = fs.readFileSync(path.resolve(import.meta.dirname, "Rules.tsx"), "utf8");
+const source = readRulesPageSource();
 
 test("规则表格的列只在 ruleTableColumns 里定义一遍", () => {
   assert.ok((source.match(/shownRuleTableColumns\.map\(/g) ?? []).length >= 3, "colgroup、表头、单元格三处都从 shownRuleTableColumns 出");

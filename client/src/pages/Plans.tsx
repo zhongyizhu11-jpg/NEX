@@ -18,6 +18,7 @@ import { EntityCard } from "@/components/entity/EntityCard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog, useFormDirty } from "@/components/ui/form-dialog";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,7 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
+import { configQuery, optionsQuery } from "@/lib/queryPresets";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import TrafficBillingSection from "@/components/TrafficBillingSection";
 import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
@@ -48,7 +50,7 @@ import {
 } from "@shared/planPricing";
 import { formatRateBps, parseRatePercentToBps } from "@shared/referral";
 import { parseProductStockInput, ProductStockField, ProductStockSummary } from "@/components/ProductStock";
-import { Check, CheckCircle2, Coins, LayoutGrid, List, Package, Pencil, Plus, RefreshCw, Settings2, ShoppingBag, Trash2 } from "lucide-react";
+import { Check, CheckCircle2, Coins, LayoutGrid, List, Package, Pencil, Plus, Settings2, ShoppingBag, Trash2 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -508,6 +510,7 @@ function PlanResourcePicker({
                     size="icon"
                     className="h-7 w-7 shrink-0 text-destructive"
                     title="删除"
+                    aria-label={`删除 ${String(item?.name || `#${getId(item)}`)}`}
                     onClick={() => onRemove(getId(item))}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -576,6 +579,7 @@ function PlanSelectedResourceList({
                 size="icon"
                 className="h-7 w-7 shrink-0 text-destructive"
                 title="删除"
+                aria-label={`删除 ${String(item?.name || `#${getId(item)}`)}`}
                 onClick={() => onRemove(getId(item))}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -695,8 +699,11 @@ function payload(form: PlanForm) {
 export default function Plans() {
   const utils = trpc.useUtils();
   const [form, setForm] = useState<PlanForm>(emptyForm);
-  const subTemplatesQuery = trpc.proxySubscriptions.adminListTemplates.useQuery();
   const [editing, setEditing] = useState(false);
+  // 改过没保存就关要先问一句（ui/form-dialog）
+  const planFormDirty = useFormDirty(editing, form);
+  // 订阅模板清单只在编辑弹窗里用：页面一打开就拉是白发一个请求，等弹窗开了再要。
+  const subTemplatesQuery = trpc.proxySubscriptions.adminListTemplates.useQuery(undefined, { enabled: editing });
   const [planDialogTab, setPlanDialogTab] = useState<PlanDialogTab>("settings");
   const [assignOpen, setAssignOpen] = useState(false);
   // 页头的「新增计费资源」：每点一次 +1，TrafficBillingSection 转给计费资源列表开新建弹窗
@@ -750,28 +757,28 @@ export default function Plans() {
   const needsPlanResourceOptions = editing && planDialogTab === "resources";
   const { data: hosts = [] } = trpc.hosts.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: tunnels = [], isLoading: tunnelsLoading } = trpc.tunnels.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: forwardGroups = [], isLoading: forwardGroupsLoading } = trpc.forwardGroups.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: users = [] } = trpc.users.options.useQuery(undefined, {
     enabled: assignOpen,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: planOptions = [] } = trpc.plans.options.useQuery(undefined, {
     enabled: assignOpen,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   // 无条件发：这张卡片要说的是「按量计费现在开没开」，不能因为你没点开某个 tab
   // 就一律显示「已关闭」—— 那是在关于钱的事情上说假话。
   const { data: trafficBillingData, isLoading: trafficBillingLoading } = trpc.trafficBilling.configs.useQuery(undefined, {
-    staleTime: 30_000,
+    ...configQuery,
   });
 
   const createPlan = trpc.plans.create.useMutation({
@@ -907,6 +914,8 @@ export default function Plans() {
    */
   const { data: proxyNodeOptions = [], isLoading: proxyNodeOptionsLoading } = trpc.plans.proxyNodeOptions.useQuery(undefined, {
     staleTime: 30_000,
+    // 同样只在编辑弹窗里用（附带落地节点那一栏），列表页不需要
+    enabled: editing,
   });
   const storeVisiblePlans = Number(planSummary?.storeVisibleItems ?? 0);
   const trafficBillingEnabled = !!trafficBillingData?.enabled;
@@ -1367,23 +1376,33 @@ export default function Plans() {
         </Tabs>
       </div>
 
-      <Dialog open={editing} onOpenChange={setEditing}>
-        <DialogContent className="flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[95vw] flex-col overflow-hidden p-0 sm:max-w-2xl">
-          <DialogHeader className="px-4 pt-4 sm:px-5 sm:pt-5">
-            <DialogTitle>{form.id ? "编辑套餐" : "新增套餐"}</DialogTitle>
-            <DialogDescription data-fx-help="">配置套餐限制，并绑定订阅后可用资源。</DialogDescription>
-          </DialogHeader>
-
-          <Tabs value={planDialogTab} onValueChange={(value) => setPlanDialogTab(value as PlanDialogTab)} className="flex min-h-0 flex-1 flex-col px-4 sm:px-5">
-            {/* shrink-0 同理：它和下面那块可滚区域是同一列的兄弟，不钉住会被压扁，
-                压扁之后标签自己溢出来，盖在上面的说明文字上。 */}
-            <TabsList className="grid h-auto w-full shrink-0 grid-cols-2">
+      {/*
+        FormDialog：回车保存、改过没保存关之前先问、保存中不许关。
+        Tabs 包在弹窗外面（className="contents" 不占布局）：页签条要钉在页头下面、内容在滚动区里，
+        两者隔着壳的两个槽，靠 Radix 的 context 连起来。
+      */}
+      <Tabs value={planDialogTab} onValueChange={(value) => setPlanDialogTab(value as PlanDialogTab)} className="contents">
+        <FormDialog
+          open={editing}
+          onOpenChange={setEditing}
+          title={form.id ? "编辑套餐" : "新增套餐"}
+          description="配置套餐限制，并绑定订阅后可用资源。"
+          descriptionProps={{ "data-fx-help": "" }}
+          className="w-[calc(100vw-1rem)] max-w-[95vw] sm:max-w-2xl"
+          toolbar={(
+            <TabsList className="grid h-auto w-full grid-cols-2">
               <TabsTrigger value="settings">套餐设置</TabsTrigger>
               <TabsTrigger value="resources">资源绑定</TabsTrigger>
             </TabsList>
-
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
-              <TabsContent value="settings" className="mt-4 space-y-4">
+          )}
+          bodyClassName="space-y-0 pr-1 [scrollbar-gutter:stable]"
+          onSubmit={save}
+          submitText="保存"
+          submitIcon={<CheckCircle2 className="h-4 w-4" />}
+          pending={createPlan.isPending || updatePlan.isPending}
+          dirty={planFormDirty}
+        >
+              <TabsContent value="settings" className="mt-0 space-y-4">
                 <div className="grid gap-4 md:grid-cols-3">
             <FormField className="space-y-2">
               <Label>套餐名称</Label>
@@ -1706,7 +1725,7 @@ export default function Plans() {
                 </FormField>
               </TabsContent>
 
-              <TabsContent value="resources" className="mt-3 space-y-3">
+              <TabsContent value="resources" className="mt-0 space-y-3">
                 <div className="space-y-3">
                   {true ? (
                     <>
@@ -1986,18 +2005,8 @@ export default function Plans() {
           </div>
 
               </TabsContent>
-            </div>
-          </Tabs>
-
-          <DialogFooter className="border-t border-border/60 px-4 py-3 sm:px-5">
-            <Button variant="outline" onClick={() => setEditing(false)}>取消</Button>
-            <Button onClick={save} disabled={createPlan.isPending || updatePlan.isPending}>
-              {(createPlan.isPending || updatePlan.isPending) ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </FormDialog>
+      </Tabs>
 
       <Dialog open={assignOpen} onOpenChange={(open) => {
         setAssignOpen(open);

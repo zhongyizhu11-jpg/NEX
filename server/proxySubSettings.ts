@@ -5,6 +5,8 @@
  * 管理员保存后立刻作废缓存，所以改完就生效。
  */
 
+import { createHash } from "node:crypto";
+
 import {
   parseProxySubSettings,
   PROXY_SUB_SETTING_PREFIX,
@@ -27,6 +29,8 @@ export async function loadProxySubSettings(): Promise<ProxySubSettings> {
     try {
       const record = await getSettingsByPrefix(PROXY_SUB_SETTING_PREFIX);
       const value = parseProxySubSettings(record);
+      // 指纹在这里算一次：这份对象接下来 15 秒里每次拉订阅都要拿它进缓存键。
+      proxySubSettingsFingerprint(value);
       cached = { value, expiresAt: Date.now() + CACHE_TTL_MS };
       return value;
     } catch (error) {
@@ -39,6 +43,24 @@ export async function loadProxySubSettings(): Promise<ProxySubSettings> {
     }
   })();
   return pending;
+}
+
+/**
+ * 一份设置的指纹，订阅缓存键里放它而不放整份设置。
+ *
+ * 原来键里直接塞 renderSettings：每次拉取都把整份设置（含两段最多 20 KB 的自定义规则）
+ * JSON.stringify 一遍再 sha1。按对象记（WeakMap）：loadProxySubSettings 给的是同一个缓存对象，
+ * 算一次用 15 秒；别处自己拼的设置对象第一次问时算、之后也记着。
+ */
+const fingerprints = new WeakMap<ProxySubSettings, string>();
+
+export function proxySubSettingsFingerprint(settings: ProxySubSettings): string {
+  let fingerprint = fingerprints.get(settings);
+  if (!fingerprint) {
+    fingerprint = createHash("sha1").update(JSON.stringify(settings)).digest("hex");
+    fingerprints.set(settings, fingerprint);
+  }
+  return fingerprint;
 }
 
 export async function saveProxySubSettings(partial: Partial<ProxySubSettings>): Promise<ProxySubSettings> {

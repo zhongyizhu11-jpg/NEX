@@ -3568,7 +3568,10 @@ export async function getUnreachableRuleIds(ruleIds: number[], now = Date.now())
   const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   const result = new Set<number>();
   if (ids.length === 0) return result;
-  await tcpingStatWrites.flush();
+  /*
+    不在这里 flush 攒着的探测样本：这是订阅拉取的路，一次 flush 就是一条替所有主机写样本的
+    INSERT 挤进客户端的请求里。判定看的是最近十五分钟里连续几次，差排队里那几秒的样本无妨。
+  */
   const q = quoteIdentifier;
   const since = new Date(now - 15 * 60 * 1000);
   const rows = await queryRaw<any>(

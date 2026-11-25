@@ -28,7 +28,6 @@ const (
 	wireGuardUDPProxySoftSessions  = 512
 	wireGuardUDPProxyMaxSessions   = 1024
 	wireGuardUDPProxyReclaimAfter  = 30 * time.Second
-	wireGuardUDPProxyMaxQueueDelay = 25 * time.Millisecond
 	wireGuardUDPProxyBufferBytes   = 4 * 1024 * 1024
 	wireGuardUDPSessionBufferBytes = 256 * 1024
 	wireGuardRuntimeReleaseDelay   = time.Minute
@@ -37,6 +36,11 @@ const (
 	// wireGuardMTUProbeTimeout 是建数据面前 MTU 探测的上限（解析域名 + 发一个包 + 等 300 ms）。
 	wireGuardMTUProbeTimeout = 3 * time.Second
 )
+
+// UDP 代理队列里的包等了这么久、后面又有更新的包时，老的那个直接丢（实时流量要新不要全）。
+// 放成 var 只为测试：验证「一批都送到」的用例把它调大，否则 CI 机器一慢，正常的新鲜度淘汰就会
+// 把测试当成丢包；新鲜度淘汰本身有单独的用例。
+var wireGuardUDPProxyMaxQueueDelay = 25 * time.Millisecond
 
 type wireGuardPeerSpec struct {
 	ID                  string `json:"id"`

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { readHeartbeatRouteSource } from "./testing/heartbeatSource";
 
 /**
  * 协议封禁只有主机那一层说了算。
@@ -95,7 +96,7 @@ test("规则那三列不许有人读，生效的只能是主机那一层", () =>
 });
 
 test("下发给 Agent 的封禁策略，按主机查", () => {
-  const source = read("server/agentHeartbeatRoute.ts");
+  const source = readHeartbeatRouteSource();
   assert.match(
     source,
     /const ruleProtocolPolicy = \(rule: any\) => getHostProtocolPolicy\(/,

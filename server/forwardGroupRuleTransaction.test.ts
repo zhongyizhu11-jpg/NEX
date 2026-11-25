@@ -41,10 +41,7 @@ const setup = String.raw`
     [templateId],
   );
   // 某台主机上的子规则一写进去就失败：第一台成员机的子规则这时已经在同一个事务里写过了。
-  const failChildOnHost = (hostId) => exec(
-    'CREATE TRIGGER fail_child BEFORE INSERT ON forward_rules WHEN NEW."forwardGroupRuleId" IS NOT NULL AND NEW."hostId" = ' + Number(hostId)
-      + " BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
-  );
+  const failChildOnHost = (hostId) => failWrite("fail_child", { table: "forward_rules", event: "INSERT", when: 'NEW."forwardGroupRuleId" IS NOT NULL AND NEW."hostId" = ' + Number(hostId) });
   const templateInput = {
     name: "pf", forwardType: "gost", protocol: "tcp", gostMode: "direct",
     forwardGroupId: 10, sourcePort: 41001, targetIp: "198.51.100.9", targetPort: 443,
@@ -76,7 +73,7 @@ test("建端口转发模板：第二台成员机的子规则写失败时，模�
     assert.equal(await count("SELECT COUNT(*) AS n FROM config_audit_events"), auditBefore, "回滚了就不记审计");
 
     // 入口端口没被占着：去掉故障后同一个端口马上能建
-    await exec("DROP TRIGGER fail_child");
+    await dropFailWrite("fail_child", "forward_rules");
     const created = await caller.create(templateInput);
     assert.equal(created.sourcePort, 41001);
     assert.equal((await childrenOf(created.id)).length, 2);
@@ -95,7 +92,7 @@ test("普通规则改成端口转发模板：子规则写失败时规则原样�
     assert.equal(Number(rule.isRunning), 1, "原来那条转发还在跑");
     assert.equal(await count('SELECT COUNT(*) AS n FROM forward_rules WHERE "forwardGroupRuleId" = 50'), 0);
 
-    await exec("DROP TRIGGER fail_child");
+    await dropFailWrite("fail_child", "forward_rules");
     const result = await caller.update({ id: 50, forwardGroupId: 10 });
     assert.equal(result.success, true);
     const [saved] = await query('SELECT "forwardGroupId", "isForwardGroupTemplate" FROM forward_rules WHERE id = 50');
@@ -110,14 +107,14 @@ test("端口转发模板改回普通规则：标子规则待删时失败，模�
     const created = await caller.create(templateInput);
     const before = await childrenOf(created.id);
     assert.equal(before.length, 2);
-    await exec("CREATE TRIGGER fail_retire BEFORE UPDATE ON forward_rules WHEN NEW.\"pendingDelete\" = 1 AND OLD.\"pendingDelete\" = 0 BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+    await failWrite("fail_retire", { table: "forward_rules", event: "UPDATE", when: 'NEW."pendingDelete" = 1 AND OLD."pendingDelete" = 0' });
     await assert.rejects(() => caller.update({ id: created.id, forwardGroupId: null, hostId: 4 }), /injected failure/);
     const [template] = await query('SELECT "hostId", "forwardGroupId", "isForwardGroupTemplate" FROM forward_rules WHERE id = ?', [created.id]);
     assert.equal(Number(template.isForwardGroupTemplate), 1, "模板不能先变成普通规则、子规则却还挂着");
     assert.equal(Number(template.forwardGroupId), 10);
     assert.deepEqual((await childrenOf(created.id)).map((child) => Number(child.pendingDelete)), [0, 0]);
 
-    await exec("DROP TRIGGER fail_retire");
+    await dropFailWrite("fail_retire", "forward_rules");
     const result = await caller.update({ id: created.id, forwardGroupId: null, hostId: 4 });
     assert.equal(result.success, true);
     const [saved] = await query('SELECT "hostId", "forwardGroupId", "isForwardGroupTemplate" FROM forward_rules WHERE id = ?', [created.id]);
@@ -137,7 +134,7 @@ test("端口转发模板换组：新组的子规则写失败时，模板留在�
     assert.equal(Number(template.forwardGroupId), 10);
     assert.deepEqual((await childrenOf(created.id)).map((child) => [Number(child.hostId), Number(child.pendingDelete)]), [[1, 0], [2, 0]]);
 
-    await exec("DROP TRIGGER fail_child");
+    await dropFailWrite("fail_child", "forward_rules");
     await caller.update({ id: created.id, forwardGroupId: 11 });
     const [moved] = await query('SELECT "forwardGroupId" FROM forward_rules WHERE id = ?', [created.id]);
     assert.equal(Number(moved.forwardGroupId), 11);
@@ -159,14 +156,14 @@ test("隧道成员的转发组建模板：最后把隧道标成待下发时失�
     );
     await exec('INSERT INTO forward_group_members (id, "groupId", "memberType", "tunnelId", priority, "isEnabled") VALUES (120, 12, ?, 30, 0, 1)', ["tunnel"]);
     // 同步的最后一步：子规则都写好了，把成员隧道标成待下发
-    await exec("CREATE TRIGGER fail_tunnel_mark BEFORE UPDATE ON tunnels WHEN NEW.\"isRunning\" = 0 BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+    await failWrite("fail_tunnel_mark", { table: "tunnels", event: "UPDATE", when: 'NEW."isRunning" = 0' });
     const input = { ...templateInput, forwardGroupId: 12, sourcePort: 41012 };
     await assert.rejects(() => caller.create(input), /injected failure/);
     assert.equal(await count("SELECT COUNT(*) AS n FROM forward_rules"), 0);
     assert.equal(await count("SELECT COUNT(*) AS n FROM forward_rule_tunnel_exits"), 0);
     assert.equal(Number((await query("SELECT \"isRunning\" FROM tunnels WHERE id = 30"))[0].isRunning), 1);
 
-    await exec("DROP TRIGGER fail_tunnel_mark");
+    await dropFailWrite("fail_tunnel_mark", "tunnels");
     const created = await caller.create(input);
     const children = await query('SELECT "tunnelId", "tunnelExitPort", "sourcePort" FROM forward_rules WHERE "forwardGroupRuleId" = ?', [created.id]);
     assert.equal(children.length, 1);
@@ -179,7 +176,7 @@ test("隧道成员的转发组建模板：最后把隧道标成待下发时失�
 test("新建转发组：成员写失败时组行也不留下", () => {
   runInDatabase(String.raw`
     const groups = await import(url("server/db.ts"));
-    await exec("CREATE TRIGGER fail_member BEFORE INSERT ON forward_group_members WHEN NEW.\"hostId\" = 2 BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+    await failWrite("fail_member", { table: "forward_group_members", event: "INSERT", when: 'NEW."hostId" = 2' });
     const groupsBefore = await count("SELECT COUNT(*) AS n FROM forward_groups");
     const membersBefore = await count("SELECT COUNT(*) AS n FROM forward_group_members");
     const input = { name: "pf-new", groupType: "host", groupMode: "port", forwardType: "gost", userId: 1, isEnabled: true };
@@ -188,7 +185,7 @@ test("新建转发组：成员写失败时组行也不留下", () => {
     assert.equal(await count("SELECT COUNT(*) AS n FROM forward_groups"), groupsBefore, "不能留下缺成员的组");
     assert.equal(await count("SELECT COUNT(*) AS n FROM forward_group_members"), membersBefore);
 
-    await exec("DROP TRIGGER fail_member");
+    await dropFailWrite("fail_member", "forward_group_members");
     const id = await groups.createForwardGroup(input, members);
     assert.equal(await count('SELECT COUNT(*) AS n FROM forward_group_members WHERE "groupId" = ?', [id]), 2);
   `, { name: "fg-group-create-tx", setup, quiet: true });
@@ -207,6 +204,8 @@ test("新建转发组：成员写失败时组行也不留下", () => {
 */
 test("模板换组时事务外正好有一次端口加载在排队：不卡死；两个请求互相换组也不卡死", { timeout: 60_000 }, () => {
   runInDatabase(String.raw`
+    skipUnless("sqlite"); // 触发器里调的是挂在 SQLite 句柄上的自定义函数
+
     const { AsyncResource } = await import("node:async_hooks");
     const ops = await import(url("server/ops/opsReservedPorts.ts"));
     ops.registerOpsReservedPortsLoader("test-loader", async () => {

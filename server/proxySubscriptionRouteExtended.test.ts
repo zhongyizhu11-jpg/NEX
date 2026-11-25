@@ -156,7 +156,9 @@ test("订阅路由的新能力", () => {
     const expiredRow = (await query("SELECT lastFailureReason FROM proxy_sub_tokens WHERE id = 3"))[0];
     assert.equal(expiredRow.lastFailureReason, "token-expired");
 
-    // 拉取日志落了表（成功、落地页、被拒都有）。
+    // 拉取日志落了表（成功、落地页、被拒都有）。日志是攒批写的（dbWriteBatcher），直接查表前先刷。
+    const extraRepo = await import(url("server/repositories/proxySubExtraRepository.ts"));
+    await extraRepo.flushProxySubAccessLogs();
     const logs = await query("SELECT result, clientFamily FROM proxy_sub_access_logs ORDER BY id");
     assert.ok(logs.some((row) => row.result === "ok"), JSON.stringify(logs));
     assert.ok(logs.some((row) => row.result === "page"), JSON.stringify(logs));

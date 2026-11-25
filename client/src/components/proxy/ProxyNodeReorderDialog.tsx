@@ -22,9 +22,14 @@ export default function ProxyNodeReorderDialog({
   onSaved?: () => void;
 }) {
   const [order, setOrder] = useState<Array<{ id: number; name: string }>>([]);
+  /*
+    只在打开那一刻照着列表填一次。nodes 也放进依赖的话，页面上的节点列表每轮询
+    一次（或父组件每渲染一次传来新数组）都会把用户挪了一半的顺序冲回去。
+  */
   useEffect(() => {
     if (open) setOrder(nodes.filter((node) => !node.sharedFrom).map((node) => ({ id: node.id, name: node.name })));
-  }, [open, nodes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   const reorder = trpc.proxySubscriptions.reorderNodes.useMutation({
     onSuccess: () => {
       toast.success("顺序已保存");

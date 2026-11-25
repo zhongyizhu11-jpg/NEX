@@ -214,9 +214,46 @@ func TestFXPUDPQueuedPacketSupersededDelayBoundary(t *testing.T) {
 }
 
 func TestDefaultFXPUDPSessionPolicyIsIndependentOfTCPPlanLimits(t *testing.T) {
-	policy := defaultFXPUDPSessionPolicy()
+	policy := builtinFXPUDPSessionPolicy()
 	if policy.softSessions != 512 || policy.hardSessions != 1024 || policy.softPerIP != 48 || policy.hardPerIP != 64 {
 		t.Fatalf("default policy = %+v, want total 512/1024 and per-IP 48/64", policy)
+	}
+	if got := udpSessionPolicyFromEnv(func(string) string { return "" }); got != policy {
+		t.Fatalf("empty env policy = %+v, want builtin %+v", got, policy)
+	}
+}
+
+func TestUDPSessionPolicyFromEnv(t *testing.T) {
+	env := func(values map[string]string) func(string) string {
+		return func(name string) string { return values[name] }
+	}
+	type limits struct{ softTotal, hardTotal, softPerIP, hardPerIP int }
+	limitsOf := func(policy fxpUDPSessionPolicy) limits {
+		return limits{policy.softSessions, policy.hardSessions, policy.softPerIP, policy.hardPerIP}
+	}
+	cases := []struct {
+		name string
+		env  map[string]string
+		want limits
+	}{
+		{"只给每 IP 硬上限，软上限取 3/4", map[string]string{fxpUDPMaxSessionsPerIPEnv: "200"}, limits{512, 1024, 150, 200}},
+		{"软硬都给", map[string]string{fxpUDPMaxSessionsPerIPEnv: " 128 ", fxpUDPSoftSessionsPerIPEnv: "100"}, limits{512, 1024, 100, 128}},
+		{"软上限超过硬上限按硬上限", map[string]string{fxpUDPMaxSessionsPerIPEnv: "80", fxpUDPSoftSessionsPerIPEnv: "500"}, limits{512, 1024, 80, 80}},
+		{"0 表示不限", map[string]string{fxpUDPMaxSessionsPerIPEnv: "0", fxpUDPSoftSessionsPerIPEnv: "0"}, limits{512, 1024, 0, 0}},
+		{"总数上限", map[string]string{fxpUDPMaxSessionsEnv: "4000"}, limits{3000, 4000, 48, 64}},
+		{"总数软上限单独调", map[string]string{fxpUDPSoftSessionsEnv: "900"}, limits{900, 1024, 48, 64}},
+		{"写错的值当没写", map[string]string{fxpUDPMaxSessionsPerIPEnv: "lots", fxpUDPSoftSessionsEnv: "-3"}, limits{512, 1024, 48, 64}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := udpSessionPolicyFromEnv(env(tc.env))
+			if limitsOf(got) != tc.want {
+				t.Fatalf("env %v → %+v, want %+v", tc.env, limitsOf(got), tc.want)
+			}
+			if got.reclaimAfter != fxpUDPReclaimAfter {
+				t.Fatalf("reclaimAfter changed to %v", got.reclaimAfter)
+			}
+		})
 	}
 }
 

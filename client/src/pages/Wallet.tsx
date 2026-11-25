@@ -1,7 +1,8 @@
-import { getFormatLocale } from "@/i18n";
+import { formatDateTime } from "@/lib/formatTime";
 import { FormField } from "@/components/ui/form-field";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useIsMobile } from "@/hooks/useMobile";
 import { forwardAccessRestoredNote } from "@shared/forwardAccessMessage";
 import { ledgerTone } from "@/lib/ledgerTone";
 import { balanceTypeLabel } from "@shared/ledgerLabels";
@@ -32,9 +33,7 @@ import { toast } from "sonner";
 type PaymentType = "alipay" | "wxpay" | "stripe" | "usdt";
 
 function dateText(value?: string | Date | null) {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale());
+  return formatDateTime(value, "-");
 }
 
 function orderTypeText(type?: string | null) {
@@ -58,6 +57,8 @@ function ledgerIcon(item: any) {
 }
 
 export default function Wallet() {
+  // 手机 / 桌面只渲染一种列表（原来两套都画、靠 md:hidden 藏一套，DOM 翻倍）。断点仍是 768。
+  const isMobile = useIsMobile();
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const {
@@ -223,89 +224,92 @@ export default function Wallet() {
             ) : (
             <>
             {/* 手机上不画表：六列挤进 393px，「类型」那一列会被压成一个字一行。 */}
-            <div className="md:hidden" data-testid="ledger-mobile">
-              {ledger.length === 0 ? (
-                ledgerError ? (
-                  <DataSectionError label="账单流水" error={ledgerError} retrying={ledgerFetching} onRetry={() => { void refetchLedger(); }} minHeight="min-h-[120px]" />
-                ) : (
-                  <EmptyState icon={<ReceiptText />} title="暂无账单流水" />
-                )
-              ) : ledger.map((item: any) => {
-                const Icon = ledgerIcon(item);
-                return (
-                  <LedgerRow
-                    key={item.id}
-                    icon={<Icon className="h-4 w-4" />}
-                    title={item.title}
-                    meta={ledgerMeta(item.description, item.category !== item.title && item.category, item.statusLabel || item.status, dateText(item.createdAt))}
-                    amount={item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
-                    amountClassName={ledgerTone(item)}
-                  />
-                );
-              })}
-            </div>
-            <div className="hidden md:block">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>项目</TableHead>
-                  <TableHead>类型</TableHead>
-                  <TableHead>金额</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>关联信息</TableHead>
-                  <TableHead>时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {ledger.map((item: any) => {
+            {isMobile ? (
+              <div data-testid="ledger-mobile">
+                {ledger.length === 0 ? (
+                  ledgerError ? (
+                    <DataSectionError label="账单流水" error={ledgerError} retrying={ledgerFetching} onRetry={() => { void refetchLedger(); }} minHeight="min-h-[120px]" />
+                  ) : (
+                    <EmptyState icon={<ReceiptText />} title="暂无账单流水" />
+                  )
+                ) : ledger.map((item: any) => {
                   const Icon = ledgerIcon(item);
                   return (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        <div className="flex min-w-56 items-start gap-3">
-                          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted/30">
-                            <Icon className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">{item.title}</p>
-                            <p className="truncate text-xs text-muted-foreground">{item.description || "-"}</p>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell><Badge variant="outline">{item.category}</Badge></TableCell>
-                      <TableCell className={ledgerTone(item)}>
-                        {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>
-                          {item.statusLabel || item.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-")}
-                      </TableCell>
-                      <TableCell>{dateText(item.createdAt)}</TableCell>
-                    </TableRow>
+                    <LedgerRow
+                      key={item.id}
+                      icon={<Icon className="h-4 w-4" />}
+                      title={item.title}
+                      meta={ledgerMeta(item.description, item.category !== item.title && item.category, item.statusLabel || item.status, dateText(item.createdAt))}
+                      amount={item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
+                      amountClassName={ledgerTone(item)}
+                    />
                   );
                 })}
-                {ledger.length === 0 && (ledgerError ? (
-                  <DataTableErrorRow
-                    colSpan={6}
-                    label="账单流水"
-                    error={ledgerError}
-                    retrying={ledgerFetching}
-                    onRetry={() => { void refetchLedger(); }}
-                  />
-                ) : (
+              </div>
+            ) : (
+              <div>
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                      暂无账单流水
-                    </TableCell>
+                    <TableHead>项目</TableHead>
+                    <TableHead>类型</TableHead>
+                    <TableHead>金额</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>关联信息</TableHead>
+                    <TableHead>时间</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            </div>
+                </TableHeader>
+                <TableBody>
+                  {ledger.map((item: any) => {
+                    const Icon = ledgerIcon(item);
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell>
+                          <div className="flex min-w-56 items-start gap-3">
+                            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted/30">
+                              <Icon className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{item.title}</p>
+                              <p className="truncate text-xs text-muted-foreground">{item.description || "-"}</p>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell><Badge variant="outline">{item.category}</Badge></TableCell>
+                        <TableCell className={ledgerTone(item)}>
+                          {item.kind === "subscription" && Number(item.amountCents || 0) === 0 ? "-" : money(item.amountCents, item.currency || "CNY")}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={item.status === "completed" || item.status === "paid" || item.status === "active" ? "default" : "secondary"}>
+                            {item.statusLabel || item.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">
+                          {item.paymentOrderNo || item.tradeNo || (item.planId ? `plan#${item.planId}` : "-")}
+                        </TableCell>
+                        <TableCell>{dateText(item.createdAt)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {ledger.length === 0 && (ledgerError ? (
+                    <DataTableErrorRow
+                      colSpan={6}
+                      label="账单流水"
+                      error={ledgerError}
+                      retrying={ledgerFetching}
+                      onRetry={() => { void refetchLedger(); }}
+                    />
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                        暂无账单流水
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            )}
             <PersistentPagination pagination={ledgerPagination} itemName="条账单" />
             </>
             )}
@@ -324,54 +328,57 @@ export default function Wallet() {
               <DataSectionLoading label="正在加载余额流水" />
             ) : (
             <>
-            <div className="md:hidden" data-testid="wallet-mobile">
-              {(wallet?.transactions || []).length === 0 ? (
-                <EmptyState icon={<WalletCards />} title="暂无余额流水" />
-              ) : (wallet?.transactions || []).map((tx: any) => (
-                <LedgerRow
-                  key={tx.id}
-                  title={tx.typeLabel || balanceTypeLabel(tx.type)}
-                  meta={ledgerMeta(tx.description, `余额 ${money(tx.balanceAfterCents)}`, dateText(tx.createdAt))}
-                  amount={money(tx.amountCents)}
-                  amountClassName={Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}
-                />
-              ))}
-            </div>
-            <div className="hidden md:block">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>类型</TableHead>
-                  <TableHead>金额</TableHead>
-                  <TableHead>余额</TableHead>
-                  <TableHead>说明</TableHead>
-                  <TableHead>时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(wallet?.transactions || []).map((tx: any) => (
-                  <TableRow key={tx.id}>
-                    <TableCell>
-                      <Badge variant="outline">{tx.typeLabel || balanceTypeLabel(tx.type)}</Badge>
-                    </TableCell>
-                    <TableCell className={Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}>
-                      {money(tx.amountCents)}
-                    </TableCell>
-                    <TableCell>{money(tx.balanceAfterCents)}</TableCell>
-                    <TableCell>{tx.description || "-"}</TableCell>
-                    <TableCell>{dateText(tx.createdAt)}</TableCell>
-                  </TableRow>
+            {isMobile ? (
+              <div data-testid="wallet-mobile">
+                {(wallet?.transactions || []).length === 0 ? (
+                  <EmptyState icon={<WalletCards />} title="暂无余额流水" />
+                ) : (wallet?.transactions || []).map((tx: any) => (
+                  <LedgerRow
+                    key={tx.id}
+                    title={tx.typeLabel || balanceTypeLabel(tx.type)}
+                    meta={ledgerMeta(tx.description, `余额 ${money(tx.balanceAfterCents)}`, dateText(tx.createdAt))}
+                    amount={money(tx.amountCents)}
+                    amountClassName={Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}
+                  />
                 ))}
-                {(!wallet?.transactions || wallet.transactions.length === 0) && (
+              </div>
+            ) : (
+              <div>
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                      暂无余额流水
-                    </TableCell>
+                    <TableHead>类型</TableHead>
+                    <TableHead>金额</TableHead>
+                    <TableHead>余额</TableHead>
+                    <TableHead>说明</TableHead>
+                    <TableHead>时间</TableHead>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
-            </div>
+                </TableHeader>
+                <TableBody>
+                  {(wallet?.transactions || []).map((tx: any) => (
+                    <TableRow key={tx.id}>
+                      <TableCell>
+                        <Badge variant="outline">{tx.typeLabel || balanceTypeLabel(tx.type)}</Badge>
+                      </TableCell>
+                      <TableCell className={Number(tx.amountCents) >= 0 ? "text-[var(--fx-healthy-text)]" : "text-destructive"}>
+                        {money(tx.amountCents)}
+                      </TableCell>
+                      <TableCell>{money(tx.balanceAfterCents)}</TableCell>
+                      <TableCell>{tx.description || "-"}</TableCell>
+                      <TableCell>{dateText(tx.createdAt)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {(!wallet?.transactions || wallet.transactions.length === 0) && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                        暂无余额流水
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+              </div>
+            )}
             </>
             )}
           </CardContent>
@@ -389,69 +396,72 @@ export default function Wallet() {
               <DataSectionLoading label="正在加载支付流水" />
             ) : (
             <>
-            <div className="md:hidden" data-testid="payments-mobile">
-              {paymentOrders.length === 0 ? (
-                paymentOrdersError ? (
-                  <DataSectionError label="支付流水" error={paymentOrdersError} retrying={paymentOrdersFetching} onRetry={() => { void refetchPaymentOrders(); }} minHeight="min-h-[120px]" />
-                ) : (
-                  <EmptyState icon={<CreditCard />} title="暂无支付流水" />
-                )
-              ) : paymentOrders.map((order: any) => (
-                <LedgerRow
-                  key={order.id}
-                  title={orderTypeText(order.orderType)}
-                  meta={ledgerMeta(order.outTradeNo, paymentMethodText(order.paymentType || order.provider), order.status, dateText(order.createdAt))}
-                  amount={money(order.amountCents, order.currency || "CNY")}
-                />
-              ))}
-            </div>
-            <div className="hidden md:block">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>订单号</TableHead>
-                  <TableHead>类型</TableHead>
-                  <TableHead>支付方式</TableHead>
-                  <TableHead>金额</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paymentOrders.map((order: any) => (
-                  <TableRow key={order.id}>
-                    <TableCell className="font-mono text-xs">{order.outTradeNo}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{orderTypeText(order.orderType)}</Badge>
-                    </TableCell>
-                    <TableCell>{paymentMethodText(order.paymentType || order.provider)}</TableCell>
-                    <TableCell>{money(order.amountCents, order.currency || "CNY")}</TableCell>
-                    <TableCell>
-                      <Badge variant={order.status === "completed" || order.status === "paid" ? "default" : "secondary"}>
-                        {order.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{dateText(order.createdAt)}</TableCell>
-                  </TableRow>
-                ))}
-                {paymentOrders.length === 0 && (paymentOrdersError ? (
-                  <DataTableErrorRow
-                    colSpan={6}
-                    label="支付流水"
-                    error={paymentOrdersError}
-                    retrying={paymentOrdersFetching}
-                    onRetry={() => { void refetchPaymentOrders(); }}
+            {isMobile ? (
+              <div data-testid="payments-mobile">
+                {paymentOrders.length === 0 ? (
+                  paymentOrdersError ? (
+                    <DataSectionError label="支付流水" error={paymentOrdersError} retrying={paymentOrdersFetching} onRetry={() => { void refetchPaymentOrders(); }} minHeight="min-h-[120px]" />
+                  ) : (
+                    <EmptyState icon={<CreditCard />} title="暂无支付流水" />
+                  )
+                ) : paymentOrders.map((order: any) => (
+                  <LedgerRow
+                    key={order.id}
+                    title={orderTypeText(order.orderType)}
+                    meta={ledgerMeta(order.outTradeNo, paymentMethodText(order.paymentType || order.provider), order.status, dateText(order.createdAt))}
+                    amount={money(order.amountCents, order.currency || "CNY")}
                   />
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                      暂无支付流水
-                    </TableCell>
-                  </TableRow>
                 ))}
-              </TableBody>
-            </Table>
-            </div>
+              </div>
+            ) : (
+              <div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>订单号</TableHead>
+                    <TableHead>类型</TableHead>
+                    <TableHead>支付方式</TableHead>
+                    <TableHead>金额</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>时间</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paymentOrders.map((order: any) => (
+                    <TableRow key={order.id}>
+                      <TableCell className="font-mono text-xs">{order.outTradeNo}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{orderTypeText(order.orderType)}</Badge>
+                      </TableCell>
+                      <TableCell>{paymentMethodText(order.paymentType || order.provider)}</TableCell>
+                      <TableCell>{money(order.amountCents, order.currency || "CNY")}</TableCell>
+                      <TableCell>
+                        <Badge variant={order.status === "completed" || order.status === "paid" ? "default" : "secondary"}>
+                          {order.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{dateText(order.createdAt)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {paymentOrders.length === 0 && (paymentOrdersError ? (
+                    <DataTableErrorRow
+                      colSpan={6}
+                      label="支付流水"
+                      error={paymentOrdersError}
+                      retrying={paymentOrdersFetching}
+                      onRetry={() => { void refetchPaymentOrders(); }}
+                    />
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                        暂无支付流水
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            )}
             </>
             )}
           </CardContent>

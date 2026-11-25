@@ -4,14 +4,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { trpc } from "@/lib/trpc";
-import { Trash2, Key, AlertTriangle, Loader2 } from "lucide-react";
+import { Trash2, Key, Loader2 } from "lucide-react";
 import { useMemo, useState, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -107,7 +107,7 @@ export default function DeepSeekSettingsCard() {
   const [deepseekTelegramUserManageEnabled, setDeepseekTelegramUserManageEnabled] = useState(true);
   const [deepseekTelegramAutoRecallEnabled, setDeepseekTelegramAutoRecallEnabled] = useState(false);
   const [deepseekTelegramAutoRecallSeconds, setDeepseekTelegramAutoRecallSeconds] = useState(60);
-  const [showDeleteDeepSeekKey, setShowDeleteDeepSeekKey] = useState(false);
+  const confirmDialog = useConfirmDialog();
   const activeProviderConfig = providerConfigs[deepseekProvider] || createDefaultAiProviderConfig(deepseekProvider);
   const deepseekBaseUrl = activeProviderConfig.baseUrl;
   const deepseekModel = activeProviderConfig.model;
@@ -173,7 +173,6 @@ export default function DeepSeekSettingsCard() {
             apiKeyInput: "",
           },
         }));
-        setShowDeleteDeepSeekKey(false);
         toast.success("AI API Key 已删除");
         return;
       }
@@ -253,13 +252,33 @@ export default function DeepSeekSettingsCard() {
     setDeepseekTelegramAutoRecallSeconds(telegramAutoRecallSeconds);
   };
 
-  const handleClearDeepSeekKey = () => {
-    updateSettingsMutation.mutate({
-      deepseek: {
-        provider: deepseekProvider,
-        enabled: false,
-        clearApiKey: true,
-      },
+  // 删 Key 走共享的确认框：请求在路上时弹窗留着、按钮写「正在删除...」，成功了才关；当前配置那三行放 details 槽
+  const confirmClearDeepSeekKey = () => {
+    void confirmDialog({
+      title: "删除 AI API Key",
+      description: "删除后会同时关闭 AI 助手，需要重新填写 API Key 后才能启用。",
+      details: (
+        <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
+          <p className="text-xs text-muted-foreground">当前配置</p>
+          <p className="mt-1 truncate font-medium">{providerLabel}</p>
+          <p className="mt-1 truncate font-medium">{deepseekModel || activeProviderDefaults.model}</p>
+          <p
+            className="mt-2 truncate font-mono text-xs text-muted-foreground"
+            title={activeProviderConfig.apiKeyMasked || undefined}
+          >
+            {activeProviderConfig.apiKeyMasked || "-"}
+          </p>
+        </div>
+      ),
+      confirmText: "确认删除",
+      confirmPendingText: "正在删除...",
+      onConfirm: () => updateSettingsMutation.mutateAsync({
+        deepseek: {
+          provider: deepseekProvider,
+          enabled: false,
+          clearApiKey: true,
+        },
+      }),
     });
   };
 
@@ -504,7 +523,7 @@ export default function DeepSeekSettingsCard() {
                   <Button
                     variant="outline"
                     className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    onClick={() => setShowDeleteDeepSeekKey(true)}
+                    onClick={confirmClearDeepSeekKey}
                     disabled={updateSettingsMutation.isPending}
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
@@ -517,50 +536,6 @@ export default function DeepSeekSettingsCard() {
         </CardContent>
       </Card>
 
-      <Dialog
-        open={showDeleteDeepSeekKey}
-        onOpenChange={(open) => {
-          if (!updateSettingsMutation.isPending) setShowDeleteDeepSeekKey(open);
-        }}
-      >
-        <DialogContent className="flex max-h-[calc(100svh-1.5rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-md">
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 pr-12 sm:p-6 sm:pr-12">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-destructive">
-                <AlertTriangle className="h-5 w-5 shrink-0" />
-                删除 AI API Key
-              </DialogTitle>
-              <DialogDescription>
-                删除后会同时关闭 AI 助手，需要重新填写 API Key 后才能启用。
-              </DialogDescription>
-            </DialogHeader>
-            <div className="mt-4 rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-              <p className="text-xs text-muted-foreground">当前配置</p>
-              <p className="mt-1 truncate font-medium">{providerLabel}</p>
-              <p className="mt-1 truncate font-medium">{deepseekModel || activeProviderDefaults.model}</p>
-              <p
-                className="mt-2 truncate font-mono text-xs text-muted-foreground"
-                title={activeProviderConfig.apiKeyMasked || undefined}
-              >
-                {activeProviderConfig.apiKeyMasked || "-"}
-              </p>
-            </div>
-          </div>
-          <DialogFooter className="shrink-0 gap-2 border-t border-border/40 p-4 sm:px-6">
-            <Button
-              variant="outline"
-              onClick={() => setShowDeleteDeepSeekKey(false)}
-              disabled={updateSettingsMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button variant="destructive" onClick={handleClearDeepSeekKey} disabled={updateSettingsMutation.isPending}>
-              {updateSettingsMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {updateSettingsMutation.isPending ? "正在删除..." : "确认删除"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

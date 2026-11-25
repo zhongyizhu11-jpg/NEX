@@ -3,13 +3,14 @@ import OpsInboundCompatibilityDialog from "@/features/ops/slots/ProxyInboundExtr
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
+import EmptyState from "@/components/EmptyState";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,7 @@ import { RealityDestChecker } from "@/components/proxy/RealityDestChecker";
 import { MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { bytesFromGb, gbFromBytes, positiveIntFromInput } from "@shared/trafficGb";
 import { clipboardNeedsManualCopy, copyTextFromElement, copyTextToClipboard } from "@/lib/clipboard";
+import { optionsQuery as optionsQueryPreset } from "@/lib/queryPresets";
 import { trpc } from "@/lib/trpc";
 import {
   PROXY_INBOUND_PROTOCOLS,
@@ -63,7 +65,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 
@@ -75,6 +77,15 @@ const TRANSPORT_LABELS: Record<string, string> = {
   httpupgrade: "HTTPUpgrade",
   xhttp: "XHTTP",
 };
+
+/*
+  查询还没回来时的兜底数组。
+
+  写成模块级常量而不是 `data || []`：后者每次渲染都是一个新数组，而 inboundRowSpecs
+  那个 useMemo 把它当依赖 —— 非管理员不拉用户名单，usersQuery.data 永远是 undefined，
+  于是表单里每敲一个键整张列表都重算一遍。
+*/
+const EMPTY: never[] = [];
 
 type InboundForm = {
   id: number;
@@ -185,7 +196,7 @@ function emptyForm(): InboundForm {
  * 之后传进来**（粘贴/分享那两类走 extraRows），这里只负责分组和排版。这样不存在
  * 「在列表里按类型分支、结果接错线」的可能。
  */
-export default function ProxyInboundsSection({
+function ProxyInboundsSection({
   extraRows = [],
   extraLoading = false,
   groupMode,
@@ -275,13 +286,14 @@ export default function ProxyInboundsSection({
 
   const inboundsQuery = trpc.proxyInbounds.list.useQuery();
   const optionsQuery = trpc.proxyInbounds.options.useQuery();
-  const hostsQuery = trpc.hosts.list.useQuery();
+  /*
+    这里只要主机名和「有没有主机」，用 options 这份瘦的：hosts.list 服务端会顺带排
+    升级清理任务、算整形状态，为取个名字跑一遍不值。
+  */
+  const hostsQuery = trpc.hosts.options.useQuery(undefined, optionsQueryPreset);
   // 分租要用：管理员建入站时要能指定归属用户。普通用户只能开给自己，不必拉这份名单。
-  const usersQuery = trpc.users.options.useQuery(undefined, {
-    enabled: isAdmin,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
+  // 名单类查询的新鲜期统一在 lib/queryPresets：和分享弹窗取的是同一份缓存，口径一样才不会各拉各的。
+  const usersQuery = trpc.users.options.useQuery(undefined, { ...optionsQueryPreset, enabled: isAdmin });
 
   const refresh = () => {
     void utils.proxyInbounds.list.invalidate();
@@ -318,15 +330,17 @@ export default function ProxyInboundsSection({
    * 直接复用订阅那边现成的 updateNode —— 派生节点本来就是一条 proxy_node，
    * 不必为此另开一个接口。多用户入站有好几条，一起改。
    */
-  const updateNode = trpc.proxySubscriptions.updateNode.useMutation({
-    onError: (error) => toast.error(error.message),
-  });
-  // 立即生效（直接改派生节点），所以行上用开关；名字别以 set 开头，那是「写草稿」的约定。
+  const updateNode = trpc.proxySubscriptions.updateNode.useMutation();
+  /*
+    立即生效（直接改派生节点），所以行上用开关；名字别以 set 开头，那是「写草稿」的约定。
+    失败就 throw：行上是 OptimisticSwitch，它接住之后把开关拨回去、报一次错 —— 原来是
+    `void Promise.all(mutateAsync…)`，失败成了未处理拒绝，开关也不知道自己没拨成。
+    多条派生节点一起失败时错误也只报一次，所以 mutation 上不再各自 toast。
+  */
   const toggleInSubscription = async (row: any, checked: boolean) => {
     const ids: number[] = Array.isArray(row.derivedNodeIds) ? row.derivedNodeIds : [];
     if (ids.length === 0) {
-      toast.error("这个节点还没派生出客户端节点，通常是主机还没有可用地址");
-      return;
+      throw new Error("这个节点还没派生出客户端节点，通常是主机还没有可用地址");
     }
     await Promise.all(ids.map((id) => updateNode.mutateAsync({ id, includeDirect: checked })));
     toast.success(checked ? "已加进订阅" : "已从订阅移除");
@@ -433,10 +447,12 @@ export default function ProxyInboundsSection({
     onError: (error) => toast.error(error.message),
   });
 
-  const hosts = (hostsQuery.data || []) as any[];
-  const hostName = (hostId: number) => hosts.find((item) => Number(item.id) === Number(hostId))?.name || `主机 #${hostId}`;
+  const hosts = (hostsQuery.data || EMPTY) as any[];
+  // 每一行都要查一次主机名，按 id 建一张表，别让每行都把主机数组扫一遍。
+  const hostsById = useMemo(() => new Map(hosts.map((item) => [Number(item.id), item])), [hosts]);
+  const hostName = (hostId: number) => hostsById.get(Number(hostId))?.name || `主机 #${hostId}`;
 
-  const userOptions = (usersQuery.data || []) as any[];
+  const userOptions = (usersQuery.data || EMPTY) as any[];
   const ownerLabel = (userId: number) => {
     const found = userOptions.find((item) => Number(item.id) === Number(userId));
     if (!found) return `用户 #${userId}`;
@@ -607,7 +623,7 @@ export default function ProxyInboundsSection({
     if (ok) deleteInbound.mutate({ id: Number(row.id) });
   };
 
-  const rows = (inboundsQuery.data || []) as any[];
+  const rows = (inboundsQuery.data || EMPTY) as any[];
   /**
    * 自建节点这一路的行规格。
    *
@@ -675,12 +691,13 @@ export default function ProxyInboundsSection({
     ),
     // 和粘贴行同一个开关：点了立即生效（进 / 出订阅），本就该是开关；两种行也就一样高、一样宽。
     toggle: (
-      <Switch
+      <OptimisticSwitch
         aria-label={`${row.name} 加进订阅`}
         className="shrink-0 scale-90"
         checked={!!row.includeDirect}
         title={row.includeDirect ? "已在订阅里，关掉就不出现" : "加进订阅"}
-        onCheckedChange={(checked) => void toggleInSubscription(row, checked)}
+        onCheckedChangeAsync={(checked) => toggleInSubscription(row, checked)}
+        onToggleError={(error) => toast.error(error instanceof Error ? error.message : "更新失败")}
       />
     ),
     actions: [
@@ -720,7 +737,7 @@ export default function ProxyInboundsSection({
           { key: "delete", label: "删除", icon: Trash2, destructive: true, onSelect: () => void askDelete(row) },
         ]),
     ],
-  })), [rows, hosts, userOptions, isAdmin, linkLoadingId, inboundLeading, notInSubscriptionInboundIds, hostNeverOnlineInboundIds, expandedQuotaIds, onExitCheck]);
+  })), [rows, hostsById, userOptions, isAdmin, linkLoadingId, inboundLeading, notInSubscriptionInboundIds, hostNeverOnlineInboundIds, expandedQuotaIds, onExitCheck]);
 
 
   /** 三类合成一个列表：自建在前（它们是这一页的起点），然后是粘贴和分享来的。 */
@@ -882,10 +899,11 @@ export default function ProxyInboundsSection({
                 onRetry={() => { void inboundsQuery.refetch(); }}
               />
             ) : totalRowCount === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                还没有节点。可以让面板在你自己的机器上开一个（REALITY 不需要域名和证书），
-                也可以把别处的节点链接粘进来。
-              </p>
+              <EmptyState
+                icon={<Server />}
+                title="还没有节点"
+                description="可以让面板在你自己的机器上开一个（REALITY 不需要域名和证书），也可以把别处的节点链接粘进来。"
+              />
             ) : (
               <div className="space-y-3">
                 {nodeGroups.map((group) => {
@@ -904,6 +922,7 @@ export default function ProxyInboundsSection({
                           key={spec.key}
                           leading={spec.leading}
                           name={spec.name}
+                          label={spec.sortName}
                           tag={spec.tag}
                           meta={spec.meta}
                           detail={spec.detail}
@@ -938,6 +957,8 @@ export default function ProxyInboundsSection({
         <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{form.id > 0 ? "编辑节点" : "新建节点"}</DialogTitle>
+            {/* 读屏要一句说明，不然 Radix 会在控制台警告；表单各字段下面已经各有说明，这句不占版面。 */}
+            <DialogDescription className="sr-only">填好主机、协议和端口，面板会把配置下发到那台机器上。</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -952,12 +973,12 @@ export default function ProxyInboundsSection({
                   </SelectContent>
                 </Select>
               </FormField>
-              <div className="min-w-0 space-y-1.5">
+              <FormField className="min-w-0 space-y-1.5">
                 <Label className="text-xs">名称</Label>
                 <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="HK 落地" />
                 <p data-fx-help="" className="text-xs text-muted-foreground">客户端里显示的节点名，会随订阅发出去。</p>
-              </div>
-              <div className="min-w-0 space-y-1.5">
+              </FormField>
+              <FormField className="min-w-0 space-y-1.5">
                 <Label className="text-xs">备注</Label>
                 <Input
                   value={form.remark}
@@ -966,8 +987,8 @@ export default function ProxyInboundsSection({
                 />
                 {/* 只留在面板里 —— 写进名称的话，客户端里就会出现「给张三的」。 */}
                 <p data-fx-help="" className="text-xs text-muted-foreground">这个端口是干嘛的，只给你自己看。分享出去的人看不到。</p>
-              </div>
-              <div className="min-w-0 space-y-1.5">
+              </FormField>
+              <FormField className="min-w-0 space-y-1.5">
                 <Label className="text-xs">对外标注</Label>
                 <Input
                   value={form.publicLabel}
@@ -980,7 +1001,7 @@ export default function ProxyInboundsSection({
                   这一句是线路本身的属性，恰恰是租户最想知道、而只有你说得出的那件事。
                 */}
                 <p data-fx-help="" className="text-xs text-muted-foreground">线路是什么类型，分享出去的人也看得到。不进订阅。</p>
-              </div>
+              </FormField>
               {isAdmin ? (
                 <FormField className="min-w-0 space-y-1.5 sm:col-span-2">
                   <Label className="text-xs">
@@ -1151,7 +1172,7 @@ export default function ProxyInboundsSection({
                 </button>
                 {realityOpen ? (
                   <div className="space-y-3 rounded-md border p-3">
-                    <div className="space-y-1.5">
+                    <FormField className="space-y-1.5">
                       <Label className="text-xs">要偷的握手域名</Label>
                       <Input
                         value={form.serverName}
@@ -1161,15 +1182,15 @@ export default function ProxyInboundsSection({
                       <p data-fx-help="" className="text-xs text-muted-foreground">
                         留空按默认值。REALITY 不需要域名和证书，密钥对由面板生成。
                       </p>
-                    </div>
-                    <div className="space-y-1.5">
+                    </FormField>
+                    <FormField className="space-y-1.5">
                       <Label className="text-xs">握手目标（可选）</Label>
                       <Input
                         value={form.realityDest}
                         onChange={(event) => setForm((prev) => ({ ...prev, realityDest: event.target.value }))}
                         placeholder="留空按握手域名的 443"
                       />
-                    </div>
+                    </FormField>
                     {/* 从这台落地机去测握手目标：TLS 1.3 / X25519 / h2 / 证书，能用的点一下就填进上面的握手域名。 */}
                     <RealityDestChecker
                       hostId={Number(form.hostId || 0)}
@@ -1185,7 +1206,7 @@ export default function ProxyInboundsSection({
 
             {isAcme ? (
               <div className="space-y-3 rounded-md border p-3">
-                <div className="space-y-1.5">
+                <FormField className="space-y-1.5">
                   <Label className="text-xs">域名</Label>
                   <Input
                     value={form.serverName}
@@ -1195,8 +1216,8 @@ export default function ProxyInboundsSection({
                   <p data-fx-help="" className="text-xs text-muted-foreground">
                     这个域名要先解析到这台落地机，签证书时会来验。填 IP 签不出来。
                   </p>
-                </div>
-                <div className="space-y-1.5">
+                </FormField>
+                <FormField className="space-y-1.5">
                   <Label className="text-xs">邮箱</Label>
                   <Input
                     value={form.acmeEmail}
@@ -1206,7 +1227,7 @@ export default function ProxyInboundsSection({
                   <p data-fx-help="" className="text-xs text-muted-foreground">
                     注册 Let's Encrypt 账户用，证书快到期时会发提醒到这里。
                   </p>
-                </div>
+                </FormField>
                 <p className="text-xs text-[var(--fx-warn-text)]">
                   签证书需要落地机的 80 或 443 端口能从公网访问到。证书由落地机自己申请和续期，私钥不经过面板。
                 </p>
@@ -1215,19 +1236,19 @@ export default function ProxyInboundsSection({
 
             {isTls ? (
               <div className="space-y-3 rounded-md border p-3">
-                <div className="space-y-1.5">
+                <FormField className="space-y-1.5">
                   <Label className="text-xs">证书域名</Label>
                   <Input value={form.serverName} onChange={(event) => setForm((prev) => ({ ...prev, serverName: event.target.value }))} placeholder="a.example.com" />
-                </div>
+                </FormField>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="min-w-0 space-y-1.5">
+                  <FormField className="min-w-0 space-y-1.5">
                     <Label className="text-xs">证书路径</Label>
                     <Input value={form.certPath} onChange={(event) => setForm((prev) => ({ ...prev, certPath: event.target.value }))} placeholder="/etc/ssl/fullchain.pem" />
-                  </div>
-                  <div className="min-w-0 space-y-1.5">
+                  </FormField>
+                  <FormField className="min-w-0 space-y-1.5">
                     <Label className="text-xs">私钥路径</Label>
                     <Input value={form.keyPath} onChange={(event) => setForm((prev) => ({ ...prev, keyPath: event.target.value }))} placeholder="/etc/ssl/privkey.pem" />
-                  </div>
+                  </FormField>
                 </div>
                 <p data-fx-help="" className="text-xs text-muted-foreground">
                   路径是落地机上的本地路径，证书要先自己放上去。不想折腾证书就改用 REALITY。
@@ -1237,10 +1258,10 @@ export default function ProxyInboundsSection({
 
             {usesPath ? (
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="min-w-0 space-y-1.5">
+                <FormField className="min-w-0 space-y-1.5">
                   <Label className="text-xs">{form.transport === "grpc" ? "服务名" : "路径"}</Label>
                   <Input value={form.path} onChange={(event) => setForm((prev) => ({ ...prev, path: event.target.value }))} placeholder={form.transport === "grpc" ? "gsvc" : "/ray"} />
-                </div>
+                </FormField>
                 {form.transport !== "grpc" ? (
                   <FormField className="min-w-0 space-y-1.5">
                     <Label className="text-xs">Host 头</Label>
@@ -1263,17 +1284,17 @@ export default function ProxyInboundsSection({
                   </Select>
                 </FormField>
                 {form.obfs ? (
-                  <div className="min-w-0 space-y-1.5">
+                  <FormField className="min-w-0 space-y-1.5">
                     <Label className="text-xs">混淆密码</Label>
                     <Input value={form.obfsPassword} onChange={(event) => setForm((prev) => ({ ...prev, obfsPassword: event.target.value }))} placeholder="留空自动生成" />
-                  </div>
+                  </FormField>
                 ) : null}
                 {/*
                   声明给客户端的带宽。填了之后客户端走 Brutal：按这个速率发包、不把
                   跨境线路的丢包当拥塞，单条连接也能跑满；不填就是 BBR，丢包一重单连接
                   就起不来。按这台落地机**单个客户端**能用的速率填，填过头只会制造丢包。
                 */}
-                <div className="min-w-0 space-y-1.5">
+                <FormField className="min-w-0 space-y-1.5">
                   <Label className="text-xs">下行带宽（Mbps，Brutal）</Label>
                   <Input
                     type="number"
@@ -1282,8 +1303,8 @@ export default function ProxyInboundsSection({
                     onChange={(event) => setForm((prev) => ({ ...prev, downMbps: event.target.value }))}
                     placeholder="不填 = 客户端用 BBR"
                   />
-                </div>
-                <div className="min-w-0 space-y-1.5">
+                </FormField>
+                <FormField className="min-w-0 space-y-1.5">
                   <Label className="text-xs">上行带宽（Mbps，Brutal）</Label>
                   <Input
                     type="number"
@@ -1292,7 +1313,7 @@ export default function ProxyInboundsSection({
                     onChange={(event) => setForm((prev) => ({ ...prev, upMbps: event.target.value }))}
                     placeholder="不填 = 客户端用 BBR"
                   />
-                </div>
+                </FormField>
                 <p data-fx-help="" className="text-xs text-muted-foreground sm:col-span-2">
                   填了带宽，订阅里的 Hysteria2 节点就带上 up / down（Stash 为 up-speed / down-speed），客户端按声明速率发包，跨境丢包线路上单连接也能跑满；按单个客户端实际能用的速率填。
                 </p>
@@ -1393,7 +1414,7 @@ export default function ProxyInboundsSection({
                 <p data-fx-help="" className="text-xs text-muted-foreground">额度由管理员设置，这里只读；需要调整请联系管理员。</p>
               ) : null}
               <div className="grid grid-cols-2 gap-2">
-                <div className="min-w-0 space-y-1">
+                <FormField className="min-w-0 space-y-1">
                   <Label className="text-xs text-muted-foreground">带宽（Mbps）</Label>
                   <Input
                     type="number"
@@ -1404,8 +1425,8 @@ export default function ProxyInboundsSection({
                     readOnly={!isAdmin}
                     disabled={!isAdmin}
                   />
-                </div>
-                <div className="min-w-0 space-y-1">
+                </FormField>
+                <FormField className="min-w-0 space-y-1">
                   <Label className="text-xs text-muted-foreground">总流量（GB）</Label>
                   <Input
                     type="number"
@@ -1416,10 +1437,10 @@ export default function ProxyInboundsSection({
                     readOnly={!isAdmin}
                     disabled={!isAdmin}
                   />
-                </div>
+                </FormField>
               </div>
               {form.id > 0 ? (
-                <div className="space-y-1">
+                <FormField className="space-y-1">
                   <Label className="text-xs text-muted-foreground">已用流量（GB）</Label>
                   <div className="flex items-center gap-2">
                     <Input
@@ -1449,7 +1470,7 @@ export default function ProxyInboundsSection({
                       那个数在「主机管理」里，通常比这里大。
                     </span>
                   </p>
-                </div>
+                </FormField>
               ) : null}
               <div className="flex items-center justify-between gap-3 pt-1">
                 <div className="min-w-0">
@@ -1522,6 +1543,7 @@ export default function ProxyInboundsSection({
         <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>复制节点链接</DialogTitle>
+            <DialogDescription className="sr-only">每份凭据一条链接，复制后粘进客户端即可。</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
             {linkRows.map((item) => (
@@ -1542,6 +1564,7 @@ export default function ProxyInboundsSection({
                   size="icon"
                   className="h-7 w-7 shrink-0"
                   title="复制"
+                  aria-label={`复制${item.userName || item.name}的链接`}
                   onClick={async () => {
                     const ok = await copyTextFromElement(linkTextRefs.current[item.userId] || null, item.link);
                     if (ok) toast.success("链接已复制，粘进客户端即可");
@@ -1571,3 +1594,10 @@ export default function ProxyInboundsSection({
     </>
   );
 }
+
+/*
+  memo：这一段挂在「订阅管理」页面上，页面因为开关弹窗、二维码之类的状态重画时，这里的
+  props（行规格、几个 id 集合、回调）都是页面 useMemo / useCallback 过的，引用不变就整段跳过。
+  里面每行再由 ProxyNodeRow 自己 memo。
+*/
+export default memo(ProxyInboundsSection);

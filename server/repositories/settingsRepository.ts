@@ -1,7 +1,7 @@
 ﻿import { createHash } from "node:crypto";
 import { eq, inArray, like } from "drizzle-orm";
 import { systemSettings } from "../../drizzle/schema";
-import { executeRaw, getDatabaseKind, getDb, rawAffectedRows } from "../dbRuntime";
+import { executeRaw, getDatabaseKind, getDb, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
 import {
   SETTINGS_SECRETS_MIGRATION_KEY,
   decodeStoredSettingValue,
@@ -154,15 +154,38 @@ export async function getSentSettingKeys(keys: string[]): Promise<Set<string>> {
 
 /** 批量读取所有系统设置 */
 export async function getAllSettings(): Promise<Record<string, string | null>> {
+  const values = await loadAllSettingsValues();
+  return values ? { ...values } : {};
+}
+
+/**
+ * 从设置缓存里按键取一个值。
+ *
+ * 订阅拉取这条路每次都要看 siteTitle、panelPublicUrl、「自动隐藏不通的节点」：原来一个走
+ * getAllSettings()（每次把整份映射拷一遍，只为取一个键），两个走 getSetting()（每次一条
+ * 主键查询，不经缓存）。这里直接从缓存着的那份映射里取，不拷贝、不额外查库；缓存 5 秒，
+ * 写入时作废（setSetting），所以管理员改完立刻生效。
+ *
+ * 日标记和运行时缓存不进那份映射（见 getAllSettings），对它们退回精确查询，口径和 getSetting 一样。
+ */
+export async function getCachedSetting(key: string): Promise<string | null> {
+  if (!affectsAllSettingsCache(key)) return getSetting(key);
+  const values = await loadAllSettingsValues();
+  if (!values) return null;
+  return values[key] ?? null;
+}
+
+/** 缓存里的那份映射本身（不拷贝）。只在这个文件里用：拿到的对象谁都不许改。 */
+async function loadAllSettingsValues(): Promise<Record<string, string | null> | null> {
   const db = await getDb();
-  if (!db) return {};
+  if (!db) return null;
   const now = Date.now();
   const cached = allSettingsCache;
   if (cached && cached.db === db && cached.expiresAt > now) {
-    return { ...cached.values };
+    return cached.values;
   }
   const activeLoad = allSettingsLoad;
-  if (activeLoad && activeLoad.db === db) return { ...await activeLoad.promise };
+  if (activeLoad && activeLoad.db === db) return activeLoad.promise;
 
   const generation = allSettingsGeneration;
   const promise = db.select().from(systemSettings).then((rows: Array<{ key: string; value: string | null }>) => {
@@ -180,7 +203,7 @@ export async function getAllSettings(): Promise<Record<string, string | null>> {
   });
   allSettingsLoad = { db, promise };
   try {
-    return { ...await promise };
+    return await promise;
   } finally {
     if (allSettingsLoad?.promise === promise) allSettingsLoad = null;
   }
@@ -264,11 +287,45 @@ export async function claimSettingKey(key: string, rawValue = "1"): Promise<bool
   return claimed;
 }
 
-/** 批量 UPSERT */
+/**
+ * 批量 UPSERT：一条多行 INSERT … ON CONFLICT 写完，整批一个事务。
+ * 原来按键逐条 setSetting，保存一页设置就是几十次往返、几十次提交，而且每条都把设置缓存作废一遍。
+ * 每 200 行一条语句（参数数留足余量）；缓存只在写前写后各作废一次，口径和 setSetting 一样。
+ */
 export async function setSettings(map: Record<string, string | null>): Promise<void> {
-  for (const [k, v] of Object.entries(map)) {
-    await setSetting(k, v);
-  }
+  const entries = Object.entries(map);
+  if (entries.length === 0) return;
+  const db = await getDb();
+  if (!db) return;
+  const invalidatesCache = entries.some(([key]) => affectsAllSettingsCache(key));
+  if (invalidatesCache) invalidateAllSettingsCache();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const kind = getDatabaseKind();
+  await withDatabaseTransaction(async () => {
+    for (let offset = 0; offset < entries.length; offset += 200) {
+      const chunk = entries.slice(offset, offset + 200);
+      const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
+      // 密钥类设置加密后再写，和 setSetting 一样。
+      const params = chunk.flatMap(([key, value]) => [key, encodeSettingValueForStorage(key, value), nowSec]);
+      if (kind === "sqlite") {
+        await executeRaw(
+          `INSERT INTO system_settings (key, value, updatedAt) VALUES ${placeholders} ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt`,
+          params,
+        );
+      } else if (kind === "postgresql") {
+        await executeRaw(
+          `INSERT INTO system_settings ("key", value, "updatedAt") VALUES ${placeholders} ON CONFLICT ("key") DO UPDATE SET value=excluded.value, "updatedAt"=excluded."updatedAt"`,
+          params,
+        );
+      } else {
+        await executeRaw(
+          `INSERT INTO system_settings (\`key\`, value, updatedAt) VALUES ${placeholders} ON DUPLICATE KEY UPDATE value=VALUES(value), updatedAt=VALUES(updatedAt)`,
+          params,
+        );
+      }
+    }
+  });
+  if (invalidatesCache) invalidateAllSettingsCache();
 }
 
 /**

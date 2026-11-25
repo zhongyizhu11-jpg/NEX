@@ -42,7 +42,7 @@ export default function AuditDetailDialog({ item, onOpenChange }: { item: AuditL
 
   return (
     <Dialog open={!!item} onOpenChange={onOpenChange}>
-      <DialogContent className="fx-audit-detail max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="fx-audit-detail max-h-[88svh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {op ? <span>{op.module}</span> : null}

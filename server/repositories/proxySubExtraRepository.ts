@@ -16,15 +16,17 @@ import {
   subscriptionPlans,
   userSubscriptions,
   users,
+  type InsertProxySubAccessLog,
   type InsertProxySubSource,
   type InsertProxySubTemplate,
 } from "../../drizzle/schema";
-import { getDb, insertAndGetId, nowDate } from "../dbRuntime";
+import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, quoteDbIdentifier, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
+import { defineBatchedWrite } from "../dbWriteBatcher";
 import { deleteExpiredHistoryRows } from "./historyRetention";
 import { normalizeProxySubAlias } from "../../shared/proxySubTokenScope";
 import { parseProxySubCustomGroupsJson, PROXY_SUB_TEMPLATE_TARGETS, type ProxySubTemplate, type ProxySubTemplateTarget } from "../../shared/proxySubTemplates";
 import { parseProxySubTemplateModulesJson } from "../../shared/proxySubModules";
-import { invalidateProxySubCacheAll, invalidateProxySubCacheForUser } from "../proxySubCache";
+import { invalidateProxySubCacheAll, invalidateProxySubCacheForUser, onProxySubCacheInvalidateAll } from "../proxySubCache";
 
 // ==================== 拉取日志 ====================
 
@@ -42,10 +44,26 @@ export type ProxySubAccessLogInput = {
   bytes: number;
 };
 
-export async function recordProxySubAccessLog(input: ProxySubAccessLogInput) {
+/*
+  拉取日志攒批写（server/dbWriteBatcher.ts，和延迟样本同一套）：每次拉取一行 INSERT 自己一个事务，
+  一个商家几百个客户端一起刷时就是几百次提交。这张表只进历史、没人等着立刻读；读它的几处
+  （清单、统计、清理）先 flush 再查，「拉完马上看得到」不变。退出前的刷写由 index.ts 装的钩子统一做。
+  行上的 at 在排队时就定下来，不然晚两秒落库的记录时间也晚两秒。
+*/
+const PROXY_SUB_ACCESS_LOG_WRITE_QUEUE = "proxy_sub_access_logs";
+const accessLogWrites = defineBatchedWrite<InsertProxySubAccessLog>(PROXY_SUB_ACCESS_LOG_WRITE_QUEUE, async (rows) => {
   const db = await getDb();
   if (!db) return;
-  await db.insert(proxySubAccessLogs).values({
+  await db.insert(proxySubAccessLogs).values(rows);
+});
+
+/** 把攒着的拉取日志写进库（测试、读清单之前用）。 */
+export function flushProxySubAccessLogs() {
+  return accessLogWrites.flush();
+}
+
+export async function recordProxySubAccessLog(input: ProxySubAccessLogInput) {
+  await accessLogWrites.push({
     tokenId: Number(input.tokenId),
     userId: Number(input.userId),
     at: nowDate(),
@@ -58,7 +76,7 @@ export async function recordProxySubAccessLog(input: ProxySubAccessLogInput) {
     result: String(input.result || "ok").slice(0, 32),
     hwid: String(input.hwid || "").slice(0, 80) || null,
     bytes: Math.max(0, Math.floor(Number(input.bytes) || 0)),
-  } as any);
+  });
 }
 
 export async function listProxySubAccessLogs(options: {
@@ -70,6 +88,7 @@ export async function listProxySubAccessLogs(options: {
 }) {
   const db = await getDb();
   if (!db) return [];
+  await accessLogWrites.flush();
   const conds: any[] = [];
   if (options.tokenId) conds.push(eq(proxySubAccessLogs.tokenId, Number(options.tokenId)));
   if (options.userId) conds.push(eq(proxySubAccessLogs.userId, Number(options.userId)));
@@ -86,6 +105,7 @@ export async function listProxySubAccessLogs(options: {
 export async function proxySubAccessStats(options: { userId?: number; tokenId?: number; days?: number }) {
   const db = await getDb();
   if (!db) return { byResult: [] as Array<{ result: string; count: number }>, byFamily: [] as Array<{ family: string; count: number }>, total: 0, distinctIps: 0 };
+  await accessLogWrites.flush();
   const days = Math.min(365, Math.max(1, Math.floor(Number(options.days) || 7)));
   const since = new Date(Date.now() - days * 86_400_000);
   const conds: any[] = [gt(proxySubAccessLogs.at, since)];
@@ -117,6 +137,7 @@ export async function proxySubAccessStats(options: { userId?: number; tokenId?: 
 export async function pruneProxySubAccessLogs(retentionDays: number) {
   const days = Math.floor(Number(retentionDays) || 0);
   if (days <= 0) return 0;
+  await accessLogWrites.flush();
   const cutoff = Math.floor((Date.now() - days * 86_400_000) / 1000);
   return deleteExpiredHistoryRows("proxy_sub_access_logs", "at", cutoff);
 }
@@ -136,6 +157,28 @@ export async function countProxySubDevices(tokenId: number) {
   return Number((rows as any[])[0]?.count || 0);
 }
 
+/** 一批令牌各有几台设备（令牌清单用）：一条 GROUP BY，不按令牌逐条数。没设备的令牌不在结果里。 */
+export async function countProxySubDevicesByTokens(tokenIds: readonly number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  const ids = Array.from(new Set(tokenIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  const rows = await db
+    .select({ tokenId: proxySubDevices.tokenId, count: sql<number>`count(*)` })
+    .from(proxySubDevices)
+    .where(inArray(proxySubDevices.tokenId, ids))
+    .groupBy(proxySubDevices.tokenId);
+  for (const row of rows as any[]) out.set(Number(row.tokenId), Number(row.count || 0));
+  return out;
+}
+
+/**
+ * 刚来过的设备不再刷 lastSeenAt：设备表是给人看「哪台多久没来」的，几分钟的误差没人在意，
+ * 省下的是每次拉取对设备表的一条 UPDATE。按 IP 退化统计的窗口按小时算，远大于这个数。
+ */
+const DEVICE_TOUCH_INTERVAL_MS = 5 * 60_000;
+
 /** 登记或刷新一台设备。返回是不是新的。 */
 export async function touchProxySubDevice(input: {
   tokenId: number;
@@ -146,41 +189,68 @@ export async function touchProxySubDevice(input: {
   model?: string;
   ip?: string;
   userAgent?: string;
+  /**
+   * 调用方刚列过这条令牌的设备时带上，省一次查询：这一台在清单里就给它的 id 和上次时间，
+   * 不在就给 null。不带（undefined）时自己查一次。
+   */
+  known?: { id: number; lastSeenAt: unknown } | null;
 }): Promise<{ isNew: boolean }> {
   const db = await getDb();
   if (!db) return { isNew: false };
   const hwid = String(input.hwid || "").slice(0, 80);
   if (!hwid) return { isNew: false };
-  const existing = await db
-    .select({ id: proxySubDevices.id })
-    .from(proxySubDevices)
-    .where(and(eq(proxySubDevices.tokenId, Number(input.tokenId)), eq(proxySubDevices.hwid, hwid)))
-    .limit(1);
+  const now = nowDate();
+  let known = input.known;
+  if (known === undefined) {
+    const existing = await db
+      .select({ id: proxySubDevices.id, lastSeenAt: proxySubDevices.lastSeenAt })
+      .from(proxySubDevices)
+      .where(and(eq(proxySubDevices.tokenId, Number(input.tokenId)), eq(proxySubDevices.hwid, hwid)))
+      .limit(1);
+    const row = (existing as any[])[0];
+    known = row ? { id: Number(row.id), lastSeenAt: row.lastSeenAt } : null;
+  }
   const patch = {
-    lastSeenAt: nowDate(),
+    lastSeenAt: now,
     lastIp: String(input.ip || "").slice(0, 64) || null,
     userAgent: String(input.userAgent || "").slice(0, 200) || null,
     ...(input.deviceOs ? { deviceOs: String(input.deviceOs).slice(0, 64) } : {}),
     ...(input.osVersion ? { osVersion: String(input.osVersion).slice(0, 64) } : {}),
     ...(input.model ? { model: String(input.model).slice(0, 120) } : {}),
   };
-  if ((existing as any[]).length > 0) {
-    await db.update(proxySubDevices).set(patch as any).where(eq(proxySubDevices.id, Number((existing as any[])[0].id)));
+  if (known) {
+    const lastSeen = known.lastSeenAt ? new Date(known.lastSeenAt as any).getTime() : 0;
+    if (lastSeen && now.getTime() - lastSeen < DEVICE_TOUCH_INTERVAL_MS) return { isNew: false };
+    await db.update(proxySubDevices).set(patch as any).where(eq(proxySubDevices.id, Number(known.id)));
     return { isNew: false };
   }
-  try {
-    await db.insert(proxySubDevices).values({
-      tokenId: Number(input.tokenId),
-      userId: Number(input.userId),
-      hwid,
-      firstSeenAt: nowDate(),
-      ...patch,
-    } as any);
-    return { isNew: true };
-  } catch {
-    // 并发下撞唯一键：另一路已经插进去了，按「不是新的」算。
-    return { isNew: false };
-  }
+  /*
+    新设备：插入时撞唯一键（并发的另一路、或调用方的清单旧了）就当没插。
+    原来是 INSERT 失败再 catch —— 结果一样，但 PostgreSQL 会把每次唯一键冲突记进服务端日志。
+  */
+  if (await insertProxySubDeviceIgnoringConflict({
+    tokenId: Number(input.tokenId),
+    userId: Number(input.userId),
+    hwid,
+    firstSeenAt: now,
+    ...patch,
+  })) return { isNew: true };
+  // 另一路刚插进去了：把这一次的来路补上去，按「不是新的」算。
+  await db.update(proxySubDevices).set(patch as any).where(and(eq(proxySubDevices.tokenId, Number(input.tokenId)), eq(proxySubDevices.hwid, hwid)));
+  return { isNew: false };
+}
+
+/** INSERT 一台设备，(tokenId, hwid) 已有就忽略。插进去了返回 true。三种库各自的写法，和 settingsRepository 的 claimSettingKey 一致。 */
+async function insertProxySubDeviceIgnoringConflict(values: Record<string, unknown>): Promise<boolean> {
+  const q = quoteDbIdentifier;
+  const columns = Object.keys(values).filter((key) => values[key] !== undefined);
+  const list = columns.map(q).join(", ");
+  const placeholders = columns.map(() => "?").join(", ");
+  const params = columns.map((key) => values[key]);
+  const result = getDatabaseKind() === "mysql"
+    ? await executeRaw(`INSERT IGNORE INTO ${q("proxy_sub_devices")} (${list}) VALUES (${placeholders})`, params)
+    : await executeRaw(`INSERT INTO ${q("proxy_sub_devices")} (${list}) VALUES (${placeholders}) ON CONFLICT (${q("tokenId")}, ${q("hwid")}) DO NOTHING`, params);
+  return rawAffectedRows(result) > 0;
 }
 
 export async function deleteProxySubDevice(id: number) {
@@ -211,7 +281,8 @@ export async function pruneStaleIpDevices(windowHours: number) {
   const result = await db
     .delete(proxySubDevices)
     .where(and(sql`${proxySubDevices.hwid} LIKE 'ip:%'`, lt(proxySubDevices.lastSeenAt, cutoff)));
-  return Number((result as any)?.rowsAffected ?? (result as any)?.changes ?? 0);
+  // 三种驱动的受影响行数字段各不一样（changes / affectedRows / rowCount），mysql2 还包在元组里；统一走 rawAffectedRows。
+  return rawAffectedRows(Array.isArray(result) ? result[0] : result);
 }
 
 // ==================== 模板 ====================
@@ -229,18 +300,51 @@ function rowToTemplate(row: any): ProxySubTemplate {
   };
 }
 
-export async function listProxySubTemplates(): Promise<ProxySubTemplate[]> {
+/*
+  模板清单放在内存里。每次拉订阅都要解析一次「这条令牌用哪份模板」（令牌 → 用户 → 套餐 → 默认），
+  原来每次一两条查询，而模板全站就几份、几乎不改。改模板的三条路都走 invalidateProxySubCacheAll，
+  在那里登记一个监听把这份清单一起清掉；再加一分钟 TTL 兜底（备份导入这种直接写表的路不经过它）。
+  按 db 实例记：切库之后不拿旧库的清单。
+*/
+const TEMPLATES_CACHE_TTL_MS = 60_000;
+let templatesCache: { db: unknown; expiresAt: number; rows: ProxySubTemplate[] } | null = null;
+let templatesLoad: { db: unknown; promise: Promise<ProxySubTemplate[]> } | null = null;
+
+export function invalidateProxySubTemplatesCache() {
+  templatesCache = null;
+  templatesLoad = null;
+}
+
+onProxySubCacheInvalidateAll(invalidateProxySubTemplatesCache);
+
+async function loadProxySubTemplates(): Promise<ProxySubTemplate[]> {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select().from(proxySubTemplates).orderBy(asc(proxySubTemplates.target), asc(proxySubTemplates.id));
-  return (rows as any[]).map(rowToTemplate);
+  const now = Date.now();
+  if (templatesCache && templatesCache.db === db && templatesCache.expiresAt > now) return templatesCache.rows;
+  if (templatesLoad && templatesLoad.db === db) return templatesLoad.promise;
+  const promise = Promise.resolve(db.select().from(proxySubTemplates).orderBy(asc(proxySubTemplates.target), asc(proxySubTemplates.id)))
+    .then((rows: unknown[]) => {
+      const list = rows.map(rowToTemplate);
+      // 加载期间有人作废过（templatesLoad 被清掉）就不存，下一次重读。
+      if (templatesLoad?.promise === promise) templatesCache = { db, expiresAt: Date.now() + TEMPLATES_CACHE_TTL_MS, rows: list };
+      return list;
+    });
+  templatesLoad = { db, promise };
+  try {
+    return await promise;
+  } finally {
+    if (templatesLoad?.promise === promise) templatesLoad = null;
+  }
+}
+
+export async function listProxySubTemplates(): Promise<ProxySubTemplate[]> {
+  return [...await loadProxySubTemplates()];
 }
 
 export async function getProxySubTemplateById(id: number): Promise<ProxySubTemplate | null> {
-  const db = await getDb();
-  if (!db || !(Number(id) > 0)) return null;
-  const rows = await db.select().from(proxySubTemplates).where(eq(proxySubTemplates.id, Number(id))).limit(1);
-  return rows[0] ? rowToTemplate(rows[0]) : null;
+  if (!(Number(id) > 0)) return null;
+  return (await loadProxySubTemplates()).find((template) => template.id === Number(id)) ?? null;
 }
 
 export async function createProxySubTemplate(data: { name: string; target: ProxySubTemplateTarget; prelude: string; customGroupsJson: string | null; customRules?: string | null; modulesJson?: string | null; isDefault: boolean }) {
@@ -266,11 +370,14 @@ export async function updateProxySubTemplate(id: number, data: Partial<{ name: s
 export async function deleteProxySubTemplate(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(proxySubTemplates).where(eq(proxySubTemplates.id, Number(id)));
-  // 指向它的引用退回 0（= 看下一级）。
-  await db.update(proxySubTokens).set({ templateId: 0 } as any).where(eq(proxySubTokens.templateId, Number(id)));
-  await db.update(users).set({ proxySubTemplateId: 0 } as any).where(eq(users.proxySubTemplateId, Number(id)));
-  await db.update(subscriptionPlans).set({ proxySubTemplateId: 0 } as any).where(eq(subscriptionPlans.proxySubTemplateId, Number(id)));
+  // 四条语句一个事务：删了模板、引用还没退回就断掉，令牌 / 用户 / 套餐会指着一个不存在的模板 id。
+  await withDatabaseTransaction(async () => {
+    await db.delete(proxySubTemplates).where(eq(proxySubTemplates.id, Number(id)));
+    // 指向它的引用退回 0（= 看下一级）。
+    await db.update(proxySubTokens).set({ templateId: 0 } as any).where(eq(proxySubTokens.templateId, Number(id)));
+    await db.update(users).set({ proxySubTemplateId: 0 } as any).where(eq(users.proxySubTemplateId, Number(id)));
+    await db.update(subscriptionPlans).set({ proxySubTemplateId: 0 } as any).where(eq(subscriptionPlans.proxySubTemplateId, Number(id)));
+  });
   invalidateProxySubCacheAll();
 }
 
@@ -279,18 +386,14 @@ export async function deleteProxySubTemplate(id: number) {
  * 都没有就用这个目标的默认模板；再没有返回 null（渲染时用内置的开头部分）。
  */
 export async function resolveProxySubTemplate(target: ProxySubTemplateTarget, candidateIds: readonly number[]): Promise<ProxySubTemplate | null> {
-  const db = await getDb();
-  if (!db) return null;
-  const ids = candidateIds.map((id) => Number(id)).filter((id) => id > 0);
-  if (ids.length > 0) {
-    const rows = await db.select().from(proxySubTemplates).where(and(inArray(proxySubTemplates.id, ids), eq(proxySubTemplates.target, target)));
-    for (const id of ids) {
-      const hit = (rows as any[]).find((row) => Number(row.id) === id);
-      if (hit) return rowToTemplate(hit);
-    }
+  const templates = await loadProxySubTemplates();
+  if (templates.length === 0) return null;
+  for (const id of candidateIds.map((id) => Number(id)).filter((id) => id > 0)) {
+    const hit = templates.find((template) => template.id === id && template.target === target);
+    if (hit) return hit;
   }
-  const defaults = await db.select().from(proxySubTemplates).where(and(eq(proxySubTemplates.target, target), eq(proxySubTemplates.isDefault, true))).limit(1);
-  return defaults[0] ? rowToTemplate(defaults[0]) : null;
+  // 清单按 (target, id) 排好序，第一个默认的就是原来 LIMIT 1 取到的那个。
+  return templates.find((template) => template.target === target && template.isDefault) ?? null;
 }
 
 // ==================== 外部订阅 ====================
@@ -333,8 +436,9 @@ export async function deleteProxySubSource(id: number) {
   if (!db) throw new Error("Database not available");
   const source = await getProxySubSourceById(id);
   const nodes = await db.select({ id: proxyNodes.id }).from(proxyNodes).where(eq(proxyNodes.sourceId, Number(id)));
-  const { deleteProxyNode } = await import("./proxySubscriptionRepository");
-  for (const node of nodes as any[]) await deleteProxyNode(Number(node.id));
+  const { deleteProxyNodes } = await import("./proxySubscriptionRepository");
+  // 同步来的几十上百条一起删（每步一条 IN），不是每条八条语句。
+  await deleteProxyNodes((nodes as Array<{ id: unknown }>).map((node) => Number(node.id)));
   await db.delete(proxySubSources).where(eq(proxySubSources.id, Number(id)));
   if (source) invalidateProxySubCacheForUser(Number((source as any).userId));
 }
@@ -343,16 +447,20 @@ export async function deleteProxySubSource(id: number) {
 export async function listDueProxySubSources(now = Date.now(), limit = 20) {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db
+  /*
+    「到点没到点」在 SQL 里判，不先取一批再在 JS 里过滤：原来取 5 倍再筛，来源一多，前面几十条
+    「没到点但 lastFetchAt 最早」的会把真到点的挤出那一批，永远轮不到；PostgreSQL 上 NULL 排在最后，
+    从没拉过的更是最先被挤掉。时间列存的是秒，这里也按秒比；间隔的口径和原来 JS 里一样：
+    没填或 0 按 21600，最少 600。
+  */
+  const interval = sql`CASE WHEN COALESCE(${proxySubSources.intervalSec}, 0) <= 0 THEN 21600 WHEN ${proxySubSources.intervalSec} < 600 THEN 600 ELSE ${proxySubSources.intervalSec} END`;
+  const lastFetch = sql`COALESCE(${proxySubSources.lastFetchAt}, 0)`;
+  return db
     .select()
     .from(proxySubSources)
-    .where(eq(proxySubSources.isEnabled, true))
-    .orderBy(asc(proxySubSources.lastFetchAt), asc(proxySubSources.id))
-    .limit(Math.max(1, limit * 5));
-  return (rows as any[]).filter((row) => {
-    const last = row.lastFetchAt ? new Date(row.lastFetchAt).getTime() : 0;
-    return !last || now - last >= Math.max(600, Number(row.intervalSec) || 21600) * 1000;
-  }).slice(0, limit);
+    .where(and(eq(proxySubSources.isEnabled, true), sql`${lastFetch} + ${interval} <= ${Math.floor(now / 1000)}`))
+    .orderBy(lastFetch, asc(proxySubSources.id))
+    .limit(Math.max(1, limit));
 }
 
 export async function listProxyNodesBySource(sourceId: number) {

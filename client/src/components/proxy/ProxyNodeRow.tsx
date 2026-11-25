@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { memo, useRef, useState, type ReactNode } from "react";
 import { MoreHorizontal, type LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -92,9 +92,14 @@ const ACCENT_BORDERS: Record<ProxyNodeRowAccent, string> = {
  * 最要看的部分（地址的端口、归属的账号、名字的后半截），所以点一下文字那块就把这一张
  * 展开成换行显示，再点收起。桌面上悬停也能看到全文（title）。
  */
-export function ProxyNodeRow({
+/*
+  memo：一张列表几十行，父组件（ProxyInboundsSection，也 memo 过）因为别的原因重画时，
+  props 没变的行不再逐个重跑。各行的 spec 由 owner 用 useMemo 组装，引用是稳的。
+*/
+export const ProxyNodeRow = memo(function ProxyNodeRow({
   leading,
   name,
+  label,
   tag,
   meta,
   detail,
@@ -107,6 +112,8 @@ export function ProxyNodeRow({
   /** 状态点之类的前置标记。 */
   leading?: ReactNode;
   name: ReactNode;
+  /** 纯文本名字，给「⋯」按钮取无障碍名用（name 多半是带徽章的节点，读屏念不出来）。不传时 name 是字符串就用它。 */
+  label?: string;
   /** 名字后面那一个徽章。只放长度有上限的东西，协议名这种。 */
   tag?: ReactNode;
   /** 第二行：协议、地址、端口、停用、分享人数……一句话说完，超长就截断（点开看全文）。 */
@@ -183,7 +190,7 @@ export function ProxyNodeRow({
       {actions.length > 0 ? (
         <DropdownMenu open={open} onOpenChange={setOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="更多操作">
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" title="更多操作" aria-label={`${label || (typeof name === "string" ? name : "")} 更多操作`.trim()}>
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -225,7 +232,7 @@ export function ProxyNodeRow({
       ) : null}
     </div>
   );
-}
+});
 
 /** 第二行那句话：把非空段落用 · 串起来，省掉一堆三元表达式。 */
 export function proxyNodeMetaText(parts: Array<string | false | null | undefined>): string {

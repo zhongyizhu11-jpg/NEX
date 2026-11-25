@@ -6,7 +6,10 @@
  */
 
 import DashboardLayout from "@/components/DashboardLayout";
+import DataSectionLoading from "@/components/DataSectionLoading";
+import EmptyState from "@/components/EmptyState";
 import QueryErrorState, { QueryErrorRow, failedQueryState } from "@/components/QueryErrorState";
+import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { ProxySubTokenDevicesDialog, ProxySubTokenEditDialog, ProxySubTokenLogsDialog, type ProxySubTokenLike } from "@/components/proxy/ProxySubTokenDialogs";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +29,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDateTime as timeText } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
 import { PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "@shared/proxySubSettings";
 import {
@@ -59,9 +63,15 @@ function TokensTab() {
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  // 页码记在 localStorage、翻页控件和账单页同一个（PersistentPagination），不再手写「上一页 / 下一页」。
+  const pageRequest = usePersistentPageRequest("forwardx.adminSubscriptions.tokens.page");
   const pageSize = 20;
-  const query = trpc.proxySubscriptions.adminListTokens.useQuery({ search: search.trim() || undefined, page, pageSize });
+  // 搜索停手 300 ms 再查，期间留着上一页的结果 —— 不然每敲一个键整张表闪一次「加载中」。
+  const keyword = useDebouncedValue(search.trim(), 300);
+  const query = trpc.proxySubscriptions.adminListTokens.useQuery(
+    { search: keyword || undefined, page: pageRequest.page, pageSize },
+    { placeholderData: (previous) => previous },
+  );
   const settingsQuery = trpc.proxySubscriptions.adminGetSettings.useQuery();
   const [editing, setEditing] = useState<ProxySubTokenLike | null>(null);
   const [logsOf, setLogsOf] = useState<{ id: number; name: string } | null>(null);
@@ -72,16 +82,19 @@ function TokensTab() {
   const deleteToken = trpc.proxySubscriptions.deleteToken.useMutation({ onSuccess: () => { toast.success("已删除"); refresh(); }, onError: (error) => toast.error(error.message) });
   const items = (query.data?.items || []) as any[];
   const total = query.data?.total || 0;
-  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const pagination = useServerPagination(items, total, pageRequest, { pageSize, isReady: !query.isLoading && !!query.data });
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="按用途、用户名、别名、备注搜" className="max-w-xs" />
+        <Input value={search} onChange={(event) => { setSearch(event.target.value); pageRequest.setPage(1); }} placeholder="按用途、用户名、别名、备注搜" className="max-w-xs" />
         <span className="text-xs text-muted-foreground">共 {total} 条</span>
       </div>
-      <Card>
-        <CardContent className="overflow-x-auto p-0">
+      {/*
+        表格直接坐在一块白底上，不再套一张大卡（CardContent p-0）：那层卡在手机上是内容离屏幕边 48px 的来源，
+        和 Token / 服务列表（mobileDensity.test）同一种写法。
+      */}
+      <div className="overflow-x-auto rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
           <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
@@ -97,8 +110,10 @@ function TokensTab() {
             <TableBody>
               {items.length === 0 && !query.isLoading && query.isError ? (
                 <QueryErrorRow colSpan={7} label="令牌列表" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} />
+              ) : items.length === 0 && query.isLoading ? (
+                <TableRow><TableCell colSpan={7} className="p-0"><DataSectionLoading label="正在读取令牌" minHeight="min-h-[120px]" /></TableCell></TableRow>
               ) : items.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">{query.isLoading ? "加载中…" : "没有令牌"}</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">没有令牌</TableCell></TableRow>
               ) : items.map((row) => {
                 const status = proxySubTokenStatus(row);
                 return (
@@ -125,23 +140,16 @@ function TokensTab() {
                       <Button size="sm" variant="ghost" onClick={() => setLogsOf({ id: row.id, name: row.name })}>记录</Button>
                       <Button size="sm" variant="ghost" onClick={() => setDevicesOf({ id: row.id, name: row.name })}>设备</Button>
                       <Button size="sm" variant="ghost" onClick={() => updateToken.mutate({ id: row.id, isEnabled: !row.isEnabled })}>{row.isEnabled ? "停用" : "启用"}</Button>
-                      <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: "重置这条地址？", description: "旧地址和短链接立即失效，设备列表清空。", confirmText: "重置" })) rotateToken.mutate({ id: row.id }); }}>重置</Button>
-                      <Button size="sm" variant="ghost" className="text-[var(--fx-down-text)]" onClick={async () => { if (await confirm({ title: "删除这条地址？", description: "只是这条地址失效：用它的客户端拉不到更新，已导入的节点照常能连。要断开设备得在落地节点上重置凭据。", confirmText: "删除" })) deleteToken.mutate({ id: row.id }); }}>删除</Button>
+                      <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: "重置这条地址？", description: "旧地址和短链接立即失效，设备列表清空。", confirmText: "重置", tone: "destructive" })) rotateToken.mutate({ id: row.id }); }}>重置</Button>
+                      <Button size="sm" variant="ghost" className="text-[var(--fx-down-text)]" onClick={async () => { if (await confirm({ title: "删除这条地址？", description: "只是这条地址失效：用它的客户端拉不到更新，已导入的节点照常能连。要断开设备得在落地节点上重置凭据。", confirmText: "删除", tone: "destructive" })) deleteToken.mutate({ id: row.id }); }}>删除</Button>
                     </TableCell>
                   </TableRow>
                 );
               })}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-      {pages > 1 ? (
-        <div className="flex items-center justify-end gap-2 text-xs">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</Button>
-          <span>{page} / {pages}</span>
-          <Button size="sm" variant="outline" disabled={page >= pages} onClick={() => setPage((value) => value + 1)}>下一页</Button>
-        </div>
-      ) : null}
+      </div>
+      <PersistentPagination pagination={pagination} itemName="条令牌" />
       <ProxySubTokenEditDialog
         open={!!editing}
         onOpenChange={(open) => !open && setEditing(null)}
@@ -165,6 +173,9 @@ function StatsTab() {
   const logs = trpc.proxySubscriptions.adminAccessLogs.useQuery({ limit: 100 });
   const data = stats.data;
   const statsFailure = failedQueryState(stats);
+  // 先复制再排：data 是 react-query 的缓存，原地 sort 等于改了缓存，下一轮 placeholderData 拿到的就是排过的。
+  const byResult = useMemo(() => [...(data?.byResult || [])].sort((a, b) => b.count - a.count), [data?.byResult]);
+  const byFamily = useMemo(() => [...(data?.byFamily || [])].sort((a, b) => b.count - a.count), [data?.byFamily]);
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -187,7 +198,7 @@ function StatsTab() {
         <Card>
           <CardHeader><CardTitle className="text-sm">按结果</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-sm">
-            {(data?.byResult || []).sort((a, b) => b.count - a.count).map((item) => (
+            {byResult.map((item) => (
               <div key={item.result} className="flex justify-between"><span>{RESULT_LABELS[item.result] || item.result}</span><span className="text-muted-foreground">{item.count}</span></div>
             ))}
             {data && data.byResult.length === 0 ? <p className="text-xs text-muted-foreground">没有记录。拉取日志保留天数为 0 时不记。</p> : null}
@@ -196,15 +207,15 @@ function StatsTab() {
         <Card>
           <CardHeader><CardTitle className="text-sm">按客户端</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-sm">
-            {(data?.byFamily || []).sort((a, b) => b.count - a.count).map((item) => (
+            {byFamily.map((item) => (
               <div key={item.family} className="flex justify-between"><span>{item.label}</span><span className="text-muted-foreground">{item.count}</span></div>
             ))}
           </CardContent>
         </Card>
       </div>
-      <Card>
-        <CardHeader><CardTitle className="text-sm">最近 100 次拉取</CardTitle></CardHeader>
-        <CardContent className="overflow-x-auto p-0">
+      <div className="space-y-2">
+        <p className="text-sm font-medium">最近 100 次拉取</p>
+        <div className="overflow-x-auto rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
           <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
@@ -230,8 +241,8 @@ function StatsTab() {
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -297,7 +308,7 @@ function TemplatesTab() {
       {failedQueryState(query) ? (
         <QueryErrorState label="模板" minHeight="min-h-[120px]" {...failedQueryState(query)!} />
       ) : templates.length === 0 ? (
-        <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">还没有模板，所有人用内置的开头部分。</CardContent></Card>
+        <EmptyState icon={<FileCode2 />} title="还没有模板" description="所有人用内置的开头部分。需要改端口、DNS、TUN 这些时再建。" />
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {templates.map((template) => (
@@ -314,7 +325,7 @@ function TemplatesTab() {
                 <pre className="max-h-24 overflow-hidden whitespace-pre-wrap rounded bg-muted p-2 font-mono text-[11px] text-muted-foreground">{template.prelude.slice(0, 400) || "（空）"}</pre>
                 <div className="flex gap-1">
                   <Button size="sm" variant="ghost" onClick={() => openEdit(template)}>编辑</Button>
-                  <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: `删除模板「${template.name}」？`, description: "指向它的令牌、用户、套餐退回默认。", confirmText: "删除" })) remove.mutate({ id: template.id! }); }}>删除</Button>
+                  <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: `删除模板「${template.name}」？`, description: "指向它的令牌、用户、套餐退回默认。", confirmText: "删除", tone: "destructive" })) remove.mutate({ id: template.id! }); }}>删除</Button>
                 </div>
               </CardContent>
             </Card>

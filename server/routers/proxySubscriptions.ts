@@ -54,7 +54,7 @@ import { PROXY_CLIENT_FAMILY_LABELS } from "../../shared/proxyClientUserAgent";
 import { PROXY_SUBSCRIPTION_SKIP_LABELS as SKIP_LABELS } from "../../shared/proxySubscriptionPlan";
 import { loadProxySubSettings, saveProxySubSettings } from "../proxySubSettings";
 import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken } from "../proxySubBundle";
-import { syncProxySubSource } from "../proxySubSourceSync";
+import { requestProxySubSourceSync } from "../proxySubSourceSync";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { clearProxySubRateLimitForToken } from "../proxySubRateLimit";
 import { buildInboundExit, buildNodeExit } from "../exitQualityView";
@@ -778,14 +778,16 @@ export const proxySubscriptionsRouter = router({
 
   listTokens: protectedProcedure.query(async ({ ctx }) => {
     if (!await hasProxySubscriptionPermission(ctx)) return [];
-    const rows = await db.getProxySubTokensByUser(ctx.user.id);
-    return Promise.all((rows as any[]).map(async (row) => ({
+    const rows = await db.getProxySubTokensByUser(ctx.user.id) as any[];
+    // 设备数一条 GROUP BY 查完，不按令牌逐条数。
+    const deviceCounts = await db.countProxySubDevicesByTokens(rows.map((row) => Number(row.id)));
+    return rows.map((row) => ({
       ...row,
       scope: parseProxySubTokenScope(row.scopeJson),
       options: parseProxySubTokenOptions(row.optionsJson),
-      deviceCount: await db.countProxySubDevices(Number(row.id)),
+      deviceCount: deviceCounts.get(Number(row.id)) || 0,
       lastClientLabel: row.lastClientFamily ? (PROXY_CLIENT_FAMILY_LABELS as any)[row.lastClientFamily] || row.lastClientFamily : "",
-    })));
+    }));
   }),
 
   /** 用户看得到的那部分订阅设置：备用域名、默认外观、能不能加外部订阅…… */
@@ -1024,8 +1026,8 @@ export const proxySubscriptionsRouter = router({
         mode: input.mode,
         isEnabled: true,
       } as any);
-      // 建完立刻拉一次：填错了地址当场就知道。
-      const result = await syncProxySubSource(Number(id), { force: true });
+      // 建完立刻拉一次：填错了地址当场就知道。走「立即同步」的队列：并发满了回「已排队」，不在请求里吊着。
+      const result = await requestProxySubSourceSync(Number(id), { force: true });
       return { id, sync: result };
     }),
 
@@ -1041,7 +1043,7 @@ export const proxySubscriptionsRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
-      await assertOwnedSource(input.id, ctx);
+      const source = await assertOwnedSource(input.id, ctx);
       /*
         管理员关了外部订阅、或者套餐不再包含时：改地址、改 UA、重新启用都不行（这几样会让面板
         再去拉别处）；改名、改间隔、停用照样能改，删除也照样能删。
@@ -1062,7 +1064,8 @@ export const proxySubscriptionsRouter = router({
       if (input.mode !== undefined) data.mode = input.mode;
       if (input.isEnabled !== undefined) data.isEnabled = input.isEnabled;
       if (Object.keys(data).length > 0) await db.updateProxySubSource(input.id, data as any);
-      invalidateProxySubCacheForUser(ctx.user.id);
+      // 作废的是来源主人的缓存：管理员替别人改时，ctx.user 是管理员，改的却是那个用户的订阅。
+      invalidateProxySubCacheForUser(Number(source.userId));
       return { success: true };
     }),
 
@@ -1081,7 +1084,8 @@ export const proxySubscriptionsRouter = router({
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedSource(input.id, ctx);
       await assertExternalSourcesAllowed(ctx);
-      return syncProxySubSource(input.id, { force: true });
+      // 最多 2 路同时拉；这个来源正在跑就直接回 status: "running"，不重复拉（见 proxySubSourceSync）。
+      return requestProxySubSourceSync(input.id, { force: true });
     }),
 
   // ==================== 管理员 ====================

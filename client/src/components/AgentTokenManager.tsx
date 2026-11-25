@@ -1,5 +1,6 @@
-import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
 import { EntityActions } from "@/components/entity/EntityActions";
+import { SecretRevealDialog } from "@/components/SecretRevealDialog";
+import { useCopyWithToast } from "@/components/useCopyWithToast";
 import { CardActions } from "@/components/entity/EntityCard";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getStoredAgentTokenViewMode, storeAgentTokenViewMode, type AgentTokenViewMode } from "@/lib/agentTokenViewMode";
@@ -10,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -20,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -414,7 +417,6 @@ export default function AgentTokenManager({
   const [description, setDescription] = useState("");
   const [editingToken, setEditingToken] = useState<any>(null);
   const [editDescription, setEditDescription] = useState("");
-  const [tokenToDelete, setTokenToDelete] = useState<any | null>(null);
   const [internalViewMode, setInternalViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [installAddressMode, setInstallAddressMode] = useState<InstallAddressMode>("public");
   const lastCreateSignalRef = useRef(0);
@@ -555,6 +557,29 @@ export default function AgentTokenManager({
     onError: (err) => toast.error(err.message || "删除 Token 失败"),
   });
 
+  /*
+    删除确认走共享的确认框：请求在路上时弹窗留着、按钮写「删除中...」，成功了才关
+    （和 Tunnels 的删除框一样）—— 之前是点下去先关、再发请求，失败了用户什么都没看到。
+    要删的那串 Token 和描述放进 details 槽。
+  */
+  const confirmDeleteToken = (token: any) => {
+    void confirmDialog({
+      title: "删除 Agent Token",
+      description: "删除后该 Token 将失效；如果关联主机没有转发规则、转发组或隧道引用，会同步从主机管理中移除。",
+      details: (
+        <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-sm">
+          <div className="font-mono break-all">{token?.token}</div>
+          {token?.description && (
+            <div className="mt-2 text-xs text-muted-foreground">{token.description}</div>
+          )}
+        </div>
+      ),
+      confirmText: "确认删除",
+      confirmPendingText: "删除中...",
+      onConfirm: () => deleteTokenMutation.mutateAsync({ id: token.id }),
+    });
+  };
+
   const updateTokenMutation = trpc.agentTokens.update.useMutation({
     onSuccess: () => {
       utils.agentTokens.list.invalidate();
@@ -600,23 +625,9 @@ export default function AgentTokenManager({
     }
   };
 
-  const copyToClipboard = async (text: string) => {
-    /*
-      走共享实现，不再在这里自己拼一遍 textarea。
-
-      共享那份的注释写明了为什么：textarea 那条路 Chromium 会返回 true 其实复制了个空，
-      iOS 直接不认 —— 它改用了 contenteditable + Range。这里原来抄的正是被换掉的旧写法。
-    */
-    if (await copyTextToClipboard(text)) {
-      toast.success("已复制到剪贴板");
-      return;
-    }
-    toast.error(
-      clipboardNeedsManualCopy()
-        ? "当前是 http 访问，浏览器限制了剪贴板，请长按选中内容复制"
-        : "复制失败，请手动复制",
-    );
-  };
+  // 复制 + toast 走共享的 hook（useCopyWithToast），这页原来自己抄的那份已经删了
+  const copy = useCopyWithToast();
+  const copyToClipboard = (text: string) => copy(text, { success: "已复制到剪贴板" });
 
   /**
    * 命令怎么拼在 shared/agentInstallCommand.ts 里，服务端给租户拼的是同一份 ——
@@ -720,7 +731,7 @@ export default function AgentTokenManager({
                               loadingScriptTokenId={loadingScriptTokenId}
                               onOpenScript={openScriptDialog}
                               onEdit={openEditToken}
-                              onDelete={setTokenToDelete}
+                              onDelete={confirmDeleteToken}
                               dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={tokenReorderPending} />}
                               sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
                             />
@@ -743,7 +754,7 @@ export default function AgentTokenManager({
                             loadingScriptTokenId={loadingScriptTokenId}
                             onOpenScript={openScriptDialog}
                             onEdit={openEditToken}
-                            onDelete={setTokenToDelete}
+                            onDelete={confirmDeleteToken}
                             dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={tokenReorderPending} />}
                             sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
                           />
@@ -809,7 +820,7 @@ export default function AgentTokenManager({
                             loadingScriptTokenId={loadingScriptTokenId}
                             onOpenScript={openScriptDialog}
                             onEdit={openEditToken}
-                            onDelete={setTokenToDelete}
+                            onDelete={confirmDeleteToken}
                           />
                         </TableCell>
                       </TableRow>
@@ -840,50 +851,38 @@ export default function AgentTokenManager({
       </>
       )}
 
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>添加主机</DialogTitle>
-            <DialogDescription data-fx-help="">
-              先生成 Agent 安装 Token，再复制命令到目标主机执行。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>描述（可选）</Label>
-              <Input
-                placeholder="例如: 香港节点 Agent"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreate(false)}>
-              取消
-            </Button>
-            <Button
-              onClick={() => createTokenMutation.mutate({ description: description || undefined })}
-              disabled={createTokenMutation.isPending}
-            >
-              生成安装命令
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* FormDialog：描述框里按回车就生成；描述填了一半关之前先问；生成中不许关 */}
+      <FormDialog
+        open={showCreate}
+        onOpenChange={setShowCreate}
+        title="添加主机"
+        description="先生成 Agent 安装 Token，再复制命令到目标主机执行。"
+        descriptionProps={{ "data-fx-help": "" }}
+        onSubmit={() => createTokenMutation.mutate({ description: description || undefined })}
+        submitText="生成安装命令"
+        pendingText="生成中..."
+        pending={createTokenMutation.isPending}
+        dirty={description.trim() !== ""}
+      >
+        <FormField className="space-y-2">
+          <Label>描述（可选）</Label>
+          <Input
+            placeholder="例如: 香港节点 Agent"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            autoFocus
+          />
+        </FormField>
+      </FormDialog>
 
-      <Dialog open={showNewToken} onOpenChange={setShowNewToken}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-chart-2" />
-              安装命令已生成
-            </DialogTitle>
-            <DialogDescription>
-              在目标主机执行命令；Agent 上线后会出现在主机列表。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
+      {/* 命令里带着刚生成的 Token：SecretRevealDialog，ESC / 点遮罩关不掉，只能点「确定」 */}
+      <SecretRevealDialog
+        open={showNewToken}
+        onOpenChange={setShowNewToken}
+        title={<><CheckCircle2 className="h-5 w-5 text-chart-2" />安装命令已生成</>}
+        description="在目标主机执行命令；Agent 上线后会出现在主机列表。"
+        beforeSecret={(
+          <>
             <InstallAddressSelector
               options={installAddressOptions}
               selectedId={installAddressMode}
@@ -898,39 +897,26 @@ export default function AgentTokenManager({
                 </AlertDescription>
               </Alert>
             )}
-            <div className="space-y-2">
-              <p className="text-sm font-medium">快速安装命令：</p>
-              <div className="p-3 rounded-lg bg-background/50 border">
-                <code className="text-xs font-mono break-all">
-                  {getInstallCommand(newToken)}
-                </code>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full gap-2"
-                onClick={() => copyToClipboard(getInstallCommand(newToken))}
-              >
-                <Copy className="h-3 w-3" />
-                复制安装命令
-              </Button>
-            </div>
-            <CommandRow
-              label="OpenWrt / iStoreOS"
-              command={getOpenWrtInstallCommand(newToken)}
-              onCopy={() => copyToClipboard(getOpenWrtInstallCommand(newToken))}
-            />
-            <CommandRow
-              label="Docker（NAS 等装了 Docker 的设备）"
-              command={getDockerCommand(newToken)}
-              onCopy={() => copyToClipboard(getDockerCommand(newToken))}
-            />
-          </div>
-          <DialogFooter>
-            <Button onClick={() => setShowNewToken(false)}>确定</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </>
+        )}
+        secretLabel="快速安装命令："
+        secret={getInstallCommand(newToken)}
+        copyLabel="复制安装命令"
+        copiedMessage="已复制到剪贴板"
+        warning="命令里带着这枚 Agent Token，谁拿到谁就能把机器接进面板，别转发给别人。"
+        acknowledgeLabel="确定"
+      >
+        <CommandRow
+          label="OpenWrt / iStoreOS"
+          command={getOpenWrtInstallCommand(newToken)}
+          onCopy={() => copyToClipboard(getOpenWrtInstallCommand(newToken))}
+        />
+        <CommandRow
+          label="Docker（NAS 等装了 Docker 的设备）"
+          command={getDockerCommand(newToken)}
+          onCopy={() => copyToClipboard(getDockerCommand(newToken))}
+        />
+      </SecretRevealDialog>
 
       <Dialog open={!!editingToken} onOpenChange={(open) => {
         if (!open) {
@@ -945,7 +931,7 @@ export default function AgentTokenManager({
               备注会作为新主机默认名称。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <FormField className="space-y-2">
             <Label>备注</Label>
             <Input
               value={editDescription}
@@ -953,7 +939,7 @@ export default function AgentTokenManager({
               placeholder="例如：香港节点 Agent"
               onChange={(event) => setEditDescription(event.target.value)}
             />
-          </div>
+          </FormField>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditingToken(null)}>
               取消
@@ -971,59 +957,24 @@ export default function AgentTokenManager({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!tokenToDelete} onOpenChange={(open) => !open && setTokenToDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              删除 Agent Token
-            </DialogTitle>
-            <DialogDescription>
-              删除后该 Token 将失效；如果关联主机没有转发规则、转发组或隧道引用，会同步从主机管理中移除。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-sm">
-            <div className="font-mono break-all">{tokenToDelete?.token}</div>
-            {tokenToDelete?.description && (
-              <div className="mt-2 text-xs text-muted-foreground">{tokenToDelete.description}</div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTokenToDelete(null)}>取消</Button>
-            <Button
-              variant="destructive"
-              disabled={deleteTokenMutation.isPending || !tokenToDelete}
-              onClick={() => {
-                if (!tokenToDelete) return;
-                const id = tokenToDelete.id;
-                setTokenToDelete(null);
-                deleteTokenMutation.mutate({ id });
-              }}
-            >
-              确认删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showScript} onOpenChange={(open) => {
-        setShowScript(open);
-        if (!open) {
-          setScriptToken("");
-          setScriptBoundHost(null);
-        }
-      }}>
-        <DialogContent className="w-[calc(100vw-2rem)] max-w-[42rem] sm:w-[calc(100vw-2rem)]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Terminal className="h-5 w-5" />
-              安装命令
-            </DialogTitle>
-            <DialogDescription>
-              使用 root 执行命令。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
+      {/*
+        已有 Token 的安装命令：同一个 SecretRevealDialog。主安装命令的复制走 copyInstallCommand ——
+        这台主机已经有在线 Agent 时要先确认「会接管」，所以用 onCopy 接管复制。
+      */}
+      <SecretRevealDialog
+        open={showScript}
+        onOpenChange={(open) => {
+          setShowScript(open);
+          if (!open) {
+            setScriptToken("");
+            setScriptBoundHost(null);
+          }
+        }}
+        className="sm:max-w-[42rem]"
+        title={<><Terminal className="h-5 w-5" />安装命令</>}
+        description="使用 root 执行命令。"
+        beforeSecret={(
+          <>
             <InstallAddressSelector
               options={installAddressOptions}
               selectedId={installAddressMode}
@@ -1038,44 +989,38 @@ export default function AgentTokenManager({
                 </AlertDescription>
               </Alert>
             )}
-            <CommandRow
-              label="安装命令"
-              command={scriptToken ? getInstallCommand(scriptToken) : ""}
-              copyDisabled={!scriptToken}
-              onCopy={() => { if (scriptToken) void copyInstallCommand(getInstallCommand(scriptToken)); }}
-            />
-            <CommandRow
-              label="OpenWrt / iStoreOS"
-              command={scriptToken ? getOpenWrtInstallCommand(scriptToken) : ""}
-              copyDisabled={!scriptToken}
-              onCopy={() => { if (scriptToken) void copyInstallCommand(getOpenWrtInstallCommand(scriptToken)); }}
-            />
-            <CommandRow
-              label="Docker（NAS 等装了 Docker 的设备）"
-              command={scriptToken ? getDockerCommand(scriptToken) : ""}
-              copyDisabled={!scriptToken}
-              onCopy={() => { if (scriptToken) void copyInstallCommand(getDockerCommand(scriptToken)); }}
-            />
-            <CommandRow
-              label="卸载命令"
-              command={getUninstallCommand()}
-              onCopy={() => copyToClipboard(getUninstallCommand())}
-            />
-            <CommandRow
-              label="升级命令"
-              command={getUpgradeCommand()}
-              onCopy={() => copyToClipboard(getUpgradeCommand())}
-            />
-          </div>
-          <DialogFooter>
-            <Button onClick={() => {
-              setShowScript(false);
-              setScriptToken("");
-              setScriptBoundHost(null);
-            }}>关闭</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </>
+        )}
+        secretLabel="安装命令"
+        secret={scriptToken ? getInstallCommand(scriptToken) : ""}
+        copyLabel="复制安装命令"
+        onCopy={(command) => copyInstallCommand(command)}
+        warning="命令里带着这台主机的 Agent Token，谁拿到谁就能把机器接进面板，别转发给别人。"
+        acknowledgeLabel="关闭"
+      >
+        <CommandRow
+          label="OpenWrt / iStoreOS"
+          command={scriptToken ? getOpenWrtInstallCommand(scriptToken) : ""}
+          copyDisabled={!scriptToken}
+          onCopy={() => { if (scriptToken) void copyInstallCommand(getOpenWrtInstallCommand(scriptToken)); }}
+        />
+        <CommandRow
+          label="Docker（NAS 等装了 Docker 的设备）"
+          command={scriptToken ? getDockerCommand(scriptToken) : ""}
+          copyDisabled={!scriptToken}
+          onCopy={() => { if (scriptToken) void copyInstallCommand(getDockerCommand(scriptToken)); }}
+        />
+        <CommandRow
+          label="卸载命令"
+          command={getUninstallCommand()}
+          onCopy={() => copyToClipboard(getUninstallCommand())}
+        />
+        <CommandRow
+          label="升级命令"
+          command={getUpgradeCommand()}
+          onCopy={() => copyToClipboard(getUpgradeCommand())}
+        />
+      </SecretRevealDialog>
     </div>
   );
 }

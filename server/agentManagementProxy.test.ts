@@ -169,17 +169,18 @@ test("the GitHub entry script fetches the panel installer without inherited prox
   const start = script.indexOf("run_panel_installer() {");
   const end = script.indexOf("\ndo_install() {");
   assert.ok(start >= 0 && end > start);
-  const bin = path.join(dir, "bin");
-  fs.mkdirSync(bin);
   // curl 桩：记下它看到的代理变量，然后失败退出（只测下载这一步）。
-  fs.writeFileSync(path.join(bin, "curl"), `#!/bin/bash\necho "curl-env:[\${HTTPS_PROXY:-}|\${https_proxy:-}|\${ALL_PROXY:-}]" >&2\nexit 22\n`, { mode: 0o755 });
+  // 用 shell 函数而不是 PATH 里的可执行文件：函数优先于 PATH 查找，不受临时目录执行位 / PATH 顺序影响
+  // （macOS Intel runner 上曾经跑到了真 curl，报 Could not resolve host）。子 shell 里也看得见函数。
+  const curlStub = `curl() { echo "curl-env:[\${HTTPS_PROXY:-}|\${https_proxy:-}|\${ALL_PROXY:-}]" >&2; return 22; }`;
   const run = (proxyArgs: string) => spawnSync("bash", ["-c", [
     script.slice(0, script.indexOf("\n# Leave these empty")).replace(/^#!.*\n/, ""),
     script.slice(start, end),
+    curlStub,
     `CONFIG_DIR=${dir}/none; PANEL_URL=https://panel.invalid; FORWARDX_CURL_CONNECT_TIMEOUT=1; FORWARDX_CURL_LOW_SPEED_LIMIT=1; FORWARDX_CURL_LOW_SPEED_TIME=1; run_panel_installer install TOKEN || true`,
   ].join("\n"), "x", ...proxyArgs.split(" ").filter(Boolean)], {
     encoding: "utf8",
-    env: { PATH: `${bin}:${process.env.PATH}`, HTTPS_PROXY: "http://broken:1", https_proxy: "http://broken:1", ALL_PROXY: "http://broken:1" },
+    env: { PATH: process.env.PATH || "/usr/bin:/bin", HTTPS_PROXY: "http://broken:1", https_proxy: "http://broken:1", ALL_PROXY: "http://broken:1" },
   });
   const direct = run("install TOKEN --no-proxy");
   assert.match(direct.stderr, /curl-env:\[\|\|\]/, direct.stderr);

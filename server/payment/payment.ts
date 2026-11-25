@@ -1548,6 +1548,27 @@ export const paymentRouter = router({
     }),
 
   /**
+   * 订单记录分页（支付设置页的「订单记录」）。listOrders 留给别的调用方；这里按页取，
+   * 可按状态筛、按订单号 / 网关流水号 / 用户名搜。
+   */
+  listOrdersPage: adminProcedure
+    .input(z.object({
+      page: z.number().int().min(1).max(100_000).default(1),
+      pageSize: z.number().int().min(1).max(100).default(20),
+      status: z.string().trim().max(32).optional(),
+      keyword: z.string().trim().max(64).optional(),
+    }))
+    .query(async ({ input }) => {
+      await expireStalePendingOrders();
+      return db.listPaymentOrdersPage({
+        page: input.page,
+        pageSize: input.pageSize,
+        status: input.status || undefined,
+        keyword: input.keyword || undefined,
+      });
+    }),
+
+  /**
    * 删除没付过款的订单（上游 2.3.298），单笔和批量都走这一个。已支付 / 处理中 / 已完成的不删，
    * 逐笔带原因返回；占着的库存和折扣码在同一个事务里退回（db.deleteUnpaidPaymentOrders）。
    * 删掉之后迟到的付款回调转入余额，见 creditDeletedPaymentOrder。

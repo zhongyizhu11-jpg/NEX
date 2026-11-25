@@ -8,6 +8,7 @@ import { describeLinkKind, linkKindForRouteMode, linkKindRequiresAdmin } from "@
 import FilterToolbar from "@/components/FilterToolbar";
 import { SearchToggle } from "@/components/ListControls";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useLastShown } from "@/components/useDialogTarget";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
 import SectionTransition from "@/components/SectionTransition";
 import { forwardGroupModeOf, isUserspaceForwardType } from "@shared/forwardTypes";
@@ -18,10 +19,6 @@ import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseSubjectActions } from "@/components/DiagnoseDialog";
-import { LatencyRating } from "@/components/LatencyRating";
-import { type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
-
-import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,10 +35,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useDialogCloseGuard, useFormDirty } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { segmentedOptionClassName } from "@/components/ui/segmented";
 import {
   Select,
   SelectContent,
@@ -86,86 +84,31 @@ import {
   hasRuleProbeAfterInvalidation,
   updateRuleProbeCache,
 } from "@/lib/ruleProbeCache";
-import {
-  clearRuleStatusSnapshots,
-  readRuleStatusSnapshots,
-  writeRuleStatusSnapshots,
-  type RuleVisualStatusSnapshot,
-} from "@/lib/ruleStatusCache";
-import { batchOperationErrorMessage, chunkBatchItems, isBatchPortConflictError, runBatchOperations } from "@/lib/batchOperations";
-import { useRuleBatchJobSubmit } from "@/components/rules/useRuleBatchJobSubmit";
-import {
-  RULE_TRANSFER_FILE_KIND,
-  RULE_TRANSFER_FILE_VERSION,
-  RULE_TRANSFER_MAX_FILE_SIZE,
-  RULE_TRANSFER_MAX_IMPORT_COUNT,
-  normalizeFailoverStrategy,
-  type RuleTransferFileRule,
-} from "@/lib/ruleTransfer";
-import { parseCompatibleRuleTransferText, validateNyanpassImportTarget, type CompatibleRuleFile, type ImportedRule } from "@/lib/nyanpassImport";
-import {
-  filterRuleEntryAddressesForDisplay,
-  getEntryAddressFamily as addressFamily,
-  resolveRuleEntryHost,
-  type EntryAddressFamily,
-} from "@/lib/ruleEntryDisplay";
+import { clearRuleStatusSnapshots, writeRuleStatusSnapshots } from "@/lib/ruleStatusCache";
+import { chunkBatchItems } from "@/lib/batchOperations";
+import { RULE_TRANSFER_FILE_KIND, RULE_TRANSFER_FILE_VERSION, RULE_TRANSFER_MAX_IMPORT_COUNT, normalizeFailoverStrategy, type RuleTransferFileRule } from "@/lib/ruleTransfer";
+import { getEntryAddressFamily as addressFamily, type EntryAddressFamily } from "@/lib/ruleEntryDisplay";
 import { cn } from "@/lib/utils";
-import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
 import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
 import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
 import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
 import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
-import { RuleGroupManagerDialog, RulePersonalGroupBadges, useRefreshPersonalRuleGroups } from "@/components/rules/PersonalRuleGroups";
-import {
-  MAX_PERSONAL_RULE_GROUP_CHANGE,
-  canChangePersonalRuleGroups,
-  matchesPersonalRuleGroup,
-  personalRuleGroupRank,
-  type PersonalRuleGroup,
-} from "@shared/ruleGroups";
+import { RuleGroupManagerDialog, RulePersonalGroupBadges } from "@/components/rules/PersonalRuleGroups";
+import { personalRuleGroupRank, type PersonalRuleGroup } from "@shared/ruleGroups";
 import { hasRuleLimits } from "@shared/ruleLimits";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
-import {
-  normalizeRuleEgressType,
-  RULE_EGRESS_STATE_LABELS,
-  ruleEgressShapeError,
-  ssEgressTunnelModeSupported,
-  ruleEgressSwitchesForwardType,
-  ruleEgressStateTone,
-  ruleEgressSummaryText,
-  RULE_EGRESS_TYPE_LABELS,
-  ruleEgressProtocolOf,
-  ruleEgressUsesInbound,
-  ruleEgressUsesLink,
-  SS_EGRESS_UDP_SUPPORTED,
-  type RuleEgressState,
-} from "@shared/ssEgress";
+import { normalizeRuleEgressType, ruleEgressShapeError, ssEgressTunnelModeSupported, ruleEgressSwitchesForwardType, RULE_EGRESS_TYPE_LABELS, ruleEgressProtocolOf, ruleEgressUsesInbound, ruleEgressUsesLink, SS_EGRESS_UDP_SUPPORTED } from "@shared/ssEgress";
 import { VLESS_EGRESS_UDP_SUPPORTED } from "@shared/vlessEgress";
-import {
-  formatSniRuleEntry,
-  parseSniNameJson,
-  sniInboundChoiceKey,
-  sniInboundChoices,
-  sniRuleFormBlocker,
-  sniRuleRouteKind,
-  TLS_INBOUND_MAX_SNI_PER_RULE,
-  TLS_INBOUND_RULE_STATE_LABELS,
-  tlsInboundRuleState,
-  type SniRuleRouteKind,
-} from "@shared/tlsInbound";
+import { parseSniNameJson, sniInboundChoiceKey, sniInboundChoices, sniRuleFormBlocker, TLS_INBOUND_MAX_SNI_PER_RULE, type SniRuleRouteKind } from "@shared/tlsInbound";
 import {
   BILLING_TIME_ZONE,
 } from "@shared/billingTime";
-import {
-  parseFailoverEndpoint,
-  parseFailoverTargets,
-} from "@shared/failoverTargets";
-import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
+import { parseFailoverTargets } from "@shared/failoverTargets";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
-import { buildRuleCardDerivedProps, describeRuleLatency, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources, type RuleChainLatencyLike } from "@/features/rules/ruleCardProps";
+import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -185,14 +128,7 @@ import {
   routeGroupTunnelModeSupported,
   validateRouteGroup,
 } from "@shared/routeGroup";
-import {
-  forwardRuleFormBlocker,
-  isAdvancedSectionBlocker,
-  isForwardRuleSourcePortRequired,
-  isValidForwardPort,
-  isValidTargetHost,
-  type ForwardRuleFormContext,
-} from "@shared/forwardRuleForm";
+import { forwardRuleFormBlocker, isAdvancedSectionBlocker, isForwardRuleSourcePortRequired, isValidForwardPort, type ForwardRuleFormContext } from "@shared/forwardRuleForm";
 /*
   端口策略以前在这个文件里另抄了一份，而且和服务端漂了：服务端的策略支持
   多段 ranges（套餐发的端口段就是这么下来的），这边完全不认；「不限制」时
@@ -211,50 +147,7 @@ import {
   ruleSourcePortEnd,
 } from "@shared/portRange";
 import { RuleBatchAddDialog } from "@/components/rules/RuleBatchAddDialog";
-import {
-  Plus,
-  Trash2,
-  Pencil,
-  ArrowRightLeft,
-  ArrowRight,
-  Zap,
-  Shield,
-  Filter,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Stethoscope,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  XCircle,
-  Loader2,
-  Shuffle,
-  AlertCircle,
-  AlertTriangle,
-  Copy,
-  Download,
-  Upload,
-  Search,
-  Network,
-  ClipboardCopy,
-  ListPlus,
-  Layers3,
-  Combine,
-  LayoutGrid,
-  List,
-  Rows3,
-  GitBranch,
-  Globe,
-  RotateCcw,
-  Lock,
-  X,
-  Check,
-  Folder,
-  FolderCog,
-  Pause,
-  Play,
-  RotateCw,
-} from "lucide-react";
+import { Plus, Trash2, Pencil, ArrowRightLeft, ArrowRight, Zap, Shield, Filter, Stethoscope, CheckCircle2, ChevronDown, ChevronRight, XCircle, Loader2, Shuffle, AlertCircle, Copy, Search, Network, ClipboardCopy, ListPlus, Layers3, Combine, LayoutGrid, List, Rows3, GitBranch, Globe, RotateCcw, X, Check, Folder, FolderCog } from "lucide-react";
 
 import {
   FORWARD_TYPES,
@@ -266,7 +159,7 @@ import {
   type ForwardProtocolKey,
 } from "@shared/forwardTypes";
 import { ruleLatencyProbeMethodForRule } from "@shared/latencyProbe";
-import { formatTrafficMultiplier, normalizeTrafficMultiplier, TRAFFIC_MULTIPLIER_DEFAULT } from "@shared/trafficMultiplier";
+import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
 import {
   formatHostAddressWithPort,
   getHostEntryAddress,
@@ -281,41 +174,44 @@ import { Fragment, lazy, memo, Suspense, useState, useMemo, useEffect, useCallba
 import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
-
-import {
-  addHostNodeMeta,
-  addNodeMetaAliases,
-  findHostByAddress,
-  hostDisplayName,
-  hostNodeMeta,
-  targetGeoNodeMeta,
-} from "@/lib/linkTestNodeMeta";
-import { getTunnelExitNames, getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName } from "@/lib/tunnelDisplay";
+import { getTunnelHopIds, getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { StatusDot } from "@/components/network/StatusDot";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { HeaderSpark, HeaderStatusChips } from "@/components/HeaderStatusChips";
-import { useDailyTrafficSpark } from "@/features/traffic/useDailyTrafficSpark";
 import {
   decideRuleFlowLayout,
   ruleVisualStateToHealth,
 } from "@/features/rules/ruleFlow";
-import {
-  preferLastKnownForwardRuleVisualStatus,
-  resolveForwardRuleNotRunningReason,
-  resolveForwardRuleVisualStatus,
-  resolveForwardRuleStopReason,
-} from "@/lib/forwardRuleStatus";
+import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, resolveForwardRuleStopReason } from "@/lib/forwardRuleStatus";
 import { buildLinkAvailabilityIndex } from "@shared/linkAvailability";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useStableRows } from "@/lib/stableRows";
 import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
+import { useSelfTestLinkTestNodeData } from "../features/rules/useSelfTestLinkTestNodeData";
+import { useTrafficByRule } from "../features/rules/useTrafficByRule";
+import { useRuleTransferDisplay } from "../features/rules/useRuleTransferDisplay";
+import { useRuleEntryAddresses } from "../features/rules/useRuleEntryAddresses";
+import { useRuleTransferResources } from "../features/rules/useRuleTransferResources";
+import { useRenderTunnelRoute } from "../features/rules/useRenderTunnelRoute";
+import { useRuleVisualStatuses } from "../features/rules/useRuleVisualStatuses";
+import { useRuleTrafficCells } from "../features/rules/useRuleTrafficCells";
+import { useRuleSourceBadges } from "../features/rules/useRuleSourceBadges";
+import { useRuleWarningBadges } from "../features/rules/useRuleWarningBadges";
+import { useRuleTableTransferCells } from "../features/rules/useRuleTableTransferCells";
+import { useRuleStateBadges } from "../features/rules/useRuleStateBadges";
+import { useRuleTrafficSeries } from "../features/rules/useRuleTrafficSeries";
+import { useRuleSelectOptionHelpers } from "../features/rules/useRuleSelectOptionHelpers";
+import { useRuleTransferResourceLists } from "../features/rules/useRuleTransferResourceLists";
+import { useRuleBatchManageState } from "../features/rules/useRuleBatchManageState";
+import { useRuleBatchManage } from "../features/rules/useRuleBatchManage";
 const SelfTestDialog = lazy(() => import("@/features/rules/SelfTestDialog"));
 const RuleTrafficGlobe = lazy(() => import("@/features/rules/RuleTrafficGlobe"));
+const RuleBatchManageDialog = lazy(() => import("@/features/rules/RuleBatchManageDialog"));
 
 /** 探测是多久以前的：「18 分钟前」。 */
-const formatProbeAge = (at: unknown) => formatAgo(Date.now() - timestampMillis(at));
+export const formatProbeAge = (at: unknown) => formatAgo(Date.now() - timestampMillis(at));
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 // 精简布局：延迟记录并进诊断框当一页
 const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
@@ -357,8 +253,8 @@ function clearRuleTrafficStatCaches() {
   }
 }
 
-type RuleProtocol = "tcp" | "udp" | "both";
-type RuleRouteMode = "local" | "tunnel" | "chain" | "group";
+export type RuleProtocol = "tcp" | "udp" | "both";
+export type RuleRouteMode = "local" | "tunnel" | "chain" | "group";
 
 function isForwardGroupBackedRouteModeValue(mode: RuleRouteMode, forwardGroupId?: number | null) {
   return mode === "chain" || mode === "group" || (mode === "local" && Number(forwardGroupId || 0) > 0);
@@ -415,7 +311,7 @@ type RuleFormData = {
 
 type ProxyProtocolVersion = 1 | 2;
 
-const defaultForm: RuleFormData = {
+export const defaultForm: RuleFormData = {
   hostId: null,
   name: "",
   routeMode: "local",
@@ -445,7 +341,7 @@ const gostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const nginxTunnelModes = new Set(["nginx_stream"]);
 const unsupportedProtocolTitle = "当前转发方式已停用，请编辑并切换到可用资源";
 const revokedResourceTitle = "资源授权已失效，请编辑规则并选择当前有权限的端口转发或隧道";
-const desktopRuleTypeLabels = {
+export const desktopRuleTypeLabels = {
   local: "端口转发",
   tunnel: "隧道转发",
   chain: "转发链",
@@ -458,37 +354,37 @@ const ruleTypeDescriptions = {
   group: "使用转发组入口",
 } as const;
 
-type RuleViewMode = "card" | "table" | "globe";
+export type RuleViewMode = "card" | "table" | "globe";
 type RuleCardSize = "standard" | "compact";
 type RuleDisplayMode = RuleCardSize | "table" | "globe";
 type RulePageSize = 12 | 24 | 36 | 48;
-type RuleGroupType = keyof typeof desktopRuleTypeLabels;
+export type RuleGroupType = keyof typeof desktopRuleTypeLabels;
 type RuleGroupCollapsedState = Partial<Record<RuleGroupType, boolean>>;
-type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
+export type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleCategoryCounts = Record<RuleCategory, number>;
-type RuleTransferScopeType = Exclude<RuleCategory, "all">;
-type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
+export type RuleTransferScopeType = Exclude<RuleCategory, "all">;
+export type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
 // state：批量启用 / 暂停 / 重启（上游 2.3.292），和删除、复制一样交给服务端任务（RuleBatchJobWidget 看进度）
-type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group" | "state";
-type BatchEditFormData = Pick<RuleFormData, "routeMode" | "forwardType" | "tunnelId" | "forwardGroupId" | "targetIp" | "targetPort">;
+export type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group" | "state";
+export type BatchEditFormData = Pick<RuleFormData, "routeMode" | "forwardType" | "tunnelId" | "forwardGroupId" | "targetIp" | "targetPort">;
 
 const RULE_CATEGORIES = ["all", "local", "tunnel", "chain", "group"] as const;
-const ruleTransferScopeLabels: Record<RuleTransferScopeType, string> = {
+export const ruleTransferScopeLabels: Record<RuleTransferScopeType, string> = {
   local: "端口转发",
   tunnel: "隧道",
   chain: "转发链",
   group: "转发组",
 };
 
-const ruleTransferScopeOptions: Array<{ value: RuleTransferScopeType; label: string }> = [
+export const ruleTransferScopeOptions: Array<{ value: RuleTransferScopeType; label: string }> = [
   { value: "local", label: "端口转发" },
   { value: "tunnel", label: "隧道" },
   { value: "chain", label: "转发链" },
   { value: "group", label: "转发组" },
 ];
-const importRuleTransferScopeOptions = ruleTransferScopeOptions;
+export const importRuleTransferScopeOptions = ruleTransferScopeOptions;
 
-function parseRuleResourceFilter(value: unknown): { type: RuleTransferScopeType | null; id: number | null } {
+export function parseRuleResourceFilter(value: unknown): { type: RuleTransferScopeType | null; id: number | null } {
   const raw = String(value || "").trim();
   if (!raw || raw === "all") return { type: null, id: null };
   const [type, idText] = raw.split(":", 2);
@@ -715,7 +611,7 @@ function getStoredString(key: string, fallback: string) {
   }
 }
 
-function storeString(key: string, value: string) {
+export function storeString(key: string, value: string) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(key, value);
@@ -738,7 +634,7 @@ function getRuleForwardGroupKind(rule: any, forwardGroupById: Map<number, any>):
   return mode === "chain" ? "chain" : "group";
 }
 
-function getRuleCategory(rule: any, forwardGroupById: Map<number, any>): Exclude<RuleCategory, "all"> {
+export function getRuleCategory(rule: any, forwardGroupById: Map<number, any>): Exclude<RuleCategory, "all"> {
   const groupKind = getRuleForwardGroupKind(rule, forwardGroupById);
   if (groupKind) return groupKind;
   return rule.forwardType === "gost" && rule.tunnelId ? "tunnel" : "local";
@@ -748,7 +644,7 @@ function getRuleDisplayType(rule: any, forwardGroupById: Map<number, any>): Rule
   return getRuleCategory(rule, forwardGroupById);
 }
 
-type RuleFilterState = {
+export type RuleFilterState = {
   filterUser: string;
   filterResource: RuleResourceFilter;
   ruleCategory: RuleCategory;
@@ -820,7 +716,9 @@ function RuleCardPlaceholder() {
       ruleCardUi）：卡片里点「编辑」「开关」拿到的总是最新的状态，不会是这张卡上次画时的旧闭包。
       ui.* 读到的页面数据都列在 page.helperInputs 里，它们一变 page 就换引用。
 */
-type RuleCardRule = any;
+export type RuleCardRule = any;
+/** 主机 / 隧道 / 转发组这些资源行在页面里还是宽类型（仓储层带 any）；抽出去的批量管理 hook / 弹窗用这个名字指它们，别再散落 any。 */
+export type RuleResourceRow = any;
 type RuleCardTone = "ok" | "warn" | "down" | "off";
 
 type RuleTransferDisplay = {
@@ -1606,7 +1504,7 @@ function isRuleSearchMatch(rule: any, filters: RuleFilterState) {
   const searchText = buildRuleSearchText(rule, filters);
   return tokens.every((token) => searchText.includes(token));
 }
-function isForwardRuleVisibleByFilters(rule: any, filters: RuleFilterState) {
+export function isForwardRuleVisibleByFilters(rule: any, filters: RuleFilterState) {
   if (filters.isAdmin) {
     if (filters.filterUser === "self" && Number(rule.userId) !== Number(filters.userId)) {
       return false;
@@ -1634,7 +1532,7 @@ function isForwardRuleVisibleByFilters(rule: any, filters: RuleFilterState) {
   return true;
 }
 
-function getTunnelDisplay(tunnel: any | null | undefined, showNginxLabel = true) {
+export function getTunnelDisplay(tunnel: any | null | undefined, showNginxLabel = true) {
   const mode = String(tunnel?.mode || "").toLowerCase();
   if (mode === "forwardx") {
     return {
@@ -1673,8 +1571,8 @@ function getTunnelDisplay(tunnel: any | null | undefined, showNginxLabel = true)
 
 // 入口地址推导已移到 shared，服务端生成客户端订阅时复用同一实现，
 // 保证订阅里的节点地址和面板上显示的入口地址永远一致。
-type EntryAddress = HostEntryAddress;
-const pushUniqueEntryAddress = pushUniqueHostEntryAddress;
+export type EntryAddress = HostEntryAddress;
+export const pushUniqueEntryAddress = pushUniqueHostEntryAddress;
 export const formatAddressWithPort = formatHostAddressWithPort;
 /** 规则卡上的入口地址：端口段写成 `地址:20000-20100`（shared/portRange.ts）。 */
 /** 端口框原文里的段尾（20000-20100 → 20100）；单端口、没写完或写错都是 0。 */
@@ -1683,7 +1581,7 @@ function portSpanEndFromText(text: string | null): number {
   return spec && !("error" in spec) && spec.end > spec.start ? spec.end : 0;
 }
 
-const formatRuleEntryAddress = (host: string, rule: { sourcePort?: unknown; sourcePortEnd?: unknown }) => (
+export const formatRuleEntryAddress = (host: string, rule: { sourcePort?: unknown; sourcePortEnd?: unknown }) => (
   isPortRangeRule(rule)
     ? `${formatAddressWithPort(host, Number(rule.sourcePort))}-${ruleSourcePortEnd(rule)}`
     : formatAddressWithPort(host, Number(rule.sourcePort))
@@ -1693,7 +1591,7 @@ export function isForwardChainGroup(group: any | null | undefined) {
   return forwardGroupModeOf(group) === "chain";
 }
 
-function getForwardGroupRouteLabel(group: any | null | undefined) {
+export function getForwardGroupRouteLabel(group: any | null | undefined) {
   const mode = forwardGroupModeOf(group);
   if (mode === "port") return "端口转发";
   if (mode === "chain") return "转发链";
@@ -1780,7 +1678,7 @@ function resolveChainConnectHostForWarning(member: any, host: any | null | undef
   return publicAddr || stored;
 }
 
-function enabledHostMembers(group: any | null | undefined) {
+export function enabledHostMembers(group: any | null | undefined) {
   return [...(group?.members || [])]
     .filter((member: any) => member?.memberType !== "tunnel" && member?.isEnabled !== false && Number(member?.hostId || 0) > 0)
     .sort((a: any, b: any) => Number(a.priority || 0) - Number(b.priority || 0));
@@ -1914,7 +1812,7 @@ function isSelectableForwardRuleGroup(group: any | null | undefined) {
   return mode === "port" || mode === "failover" || mode === "chain";
 }
 
-function getForwardGroupKindLabel(group: any | null | undefined) {
+export function getForwardGroupKindLabel(group: any | null | undefined) {
   const mode = forwardGroupModeOf(group);
   if (mode === "port") return "端口转发";
   if (mode === "chain") return "转发链";
@@ -1973,25 +1871,25 @@ export function ruleGlobeRouteHostIds(rule: any, tunnelById: Map<number, any>, f
   return [Number(rule.hostId || 0)].filter((id) => id > 0);
 }
 
-function routeModeOptionClass(active: boolean, disabled = false) {
+export function routeModeOptionClass(active: boolean, disabled = false) {
   return segmentedOptionClassName(active, disabled, "gap-1.5 px-3");
 }
 
-function normalizeRuleProtocol(value: unknown): RuleProtocol {
+export function normalizeRuleProtocol(value: unknown): RuleProtocol {
   return value === "tcp" || value === "udp" || value === "both" ? value : "both";
 }
 
-function normalizeRuleForwardType(value: unknown): ForwardType {
+export function normalizeRuleForwardType(value: unknown): ForwardType {
   return FORWARD_TYPES.includes(value as ForwardType) ? (value as ForwardType) : "iptables";
 }
 
-function getForwardGroupRuleForwardType(group: any | null | undefined, fallback: ForwardType | undefined = "iptables"): ForwardType {
+export function getForwardGroupRuleForwardType(group: any | null | undefined, fallback: ForwardType | undefined = "iptables"): ForwardType {
   if (!group) return fallback || "iptables";
   if (!isForwardChainGroup(group) && String(group?.groupType || "") === "tunnel") return "gost";
   return normalizeRuleForwardType(group?.forwardType || fallback);
 }
 
-function normalizePositiveRuleNumber(value: unknown, fallback: number) {
+export function normalizePositiveRuleNumber(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
@@ -2001,7 +1899,7 @@ function normalizeRuleTransferSeconds(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? Math.min(3600, Math.max(10, Math.round(parsed))) : fallback;
 }
 
-function normalizeProxyProtocolVersion(value: unknown): ProxyProtocolVersion {
+export function normalizeProxyProtocolVersion(value: unknown): ProxyProtocolVersion {
   return Number(value) === 2 ? 2 : 1;
 }
 
@@ -2033,7 +1931,7 @@ function exportRuleForTransfer(rule: any): RuleTransferFileRule {
   };
 }
 
-function downloadRuleTransferFiles(
+export function downloadRuleTransferFiles(
   rules: readonly any[],
   scope: Record<string, unknown>,
   fileNameBase: string,
@@ -2231,10 +2129,8 @@ function RulesContent() {
   const [editingLimitBaseline, setEditingLimitBaseline] = useState<any>(null);
   const [editingOriginalProtocol, setEditingOriginalProtocol] = useState<RuleProtocol | null>(null);
   const [legacyLocalRuleEditId, setLegacyLocalRuleEditId] = useState<number | null>(null);
-  const [deleteRule, setDeleteRule] = useState<any | null>(null);
   // 主备策略面板开着的是哪条规则。存 id 不存整行：强制走之后列表会刷新，面板要跟着新数据走。
   const [policyRuleId, setPolicyRuleId] = useState<number | null>(null);
-  const [resetTrafficTarget, setResetTrafficTarget] = useState<{ scope: "all" } | { scope: "rule"; rule: any } | null>(null);
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [form, setForm] = useState<RuleFormData>(defaultForm);
   const filterResourceStorageKey = ruleFilterStorageKey(RULE_FILTER_RESOURCE_STORAGE_KEY, user);
@@ -2392,66 +2288,8 @@ function RulesContent() {
   const [portRangeError, setPortRangeError] = useState<string | null>(null);
   const [batchAddOpen, setBatchAddOpen] = useState(false);
   const latestPortCheckRef = useRef(0);
-  const [copyRuleIds, setCopyRuleIds] = useState<number[]>([]);
-  const [copyRuleSearch, setCopyRuleSearch] = useState("");
-  const [copyRuleCategory, setCopyRuleCategory] = useState<RuleCategory>("all");
-  const [copyManageMode, setCopyManageMode] = useState<RuleBatchManageMode>("copy");
-  /*
-    批量管理里的个人分组（上游 2.3.290）：左边按分组筛（每种操作都能用，打开时沿用页面上的分组筛选）；
-    「调整分组」先选目标分组和加入 / 移出，左边只列出真的会被改到的规则（canChangePersonalRuleGroups）。
-  */
-  const [copyRulePersonalGroup, setCopyRulePersonalGroup] = useState<number | null>(null);
-  const [batchGroupTargetIds, setBatchGroupTargetIds] = useState<number[]>([]);
-  const [batchGroupMode, setBatchGroupMode] = useState<"add" | "remove">("add");
-  const moveToPersonalGroupsMutation = trpc.rules.moveToPersonalGroups.useMutation();
-  const refreshPersonalRuleGroups = useRefreshPersonalRuleGroups();
-  const [copyTargetScopeType, setCopyTargetScopeType] = useState<RuleTransferScopeType>("local");
-  const [copyTargetResourceIds, setCopyTargetResourceIds] = useState<number[]>([]);
-  // Keep an eagerly-updated snapshot of the target selection.  React state is
-  // normally flushed before the next click, but a user can click a checkbox
-  // and the action button in the same frame (especially on a busy page).  In
-  // that case the button handler may still be running the previous render's
-  // closure.  The ref is updated by the selection handlers before scheduling
-  // the state update, so a copy always uses the most recent explicit choice.
-  const copyTargetSelectionRef = useRef<{
-    scopeType: RuleTransferScopeType;
-    resourceIds: number[];
-  }>({ scopeType: "local", resourceIds: [] });
-  const commitCopyTargetSelection = useCallback((scopeType: RuleTransferScopeType, resourceIds: readonly number[]) => {
-    const normalizedIds = Array.from(new Set(resourceIds
-      .map((id) => Number(id))
-      .filter((id) => Number.isInteger(id) && id > 0)));
-    copyTargetSelectionRef.current = { scopeType, resourceIds: normalizedIds };
-    setCopyTargetScopeType(scopeType);
-    setCopyTargetResourceIds(normalizedIds);
-  }, []);
-  const [copyTargetSearch, setCopyTargetSearch] = useState("");
-  const [copyConflictStrategy, setCopyConflictStrategy] = useState<"skip" | "auto" | "error">("auto");
-  const [copyWorking, setCopyWorking] = useState(false);
-  const [batchEditForm, setBatchEditForm] = useState<BatchEditFormData>({
-    routeMode: "local",
-    forwardType: defaultForm.forwardType,
-    tunnelId: null,
-    forwardGroupId: null,
-    targetIp: "",
-    targetPort: 0,
-  });
-  const [exportScopeType] = useState<RuleTransferScopeType>("local");
-  const [exportResourceId, setExportResourceId] = useState("");
-  const [importScopeType, setImportScopeType] = useState<RuleTransferScopeType>("tunnel");
-  const [importResourceId, setImportResourceId] = useState("");
-  const [importResourceSearch, setImportResourceSearch] = useState("");
-  const [importSourceMode, setImportSourceMode] = useState<"file" | "manual" | "nyanpass">("file");
-  const [importFile, setImportFile] = useState<CompatibleRuleFile | null>(null);
-  /** ny 导出里没有协议，导入时统一选一个（上游 2.3.285，实验性）。 */
-  const [importNyanpassProtocol, setImportNyanpassProtocol] = useState<RuleProtocol>("tcp");
-  const [importNyanpassAcknowledged, setImportNyanpassAcknowledged] = useState(false);
-  const [importFileName, setImportFileName] = useState("");
-  const [importFileError, setImportFileError] = useState("");
-  const [importFileInputKey, setImportFileInputKey] = useState(0);
-  const [importManualText, setImportManualText] = useState("");
-  const [importingRules, setImportingRules] = useState(false);
-  const importingRulesRef = useRef(false);
+  const batchState = useRuleBatchManageState();
+  const { exportScopeType, importScopeType, exportResourceId, setExportResourceId, importResourceId, setImportResourceId, importResourceSearch, importManualText } = batchState;
   const rulePageRequest = usePersistentPageRequest("forwardx.rules.page");
   const rulePageResource = parseRuleResourceFilter(filterResource);
   const rulePageFilterKey = [filterUser, filterResource, ruleCategory, ruleSearchQuery.trim(), rulePageSize, personalGroupFilter ?? "all", personalGroupSortActive ? "group" : "default"].join(":");
@@ -2686,13 +2524,6 @@ function RulesContent() {
     onError: (err) => toast.error(err.message || "排序保存失败"),
   });
   const ruleReorderPending = reorderRulesMutation.isPending;
-
-  const batchCreateMutation = trpc.rules.create.useMutation();
-  const batchUpdateMutation = trpc.rules.update.useMutation();
-  const batchDeleteMutation = trpc.rules.deleteBatch.useMutation();
-  const ruleBatchJob = useRuleBatchJobSubmit();
-
-  const importCreateMutation = trpc.rules.create.useMutation();
 
   // tab：打开时先停在哪一页（表格里点「详细」直接看延迟记录）
   const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; chainKernel?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
@@ -2947,37 +2778,6 @@ function RulesContent() {
       return;
     }
     setShowDialog(true);
-  };
-  const openCopyDialog = () => {
-    setCopyManageMode(transferSourceRules.length ? "copy" : "import");
-    setBatchEditForm(buildEmptyBatchEditForm());
-    setCopyRulePersonalGroup(personalGroupFilter);
-    setBatchGroupTargetIds([]);
-    setBatchGroupMode("add");
-    setCopyRuleCategory(ruleCategory);
-    setCopyRuleSearch(ruleSearchQuery);
-    const preferredCopyTargetScope: RuleTransferScopeType = canUseSavedLocalForward
-      ? "local"
-      : canUseGost
-        ? "tunnel"
-        : canUseForwardChain
-          ? "chain"
-          : "group";
-    commitCopyTargetSelection(preferredCopyTargetScope, []);
-    setCopyTargetSearch("");
-    setCopyRuleIds([]);
-    setCopyConflictStrategy("auto");
-    const preferredImportType: RuleTransferScopeType = canUseSavedLocalForward
-      ? "local"
-      : canUseGost
-        ? "tunnel"
-        : canUseForwardChain
-          ? "chain"
-          : "group";
-    setImportScopeType(preferredImportType);
-    setImportResourceId("");
-    setImportResourceSearch("");
-    setShowCopyDialog(true);
   };
 
   const openEdit = (rule: any) => {
@@ -3266,50 +3066,8 @@ function RulesContent() {
     () => availableForwardGroups.filter((group: any) => isForwardChainGroup(group)),
     [availableForwardGroups]
   );
-  const availableFailoverForwardGroups = useMemo(
-    () => availableForwardGroups.filter((group: any) => forwardGroupModeOf(group) === "failover"),
-    [availableForwardGroups]
-  );
-  const transferPortGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => forwardGroupModeOf(group) === "port"),
-    [forwardGroups]
-  );
-  const transferChainGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => isForwardChainGroup(group)),
-    [forwardGroups]
-  );
-  const transferRuleGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => forwardGroupModeOf(group) === "failover"),
-    [forwardGroups]
-  );
-  const getRuleFilterResources = useCallback((type: RuleTransferScopeType): any[] => {
-    if (type === "local") return transferPortGroups;
-    if (type === "tunnel") return tunnels || [];
-    if (type === "chain") return transferChainGroups;
-    return transferRuleGroups;
-  }, [transferChainGroups, transferPortGroups, transferRuleGroups, tunnels]);
-  useEffect(() => {
-    const selected = parseRuleResourceFilter(filterResource);
-    if (!selected.type || !selected.id) return;
-    if (selected.type === "tunnel" ? !Array.isArray(tunnels) : !Array.isArray(forwardGroups)) return;
-    if (getRuleFilterResources(selected.type).some((resource: any) => Number(resource.id) === selected.id)) return;
-    setFilterResource("all");
-    storeString(filterResourceStorageKey, "all");
-  }, [filterResource, filterResourceStorageKey, getRuleFilterResources]);
-  const getTransferResources = useCallback((type: RuleTransferScopeType): any[] => {
-    if (type === "local") return transferPortGroups;
-    if (type === "tunnel") return tunnels || [];
-    if (type === "chain") return transferChainGroups;
-    return transferRuleGroups;
-  }, [tunnels, transferPortGroups, transferChainGroups, transferRuleGroups]);
-  const getImportResources = useCallback((type: RuleTransferScopeType): any[] => {
-    if (type === "local") return availablePortForwardGroups;
-    if (type === "tunnel") return supportedTunnels;
-    if (type === "chain") return availableForwardChainGroups;
-    return availableFailoverForwardGroups;
-  }, [availableFailoverForwardGroups, availableForwardChainGroups, availablePortForwardGroups, supportedTunnels]);
-  const exportResources = useMemo(() => getTransferResources(exportScopeType), [exportScopeType, getTransferResources]);
-  const importResources = useMemo(() => getImportResources(importScopeType), [getImportResources, importScopeType]);
+  const useRuleTransferResourceListsResult = useRuleTransferResourceLists({ availableForwardGroups, forwardGroups, tunnels, filterResource, setFilterResource, filterResourceStorageKey, availablePortForwardGroups, supportedTunnels, availableForwardChainGroups, exportScopeType, importScopeType });
+  const { availableFailoverForwardGroups, exportResources, importResources, getRuleFilterResources } = useRuleTransferResourceListsResult;
   useEffect(() => {
     const firstId = exportResources[0]?.id;
     if (!firstId) {
@@ -3915,323 +3673,36 @@ function RulesContent() {
     }
   };
 
-  const toggleCopyRule = (ruleId: number, checked: boolean) => {
-    setCopyRuleIds((prev) => checked ? Array.from(new Set([...prev, ruleId])) : prev.filter((id) => id !== ruleId));
-  };
-
-  const switchCopyManageMode = (mode: RuleBatchManageMode) => {
-    // 进出「调整分组」时清掉勾选：那里只列得出能改的规则，带着别处勾的规则过去，等于改了看不见的规则。
-    if ((mode === "group") !== (copyManageMode === "group")) setCopyRuleIds([]);
-    setCopyManageMode(mode);
-    if (mode === "edit") {
-      commitCopyTargetSelection(copyTargetSelectionRef.current.scopeType, []);
-      setBatchEditForm(buildEmptyBatchEditForm());
-    }
-    if (mode === "import") {
-      const preferredImportType: RuleTransferScopeType = canUseSavedLocalForward
-        ? "local"
-        : canUseGost
-          ? "tunnel"
-          : canUseForwardChain
-            ? "chain"
-            : "group";
-      setImportScopeType(preferredImportType);
-      setImportResourceId("");
-      setImportResourceSearch("");
-      resetImportDialog();
-    }
-  };
-
-  const setBatchEditRouteMode = (mode: RuleRouteMode) => {
-    if (mode === batchEditForm.routeMode) return;
-    if (mode === "local" && !canUseSavedLocalForward) return;
-    if (mode === "tunnel" && !canUseGost) return;
-    if (mode === "chain" && !canUseForwardChain) return;
-    if (mode === "group" && !canUseFailoverGroup) return;
-    setBatchEditForm((prev) => ({
-      ...prev,
-      routeMode: mode,
-      forwardType: mode === "tunnel" ? "gost" : prev.forwardType,
-      tunnelId: null,
-      forwardGroupId: null,
-    }));
-  };
-
-  const toggleCopyTargetResource = (resourceId: number, checked: boolean, renderedScopeType: RuleTransferScopeType) => {
-    const current = copyTargetSelectionRef.current;
-    // If the scope selector changed but this checkbox belongs to the previous
-    // render, do not mix IDs from the two scopes.  The checkbox's rendered
-    // scope is the authoritative context for this event.
-    const currentIds = current.scopeType === renderedScopeType ? current.resourceIds : [];
-    const nextIds = !checked
-      ? currentIds.filter((id) => id !== resourceId)
-      : copyManageMode === "edit"
-        ? [resourceId]
-        : Array.from(new Set([...currentIds, resourceId]));
-    commitCopyTargetSelection(renderedScopeType, nextIds);
-  };
-
-  const buildBatchCopyRulePayload = (rule: any, targetType: RuleTransferScopeType, resource: any, sourcePort: number) => {
-    const isTunnelTarget = targetType === "tunnel";
-    const isForwardGroupTarget = !isTunnelTarget;
-    const forwardType = isTunnelTarget ? "gost" : getForwardGroupRuleForwardType(resource, rule.forwardType);
-    const keepFailover = targetType === "group" && !!rule.failoverEnabled;
-    return {
-      hostId: isTunnelTarget ? Number(resource.entryHostId) : undefined,
-      userId: createOwnerUserId,
-      name: String(rule.name || "复制规则").trim().slice(0, 128) || "复制规则",
-      forwardType,
-      protocol: normalizeRuleProtocol(rule.protocol),
-      gostMode: "direct" as const,
-      gostRelayHost: null,
-      gostRelayPort: null,
-      tunnelId: isTunnelTarget ? Number(resource.id) : null,
-      forwardGroupId: isForwardGroupTarget ? Number(resource.id) : null,
-      sourcePort,
-      targetIp: String(rule.targetIp || ""),
-      targetPort: Number(rule.targetPort || 0),
-      telegramErrorNotifyEnabled: telegramBotReady && !!rule.telegramErrorNotifyEnabled,
-      entryDomainEnabled: rule.entryDomainEnabled !== false,
-      proxyProtocolReceive: !!rule.proxyProtocolReceive,
-      proxyProtocolSend: !!rule.proxyProtocolSend,
-      proxyProtocolExitReceive: !!rule.proxyProtocolExitReceive,
-      proxyProtocolExitSend: !!rule.proxyProtocolExitSend,
-      proxyProtocolVersion: normalizeProxyProtocolVersion(rule.proxyProtocolVersion),
-      tcpFastOpen: !!rule.tcpFastOpen,
-      zeroCopy: !!rule.zeroCopy,
-      udpOverTcp: !!rule.udpOverTcp,
-      udpOverTcpPort: Number(rule.udpOverTcpPort || 0),
-      failoverEnabled: keepFailover,
-      failoverStrategy: normalizeFailoverStrategy(rule.failoverStrategy),
-      failoverTargets: keepFailover ? parseFailoverTargets(rule.failoverTargets) : [],
-      failoverSeconds: normalizePositiveRuleNumber(rule.failoverSeconds, 60),
-      recoverSeconds: normalizePositiveRuleNumber(rule.recoverSeconds, 120),
-      autoFailback: rule.autoFailback !== false,
-    };
-  };
-
-  const buildBatchEditRulePayload = (rule: any, sourcePort: number) => {
-    const payload: Record<string, any> = { id: Number(rule.id) };
-    if (hasBatchEditRouteSelection) {
-      if (batchEditForm.routeMode === "tunnel" && selectedBatchEditTunnel) {
-        payload.forwardType = "gost";
-        payload.tunnelId = Number(selectedBatchEditTunnel.id);
-        payload.forwardGroupId = null;
-        payload.hostId = Number(selectedBatchEditTunnel.entryHostId);
-        payload.sourcePort = sourcePort;
-      } else if (selectedBatchEditForwardGroup) {
-        payload.forwardGroupId = Number(selectedBatchEditForwardGroup.id);
-        payload.forwardType = getForwardGroupRuleForwardType(selectedBatchEditForwardGroup, rule.forwardType);
-        payload.sourcePort = sourcePort;
-      }
-    }
-    if (hasBatchEditTargetIpChange) payload.targetIp = batchEditTargetIp;
-    if (hasBatchEditTargetPortChange) payload.targetPort = batchEditTargetPort;
-    return payload;
-  };
-
-  const updateBatchRuleTarget = async (rule: any) => {
-    const sourcePort = Number(rule.sourcePort || 0);
-    try {
-      await batchUpdateMutation.mutateAsync(buildBatchEditRulePayload(rule, sourcePort) as any);
-      return { updated: true, skipped: false };
-    } catch (error: any) {
-      if (!hasBatchEditRouteSelection || copyConflictStrategy === "error" || !isBatchPortConflictError(error)) throw error;
-      if (copyConflictStrategy === "auto") {
-        await batchUpdateMutation.mutateAsync(buildBatchEditRulePayload(rule, 0) as any);
-        return { updated: true, skipped: false };
-      }
-      return { updated: false, skipped: true };
-    }
-  };
-
-  const handleCopyRules = async () => {
-    if (!canAdd) {
-      toast.error("当前账号没有添加转发规则的权限");
-      return;
-    }
-    if (copySelectedRules.length === 0) {
-      toast.error("请选择要复制的规则");
-      return;
-    }
-    // Read the eagerly-updated selection snapshot instead of relying solely
-    // on values captured by the render that created this click handler.  This
-    // prevents a checkbox click immediately followed by "复制" from using a
-    // previous target (or a previous scope when the resource list is being
-    // refreshed).
-    const targetSelection = copyTargetSelectionRef.current;
-    const targetType = targetSelection.scopeType;
-    const targetResources = targetType === "local"
-      ? availablePortForwardGroups
-      : targetType === "tunnel"
-        ? supportedTunnels
-        : targetType === "chain"
-          ? availableForwardChainGroups
-          : availableFailoverForwardGroups;
-    const selectedTargetIds = new Set(targetSelection.resourceIds.map(Number));
-    const selectedTargets = targetResources.filter((resource: any) => selectedTargetIds.has(Number(resource.id)));
-    if (selectedTargets.length === 0) {
-      toast.error("请选择目标" + ruleTransferScopeLabels[targetType]);
-      return;
-    }
-    const targetNames = selectedTargets.map((resource: any) => (
-      `${getTransferResourceLabel(targetType, resource)} (#${Number(resource.id)})`
-    ));
-    const targetSummary = targetNames.length <= 3
-      ? targetNames.join("、")
-      : `${targetNames.slice(0, 3).join("、")} 等 ${targetNames.length} 个目标`;
-    /*
-      批量复制交给服务端任务（上游 2.3.290）：每条副本的参数在这里按原来的规则拼好，服务端逐条调 rules.create，
-      端口冲突按所选策略换端口或跳过。提交即返回，进度、失败明细、重试失败项都在右下角的小窗里。
-    */
-    const copyItems = selectedTargets.flatMap((resource: any) => copySelectedRules.map((rule: any) => ({
-      label: `${String(rule.name || `规则 #${rule.id}`)} → ${getTransferResourceLabel(targetType, resource)}`.slice(0, 160),
-      input: buildBatchCopyRulePayload(rule, targetType, resource, Number(rule.sourcePort || 0)) as Record<string, unknown>,
-    })));
-    const submitted = await ruleBatchJob.submit({
-      operation: "copy",
-      title: `复制 ${copySelectedRules.length} 条规则到 ${targetSummary}`.slice(0, 80),
-      copyItems,
-      conflictStrategy: copyConflictStrategy,
+  /*
+    「重置统计」和「删除规则」都走共享的确认框：请求在路上时弹窗留着、按钮写「重置中...」，
+    成功了才关。原来这两处各自手写一个 Dialog，就是因为 useConfirmDialog 没有 pending 态和 details 槽。
+  */
+  const confirmResetTraffic = (target: { scope: "all" } | { scope: "rule"; rule: any }) => {
+    if (target.scope === "all" && visibleRuleIdsForMetrics.length === 0) return;
+    void confirmDialog({
+      title: target.scope === "all" ? "重置全部规则数据" : "重置规则数据",
+      description: target.scope === "all"
+        ? `确认重置当前列表中 ${visibleRuleIdsForMetrics.length} 条规则的所有统计数据？`
+        : `确认重置规则 "${target.rule?.name || ""}" 的所有统计数据？`,
+      details: (
+        <div className="rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_20%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs leading-5 text-[var(--fx-warn-text)]">
+          这里只清除规则页面展示的统计数据，不会清除用户套餐已用流量、余额或流量按量计费记录。
+        </div>
+      ),
+      confirmText: "确认重置",
+      confirmPendingText: "重置中...",
+      onConfirm: () => resetTrafficMutation.mutateAsync(target.scope === "rule"
+        ? { scope: "rule", ruleId: Number(target.rule?.id || 0) }
+        : { scope: "all", ruleIds: visibleRuleIdsForMetrics }),
     });
-    if (submitted) setShowCopyDialog(false);
   };
-
-  const handleBatchEditRules = async () => {
-    if (copySelectedRules.length === 0) {
-      toast.error("请选择要批量编辑的规则");
-      return;
-    }
-    if (!hasBatchEditChanges) {
-      toast.error("请至少选择要替换的入口资源，或填写目标地址/端口");
-      return;
-    }
-    if (batchEditForm.routeMode === "tunnel" && !selectedBatchEditTunnel && !hasBatchEditTargetIpChange && !hasBatchEditTargetPortChange) {
-      toast.error("请选择要替换到的隧道");
-      return;
-    }
-    if (batchEditForm.routeMode !== "tunnel" && !selectedBatchEditForwardGroup && !hasBatchEditTargetIpChange && !hasBatchEditTargetPortChange) {
-      toast.error(batchEditForm.routeMode === "local" ? "请选择要替换到的端口转发" : batchEditForm.routeMode === "chain" ? "请选择要替换到的转发链" : "请选择要替换到的转发组");
-      return;
-    }
-    if (hasBatchEditTargetIpChange && !isValidTargetHost(batchEditTargetIp)) {
-      toast.error("请输入有效的目标地址");
-      return;
-    }
-    if (batchEditForm.targetPort && !hasBatchEditTargetPortChange) {
-      toast.error("请输入有效的目标端口");
-      return;
-    }
-    setCopyWorking(true);
-    let updated = 0;
-    let skipped = 0;
-    try {
-      const results = await runBatchOperations(copySelectedRules, 6, (rule) => updateBatchRuleTarget(rule));
-      for (const result of results) {
-        if (result.status === "rejected") continue;
-        if (result.value.updated) updated += 1;
-        if (result.value.skipped) skipped += 1;
-      }
-      invalidateRuleProbeStatuses(results
-        .filter((result) => result.status === "fulfilled" && result.value.updated)
-        .map((result) => Number(result.item.id)));
-      await Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-        utils.rules.trafficSummary.invalidate(),
-      ]);
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length > 0) {
-        toast.error(`批量编辑完成：成功 ${updated} 条，跳过 ${skipped} 条，失败 ${failures.length} 条。${batchOperationErrorMessage(failures[0].reason)}`);
-      } else {
-        toast.success("已批量编辑 " + updated + " 条规则" + (skipped ? "，跳过 " + skipped + " 条" : ""));
-        if (updated > 0) setShowCopyDialog(false);
-      }
-    } catch (error: any) {
-      toast.error("批量编辑处理失败：" + (error?.message || "请检查目标配置"));
-    } finally {
-      setCopyWorking(false);
-    }
-  };
-
-  const handleBatchExportRules = () => {
-    if (copySelectedRules.length === 0) {
-      toast.error("请选择要导出的规则");
-      return;
-    }
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const partCount = downloadRuleTransferFiles(
-      copySelectedRules,
-      { type: "batch", name: "批量管理选中规则" },
-      `forwardx-rules-batch-${date}`,
-    );
-    toast.success(`已导出 ${copySelectedRules.length} 条规则${partCount > 1 ? `，共 ${partCount} 个文件` : ""}`);
-  };
-
-  /** 批量删除 / 启用 / 暂停 / 重启都交给服务端任务：提交即返回，进度见右下角的小窗。 */
-  const batchRuleLabels = (rules: any[]) => Object.fromEntries(rules.map((rule: any) => [
-    String(rule.id),
-    String(rule.name || `规则 #${rule.id}`).slice(0, 160),
-  ]));
-
-  const handleBatchDeleteRules = async () => {
-    if (copySelectedRules.length === 0) {
-      toast.error("请选择要删除的规则");
-      return;
-    }
-    if (!(await confirmDialog({
+  const confirmDeleteRule = (rule: any) => {
+    void confirmDialog({
       title: "删除转发规则",
-      description: `确认删除选中的 ${copySelectedRules.length} 条转发规则？删除在后台逐条进行，可以随时停止剩下的。`,
+      description: `确认删除 "${rule?.name}"？`,
       confirmText: "删除",
-      tone: "destructive",
-    }))) return;
-    const requestedIds = Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id))));
-    const submitted = await ruleBatchJob.submit({
-      operation: "delete",
-      ruleIds: requestedIds,
-      ruleLabels: batchRuleLabels(copySelectedRules),
-      conflictStrategy: "error",
-    });
-    if (submitted) {
-      setCopyRuleIds([]);
-      setShowCopyDialog(false);
-    }
-  };
-
-  const handleBatchStateRules = async (operation: "enable" | "pause" | "restart") => {
-    if (copySelectedRules.length === 0) {
-      toast.error("请选择规则");
-      return;
-    }
-    if (operation === "restart" && !(await confirmDialog({
-      title: "重启转发规则",
-      description: `按当前配置把选中的 ${copySelectedRules.length} 条规则重新下发给 Agent。已暂停的规则保持暂停，流量统计不受影响。`,
-      confirmText: "重启",
-    }))) return;
-    const submitted = await ruleBatchJob.submit({
-      operation,
-      ruleIds: Array.from(new Set(copySelectedRules.map((rule: any) => Number(rule.id)))),
-      ruleLabels: batchRuleLabels(copySelectedRules),
-      conflictStrategy: "error",
-    });
-    if (submitted) setShowCopyDialog(false);
-  };
-
-  const handleConfirmResetTraffic = () => {
-    if (!resetTrafficTarget) return;
-    if (resetTrafficTarget.scope === "rule") {
-      resetTrafficMutation.mutate({
-        scope: "rule",
-        ruleId: Number(resetTrafficTarget.rule?.id || 0),
-      });
-      return;
-    }
-    resetTrafficMutation.mutate({
-      scope: "all",
-      ruleIds: visibleRuleIdsForMetrics,
+      confirmPendingText: "删除中...",
+      onConfirm: () => deleteMutation.mutateAsync({ id: rule.id }),
     });
   };
 
@@ -4440,6 +3911,17 @@ function RulesContent() {
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+  // 编辑规则的弹窗：改过没保存就关要先问「放弃修改？」；请求在路上时不许关（ui/form-dialog）
+  const ruleFormDirty = useFormDirty(showDialog, form);
+  const ruleDialogGuard = useDialogCloseGuard({
+    open: showDialog,
+    dirty: ruleFormDirty,
+    pending: isPending,
+    onOpenChange: (open) => {
+      if (!open) resetForm();
+      setShowDialog(open);
+    },
+  });
 
   const ruleFilters = useMemo<RuleFilterState>(() => ({
     filterUser,
@@ -4472,365 +3954,6 @@ function RulesContent() {
     return next;
   }, [baseScopedRules, ruleFilters, scopedRulesReady, selectedScopedRules, selectedScopeQueryEnabled]);
   const filteredRulesPrimed = scopedRulesReady || lastFilteredRulesRef.current.length > 0;
-  // Batch tools need all matching source rules, while the page itself stays
-  // on its current server page.  Keep these two data sources separate.
-  const transferSourceRules = selectedScopeQueryEnabled
-    ? selectedScopedRules || []
-    : needsFullRuleList
-      ? (fullRulesQuery.data as any[] | undefined) || []
-      : baseScopedRules;
-  const copyableSourceRules = useMemo(() => {
-    const batchFilters: RuleFilterState = {
-      ...ruleFilters,
-      filterResource: "all",
-      ruleCategory: copyRuleCategory,
-      searchQuery: copyRuleSearch,
-    };
-    const groupMode = copyManageMode === "group";
-    // 启停 / 重启和调整分组一样不搬家：共享 TLS 入站上的规则也能勾。
-    const keepsResource = groupMode || copyManageMode === "state";
-    return transferSourceRules
-      // 共享 TLS 入站上的规则不参与批量复制 / 迁移：它们没有自己的端口，搬到别的资源上就不是同一条规则了。
-      // 调整分组只是贴标签，这些规则照样能分组。
-      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && (keepsResource || (!(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))))
-      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters))
-      .filter((rule) => matchesPersonalRuleGroup(rule.personalGroupIds, copyRulePersonalGroup))
-      .filter((rule) => !groupMode || canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
-  }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleCategory, copyRulePersonalGroup, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
-  const copySelectedRules = useMemo(() => {
-    const selected = new Set(copyRuleIds.map(Number));
-    if (copyManageMode === "group") {
-      // 勾着的、而且此刻还真的会被改到的（列表刷新后有的规则可能已经在组里了）
-      return transferSourceRules.filter((rule) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
-        && canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
-    }
-    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
-      && (copyManageMode === "state" || !(Number(rule.tlsInboundId || 0) > 0)));
-  }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleIds, transferSourceRules]);
-  const copyTargetResources = useMemo(() => {
-    if (copyTargetScopeType === "local") return availablePortForwardGroups;
-    if (copyTargetScopeType === "tunnel") return supportedTunnels;
-    if (copyTargetScopeType === "chain") return availableForwardChainGroups;
-    return availableFailoverForwardGroups;
-  }, [availableFailoverForwardGroups, availableForwardChainGroups, availablePortForwardGroups, copyTargetScopeType, supportedTunnels]);
-  const filteredCopyTargetResources = useMemo(() => {
-    const keyword = copyTargetSearch.trim().toLowerCase();
-    if (!keyword) return copyTargetResources;
-    return copyTargetResources.filter((resource: any) => {
-      const values = [
-        resource?.id,
-        resource?.name,
-        resource?.description,
-        resource?.displayRemark,
-        resource?.domain,
-        resource?.forwardType,
-        resource?.groupMode,
-        resource?.groupType,
-        resource?.mode,
-        resource?.listenPort,
-        resource?.entryHostId,
-        resource?.exitHostId,
-        getForwardGroupKindLabel(resource),
-        copyTargetScopeType === "tunnel" ? getTunnelRouteText(resource, hosts || []) : "",
-      ];
-      (resource?.members || []).forEach((member: any) => {
-        values.push(member?.hostId, member?.tunnelId, member?.entryAddress, member?.connectHost, member?.name);
-      });
-      return values.filter((value) => value !== undefined && value !== null && String(value).trim()).join(" ").toLowerCase().includes(keyword);
-    });
-  }, [copyTargetResources, copyTargetScopeType, copyTargetSearch, hosts]);
-  const selectedCopyTargetResources = useMemo(() => {
-    const selected = new Set(copyTargetResourceIds.map(Number));
-    return copyTargetResources.filter((resource: any) => selected.has(Number(resource.id)));
-  }, [copyTargetResourceIds, copyTargetResources]);
-  const copyTargetScopeLabel = ruleTransferScopeLabels[copyTargetScopeType];
-  const copyActionPending = copyWorking || ruleBatchJob.isPending || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending || moveToPersonalGroupsMutation.isPending;
-  const isBatchGroupMode = copyManageMode === "group";
-  const isBatchStateMode = copyManageMode === "state";
-  const isBatchEditMode = copyManageMode === "edit";
-  const isBatchCopyMode = copyManageMode === "copy";
-  const isBatchExportMode = copyManageMode === "export";
-  const isBatchImportMode = copyManageMode === "import";
-  const selectedBatchRuleCount = copySelectedRules.length;
-  const selectedBatchTargetCount = selectedCopyTargetResources.length;
-  const allVisibleCopyRulesSelected = copyableSourceRules.length > 0
-    && copyableSourceRules.every((rule: any) => copyRuleIds.includes(Number(rule.id)));
-  const allVisibleCopyTargetsSelected = filteredCopyTargetResources.length > 0
-    && filteredCopyTargetResources.every((resource: any) => copyTargetResourceIds.includes(Number(resource.id)));
-  const batchFlowHintLabel = isBatchGroupMode
-    ? batchGroupMode === "add" ? "加入右侧分组" : "移出右侧分组"
-    : isBatchStateMode
-    ? "启停或重启所选"
-    : isBatchEditMode
-    ? "按右侧设置处理"
-    : isBatchExportMode
-      ? "导出左侧已选规则"
-      : "复制到右侧目标";
-  const batchRuleSelectionPanel = (
-    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <Label>规则筛选</Label>
-          <div data-fx-help="" className="text-xs text-muted-foreground">先选择规则，再根据上方模式填写对应内容。</div>
-        </div>
-        <div className="inline-flex items-center gap-2 self-start rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-          <span>已选规则</span>
-          <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedBatchRuleCount}</span>
-          <span className="text-primary/70">/ {copyableSourceRules.length}</span>
-        </div>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
-        <Select value={copyRuleCategory} onValueChange={(value) => setCopyRuleCategory(value as RuleCategory)}>
-          <SelectTrigger aria-label="规则类别" className="h-9 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部规则</SelectItem>
-            <SelectItem value="local">端口转发</SelectItem>
-            <SelectItem value="tunnel">隧道转发</SelectItem>
-            <SelectItem value="chain">转发链</SelectItem>
-            <SelectItem value="group">转发组</SelectItem>
-          </SelectContent>
-        </Select>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={copyRuleSearch}
-            onChange={(event) => setCopyRuleSearch(event.target.value)}
-            placeholder="查找规则名称、端口或目标地址"
-            className="h-9 pl-8 pr-8 text-xs"
-          />
-          {copyRuleSearch ? (
-            <button
-              type="button"
-              aria-label="清空查找"
-              className="absolute right-2 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
-              onClick={() => setCopyRuleSearch("")}
-            >
-              <XCircle className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 px-2 text-xs"
-          onClick={() => {
-            const visibleRuleIds = copyableSourceRules.map((rule: any) => Number(rule.id));
-            const visibleRuleIdSet = new Set(visibleRuleIds);
-            setCopyRuleIds((prev) => (
-              allVisibleCopyRulesSelected
-                ? prev.filter((id) => !visibleRuleIdSet.has(id))
-                : Array.from(new Set([...prev, ...visibleRuleIds]))
-            ));
-          }}
-          disabled={copyableSourceRules.length === 0 || copyActionPending}
-        >
-          {allVisibleCopyRulesSelected ? "取消" : "全选"}
-        </Button>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {copyableSourceRules.length} 项
-        </span>
-        {/* 按个人分组筛：换一个分组就清掉勾选，免得带着看不见的规则去做批量操作 */}
-        <Select
-          value={copyRulePersonalGroup === null ? "all" : String(copyRulePersonalGroup)}
-          onValueChange={(value) => {
-            setCopyRulePersonalGroup(value === "all" ? null : Number(value));
-            setCopyRuleIds([]);
-          }}
-          disabled={copyActionPending}
-        >
-          <SelectTrigger aria-label="按个人分组筛选" className="ml-auto h-8 w-[9.5rem] text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部分组</SelectItem>
-            {personalGroups.map((group) => <SelectItem key={group.id} value={String(group.id)}>{group.name}</SelectItem>)}
-            <SelectItem value="0">未分组</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
-        {copyableSourceRules.length > 0 ? copyableSourceRules.map((rule: any) => {
-          const category = getRuleCategory(rule, forwardGroupById);
-          return (
-            <label
-              key={rule.id}
-              className={`flex cursor-pointer items-start gap-3 rounded-md border p-2 transition-colors hover:bg-muted/40 ${
-                copyRuleIds.includes(Number(rule.id))
-                  ? "border-primary/50 bg-primary/5 shadow-sm"
-                  : "border-border/40 bg-background/70"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={copyRuleIds.includes(Number(rule.id))}
-                disabled={copyActionPending}
-                onChange={(event) => toggleCopyRule(Number(rule.id), event.target.checked)}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
-                  <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
-                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
-                </span>
-                <span className="mt-1 block truncate text-xs text-muted-foreground">
-                  :{formatPortSpan(rule.sourcePort, ruleSourcePortEnd(rule))} -&gt; {rule.targetIp}:{formatRuleTargetPort(rule)} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}
-                </span>
-                {rule.personalGroupIds?.length ? (
-                  <span className="mt-1 flex min-w-0"><RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} maxVisible={3} /></span>
-                ) : null}
-              </span>
-            </label>
-          );
-        }) : (
-          <div className="py-10 text-center text-sm text-muted-foreground">
-            {isBatchGroupMode && batchGroupTargetIds.length === 0 ? "先在右侧选择目标分组" : "没有匹配的转发规则"}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-  /** 「调整分组」：把勾选的规则加入 / 移出右边选的那几个组。一次最多 500 条，多了分几次交。 */
-  const handleBatchGroupRules = async () => {
-    const ids = Array.from(new Set(copySelectedRules.map((rule) => Number(rule.id))));
-    if (ids.length === 0 || batchGroupTargetIds.length === 0) return;
-    setCopyWorking(true);
-    let done = 0;
-    try {
-      for (const chunk of chunkBatchItems(ids, MAX_PERSONAL_RULE_GROUP_CHANGE)) {
-        const result = await moveToPersonalGroupsMutation.mutateAsync({ ids: chunk, groupIds: batchGroupTargetIds, mode: batchGroupMode });
-        done += Number(result.count || chunk.length);
-      }
-      setCopyRuleIds([]);
-      toast.success(`已${batchGroupMode === "add" ? "加入" : "移出"}分组：${done} 条规则`);
-    } catch (error) {
-      toast.error(`${done > 0 ? `已处理 ${done} 条，其余` : ""}调整分组失败：${(error instanceof Error && error.message) || "请稍后重试"}`);
-    } finally {
-      await refreshPersonalRuleGroups();
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      setCopyWorking(false);
-    }
-  };
-  // 启停 / 重启（上游 2.3.292）：右侧只说明三种操作分别做什么，按钮在底部。
-  const batchStatePanel = (
-    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <Label>启停 / 重启</Label>
-        <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-          <span>已选</span>
-          <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedBatchRuleCount}</span>
-        </div>
-      </div>
-      <ul className="space-y-2 text-xs leading-5 text-muted-foreground">
-        <li><span className="font-medium text-foreground">启用</span>：和单条打开开关一样检查端口、套餐与授权，通过的才启用。</li>
-        <li><span className="font-medium text-foreground">暂停</span>：停止转发，规则和统计都保留。</li>
-        <li><span className="font-medium text-foreground">重启</span>：启用中的规则按当前配置重新下发给 Agent；已暂停的保持暂停，流量统计不清零。</li>
-      </ul>
-      <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-        提交后在右下角看进度，可停止剩余或只重试失败项；同一批规则正在处理时不会重复提交。
-      </div>
-    </div>
-  );
-  const batchGroupPanel = (
-    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <Label>目标分组</Label>
-          <div className="text-xs text-muted-foreground">分组只有你自己看得见，不影响转发和授权。</div>
-        </div>
-        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 self-start text-xs" onClick={() => setRuleGroupManagerOpen(true)} disabled={copyActionPending}>
-          <FolderCog className="h-3.5 w-3.5" />管理分组
-        </Button>
-      </div>
-      <div className={segmentedControlClassName}>
-        <div className="grid grid-cols-2 gap-1">
-          {(["add", "remove"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={routeModeOptionClass(batchGroupMode === mode, copyActionPending)}
-              aria-pressed={batchGroupMode === mode}
-              disabled={copyActionPending}
-              onClick={() => {
-                if (batchGroupMode === mode) return;
-                setBatchGroupMode(mode);
-                setCopyRuleIds([]);
-              }}
-            >
-              <span className="truncate">{mode === "add" ? "加入分组" : "移出分组"}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="max-h-[19rem] space-y-1 overflow-y-auto rounded-md border border-border/60 p-2">
-        {personalGroups.length > 0 ? personalGroups.map((group) => {
-          const checked = batchGroupTargetIds.includes(Number(group.id));
-          return (
-            <label key={group.id} className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/40 ${checked ? "bg-primary/5" : ""}`}>
-              <Checkbox
-                checked={checked}
-                disabled={copyActionPending}
-                onCheckedChange={(next) => {
-                  setBatchGroupTargetIds((current) => next ? Array.from(new Set([...current, Number(group.id)])) : current.filter((id) => id !== Number(group.id)));
-                  // 目标分组变了，左边能改的规则也跟着变：清掉勾选，不带着看不见的规则走
-                  setCopyRuleIds([]);
-                }}
-              />
-              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">{group.name}</span>
-              <span className="text-xs tabular-nums text-muted-foreground">{group.count}</span>
-            </label>
-          );
-        }) : (
-          <div className="py-8 text-center text-sm text-muted-foreground">还没有分组，先点「管理分组」建一个</div>
-        )}
-      </div>
-      <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
-        {batchGroupMode === "add"
-          ? "左边只列出还没在全部所选分组里的规则；只在其中几个组里的照样列出，加入时补齐。规则原来的其他分组不变。"
-          : "左边只列出在任一所选分组里的规则；移出只去掉所选的分组，规则的其他分组保留。"}
-      </div>
-    </div>
-  );
-  const buildEmptyBatchEditForm = useCallback((): BatchEditFormData => ({
-    routeMode: canUseSavedLocalForward ? "local" : canUseGost ? "tunnel" : canUseForwardChain ? "chain" : canUseFailoverGroup ? "group" : "local",
-    forwardType: defaultForm.forwardType,
-    tunnelId: null,
-    forwardGroupId: null,
-    targetIp: "",
-    targetPort: 0,
-  }), [canUseFailoverGroup, canUseForwardChain, canUseGost, canUseSavedLocalForward]);
-  const selectedBatchEditTunnel = useMemo(() => {
-    if (!batchEditForm.tunnelId || !tunnels) return null;
-    return tunnels.find((t: any) => Number(t.id) === Number(batchEditForm.tunnelId)) || null;
-  }, [batchEditForm.tunnelId, tunnels]);
-  const selectedBatchEditForwardGroup = useMemo(() => {
-    if (!batchEditForm.forwardGroupId) return null;
-    return forwardGroupById.get(Number(batchEditForm.forwardGroupId)) || null;
-  }, [batchEditForm.forwardGroupId, forwardGroupById]);
-  const selectedBatchEditTunnelDisplay = useMemo(
-    () => getTunnelDisplay(selectedBatchEditTunnel, nginxTunnelEnabled),
-    [selectedBatchEditTunnel, nginxTunnelEnabled],
-  );
-  const batchEditAvailableGroups = useMemo(
-    () => batchEditForm.routeMode === "local"
-      ? availablePortForwardGroups
-      : batchEditForm.routeMode === "chain"
-        ? availableForwardChainGroups
-        : availableFailoverForwardGroups,
-    [availableFailoverForwardGroups, availableForwardChainGroups, availablePortForwardGroups, batchEditForm.routeMode],
-  );
-  const batchEditTargetIp = String(batchEditForm.targetIp || "").trim();
-  const batchEditTargetPort = Number(batchEditForm.targetPort || 0);
-  const hasBatchEditRouteSelection = batchEditForm.routeMode === "tunnel"
-    ? !!selectedBatchEditTunnel
-    : !!selectedBatchEditForwardGroup;
-  const hasBatchEditTargetIpChange = batchEditTargetIp.length > 0;
-  const hasBatchEditTargetPortChange = isValidForwardPort(batchEditTargetPort);
-  const hasBatchEditChanges = hasBatchEditRouteSelection || hasBatchEditTargetIpChange || hasBatchEditTargetPortChange;
-  const batchCopyDisabled = !canAdd || copyActionPending || selectedBatchRuleCount === 0 || selectedBatchTargetCount === 0;
-  const batchEditDisabled = copyActionPending || selectedBatchRuleCount === 0 || !hasBatchEditChanges;
   const ruleFilterCacheScope = user?.role === "admin"
     ? `admin-${user?.id || "self"}-${filterUser}`
     : `user-${user?.id || "self"}`;
@@ -4984,7 +4107,6 @@ function RulesContent() {
         utils.dashboard.trafficSeries.invalidate(),
         utils.dashboard.trafficBreakdown.invalidate(),
       ]);
-      setResetTrafficTarget(null);
       toast.success("规则统计数据已重置");
     },
     onError: (err) => toast.error(err.message || "重置数据失败"),
@@ -5009,75 +4131,8 @@ function RulesContent() {
   }, [dailyTrafficSummary, visibleRuleIdsForMetrics.length]);
   const totalTrafficSummaryRows = visibleRuleIdsForMetrics.length === 0 ? [] : totalTrafficSummary ?? stableTotalTrafficSummaryRows;
   const dailyTrafficSummaryRows = visibleRuleIdsForMetrics.length === 0 ? [] : dailyTrafficSummary ?? stableDailyTrafficSummaryRows;
-  const trafficByRule = useMemo(() => {
-    const m = new Map<number, {
-      bytesIn: number;
-      bytesOut: number;
-      connections: number;
-      latestLatencyMs: number | null;
-      latestLatencyIsTimeout: boolean;
-      latestLatencyAt: Date | string | null;
-      latestProbeFailure: string | null;
-      /** 负载均衡链路：几台出口报了到目标的情况、其中连得上的几台、规则卡上那一句（server/exitTargetHealth.ts） */
-      exitTargetTotal: number | null;
-      exitTargetOk: number | null;
-      exitTargetNote: string | null;
-      /** 负载均衡链路：入口报的在用出口（扛流量最多的排第一；2.3.537 起只在主出口切走时有，现在入口报了就有） */
-      exitTargetVia: string[] | null;
-      exitTargetViaHostIds: number[] | null;
-      /** 卡上的延迟是面板探的两段相加：在用那台出口、入口到它、它到目标（server/exitTargetHealth.ts 的 RuleChainLatencyView） */
-      latestLatencyChain: RuleChainLatencyLike | null;
-      /** 卡上这个延迟从哪来：live 入口实时、probe 定时探测、diagnosis 最近一次诊断（悬停写明） */
-      latestLatencySource: string | null;
-    }>();
-    dailyTrafficSummaryRows.forEach((t: any) => {
-      const rid = Number(t.ruleId);
-      const prev = m.get(rid);
-      if (prev) {
-        if (t.exitTargetTotal != null) {
-          prev.exitTargetTotal = Number(t.exitTargetTotal);
-          prev.exitTargetOk = t.exitTargetOk == null ? null : Number(t.exitTargetOk);
-          prev.exitTargetNote = t.exitTargetNote || null;
-        }
-        // 在用的出口：只有一台出口报了数据时 exitTargetTotal 是空的，照样要带上（2.3.539）
-        if (Array.isArray(t.exitTargetVia)) {
-          prev.exitTargetVia = t.exitTargetVia.map(String);
-          prev.exitTargetViaHostIds = Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null;
-        }
-        prev.bytesIn += Number(t.bytesIn) || 0;
-        prev.bytesOut += Number(t.bytesOut) || 0;
-        prev.connections += Number(t.connections) || 0;
-        const prevAt = prev.latestLatencyAt ? new Date(prev.latestLatencyAt).getTime() : 0;
-        const nextAt = t.latestLatencyAt ? new Date(t.latestLatencyAt).getTime() : 0;
-        if (nextAt > prevAt) {
-          prev.latestLatencyMs = t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs);
-          prev.latestLatencyIsTimeout = !!t.latestLatencyIsTimeout;
-          prev.latestLatencyAt = t.latestLatencyAt || null;
-          prev.latestProbeFailure = t.latestProbeFailure || null;
-          prev.latestLatencyChain = t.latestLatencyChain || null;
-          prev.latestLatencySource = t.latestLatencySource || null;
-        }
-      } else {
-        m.set(rid, {
-          bytesIn: Number(t.bytesIn) || 0,
-          bytesOut: Number(t.bytesOut) || 0,
-          connections: Number(t.connections) || 0,
-          latestLatencyMs: t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs),
-          latestLatencyIsTimeout: !!t.latestLatencyIsTimeout,
-          latestLatencyAt: t.latestLatencyAt || null,
-          latestProbeFailure: t.latestProbeFailure || null,
-          exitTargetTotal: t.exitTargetTotal == null ? null : Number(t.exitTargetTotal),
-          exitTargetOk: t.exitTargetOk == null ? null : Number(t.exitTargetOk),
-          exitTargetNote: t.exitTargetNote || null,
-          exitTargetVia: Array.isArray(t.exitTargetVia) ? t.exitTargetVia.map(String) : null,
-          exitTargetViaHostIds: Array.isArray(t.exitTargetViaHostIds) ? t.exitTargetViaHostIds.map(Number) : null,
-          latestLatencyChain: t.latestLatencyChain || null,
-          latestLatencySource: t.latestLatencySource || null,
-        });
-      }
-    });
-    return m;
-  }, [dailyTrafficSummaryRows]);
+  const useTrafficByRuleResult = useTrafficByRule({ dailyTrafficSummaryRows });
+  const { trafficByRule } = useTrafficByRuleResult;
   useEffect(() => {
     if (dailyTrafficSummary === undefined) return;
     updateRuleProbeCache(user?.id, trafficByRule);
@@ -5106,76 +4161,8 @@ function RulesContent() {
     dailyTrafficSummaryFetched
     && (!hasForwardGroupRules || forwardGroupsFetched || forwardGroupsError)
   );
-  const dailyTrafficByRule = useMemo(() => {
-    const m = new Map<number, { bytesIn: number; bytesOut: number }>();
-    dailyTrafficSummaryRows.forEach((t: any) => {
-      const rid = Number(t.ruleId);
-      const prev = m.get(rid);
-      if (prev) {
-        prev.bytesIn += Number(t.bytesIn) || 0;
-        prev.bytesOut += Number(t.bytesOut) || 0;
-      } else {
-        m.set(rid, {
-          bytesIn: Number(t.bytesIn) || 0,
-          bytesOut: Number(t.bytesOut) || 0,
-        });
-      }
-    });
-    return m;
-  }, [dailyTrafficSummaryRows]);
-  /*
-    规则卡上那条小走势线：这一页规则近 24 小时的逐时字节，一次请求全拿。表格和地图视图
-    不画它，就不请求。
-  */
-  // 页头右上角那条近 24H 小走势（和首页图表同一条数据，服务端按用户缓存）
-  const dailySpark = useDailyTrafficSpark(secondaryQueriesReady);
-  const { data: ruleTrafficSeriesRows } = trpc.rules.trafficSeriesBatch.useQuery(
-    { ruleIds: visibleRuleIdsForMetrics, hours: 24, bucketMinutes: 60 },
-    {
-      enabled: secondaryQueriesReady && visibleRuleIdsForMetrics.length > 0 && effectiveViewMode === "card",
-      refetchInterval: pollingInterval("slow"),
-      staleTime: 30_000,
-      refetchOnWindowFocus: false,
-      placeholderData: (previousData) => previousData,
-    }
-  );
-  const sparkByRule = useMemo(() => {
-    const m = new Map<number, number[]>();
-    if (!ruleTrafficSeriesRows) return m;
-    const hourMs = 60 * 60 * 1000;
-    // 24 格 = 过去 24 个整点小时；正在走的这个小时并进最后一格，刚发生的流量不会被截掉。
-    const firstHour = Math.floor(Date.now() / hourMs) - 24;
-    ruleTrafficSeriesRows.forEach((row: any) => {
-      const rid = Number(row.ruleId);
-      const at = new Date(row.bucket).getTime();
-      if (!Number.isFinite(at)) return;
-      const index = Math.min(23, Math.floor(at / hourMs) - firstHour);
-      if (index < 0) return;
-      const slots = m.get(rid) || new Array<number>(24).fill(0);
-      slots[index] += (Number(row.bytesIn) || 0) + (Number(row.bytesOut) || 0);
-      m.set(rid, slots);
-    });
-    return m;
-  }, [ruleTrafficSeriesRows]);
-  const totalTrafficByRule = useMemo(() => {
-    const m = new Map<number, { bytesIn: number; bytesOut: number; connections: number }>();
-    totalTrafficSummaryRows.forEach((t: any) => {
-      const rid = Number(t.ruleId);
-      const prev = m.get(rid);
-      if (prev) {
-        prev.bytesIn += Number(t.bytesIn) || 0;
-        prev.bytesOut += Number(t.bytesOut) || 0;
-        prev.connections += Number(t.connections) || 0;
-      } else {
-        m.set(rid, {
-          bytesIn: Number(t.bytesIn) || 0,
-          bytesOut: Number(t.bytesOut) || 0,
-          connections: Number(t.connections) || 0,
-        });
-      }
-    });
-    return m;
-  }, [totalTrafficSummaryRows]);
+  const useRuleTrafficSeriesResult = useRuleTrafficSeries({ dailyTrafficSummaryRows, secondaryQueriesReady, visibleRuleIdsForMetrics, effectiveViewMode, totalTrafficSummaryRows });
+  const { dailyTrafficByRule, totalTrafficByRule, sparkByRule, dailySpark } = useRuleTrafficSeriesResult;
   const pageDailyTrafficTotals = useMemo(() => {
     let bytesIn = 0;
     let bytesOut = 0;
@@ -5382,110 +4369,8 @@ function RulesContent() {
     group: groupRuleGroupSortable,
   };
 
-  const getHostName = (hostId: number) => {
-    return hosts?.find((h: any) => h.id === hostId)?.name || `主机 #${hostId}`;
-  };
-  const getHostOptionName = (host: any) => host?.name || `主机 #${host?.id || "-"}`;
-  const renderTrafficBillingResourceBadge = (enabled = true) => enabled ? (
-    <span className="shrink-0 rounded border border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 py-0.5 text-[11px] font-medium leading-none text-[var(--fx-warn-text)]">
-      按量计费资源
-    </span>
-  ) : null;
-  const getHostOptionText = (host: any) => `${getHostOptionName(host)}（${host?.isOnline ? "在线" : "离线"}）${trafficBillingHostIds.has(Number(host?.id)) ? " / 按量计费资源" : ""}`;
-  const renderHostStatusLabel = (host: any) => {
-    const online = !!host?.isOnline;
-    return (
-      <span className="inline-flex min-w-0 items-center gap-2" title={getHostOptionText(host)}>
-        <span
-          className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-            online
-              ? "bg-[var(--fx-healthy)] shadow-[0_0_0_3px_var(--fx-healthy-soft)]"
-              : "bg-[var(--fx-down)] shadow-[0_0_0_3px_var(--fx-down-soft)]"
-          }`}
-          aria-hidden="true"
-        />
-        <span className="min-w-0 truncate">{getHostOptionName(host)}</span>
-        {renderTrafficBillingResourceBadge(trafficBillingHostIds.has(Number(host?.id)))}
-        <span className="sr-only">{online ? "在线" : "离线"}</span>
-      </span>
-    );
-  };
-  const getPortRangeText = (item: any) => {
-    const start = Number(item?.portRangeStart || 0);
-    const end = Number(item?.portRangeEnd || 0);
-    return start > 0 && end > 0 ? `${start}-${end}` : "";
-  };
-  /*
-    计费倍率徽标。
-
-    以前不管倍率是多少都刷一层绿 —— 参数名都写成了 `_value`，说明它压根没看过
-    这个值。而绿在这套面板里是「正常」的语义色，于是一条 5 倍计费的线路和一条
-    1 倍的线路长得一模一样，还都透着「没问题」。
-
-    倍率的意义是**这条线路的流量按几倍扣**，所以只有一种情况需要颜色：超过 1 倍，
-    那是花钱的警告。等于 1 倍是默认，低于 1 倍是优惠 —— 两者都不必抢注意力。
-  */
-  const trafficMultiplierBadgeClass = (value: unknown) =>
-    normalizeTrafficMultiplier(value) > TRAFFIC_MULTIPLIER_DEFAULT
-      ? "border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[var(--fx-warn-text)]"
-      : "border-[var(--fx-stroke-base)] text-muted-foreground";
-  const renderTrafficMultiplierBadge = (value: unknown) => (
-    <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-medium leading-none ${trafficMultiplierBadgeClass(value)}`}>
-      {formatTrafficMultiplier(value)}
-    </span>
-  );
-  const getTunnelSelectName = (tunnel: any) => String(tunnel?.name || `隧道 #${tunnel?.id || "-"}`);
-  const getTunnelSelectModeLabel = (tunnel: any) => getTunnelDisplay(tunnel, true).shortLabel;
-  const getTunnelSelectText = (tunnel: any) => [
-    getTunnelSelectName(tunnel),
-    getTunnelSelectModeLabel(tunnel),
-    getPortRangeText(tunnel),
-    formatTrafficMultiplier((tunnel as any)?.trafficMultiplier),
-    trafficBillingTunnelIds.has(Number(tunnel?.id)) ? "按量计费资源" : "",
-  ].filter(Boolean).join(" / ");
-  const renderTunnelModeBadge = (tunnel: any) => (
-    <span className="shrink-0 rounded border border-[color-mix(in_srgb,var(--fx-accent)_30%,transparent)] bg-[var(--fx-accent-soft)] px-1.5 py-0.5 text-[11px] font-medium leading-none text-[var(--fx-accent)]">
-      {getTunnelSelectModeLabel(tunnel)}
-    </span>
-  );
-  const getTunnelStatusText = (tunnel: any) => {
-    const state = tunnelAvailabilityById.get(Number(tunnel?.id || 0));
-    if (state?.status === "available") return "可用";
-    if (state?.status === "degraded") return "部分可用";
-    if (state?.status === "pending") return "等待检测";
-    if (state?.status === "unavailable") return "不可用";
-    return state?.message || "已停用";
-  };
-  const renderTunnelSelectStatusDot = (tunnel: any) => {
-    const state = tunnelAvailabilityById.get(Number(tunnel?.id || 0));
-    if (state?.status === "available") return <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-chart-2 shadow-sm shadow-chart-2/50 animate-pulse" aria-hidden="true" />;
-    if (state?.status === "degraded" || state?.status === "pending") return <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--fx-warn)] shadow-sm" aria-hidden="true" />;
-    if (state?.status === "unavailable") return <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-destructive/70 shadow-sm shadow-destructive/40" aria-hidden="true" />;
-    return <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-muted-foreground/30" aria-hidden="true" />;
-  };
-  const renderTunnelSelectLabel = (tunnel: any) => (
-    <span className="inline-flex min-w-0 items-center gap-2" title={`${getTunnelStatusText(tunnel)} / ${getTunnelSelectText(tunnel)}`}>
-      {renderTunnelSelectStatusDot(tunnel)}
-      <span className="min-w-0 truncate">{getTunnelSelectName(tunnel)}</span>
-      {renderTunnelModeBadge(tunnel)}
-      {getPortRangeText(tunnel) && <span className="shrink-0 rounded border border-border/50 bg-background/60 px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground">{getPortRangeText(tunnel)}</span>}
-      {renderTrafficMultiplierBadge((tunnel as any).trafficMultiplier)}
-      {renderTrafficBillingResourceBadge(trafficBillingTunnelIds.has(Number(tunnel?.id)))}
-      <span className="sr-only">{getTunnelStatusText(tunnel)}</span>
-    </span>
-  );
-  const getForwardGroupSelectName = (group: any) => String(group?.name || `${getForwardGroupRouteLabel(group)} #${group?.id || "-"}`);
-  const isTrafficBillingForwardGroup = (group: any) => {
-    if (!trafficBilling?.enabled || !group) return false;
-    if (trafficBillingForwardGroupIds.has(Number(group.id))) return true;
-    const members = Array.isArray(group.members) ? group.members : [];
-    return members.some((member: any) => {
-      if (!member || member.isEnabled === false) return false;
-      if (member.memberType === "host") return trafficBillingHostIds.has(Number(member.hostId || 0));
-      if (member.memberType === "tunnel") return trafficBillingTunnelIds.has(Number(member.tunnelId || 0));
-      return false;
-    });
-  };
+  const useRuleSelectOptionHelpersResult = useRuleSelectOptionHelpers({ hosts, trafficBillingHostIds, trafficBillingTunnelIds, tunnelAvailabilityById, trafficBilling, trafficBillingForwardGroupIds });
+  const { isTrafficBillingForwardGroup, getForwardGroupSelectName, renderTrafficMultiplierBadge, renderTrafficBillingResourceBadge, getHostName, getTunnelSelectName, getTunnelSelectText, renderTunnelSelectLabel, getHostOptionText, renderHostStatusLabel } = useRuleSelectOptionHelpersResult;
   const getForwardGroupSelectText = (group: any) => {
     const mode = forwardGroupModeOf(group);
     const billingText = isTrafficBillingForwardGroup(group) ? " / 按量计费资源" : "";
@@ -5524,83 +4409,8 @@ function RulesContent() {
     }
     return names;
   };
-  const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
-    const latest = stableProbeByRule.get(Number(rule.id));
-    // 负载均衡链路：各台出口到目标的情况（不进探测缓存，按这一次的汇总）
-    const exitTargets = trafficByRule.get(Number(rule.id));
-    const exitTargetFields = {
-      exitTargetOk: exitTargets?.exitTargetOk ?? null,
-      exitTargetNote: exitTargets?.exitTargetNote ?? null,
-    };
-    if (rule.forwardGroupId) {
-      const group = forwardGroupById.get(Number(rule.forwardGroupId));
-      const runtime = Array.isArray(group?.ruleRuntimeStatuses)
-        ? group.ruleRuntimeStatuses.find((item: any) => Number(item.templateRuleId) === Number(rule.id))
-        : null;
-      const rawGroupStatus = group
-        ? getForwardGroupConfigStatus(group)
-        : forwardGroupsFetched || forwardGroupsError
-          ? "unavailable"
-          : "pending";
-      const groupStatus = rawGroupStatus === "degraded" ? "available" : rawGroupStatus;
-      return resolveForwardRuleVisualStatus({
-        ruleEnabled: !!rule.isEnabled && !normalizeRuleLimitReason(rule.ruleLimitReason),
-        ruleRunning: !!rule.isRunning,
-        resourceAccessAllowed: rule.resourceAccessAllowed,
-        groupEnabled: group?.isEnabled !== false,
-        groupConfigStatus: groupStatus,
-        runtimeStatus: runtime?.status,
-        runningCount: runtime?.runningRuleCount,
-        expectedCount: runtime?.expectedRuleCount,
-        latestLatencyMs: latest?.latestLatencyMs,
-        latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
-        latestLatencyAt: latest?.latestLatencyAt,
-        latestProbeFailure: latest?.latestProbeFailure,
-        offlineHostNames: getRuleOfflineHostNames(rule),
-        ...exitTargetFields,
-      });
-    }
-    return resolveForwardRuleVisualStatus({
-      ruleEnabled: !!rule.isEnabled && !normalizeRuleLimitReason(rule.ruleLimitReason),
-      ruleRunning: !!rule.isRunning,
-      resourceAccessAllowed: rule.resourceAccessAllowed,
-      groupEnabled: true,
-      groupConfigStatus: "available",
-      latestLatencyMs: latest?.latestLatencyMs,
-      latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
-      latestLatencyAt: latest?.latestLatencyAt,
-      latestProbeFailure: latest?.latestProbeFailure,
-      offlineHostNames: getRuleOfflineHostNames(rule),
-      ...exitTargetFields,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule, trafficByRule, hosts, tunnels]);
-  const ruleVisualStatuses = useMemo(() => {
-    const statuses = new Map<number, {
-      current: ReturnType<typeof resolveForwardRuleVisualStatus>;
-      display: ReturnType<typeof resolveForwardRuleVisualStatus>;
-      lastKnown: RuleVisualStatusSnapshot | null;
-      invalidated: boolean;
-    }>();
-    const ruleIds = filteredRules
-      .map((rule: any) => Number(rule?.id || 0))
-      .filter((ruleId: number) => Number.isInteger(ruleId) && ruleId > 0);
-    const lastKnownByRule = readRuleStatusSnapshots(user?.id, ruleIds);
-    for (const rule of filteredRules) {
-      const ruleId = Number(rule?.id || 0);
-      if (!Number.isInteger(ruleId) || ruleId <= 0) continue;
-      const current = resolveRuleVisualStatus(rule);
-      const invalidated = invalidatedRuleProbeIdsRef.current.has(ruleId);
-      const lastKnown = invalidated ? null : lastKnownByRule.get(ruleId) || null;
-      statuses.set(ruleId, {
-        current,
-        lastKnown,
-        invalidated,
-        display: preferLastKnownForwardRuleVisualStatus(current, lastKnown),
-      });
-    }
-    return statuses;
-  }, [filteredRules, resolveRuleVisualStatus, ruleProbeCacheRevision, user?.id]);
+  const useRuleVisualStatusesResult = useRuleVisualStatuses({ stableProbeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules, user, invalidatedRuleProbeIdsRef, ruleProbeCacheRevision });
+  const { ruleVisualStatuses, resolveRuleVisualStatus } = useRuleVisualStatusesResult;
   const hasCachedRuleStatus = useMemo(
     () => Array.from(ruleVisualStatuses.values()).some((item) => !!item.lastKnown),
     [ruleVisualStatuses],
@@ -5660,43 +4470,8 @@ function RulesContent() {
       </span>
     );
   };
-  const renderTunnelRoute = (tunnel: any, compact = false) => {
-    const hopIds = getTunnelHopIds(tunnel);
-    const exitGroup = Number(tunnel?.exitGroupId || 0) > 0
-      ? forwardGroupById.get(Number(tunnel.exitGroupId))
-      : null;
-    const exitGroupName = exitGroup ? getForwardGroupSelectName(exitGroup) : "";
-    const exitNames = exitGroupName ? getTunnelExitNames(tunnel, hosts) : [];
-    const routeTitle = getTunnelRouteText(tunnel, hosts, exitGroupName);
-    return (
-      <div
-        className={`flex min-w-0 items-center gap-1.5 text-xs ${compact ? "flex-wrap" : "whitespace-nowrap"}`}
-        title={routeTitle}
-      >
-        {hopIds.map((hostId: number, index: number) => (
-          <Fragment key={`${tunnel?.id || "tunnel"}-${hostId}-${index}`}>
-            {index > 0 && <ArrowRight className="h-3 w-3 shrink-0" />}
-            <span
-              className={exitGroupName && index === hopIds.length - 1
-                ? (compact ? "min-w-0 max-w-full break-words" : "min-w-0 truncate")
-                : (compact ? "max-w-[8rem] truncate" : "truncate")}
-            >
-              {exitGroupName && index === hopIds.length - 1 ? (
-                <>
-                  {exitGroupName}
-                  {exitNames.length > 0 && (
-                    <span className="text-muted-foreground">
-                      {"\uFF1B\u51FA\u53E3\uFF1A"}{exitNames.join(" / ")}
-                    </span>
-                  )}
-                </>
-              ) : tunnelHopHostName(tunnel, hostId, hosts)}
-            </span>
-          </Fragment>
-        ))}
-      </div>
-    );
-  };
+  const useRenderTunnelRouteResult = useRenderTunnelRoute({ forwardGroupById, getForwardGroupSelectName, hosts });
+  const { renderTunnelRoute } = useRenderTunnelRouteResult;
 
   const getRuleEntryHost = (rule: any) => {
     const directHost = hosts?.find((h: any) => Number(h.id) === Number(rule.hostId));
@@ -5713,632 +4488,16 @@ function RulesContent() {
     return entryHost?.name || getHostName(Number(rule.hostId));
   };
 
-  const selfTestLinkTestNodeData = useMemo(() => {
-    const meta: Record<string, any> = {};
-    const rule = selfTestRuleDetail;
-    if (!rule) {
-      return { nodeMeta: meta, sourceLabel: selfTestRule?.name || "源节点", targetLabel: selfTestRule?.name || "目标", plannedSegments: [] as LinkTestPlannedSegment[] };
-    }
+  const useSelfTestLinkTestNodeDataResult = useSelfTestLinkTestNodeData({ selfTestRuleDetail, selfTestRule, hosts, tunnelById, forwardGroupById, trafficByRule, getRuleEntryHost, targetGeoByAddress, getRuleEntryHostName });
+  const { selfTestLinkTestNodeData } = useSelfTestLinkTestNodeDataResult;
 
-    const hostById = new Map<number, any>((hosts || []).map((host: any) => [Number(host.id), host]));
-    const tunnel = rule.tunnelId ? tunnelById.get(Number(rule.tunnelId)) : null;
-    const tunnelHostById = new Map<number, any>();
-    if (tunnel) {
-      [
-        ...(Array.isArray((tunnel as any).hopHosts) ? (tunnel as any).hopHosts : []),
-        (tunnel as any).entryHost,
-        (tunnel as any).exitHost,
-        ...(Array.isArray((tunnel as any).loadBalanceExits) ? (tunnel as any).loadBalanceExits.map((exit: any) => exit?.host) : []),
-      ].forEach((host: any) => {
-        const id = Number(host?.id || 0);
-        if (id > 0) tunnelHostById.set(id, host);
-      });
-    }
-    const hostForRouteId = (hostId: number) => hostById.get(Number(hostId)) || tunnelHostById.get(Number(hostId));
-    const chainGroup = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    const chainEntryGroup = chainGroup && isForwardChainGroup(chainGroup) && Number(chainGroup.entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number(chainGroup.entryGroupId))
-      : null;
-    const chainEntryMembers = chainEntryGroup && forwardGroupModeOf(chainEntryGroup) === "entry" ? enabledHostMembers(chainEntryGroup) : [];
-    const tunnelEntryGroup = tunnel && Number((tunnel as any).entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number((tunnel as any).entryGroupId)) || (tunnel as any).entryGroup
-      : null;
-    const tunnelEntryMembers = tunnelEntryGroup && forwardGroupModeOf(tunnelEntryGroup) === "entry" ? enabledHostMembers(tunnelEntryGroup) : [];
-    const tunnelEntryMemberByHostId = new Map<number, any>();
-    tunnelEntryMembers.forEach((member: any) => {
-      const hostId = Number(member?.hostId || 0);
-      if (hostId > 0) tunnelEntryMemberByHostId.set(hostId, member);
-    });
-    const labelForRouteHostId = (hostId: number) => {
-      const host = hostForRouteId(hostId);
-      const member = tunnelEntryMemberByHostId.get(Number(hostId));
-      return hostDisplayName(host)
-        || String(member?.name || member?.remark || "").trim()
-        || (tunnel ? tunnelHopHostName(tunnel, hostId, hosts) : "")
-        || `主机 #${hostId}`;
-    };
-    const configuredRouteHostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
-    /*
-      负载均衡链路：诊断的路径画扛流量最多的那台出口（入口真实上报，和卡上的延迟、「经」同一台），诊断也是从它测的
-      （rules.selfTest）。它就是主出口时照旧（链路自己的延迟可以拿来填入口到出口那一段）。
-    */
-    const viaExitCandidate = tunnel ? Number(trafficByRule.get(Number(rule.id))?.exitTargetViaHostIds?.[0] || 0) : 0;
-    const viaExitHostId = viaExitCandidate > 0 && viaExitCandidate !== Number(configuredRouteHostIds[configuredRouteHostIds.length - 1] || 0) ? viaExitCandidate : 0;
-    const routeHostIds = viaExitHostId > 0 && configuredRouteHostIds.length >= 2
-      ? [...configuredRouteHostIds.slice(0, -1), viaExitHostId]
-      : configuredRouteHostIds;
-    routeHostIds.forEach((hostId: number, index: number) => {
-      const host = hostForRouteId(Number(hostId));
-      addHostNodeMeta(meta, host, [
-        index === 0 ? "入口" : "",
-        index === routeHostIds.length - 1 ? "出口" : "",
-        tunnel ? labelForRouteHostId(hostId) : "",
-        tunnel ? tunnelHopHostName(tunnel, hostId, hosts) : "",
-        `主机${hostId}`,
-        `主机 #${hostId}`,
-      ]);
-    });
 
-    const sourceHost = hostForRouteId(Number(routeHostIds[0] || rule.hostId || 0)) || getRuleEntryHost(rule);
-    const exitHost = hostForRouteId(Number(routeHostIds[routeHostIds.length - 1] || 0));
-    if (sourceHost) addHostNodeMeta(meta, sourceHost, ["入口", "源节点"]);
-    chainEntryMembers.forEach((entryMember: any) => {
-      const entryHost = hostForRouteId(Number(entryMember.hostId || 0));
-      addHostNodeMeta(meta, entryHost, [
-        "入口",
-        "源节点",
-        `主机${entryMember.hostId || ""}`,
-        `主机 #${entryMember.hostId || ""}`,
-      ]);
-    });
-    tunnelEntryMembers.forEach((entryMember: any) => {
-      const entryHostId = Number(entryMember.hostId || 0);
-      const entryHost = hostForRouteId(entryHostId);
-      addHostNodeMeta(meta, entryHost, [
-        "入口",
-        "源节点",
-        labelForRouteHostId(entryHostId),
-        entryMember.entryAddress,
-        `主机${entryHostId || ""}`,
-        `主机 #${entryHostId || ""}`,
-      ]);
-    });
-    if (exitHost) addHostNodeMeta(meta, exitHost, ["出口"]);
+  const useRuleTransferResourcesResult = useRuleTransferResources({ hosts, importResources, importScopeType, importResourceSearch, importResourceId, tunnelAvailabilityById, getForwardGroupConfigStatus, importManualText });
+  const { selectedImportResource, manualImportValidation, filteredImportResources, renderTransferResourceOption } = useRuleTransferResourcesResult;
 
-    const targetIp = String(rule.targetIp || "").trim();
-    const targetText = formatAddressWithPort(targetIp || "-", Number(rule.targetPort || 0) || "-") || "目标";
-    const ruleLabel = String(rule.name || selfTestRule?.name || `规则 #${rule.id || "-"}`).trim();
-    const targetHost = findHostByAddress(hosts, targetIp);
-    if (targetHost) {
-      addHostNodeMeta(meta, targetHost);
-      const hostMeta = {
-        ...hostNodeMeta(targetHost),
-        label: ruleLabel,
-      };
-      addNodeMetaAliases(meta, [
-        ruleLabel,
-        targetIp,
-        targetText,
-        `目标 ${targetText}`,
-        `目标 ${targetIp}:${rule.targetPort || "-"}`,
-        "目标",
-        "目的节点",
-      ], hostMeta);
-    } else {
-      const targetGeo = targetGeoByAddress.get(normalizeAddressKey(targetIp));
-      const targetMeta = targetGeoNodeMeta(ruleLabel, targetIp || targetText, targetGeo);
-      addNodeMetaAliases(meta, [
-        ruleLabel,
-        targetIp,
-        targetText,
-        `目标 ${targetText}`,
-        `目标 ${targetIp}:${rule.targetPort || "-"}`,
-        "目标",
-        "目的节点",
-      ], targetMeta);
-    }
-
-    const routeHosts = routeHostIds
-      .map((hostId: number) => hostForRouteId(Number(hostId)))
-      .filter(Boolean);
-    const plannedSegments: LinkTestPlannedSegment[] = [];
-    const isChainRule = !!chainGroup && isForwardChainGroup(chainGroup);
-    const routeHopCount = Math.max(0, routeHostIds.length - 1);
-    const pathHopCount = isChainRule
-      ? (chainEntryMembers.length > 0 ? 1 : 0) + routeHopCount + 1
-      : routeHopCount;
-    if (chainEntryMembers.length > 0 && routeHosts[0]) {
-      const firstChainHost = routeHosts[0];
-      const firstChainHostId = Number(routeHostIds[0] || 0);
-      chainEntryMembers.forEach((entryMember: any) => {
-        const entryHostId = Number(entryMember.hostId || 0);
-        const entryHost = hostForRouteId(entryHostId);
-        plannedSegments.push({
-          from: hostDisplayName(entryHost) || `入口主机 #${entryMember.hostId || "-"}`,
-          to: hostDisplayName(firstChainHost),
-          fromHostId: entryHostId || null,
-          toHostId: firstChainHostId || null,
-          hopIndex: 0,
-          hopCount: pathHopCount,
-          fromMeta: meta[hostDisplayName(entryHost)] || meta[String(entryMember.hostId || "")],
-          toMeta: meta[hostDisplayName(firstChainHost)],
-        });
-      });
-    }
-    const tunnelLatencyMs = typeof (tunnel as any)?.latestLatencyMs === "number" && Number.isFinite((tunnel as any).latestLatencyMs)
-      ? Number((tunnel as any).latestLatencyMs)
-      : typeof (tunnel as any)?.lastLatencyMs === "number" && Number.isFinite((tunnel as any).lastLatencyMs)
-        ? Number((tunnel as any).lastLatencyMs)
-        : null;
-    const tunnelLatencyIsTimeout = !!(tunnel as any)?.latestLatencyIsTimeout || ((tunnel as any)?.lastTestStatus === "failed" && tunnelLatencyMs === null);
-    const nodeMetaForHostId = (hostId: number) => {
-      const host = hostForRouteId(hostId);
-      return meta[hostDisplayName(host)] || meta[labelForRouteHostId(hostId)] || meta[String(hostId)] || undefined;
-    };
-    const createTunnelPlannedSegment = (
-      fromHostId: number,
-      toHostId: number,
-      useTunnelLatencyFallback: boolean,
-      hopIndex: number,
-    ): LinkTestPlannedSegment => ({
-      from: labelForRouteHostId(fromHostId),
-      to: labelForRouteHostId(toHostId),
-      fromHostId: fromHostId || null,
-      toHostId: toHostId || null,
-      hopIndex,
-      hopCount: pathHopCount,
-      fromMeta: nodeMetaForHostId(fromHostId),
-      toMeta: nodeMetaForHostId(toHostId),
-      success: tunnelLatencyMs !== null && useTunnelLatencyFallback
-        ? true
-        : tunnelLatencyIsTimeout && useTunnelLatencyFallback
-          ? false
-          : undefined,
-      latencyMs: tunnelLatencyMs !== null && useTunnelLatencyFallback ? tunnelLatencyMs : null,
-      message: tunnelLatencyIsTimeout && useTunnelLatencyFallback ? "隧道段失败" : null,
-      method: null,
-      pending: false,
-    });
-    const tunnelEntryHostIds = tunnel
-      ? Array.from(new Set([
-        Number(routeHostIds[0] || (tunnel as any).entryHostId || 0),
-        ...tunnelEntryMembers.map((member: any) => Number(member?.hostId || 0)),
-      ].filter((hostId: number) => Number.isFinite(hostId) && hostId > 0)))
-      : [];
-    const hasTunnelMultiEntry = !!tunnel && tunnelEntryHostIds.length > 1;
-    if (hasTunnelMultiEntry) {
-      const lastHostId = Number(routeHostIds[routeHostIds.length - 1] || (tunnel as any).exitHostId || 0);
-      const restRouteHostIds = routeHostIds.filter((hostId: number) => !tunnelEntryHostIds.includes(Number(hostId)));
-      const nextHostId = Number(restRouteHostIds[0] || lastHostId || (tunnel as any).exitHostId || 0);
-      if (nextHostId > 0) {
-        tunnelEntryHostIds.forEach((entryHostId) => {
-          if (entryHostId !== nextHostId) {
-            plannedSegments.push(createTunnelPlannedSegment(entryHostId, nextHostId, false, 0));
-          }
-        });
-      }
-      for (let index = 0; index < restRouteHostIds.length - 1; index += 1) {
-        plannedSegments.push(createTunnelPlannedSegment(
-          Number(restRouteHostIds[index]),
-          Number(restRouteHostIds[index + 1]),
-          false,
-          index + 1,
-        ));
-      }
-    } else {
-      for (let index = 0; index < routeHostIds.length - 1; index += 1) {
-        // 换成在用的出口时，链路自己的延迟（入口到主出口量的）不能拿来填这一段
-        const singleTunnelSegment = routeHostIds.length - 1 === 1 && !(viaExitHostId > 0);
-        plannedSegments.push(createTunnelPlannedSegment(
-          Number(routeHostIds[index]),
-          Number(routeHostIds[index + 1]),
-          singleTunnelSegment,
-          index + (chainEntryMembers.length > 0 ? 1 : 0),
-        ));
-      }
-    }
-    const exitHostForTarget = routeHosts[routeHosts.length - 1] || sourceHost;
-    if (exitHostForTarget) {
-      const exitHostId = Number(exitHostForTarget.id || routeHostIds[routeHostIds.length - 1] || 0);
-      plannedSegments.push({
-        from: hostDisplayName(exitHostForTarget),
-        to: ruleLabel,
-        fromHostId: exitHostId || null,
-        toHostId: Number(targetHost?.id || 0) || null,
-        hopIndex: isChainRule ? Math.max(0, pathHopCount - 1) : null,
-        hopCount: isChainRule ? pathHopCount : null,
-        fromMeta: meta[hostDisplayName(exitHostForTarget)],
-        toMeta: meta[ruleLabel] || meta[targetText] || meta[targetIp],
-      });
-    }
-
-    return {
-      nodeMeta: meta,
-      sourceLabel: chainEntryMembers.length > 0
-        ? chainEntryMembers
-          .map((member: any) => hostDisplayName(hostForRouteId(Number(member.hostId || 0))) || `入口主机 #${member.hostId || "-"}`)
-          .filter(Boolean)
-          .join(" / ")
-        : tunnelEntryHostIds.length > 1
-          ? tunnelEntryHostIds.map((hostId) => labelForRouteHostId(hostId)).filter(Boolean).join(" / ")
-          : hostDisplayName(sourceHost) || getRuleEntryHostName(rule),
-      targetLabel: ruleLabel,
-      plannedSegments,
-    };
-  }, [forwardGroupById, getRuleEntryHost, hosts, selfTestRule?.name, selfTestRuleDetail, targetGeoByAddress, tunnelById]);
-
-  const getTransferResourceLabel = (type: RuleTransferScopeType, resource: any) => {
-    if (!resource) return "";
-    if (type === "local") return resource.name || `端口转发 #${resource.id}`;
-    if (type === "tunnel") return `${resource.name || `#${resource.id}`} / ${getTunnelRouteText(resource, hosts || [])}`;
-    return resource.name || `#${resource.id}`;
-  };
-
-  const getTransferResourceSearchText = useCallback((type: RuleTransferScopeType, resource: any) => {
-    const values: any[] = [resource?.id];
-    if (type === "local") {
-      values.push(
-        resource?.name,
-        resource?.description,
-        resource?.displayRemark,
-        resource?.domain,
-        resource?.forwardType,
-        resource?.groupMode,
-        getForwardGroupKindLabel(resource),
-      );
-      (resource?.members || []).forEach((member: any) => {
-        values.push(member?.hostId, member?.entryAddress, member?.connectHost, member?.name);
-      });
-    } else if (type === "tunnel") {
-      values.push(
-        resource?.name,
-        getTunnelRouteText(resource, hosts || []),
-        resource?.mode,
-        resource?.type,
-        resource?.listenPort,
-        resource?.entryHostId,
-        resource?.exitHostId,
-      );
-    } else {
-      values.push(
-        resource?.name,
-        resource?.description,
-        resource?.domain,
-        resource?.groupType,
-        resource?.type,
-        resource?.mode,
-      );
-    }
-    return values.filter((value) => value !== undefined && value !== null && String(value).trim()).join(" ");
-  }, [hosts]);
-
-  const filterTransferResources = useCallback((resources: any[], type: RuleTransferScopeType, search: string) => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) return resources;
-    return resources.filter((resource: any) => getTransferResourceSearchText(type, resource).toLowerCase().includes(keyword));
-  }, [getTransferResourceSearchText]);
-  const filteredImportResources = useMemo(
-    () => filterTransferResources(importResources, importScopeType, importResourceSearch),
-    [filterTransferResources, importResourceSearch, importResources, importScopeType]
-  );
-  const selectedImportResource = useMemo(
-    () => importResources.find((resource: any) => String(resource.id) === importResourceId) || null,
-    [importResourceId, importResources]
-  );
-
-  const getTransferResourceStatusMeta = (type: RuleTransferScopeType, resource: any) => {
-    if (type === "tunnel") {
-      const state = tunnelAvailabilityById.get(Number(resource?.id || 0));
-      if (state?.status === "available") {
-        return {
-          label: "可用",
-          dotClassName: "bg-[var(--fx-healthy)]",
-          textClassName: "text-muted-foreground",
-        };
-      }
-      if (state?.status === "degraded" || state?.status === "pending") {
-        return {
-          label: state.status === "degraded" ? "部分可用" : "检测中",
-          dotClassName: "bg-[var(--fx-warn)]",
-          textClassName: "text-muted-foreground",
-        };
-      }
-      return {
-        label: state?.status === "disabled" ? "停用" : "不可用",
-        dotClassName: state?.status === "disabled" ? "bg-muted-foreground/60" : "bg-destructive",
-        textClassName: "text-muted-foreground",
-      };
-    }
-
-    const status = getForwardGroupConfigStatus(resource);
-    if (status === "available") {
-      return {
-        label: "可用",
-        dotClassName: "bg-[var(--fx-healthy)]",
-        textClassName: "text-muted-foreground",
-      };
-    }
-    if (status === "pending" || status === "degraded") {
-      return {
-        label: status === "degraded" ? "部分可用" : "检测中",
-        dotClassName: "bg-[var(--fx-warn)]",
-        textClassName: "text-muted-foreground",
-      };
-    }
-    if (status === "disabled") {
-      return {
-        label: "停用",
-        dotClassName: "bg-muted-foreground/60",
-        textClassName: "text-muted-foreground",
-      };
-    }
-    return {
-      label: "离线",
-      dotClassName: "bg-muted-foreground/60",
-      textClassName: "text-muted-foreground",
-    };
-  };
-
-  const renderTransferResourceOption = (type: RuleTransferScopeType, resource: any, options?: { showStatus?: boolean }) => {
-    const statusMeta = options?.showStatus ? getTransferResourceStatusMeta(type, resource) : null;
-    const statusBadge = statusMeta ? (
-      <span className="inline-flex shrink-0 items-center" title={statusMeta.label}>
-        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${statusMeta.dotClassName}`} aria-hidden="true" />
-        <span className="sr-only">{statusMeta.label}</span>
-      </span>
-    ) : null;
-
-    if (type === "local") {
-      const members = (resource?.members || []).filter((member: any) => member?.isEnabled !== false);
-      return (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-2">
-            {statusBadge}
-            <span className="truncate">{resource.name || `端口转发 #${resource.id}`}</span>
-          </span>
-          <span className="truncate text-xs text-muted-foreground">
-            {members.length > 0 ? members.map((member: any) => member.entryAddress || member.connectHost || (member.hostId ? `主机 #${member.hostId}` : "所属主机")).join(" / ") : getForwardGroupKindLabel(resource)}
-          </span>
-        </div>
-      );
-    }
-    if (type === "tunnel") {
-      return (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-2">
-            {statusBadge}
-            <span className="truncate">{resource.name || `#${resource.id}`}</span>
-          </span>
-          <span className="truncate text-xs text-muted-foreground">{getTunnelRouteText(resource, hosts || [])}</span>
-        </div>
-      );
-    }
-    return (
-      <span className="flex min-w-0 items-center gap-2">
-        {statusBadge}
-        <span className="truncate">{resource.name || `#${resource.id}`}</span>
-      </span>
-    );
-  };
-  const manualImportValidation = useMemo<{ ok: boolean; message: string; rules: RuleTransferFileRule[] }>(() => {
-    const lines = String(importManualText || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (lines.length === 0) {
-      return { ok: false, message: "请输入目标地址，每行一个 地址:端口", rules: [] };
-    }
-    if (lines.length > RULE_TRANSFER_MAX_IMPORT_COUNT) {
-      return { ok: false, message: `单次最多导入 ${RULE_TRANSFER_MAX_IMPORT_COUNT} 条规则`, rules: [] };
-    }
-    const rules: RuleTransferFileRule[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      // 这里每行只有一个地址（批量导入），所以用纯地址解析，
-      // 不要用主备那条「出站 [探测目标]」的行语法 —— 一行两个地址在这儿是错的。
-      const parsed = parseFailoverEndpoint(lines[index]);
-      if (!parsed) continue;
-      if ("error" in parsed) {
-        return { ok: false, message: `第 ${index + 1} 行：${parsed.error}`, rules: [] };
-      }
-      const targetIp = String(parsed.host || "").trim();
-      const targetPort = Number(parsed.port || 0);
-      if (!isValidTargetHost(targetIp)) {
-        return { ok: false, message: `第 ${index + 1} 行：地址格式不正确`, rules: [] };
-      }
-      if (!isValidForwardPort(targetPort)) {
-        return { ok: false, message: `第 ${index + 1} 行：端口必须在 1-65535 之间`, rules: [] };
-      }
-      rules.push({
-        name: formatAddressWithPort(targetIp, targetPort),
-        forwardType: defaultForm.forwardType,
-        protocol: defaultForm.protocol,
-        sourcePort: 0,
-        targetIp,
-        targetPort,
-        isEnabled: true,
-        telegramErrorNotifyEnabled: false,
-        proxyProtocolReceive: false,
-        proxyProtocolSend: false,
-        proxyProtocolExitReceive: false,
-        proxyProtocolExitSend: false,
-        proxyProtocolVersion: 1,
-        tcpFastOpen: false,
-        zeroCopy: false,
-        udpOverTcp: false,
-        udpOverTcpPort: 0,
-        failoverEnabled: false,
-        failoverStrategy: "fallback",
-        failoverTargets: [],
-        failoverSeconds: 60,
-        recoverSeconds: 120,
-        autoFailback: true,
-      });
-    }
-    return { ok: true, message: `已识别 ${rules.length} 条手动输入规则`, rules };
-  }, [defaultForm.forwardType, defaultForm.protocol, importManualText]);
-
-  /*
-    ny / Nyanpass 导入（实验性）：粘贴 ny 导出的逐行 JSON，或者直接选 ny 的导出文件（文件导入会自动认出来）。
-    导进来一律先停用；入口端口冲突就留作失败项，不像普通导入那样改成随机端口 —— 迁移过来的规则
-    对外公布的端口不能悄悄变。
-  */
-  const nyanpassPaste = useMemo(() => (importSourceMode === "nyanpass" && importManualText.trim()
-    ? parseCompatibleRuleTransferText(importManualText)
-    : null), [importSourceMode, importManualText]);
-  const nyanpassFile = importSourceMode === "nyanpass"
-    ? (nyanpassPaste?.ok && (nyanpassPaste.file as CompatibleRuleFile).importSource === "nyanpass" ? nyanpassPaste.file as CompatibleRuleFile : null)
-    : importSourceMode === "file" && importFile?.importSource === "nyanpass" ? importFile : null;
-  const isNyanpassImport = importSourceMode === "nyanpass" || !!nyanpassFile;
-  useEffect(() => { setImportNyanpassAcknowledged(false); }, [importResourceId, importScopeType, importNyanpassProtocol, importManualText]);
-
-  const importValidation = useMemo<{ ok: boolean; message: string; rules: ImportedRule[] }>(() => {
-    if (!importResourceId) return { ok: false, message: `请选择${ruleTransferScopeLabels[importScopeType]}`, rules: [] };
-    if (isNyanpassImport) {
-      if (nyanpassPaste && !nyanpassPaste.ok) return { ok: false, message: nyanpassPaste.error, rules: [] };
-      if (!nyanpassFile) return { ok: false, message: "粘贴 ny 导出的规则（一行一条 JSON），或选 ny 的导出文件", rules: [] };
-      const rules = nyanpassFile.rules.map((rule) => ({ ...rule, protocol: importNyanpassProtocol }));
-      const error = validateNyanpassImportTarget(rules, { protocol: importNyanpassProtocol, scope: importScopeType, resource: selectedImportResource, admin: user?.role === "admin" });
-      if (error) return { ok: false, message: error, rules };
-      if (!importNyanpassAcknowledged) return { ok: false, message: "请先勾选下面的实验性导入说明", rules };
-      return { ok: true, message: `ny（实验性）：识别到 ${rules.length} 条规则，导入后先停用，端口冲突的留作失败项`, rules };
-    }
-    if (importSourceMode === "manual") {
-      if (!manualImportValidation.ok) return manualImportValidation;
-      return manualImportValidation;
-    }
-    if (importFileError) return { ok: false, message: importFileError, rules: [] };
-    if (!importFile) return { ok: false, message: "请选择导入文件", rules: [] };
-    return { ok: true, message: `已识别 ${importFile.rules.length} 条${ruleTransferScopeLabels[importScopeType]}规则`, rules: importFile.rules };
-  }, [importFile, importFileError, importResourceId, importScopeType, importSourceMode, manualImportValidation, isNyanpassImport, nyanpassPaste, nyanpassFile, importNyanpassProtocol, importNyanpassAcknowledged, selectedImportResource, user?.role]);
-
-  const resetImportDialog = () => {
-    setImportFile(null);
-    setImportFileName("");
-    setImportFileError("");
-    setImportFileInputKey((key) => key + 1);
-    setImportManualText("");
-    setImportNyanpassAcknowledged(false);
-  };
-
-  const handleImportFileChange = async (event: any) => {
-    const file = event.target.files?.[0];
-    setImportFile(null);
-    setImportFileError("");
-    setImportFileName(file?.name || "");
-    if (!file) return;
-    if (Number(file.size || 0) > RULE_TRANSFER_MAX_FILE_SIZE) {
-      setImportFileError("规则文件不能超过 5 MiB");
-      return;
-    }
-    try {
-      const rawText = await file.text();
-      // NEX 自己的导出文件照原来的严格校验；不是的话按 ny 的导出格式试一遍。
-      const result = parseCompatibleRuleTransferText(rawText);
-      if (!result.ok) {
-        setImportFileError(result.error);
-        return;
-      }
-      setImportFile(result.file);
-    } catch {
-      setImportFileError("文件无法解析，请选择 JSON 格式的规则文件");
-    }
-  };
-
-  const buildImportRulePayload = (rule: ImportedRule) => {
-    const resourceId = Number(importResourceId);
-    const selectedTunnel = importScopeType === "tunnel" ? tunnelById.get(resourceId) : null;
-    const selectedGroup = importScopeType === "tunnel" ? null : forwardGroupById.get(resourceId);
-    const payloadForwardType: ForwardType = importScopeType === "tunnel"
-      ? "gost"
-      : getForwardGroupRuleForwardType(selectedGroup, rule.forwardType);
-    return {
-      hostId: importScopeType === "tunnel" ? Number(selectedTunnel?.entryHostId || 0) : undefined,
-      userId: createOwnerUserId,
-      name: rule.name,
-      forwardType: payloadForwardType,
-      protocol: rule.protocol,
-      gostMode: "direct" as const,
-      gostRelayHost: null,
-      gostRelayPort: null,
-      tunnelId: importScopeType === "tunnel" ? resourceId : null,
-      forwardGroupId: importScopeType === "tunnel" ? null : resourceId,
-      sourcePort: rule.sourcePort,
-      targetIp: rule.targetIp,
-      targetPort: rule.targetPort,
-      isEnabled: rule.isEnabled,
-      telegramErrorNotifyEnabled: telegramBotReady && !!rule.telegramErrorNotifyEnabled,
-      proxyProtocolReceive: rule.proxyProtocolReceive,
-      proxyProtocolSend: rule.proxyProtocolSend,
-      proxyProtocolExitReceive: rule.proxyProtocolExitReceive,
-      proxyProtocolExitSend: rule.proxyProtocolExitSend,
-      proxyProtocolVersion: rule.proxyProtocolVersion,
-      tcpFastOpen: rule.tcpFastOpen,
-      zeroCopy: rule.zeroCopy,
-      udpOverTcp: rule.udpOverTcp,
-      udpOverTcpPort: rule.udpOverTcpPort || null,
-      failoverEnabled: importScopeType === "chain" ? false : rule.failoverEnabled,
-      failoverStrategy: rule.failoverStrategy,
-      failoverTargets: importScopeType === "chain" || !rule.failoverEnabled ? [] : rule.failoverTargets,
-      failoverSeconds: rule.failoverSeconds,
-      recoverSeconds: rule.recoverSeconds,
-      autoFailback: rule.autoFailback,
-      // ny 规则自带的限速（只有管理员能设，validateNyanpassImportTarget 已拦过非管理员）。
-      ...(isNyanpassImport && rule.rateLimitMbps && user?.role === "admin" ? { rateLimitMbps: rule.rateLimitMbps } : {}),
-    };
-  };
-
-  const handleImportRules = async () => {
-    if (importingRulesRef.current) return;
-    if (!importValidation.ok) {
-      toast.error(importValidation.message);
-      return;
-    }
-    importingRulesRef.current = true;
-    setImportingRules(true);
-    try {
-      const results = await runBatchOperations(importValidation.rules, 6, async (rule) => {
-        const payload = buildImportRulePayload(rule);
-        try {
-          return await importCreateMutation.mutateAsync(payload);
-        } catch (error) {
-          // ny 迁移过来的入口端口是对外公布过的：冲突就留作失败项，不换随机端口。
-          if (isNyanpassImport || rule.sourcePort <= 0 || !isBatchPortConflictError(error)) throw error;
-          return importCreateMutation.mutateAsync({ ...payload, sourcePort: 0 });
-        }
-      });
-      const importedCount = results.filter((result) => result.status === "fulfilled").length;
-      const failures = results.filter((result) => result.status === "rejected");
-      await Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-        utils.rules.trafficSummary.invalidate(),
-      ]);
-      if (showCopyDialog) await fullRulesQuery.refetch();
-      if (failures.length > 0) {
-        const failedRules = failures.map((result) => result.item);
-        if (isNyanpassImport && nyanpassFile) {
-          setImportSourceMode("file");
-          setImportManualText("");
-          setImportFile({ ...nyanpassFile, rules: failedRules });
-        } else if (importSourceMode === "file") {
-          setImportFile((current) => current ? { ...current, rules: failedRules } : current);
-        } else {
-          setImportManualText(failedRules
-            .map((rule) => formatAddressWithPort(rule.targetIp, rule.targetPort))
-            .join("\n"));
-        }
-        toast.error(`批量导入完成：成功 ${importedCount} 条，失败 ${failures.length} 条，已仅保留失败项供重试。${batchOperationErrorMessage(failures[0].reason)}`);
-      } else {
-        toast.success(`已导入 ${importedCount} 条规则`);
-        setShowCopyDialog(false);
-        resetImportDialog();
-      }
-    } catch (error: any) {
-      toast.error(`批量导入处理失败：${error?.message || "请检查规则配置"}`);
-    } finally {
-      importingRulesRef.current = false;
-      setImportingRules(false);
-    }
-  };
+  const batchManage = useRuleBatchManage({ ...batchState, personalGroupFilter, ruleCategory, ruleSearchQuery, canUseSavedLocalForward, canUseGost, canUseForwardChain, canUseFailoverGroup, showCopyDialog, setShowCopyDialog, createOwnerUserId, telegramBotReady, canAdd, availablePortForwardGroups, supportedTunnels, availableForwardChainGroups, availableFailoverForwardGroups, invalidateRuleProbeStatuses, utils, fullRulesQuery, confirmDialog, selectedScopeQueryEnabled, selectedScopedRules, needsFullRuleList, baseScopedRules, ruleFilters, isRuleSupported, hosts, tunnels, forwardGroupById, tunnelById, nginxTunnelEnabled, selectedImportResource, user, manualImportValidation });
+  const { openCopyDialog, transferSourceRules } = batchManage;
+  const batchDialogLoaded = useLastShown(showCopyDialog, showCopyDialog ? true : null) ?? false;
   const getRuleOwnerName = (rule: any) => {
     const owner = userById.get(Number(rule.userId));
     return owner?.name || owner?.username || `用户 #${rule.userId}`;
@@ -6408,154 +4567,8 @@ function RulesContent() {
         : null);
   };
 
-  const getTunnelEntryAddresses = (tunnel: any | null | undefined): EntryAddress[] => {
-    if (!tunnel) return [];
-    const rows: EntryAddress[] = [];
-    const entryGroup = Number(tunnel?.entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number(tunnel.entryGroupId)) || tunnel.entryGroup
-      : null;
-    const entryGroupDomain = String(entryGroup?.domain || "").trim();
-    if (entryGroupDomain) {
-      pushUniqueEntryAddress(rows, "入口组", entryGroupDomain);
-      return rows;
-    }
-    const entryMembers = entryGroup && forwardGroupModeOf(entryGroup) === "entry"
-      ? enabledHostMembers(entryGroup)
-      : [];
-    if (entryMembers.length > 0) {
-      const memberEntries = entryMembers.flatMap((member: any) => {
-        const host = getTunnelEntryHostForDisplay(tunnel, Number(member.hostId || 0));
-        return getHostEntryAddresses(host);
-      });
-      const memberDomain = memberEntries.find((entry) => entry.label === "DDNS")
-        || memberEntries.find((entry) => addressFamily(entry.value) === "hostname");
-      if (memberDomain) {
-        pushUniqueEntryAddress(rows, memberDomain.label, memberDomain.value);
-        return rows;
-      }
-      const firstEntryHost = getTunnelEntryHostForDisplay(tunnel, Number(entryMembers[0]?.hostId || 0));
-      for (const entry of getHostEntryAddresses(firstEntryHost)) {
-        pushUniqueEntryAddress(rows, entry.label, entry.value);
-      }
-      return rows;
-    }
-    const entryHostId = Number(tunnel?.entryHostId || getTunnelHopIds(tunnel)[0] || 0);
-    for (const entry of getHostEntryAddresses(getTunnelEntryHostForDisplay(tunnel, entryHostId))) {
-      pushUniqueEntryAddress(rows, entry.label, entry.value);
-    }
-    return rows;
-  };
-
-  const getMemberEntryHost = (member: any | null | undefined) => {
-    const hostId = Number(member?.hostId || 0);
-    if (hostId > 0) {
-      // Shared groups may expose the member host only through the ACL-filtered
-      // `member.host` payload. Keep that nested summary as a display fallback;
-      // otherwise a configured DDNS/domain entry is replaced by entryAddress
-      // (usually an IPv4 literal) for ordinary users.
-      return resolveRuleEntryHost(hosts, hostId, member?.host || null);
-    }
-    const tunnelId = Number(member?.tunnelId || 0);
-    if (tunnelId > 0) {
-      const tunnel = tunnelById.get(tunnelId);
-      const entryHostId = Number(tunnel?.entryHostId || 0);
-      return resolveRuleEntryHost(hosts, entryHostId, tunnel?.entryHost || member?.host || null);
-    }
-    return member?.host || null;
-  };
-
-  const pushMemberEntryAddresses = (rows: EntryAddress[], member: any | null | undefined) => {
-    const tunnelId = Number(member?.tunnelId || 0);
-    if (tunnelId > 0) {
-      const tunnelRows = getTunnelEntryAddresses(tunnelById.get(tunnelId));
-      for (const entry of tunnelRows) {
-        pushUniqueEntryAddress(rows, entry.label, entry.value);
-      }
-      if (tunnelRows.length > 0) return;
-    }
-    const entryHost = getMemberEntryHost(member);
-    for (const entry of getHostEntryAddresses(entryHost)) {
-      pushUniqueEntryAddress(rows, entry.label, entry.value);
-    }
-    pushUniqueEntryAddress(rows, "入口", member?.entryAddress);
-  };
-
-  /** 挂了入口组的端口转发（2.3.438 起）：入口是入口组里的主机。 */
-  const portEntryGroupOf = (group: any | null | undefined) => {
-    if (!group || forwardGroupModeOf(group) !== "port" || Number(group.entryGroupId || 0) <= 0) return null;
-    const entryGroup = forwardGroupById.get(Number(group.entryGroupId)) || group.entryGroup || null;
-    return entryGroup && forwardGroupModeOf(entryGroup) === "entry" ? entryGroup : null;
-  };
-  /** 资源下拉、规则卡上当作入口来数 / 来画的成员：挂了入口组就是入口组的主机。 */
-  const forwardGroupDisplayMembers = (group: any | null | undefined): any[] => {
-    const entryGroup = portEntryGroupOf(group);
-    return entryGroup ? enabledHostMembers(entryGroup) : (group?.members || []);
-  };
-
-  const getForwardGroupEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
-    if (!group) return [];
-    const rows: EntryAddress[] = [];
-    const portEntryGroup = portEntryGroupOf(group);
-    if (portEntryGroup) {
-      const entryDomain = String(portEntryGroup.domain || "").trim();
-      if (entryDomain) pushUniqueEntryAddress(rows, "入口组", entryDomain);
-      for (const member of enabledHostMembers(portEntryGroup)) pushMemberEntryAddresses(rows, member);
-      return rows;
-    }
-    const domain = String(group?.domain || "").trim();
-    if (domain) {
-      pushUniqueEntryAddress(rows, getForwardGroupRouteLabel(group), domain);
-      return rows;
-    }
-    const activeMemberId = Number(group?.activeMemberId || 0);
-    const members = [...(group?.members || [])]
-      .filter((member: any) => member?.isEnabled !== false)
-      .sort((a: any, b: any) => {
-        if (activeMemberId > 0) {
-          if (Number(a.id) === activeMemberId) return -1;
-          if (Number(b.id) === activeMemberId) return 1;
-        }
-        return Number(a.priority || 0) - Number(b.priority || 0);
-      });
-    // 多台入口的端口转发（2.3.437 起）每台都在监听，入口地址全列出来；转发组只列当前生效的那台。
-    const listAllMembers = forwardGroupModeOf(group) === "port" && members.length > 1;
-    for (const member of members) {
-      pushMemberEntryAddresses(rows, member);
-      if (rows.length > 0 && !listAllMembers) return rows;
-    }
-    return rows;
-  };
-
-  const getForwardChainEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
-    if (!group) return [];
-    const rows: EntryAddress[] = [];
-    const entryGroup = isForwardChainGroup(group) && group.entryGroupId
-      ? forwardGroupById.get(Number(group.entryGroupId)) || group.entryGroup
-      : null;
-    const domain = entryDomainForForwardGroup(group);
-    if (domain) {
-      pushUniqueEntryAddress(rows, "入口组", domain);
-      return rows;
-    }
-    const entryMembers = entryGroup && forwardGroupModeOf(entryGroup) === "entry"
-      ? enabledHostMembers(entryGroup)
-      : [];
-    if (entryMembers.length > 0) {
-      const memberDomain = entryMembers
-        .map((member: any) => getHostEntryAddresses(getMemberEntryHost(member)).find((entry) => addressFamily(entry.value) === "hostname"))
-        .find(Boolean);
-      if (memberDomain) {
-        pushUniqueEntryAddress(rows, memberDomain.label, memberDomain.value);
-        return rows;
-      }
-      const firstEntryMember = entryMembers[0];
-      pushMemberEntryAddresses(rows, firstEntryMember);
-      return rows;
-    }
-    const entryMember = (group.members || [])[0];
-    pushMemberEntryAddresses(rows, entryMember);
-    return rows;
-  };
+  const useRuleEntryAddressesResult = useRuleEntryAddresses({ forwardGroupById, getTunnelEntryHostForDisplay, hosts, tunnelById, entryDomainForForwardGroup });
+  const { getTunnelEntryAddresses, getForwardChainEntryAddresses, getForwardGroupEntryAddresses, portEntryGroupOf, forwardGroupDisplayMembers } = useRuleEntryAddressesResult;
 
   /*
     卡片上入口只写第一个地址（专属域名排第一），后面的挤成「+N」。用户要挑着复制 IP 或域名，
@@ -6657,76 +4670,8 @@ function RulesContent() {
   };
 
   /** 表格里灰点的规则：名字下面一行写为什么没在运行（和卡片地址行右端那枚同一句），悬停看原文。 */
-  const renderNotRunningReason = (rule: { id?: unknown; portWarnings?: unknown }) => {
-    const visual = ruleVisualStatuses.get(Number(rule.id))?.display || resolveRuleVisualStatus(rule);
-    const reason = resolveForwardRuleNotRunningReason(visual, rule?.portWarnings);
-    if (!reason) return null;
-    return (
-      <span
-        className={cn("mt-0.5 block truncate text-[11px] leading-4", reason.tone === "down" ? "text-[var(--fx-down-text)]" : "text-muted-foreground")}
-        title={reason.detail}
-        data-rule-not-running=""
-      >
-        {reason.label}
-      </span>
-    );
-  };
-
-  /** 共享 TLS 入站规则卡片上那枚：「SNI：a.com、b.com @ 主机:443」，入站停用 / Agent 太旧时换成原因。 */
-  /** 规则主人看到的那枚「管理员管理」：说明为什么编辑、开关、删除都不在。 */
-  const renderAdminManagedBadge = (rule: any) => (
-    user?.role !== "admin" && isAdminManagedRule(rule) ? (
-      <Badge key="admin-managed" variant="outline" className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground" title={ADMIN_MANAGED_RULE_MESSAGE}>
-        <Lock className="h-3 w-3" aria-hidden="true" />
-        管理员管理
-      </Badge>
-    ) : null
-  );
-
-  const renderSniRuleBadge = (rule: any) => {
-    if (!(Number(rule?.tlsInboundId || 0) > 0)) return null;
-    const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
-    const state = tlsInboundRuleState({ inbound, agentVersion: inbound?.agentVersion, routeKind: sniRuleRouteKind(rule) });
-    const text = formatSniRuleEntry({ names: parseSniNameJson(rule.sniNames), hostName: inbound?.hostName, port: inbound?.port });
-    return (
-      <span key="sni" className="inline-flex min-w-0 max-w-full items-center gap-1">
-        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[11px] font-normal" title={text}>{text}</Badge>
-        {state !== "ok" ? (
-          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] px-1.5 text-[11px] text-[var(--fx-warn-text)]">
-            {TLS_INBOUND_RULE_STATE_LABELS[state]}
-          </Badge>
-        ) : null}
-      </span>
-    );
-  };
-
-  /** Shadowsocks 出口那一枚：「经 落地主机 X 出口」/「经 外部 SS 出口」，后面跟状态（运行 / 落地离线 / 需要升级 Agent…）。 */
-  const renderEgressBadge = (rule: any) => {
-    const egress = rule?.egress;
-    if (!egress || normalizeRuleEgressType(egress.type) === "none") return null;
-    const state = String(egress.state || "running") as RuleEgressState;
-    const tone = ruleEgressStateTone(state);
-    const text = ruleEgressSummaryText({ type: egress.type, landingHostName: egress.landingHostName, udp: egress.udp === true });
-    const title = [text, egress.masked, egress.message].filter(Boolean).join(" · ");
-    return (
-      <span key="egress" className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1" data-testid="rule-egress-badge">
-        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[11px] font-normal" title={title}>{text}</Badge>
-        <Badge
-          variant="outline"
-          className={cn(
-            // 状态那一枚（例如「UDP 出口需要升级 Agent/运行时」）在窄屏上可能比剩下的宽度长：整枚换行，不截字。
-            "h-5 max-w-full shrink-0 truncate px-1.5 text-[11px]",
-            tone === "ok" && "border-[color-mix(in_srgb,var(--fx-healthy)_40%,transparent)] text-[var(--fx-healthy-text)]",
-            tone === "warn" && "border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[var(--fx-warn-text)]",
-            tone === "muted" && "text-muted-foreground",
-          )}
-          title={egress.message || undefined}
-        >
-          {RULE_EGRESS_STATE_LABELS[state] || state}
-        </Badge>
-      </span>
-    );
-  };
+  const useRuleStateBadgesResult = useRuleStateBadges({ ruleVisualStatuses, resolveRuleVisualStatus, user, tlsInboundById });
+  const { renderNotRunningReason, renderAdminManagedBadge, renderSniRuleBadge, renderEgressBadge } = useRuleStateBadgesResult;
 
   /** 两种入口方式。编辑时定死（要换就新建规则）。 */
   const renderEntryModeSwitch = () => {
@@ -6885,104 +4830,8 @@ function RulesContent() {
     );
   };
 
-  const getRuleTransferDisplay = (rule: any) => {
-    if (Number(rule?.tlsInboundId || 0) > 0) {
-      // 共享 TLS 入站：入口是用户自己的域名 + 入站端口；sourcePort 只是本机回环端口，不给人看。
-      const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
-      const names = parseSniNameJson(rule.sniNames);
-      const port = Number(inbound?.port || 0);
-      const sniEntries = names.map((name) => ({
-        label: "SNI",
-        value: name,
-        text: port > 0 ? formatAddressWithPort(name, port) : name,
-        copyable: port > 0,
-      }));
-      const entryAddresses = sniEntries.length > 0 ? sniEntries : [{ label: "SNI", value: "", text: "SNI 未配置", copyable: false }];
-      return {
-        entryAddresses,
-        entryAddress: sniEntries.map((entry) => entry.text).join(" / "),
-        targetAddress: `${rule.targetIp}:${rule.targetPort}`,
-        entryTitle: `复制入口地址: ${sniEntries.map((entry) => entry.text).join(" / ")}`,
-        failoverCount: 0,
-        failoverEnabled: false,
-        routeLabel: "",
-      };
-    }
-    const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    const groupRouteLabel = getForwardGroupRouteLabel(group);
-    const groupEntry = isForwardChainGroup(group)
-      ? (entryDomainForForwardGroup(group) || group?.members?.[0]?.entryAddress || "")
-      : (group?.domain || group?.members?.[0]?.entryAddress || "");
-    const chainEntryItems = isForwardChainGroup(group) ? getForwardChainEntryAddresses(group) : [];
-    const groupEntryItems = rule.forwardGroupId && !isForwardChainGroup(group) ? getForwardGroupEntryAddresses(group) : [];
-    const entryItems = rule.forwardGroupId
-      ? (isForwardChainGroup(group) ? (chainEntryItems.length > 0 ? chainEntryItems : [{ label: "转发链", value: groupEntry }]) : (groupEntryItems.length > 0 ? groupEntryItems : [{ label: groupRouteLabel, value: groupEntry }]))
-      : (getRuleEntries(rule).length > 0
-        ? getRuleEntries(rule)
-        : [{ label: "入口", value: "" }]);
-    const resolvedEntryAddresses = filterRuleEntryAddressesForDisplay(entryItems)
-      .filter((entry) => String(entry.value || "").trim())
-      .map((entry) => ({
-        ...entry,
-        text: formatRuleEntryAddress(entry.value, rule),
-        copyable: true,
-      }));
-    const entryAddresses = resolvedEntryAddresses.length > 0
-      ? resolvedEntryAddresses
-      : [{ label: "入口", value: "", text: "入口地址暂不可用", copyable: false }];
-    const entryAddress = resolvedEntryAddresses.map((entry) => entry.text).join(" / ");
-    const targetAddress = `${rule.targetIp}:${formatRuleTargetPort(rule)}`;
-    const entryTitle = rule.forwardGroupId
-      ? `复制${groupRouteLabel}入口: ${entryAddress}`
-      : `复制入口地址: ${entryAddress}`;
-    const routeGroup = routeGroupOf(rule);
-    return {
-      entryAddresses,
-      entryAddress,
-      targetAddress,
-      entryTitle,
-      failoverCount: routeGroup ? routeGroup.paths.length : 0,
-      failoverEnabled: !!routeGroup,
-      routeLabel: routeGroup ? routeStrategyLabel(routeGroup.policy, true) : "",
-    };
-  };
-
-  /**
-   * 这条规则中间经过哪些节点。直连返回空数组。
-   *
-   * 隧道取它的跳点名，转发链取链上的主机名，转发组取组名 —— 组内部谁在跑是
-   * 组自己的事，规则这一层只需要说明「走的是这个组」。
-   */
-
-  const getRuleHopNames = (rule: any): string[] => {
-    const category = getRuleCategory(rule, forwardGroupById);
-    if (category === "tunnel") {
-      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
-      if (!tunnel) return [];
-      // 第一跳是入口机，卡片上已经是入口地址那一行了，「经」只列它后面经过的（中转和出口）。
-      const names = getTunnelHopIds(tunnel)
-        .slice(1)
-        .map((hostId: number) => String(tunnelHopHostName(tunnel, hostId, hosts) || "").trim())
-        .filter(Boolean);
-      /*
-        负载均衡的链路：出口那一段写入口报上来的在用出口（只走一台写名字，分给几台写「N 台出口」）；
-        还没报的写一共几台，不再只写主出口的名字（看着像只走它）。
-      */
-      const via = trafficByRule.get(Number(rule?.id))?.exitTargetVia;
-      const balanced = getTunnelLoadBalanceExitNames(tunnel, hosts).length > 0 ? getTunnelExitNames(tunnel, hosts).length : 0;
-      const exitText = via && via.length === 1 ? via[0] : via && via.length > 1 ? `${via.length} 台出口` : balanced > 1 ? `${balanced} 台出口` : null;
-      if (exitText && names.length > 0) return [...names.slice(0, -1), exitText];
-      return names;
-    }
-    const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
-    if (!group) return [];
-    if (category === "chain") {
-      return (Array.isArray(group.members) ? group.members : [])
-        .map((member: any) => String(hostById.get(Number(member?.hostId || 0))?.name || "").trim())
-        .filter(Boolean);
-    }
-    return [String(group.name || "").trim()].filter(Boolean);
-  };
+  const useRuleTransferDisplayResult = useRuleTransferDisplay({ tlsInboundById, forwardGroupById, entryDomainForForwardGroup, getForwardChainEntryAddresses, getForwardGroupEntryAddresses, getRuleEntries, tunnelById, hosts, trafficByRule, hostById });
+  const { getRuleTransferDisplay, getRuleHopNames } = useRuleTransferDisplayResult;
 
   /*
     卡片上的路径条：入口（资源名 + 地址）── 经过什么 ── 目标。
@@ -6992,90 +4841,8 @@ function RulesContent() {
     状态，线中间的小药丸写转发工具和协议；隧道 / 转发链的中继画成线上的小圆点，名字写在
     药丸里。资源名从卡头的第二行挪到了这里 —— 它本来就是「入口」。
   */
-  const renderTableTransferEntry = (rule: any) => {
-    const { entryAddresses, entryTitle } = getRuleTransferDisplay(rule);
-    // 表里的地址是等宽的裸文字（参考站的模型名那一列），不再套小框；能复制的悬停时才显出底。
-    // 精简的表里地址画成药丸、写全不截（用户定的：规则信息要全）；列宽让给入口，太长的域名在药丸里换行（compact.css）。
-    return (
-      <div className="flex min-w-0 items-center gap-1 overflow-hidden font-mono text-[12px] leading-5">
-        {entryAddresses.map((entry) => (
-          <button
-            key={`${entry.label}:${entry.value}`}
-            type="button"
-            onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
-            disabled={!entry.copyable}
-            className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-inner px-1 py-0.5 -mx-1 text-left transition-colors enabled:hover:bg-[var(--fx-l2-group)] disabled:cursor-default disabled:text-muted-foreground"
-            title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
-          >
-            {entryAddresses.length > 1 && <span className="shrink-0 text-[11px] text-muted-foreground">{entry.label}</span>}
-            <code className="fx-table-addr min-w-0 truncate">{entry.text}</code>
-            {entry.copyable && <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
-          </button>
-        ))}
-      </div>
-    );
-  };
-
-  const renderTableTransferExit = (rule: any) => {
-    const { targetAddress, failoverCount, failoverEnabled, routeLabel } = getRuleTransferDisplay(rule);
-    // 出口和入口一样点一下就复制（用户要的）：表里原来只有入口能复制
-    return (
-      <div className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] leading-5">
-        <button
-          type="button"
-          onClick={() => copyTargetAddress(targetAddress)}
-          className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-inner px-1 py-0.5 -mx-1 text-left transition-colors hover:bg-[var(--fx-l2-group)]"
-          title={`复制目标地址: ${targetAddress}`}
-        >
-          <code className="fx-table-addr min-w-0 truncate">{targetAddress}</code>
-          <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />
-        </button>
-        {failoverEnabled && (
-          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 text-[11px] text-[var(--fx-warn-text)]">
-            {routeLabel} {failoverCount} 条
-          </Badge>
-        )}
-      </div>
-    );
-  };
-
-  /*
-    转发工具的标签回答的是「它是哪一种」，不是「它好不好」，所以走分类色，不碰状态色：
-    原来 socat 是红、gost 是琥珀 —— 一枚红标签在一列灰字里看着像出错了。
-    内核转发（iptables / nftables）用强调色，和「路径」同一个色；其余三个各一个分类色。
-  */
-  const forwardToolBadgeClass = (forwardType: unknown) => {
-    const type = String(forwardType || "");
-    if (type === "iptables" || type === "nftables") return "border-[color-mix(in_srgb,var(--fx-accent)_30%,transparent)] bg-[var(--fx-accent-soft)] text-[var(--fx-accent)]";
-    if (type === "socat") return "border-[color-mix(in_srgb,var(--fx-cat-orange)_30%,transparent)] bg-[var(--fx-cat-orange-soft)] text-[var(--fx-cat-orange)]";
-    if (type === "gost") return "border-[color-mix(in_srgb,var(--fx-cat-teal)_30%,transparent)] bg-[var(--fx-cat-teal-soft)] text-[var(--fx-cat-teal)]";
-    return "border-[color-mix(in_srgb,var(--fx-cat-indigo)_30%,transparent)] bg-[var(--fx-cat-indigo-soft)] text-[var(--fx-cat-indigo)]";
-  };
-
-  const renderForwardToolBadge = (rule: any, group?: any | null) => {
-    const forwardType = group
-      ? getForwardGroupRuleForwardType(group, rule.forwardType)
-      : normalizeRuleForwardType(rule.forwardType);
-    const label = forwardTypeDisplayLabel(forwardType);
-    return (
-      <Badge
-        variant="outline"
-        className={`w-fit whitespace-nowrap text-[11px] ${forwardToolBadgeClass(forwardType)}`}
-        title={`转发工具：${label}`}
-      >
-        {forwardType === "iptables" || forwardType === "nftables" ? (
-          <Shield className="mr-1 h-3 w-3" />
-        ) : forwardType === "socat" ? (
-          <ArrowRightLeft className="mr-1 h-3 w-3" />
-        ) : forwardType === "gost" ? (
-          <Network className="mr-1 h-3 w-3" />
-        ) : (
-          <Zap className="mr-1 h-3 w-3" />
-        )}
-        {label}
-      </Badge>
-    );
-  };
+  const useRuleTableTransferCellsResult = useRuleTableTransferCells({ getRuleTransferDisplay, copyEntryAddress, copyTargetAddress, forwardTypeDisplayLabel });
+  const { renderForwardToolBadge, renderTableTransferEntry, renderTableTransferExit } = useRuleTableTransferCellsResult;
 
   const getRuleKernelForwardWarning = (rule: any) => buildKernelForwardWarning({
     rule,
@@ -7087,164 +4854,14 @@ function RulesContent() {
   });
 
   // 走的 NEX 隧道上有节点的 FXP 握不上当前协议：规则 tcping 能通、流量全超时，要直接标出来。
-  const renderTunnelFxpIssueBadge = (tunnel: any) => {
-    const issue = tunnelFxpIssueText(tunnel);
-    if (!issue) return null;
-    return (
-      <Badge
-        key="fxp-issue"
-        variant="outline"
-        className="h-5 w-fit border-destructive/30 px-1.5 text-[11px] text-destructive"
-        title={issue}
-      >
-        <AlertCircle className="mr-1 h-3 w-3" />
-        隧道 FXP 过旧
-      </Badge>
-    );
-  };
-  const renderKernelForwardWarningBadge = (warning: string | null) => {
-    if (!warning) return null;
-    return (
-      <Badge
-        variant="outline"
-        className="h-5 w-fit border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 text-[11px] text-[var(--fx-warn-text)]"
-        title={warning}
-      >
-        <AlertCircle className="mr-1 h-3 w-3" />
-        跨 IPv4/IPv6 风险
-      </Badge>
-    );
-  };
-  /*
-    端口占用告警（server/rulePortOccupancy.ts）：和规则的运行状态分开的一枚。
-    黄 = Agent 核对到入口端口上有别的程序在监听（内核转发不绑端口，只能这样发现）；
-    红 = 绑定失败或内核转发没装全，后面跟着 Agent 报的原因。冲突消失后下一轮就不再带这个字段。
-  */
-  const renderPortWarningBadge = (rule: { portWarnings?: unknown }) => {
-    const warnings = (Array.isArray(rule?.portWarnings) ? rule.portWarnings : []) as Array<{ level: string; label: string; message: string }>;
-    if (warnings.length === 0) return null;
-    const error = warnings.find((item) => item.level === "error");
-    const head = error || warnings[0];
-    const title = warnings.map((item) => item.message).join("\n");
-    return (
-      <Badge
-        key="port-warning"
-        variant="outline"
-        data-testid="rule-port-warning"
-        data-level={error ? "error" : "warn"}
-        className={cn(
-          "h-5 w-fit max-w-full truncate px-1.5 text-[11px]",
-          error
-            ? "border-destructive/30 text-destructive"
-            : "border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]",
-        )}
-        title={title}
-      >
-        <AlertTriangle className="mr-1 h-3 w-3" aria-hidden="true" />
-        {head.label}{warnings.length > 1 ? ` · ${warnings.length}` : ""}
-      </Badge>
-    );
-  };
+  const useRuleWarningBadgesResult = useRuleWarningBadges();
+  const { renderKernelForwardWarningBadge, renderTunnelFxpIssueBadge, renderPortWarningBadge } = useRuleWarningBadgesResult;
   /**
    * 「在订阅里」这一小块。没绑就什么都不显示 —— 大多数转发跟订阅无关，
    * 给每一行都挂个「未加入订阅」只是噪音。
    */
-  const renderSubscriptionBadge = (rule: any, placement: "table" | "card" = "table") => {
-    if (!subscriptionAllowed) return null;
-    const nodeId = Number(rule?.proxyNodeId || 0);
-    if (!nodeId) return null;
-    const nodeName = proxyNodeNameById.get(nodeId) || "落地节点";
-    const visible = rule?.proxyNodeVisible !== false;
-    const drifted = driftedRuleIds.has(Number(rule?.id || 0));
-    // 卡片上正常的「订阅」写在名字后面（renderSubscriptionMark），这里只剩指向已变那种要人看的。
-    if (placement === "card" && !drifted) return null;
-    /*
-      绑定和现实对不上了：这条线路还在订阅里，但客户端会拿着「nodeName」那个落地的
-      凭据去连现在这个目标。比「少一条线路」严重，所以用警示色，别混在正常的订阅角标里。
-    */
-    if (drifted) {
-      return (
-        <Badge
-          variant="outline"
-          className="w-fit whitespace-nowrap border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[11px] text-[var(--fx-warn-text)]"
-          title={`这条转发的目标已经不是它绑的「${nodeName}」了。订阅里那条线路还在，但客户端连过去是拿着「${nodeName}」的凭据去连新目标 —— 把目标改回去，或者在这里重新选节点。`}
-        >
-          <AlertTriangle className="mr-1 h-3 w-3" />
-          订阅·指向已变
-        </Badge>
-      );
-    }
-    return (
-      <Badge
-        variant="outline"
-        className={`w-fit whitespace-nowrap text-[11px] ${
-          visible ? "border-[color-mix(in_srgb,var(--fx-path)_30%,transparent)] text-[var(--fx-path)]" : "border-muted-foreground/30 text-muted-foreground"
-        }`}
-        title={visible
-          ? `这条转发以「${nodeName}」的身份出现在你的订阅里。改目标、停用或删掉它，客户端里那条线路会跟着变。`
-          : `已绑定「${nodeName}」，但设成了不进订阅。转发照常跑，客户端里看不到它。`}
-      >
-        <Zap className="mr-1 h-3 w-3" />
-        {visible ? "订阅" : "订阅已隐藏"}
-      </Badge>
-    );
-  };
-
-  /**
-   * 卡片名字后面那两个字「订阅」：说明这条转发在客户端订阅里。
-   *
-   * 原来是名字下面单独一行的徽标 —— 卡上为它多 24px，看着像又一条状态。它其实是这条
-   * 转发的一个身份，跟名字待在一起就够了；指向已变那种要人处理的仍走 renderSubscriptionBadge。
-   */
-  const renderSubscriptionMark = (rule: any) => {
-    if (!subscriptionAllowed) return null;
-    const nodeId = Number(rule?.proxyNodeId || 0);
-    if (!nodeId) return null;
-    if (driftedRuleIds.has(Number(rule?.id || 0))) return null;
-    const nodeName = proxyNodeNameById.get(nodeId) || "落地节点";
-    const visible = rule?.proxyNodeVisible !== false;
-    return (
-      <span
-        className="fx-rule-mark"
-        data-muted={visible ? undefined : ""}
-        title={visible
-          ? `这条转发以「${nodeName}」的身份出现在你的订阅里。改目标、停用或删掉它，客户端里那条线路会跟着变。`
-          : `已绑定「${nodeName}」，但设成了不进订阅。转发照常跑，客户端里看不到它。`}
-      >
-        <Zap className="h-3 w-3" aria-hidden="true" />
-        {visible ? "订阅" : "订阅已隐藏"}
-      </span>
-    );
-  };
-
-  /*
-    规则行上的主备状态。
-    原来这里只有一个「主备 2」的计数徽标 —— 它回答的是「配了几条」，而人要
-    知道的是「现在走的哪条」。配了主备和没配在列表上几乎长一样，功能配完就
-    看不见了，这正是「主备到底在哪儿用」说不清楚的地方。
-  */
-  const renderFailoverLineBadge = (rule: any) => {
-    const display = describeFailoverLineDisplay(rule, hostById.get(Number(rule.hostId)));
-    if (!display) return null;
-    // 点进去是线路组面板：现在走哪条、当前和备用路径、调度计划、最近切换、应急强制走。
-    return (
-      <button
-        type="button"
-        className="shrink-0 rounded-[var(--fx-radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => setPolicyRuleId(Number(rule.id))}
-        title={display.title}
-        aria-label={`线路组：${display.title}`}
-      >
-        <Badge
-          variant="outline"
-          className={cn("h-5 cursor-pointer gap-1 px-1.5 text-[11px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
-        >
-          <GitBranch className="h-3 w-3" aria-hidden="true" />
-          {display.text}
-        </Badge>
-      </button>
-    );
-  };
+  const useRuleSourceBadgesResult = useRuleSourceBadges({ subscriptionAllowed, proxyNodeNameById, driftedRuleIds, hostById, setPolicyRuleId });
+  const { renderSubscriptionBadge, renderFailoverLineBadge, renderSubscriptionMark } = useRuleSourceBadgesResult;
 
   /**
    * 线路徽标。
@@ -7362,82 +4979,8 @@ function RulesContent() {
     </TooltipProvider>
   );
 
-  const renderTrafficBytesValue = (t: { bytesIn?: number | null; bytesOut?: number | null } | undefined, direction: "in" | "out") => {
-    const value = direction === "in" ? Number(t?.bytesIn || 0) : Number(t?.bytesOut || 0);
-    if (!t || value <= 0) {
-      return <span className="text-xs text-muted-foreground">—</span>;
-    }
-    const Icon = direction === "in" ? ArrowDownToLine : ArrowUpFromLine;
-    // 入站走强调色、出站走次要字色（--fx-flow-*），和总览页的走势图同一对颜色：进出不是状态
-    const color = direction === "in" ? "text-[var(--fx-flow-in)]" : "text-[var(--fx-flow-out)]";
-    return (
-      <span className={`flex items-center gap-1 whitespace-nowrap text-xs tabular-nums ${color}`}>
-        <Icon className="h-3 w-3 shrink-0" /> {formatBytes(value)}
-      </span>
-    );
-  };
-  const renderRuleDailyTrafficValue = (rule: any, direction: "in" | "out") => (
-    renderTrafficBytesValue(dailyTrafficByRule.get(rule.id), direction)
-  );
-  const renderRuleTotalTraffic = (rule: any) => {
-    const t = totalTrafficByRule.get(rule.id);
-    if (!t) {
-      return <span className="text-xs text-muted-foreground">累计 —</span>;
-    }
-    const total = Number(t.bytesIn || 0) + Number(t.bytesOut || 0);
-    return (
-      <span
-        className="flex items-center gap-1 whitespace-nowrap text-xs font-medium tabular-nums text-foreground"
-        title={`累计入向 ${formatBytes(t.bytesIn)} / 出向 ${formatBytes(t.bytesOut)}`}
-      >
-        <ArrowRightLeft className="h-3 w-3 shrink-0 text-muted-foreground" />
-        累计 {formatBytes(total)}
-      </span>
-    );
-  };
-  const renderTableRuleTotalTraffic = (rule: any) => (
-    <div className="min-w-0 whitespace-nowrap text-xs">
-      {renderRuleTotalTraffic(rule)}
-    </div>
-  );
-
-  const renderTableRuleDailyTraffic = (rule: any) => (
-    <div className="flex min-w-0 flex-col items-start gap-0.5 whitespace-nowrap text-xs leading-4">
-      {renderRuleDailyTrafficValue(rule, "in")}
-      {renderRuleDailyTrafficValue(rule, "out")}
-    </div>
-  );
-
-  const renderTableRuleLatency = (rule: any) => (
-    <div className="min-w-0 whitespace-nowrap text-xs">
-      {renderLatestLatency(rule)}
-    </div>
-  );
-
-  const renderLatestLatency = (rule: any) => {
-    const t = stableProbeByRule.get(Number(rule.id));
-    if (!t?.latestLatencyAt) return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
-    // 过了新鲜期的探测只能说明「当时」：数字灰掉、写明多久以前，不再冒充现在的延迟。
-    if (!isLinkProbeFresh(t.latestLatencyAt)) {
-      return (
-        <span className="whitespace-nowrap text-xs text-muted-foreground" title={`整链：${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
-          {t.latestLatencyIsTimeout ? describeProbeFailureShort(t.latestProbeFailure) : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
-        </span>
-      );
-    }
-    if (t.latestLatencyIsTimeout) {
-      return <LatencyRating isTimeout timeoutText="超时" className="whitespace-nowrap" />;
-    }
-    if (typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs)) {
-      // 和卡片同一句悬停：整链，写明是入口实时 / 定时探测 / 最近一次诊断
-      return (
-        <span title={describeRuleLatency(t, t.latestLatencyMs).title}>
-          <LatencyRating latencyMs={t.latestLatencyMs} className="whitespace-nowrap" badge={false} />
-        </span>
-      );
-    }
-    return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
-  };
+  const useRuleTrafficCellsResult = useRuleTrafficCells({ dailyTrafficByRule, totalTrafficByRule, stableProbeByRule });
+  const { renderTableRuleDailyTraffic, renderTableRuleTotalTraffic, renderTableRuleLatency } = useRuleTrafficCellsResult;
 
   /*
     规则卡、表格行上的操作。原来五个图标常驻（延迟、自测、重置、编辑、删除）—— 十二条规则
@@ -7455,7 +4998,9 @@ function RulesContent() {
     const ruleCategory = getRuleCategory(rule, forwardGroupById);
     const isForwardChainRule = ruleCategory === "chain";
     const probeMethod = ruleLatencyProbeMethodForRule(rule);
-    const resetting = resetTrafficMutation.isPending && resetTrafficTarget?.scope === "rule" && Number(resetTrafficTarget.rule?.id) === Number(rule.id);
+    // 哪条规则正在重置看 mutation 自己记的 variables，不另存一份目标
+    const resettingVariables = resetTrafficMutation.variables;
+    const resetting = resetTrafficMutation.isPending && resettingVariables?.scope === "rule" && Number(resettingVariables.ruleId) === Number(rule.id);
     const readOnly = user?.role !== "admin" && isAdminManagedRule(rule);
     const testAction = {
       key: "test",
@@ -7478,9 +5023,9 @@ function RulesContent() {
             ariaLabel: `重置 ${rule.name} 的统计数据`,
             icon: resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />,
             disabled: resetTrafficMutation.isPending,
-            onSelect: () => setResetTrafficTarget({ scope: "rule", rule }),
+            onSelect: () => confirmResetTraffic({ scope: "rule", rule }),
           },
-          { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
+          { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => confirmDeleteRule(rule) },
         ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
@@ -7946,6 +5491,7 @@ function RulesContent() {
   const ruleCardIsAdmin = user?.role === "admin";
   const ruleCardCompact = effectiveRuleCardSize === "compact";
   const ruleCardResetPending = resetTrafficMutation.isPending;
+  const ruleCardResetVariables = resetTrafficMutation.variables;
   const ruleCardPage = useMemo<RuleCardPage>(() => ({
     compact: ruleCardCompact,
     compactLayout,
@@ -7966,7 +5512,7 @@ function RulesContent() {
       getRuleProtocolKey,
       protocolUnsupportedLabel,
       ruleCardResetPending,
-      resetTrafficTarget,
+      ruleCardResetVariables,
     ],
   }), [
     compactLayout,
@@ -7978,10 +5524,10 @@ function RulesContent() {
     isRuleSupported,
     protocolUnsupportedLabel,
     proxyNodeNameById,
-    resetTrafficTarget,
     ruleCardCompact,
     ruleCardIsAdmin,
     ruleCardResetPending,
+    ruleCardResetVariables,
     ruleCardUi,
     ruleReorderPending,
     subscriptionAllowed,
@@ -8066,7 +5612,7 @@ function RulesContent() {
               <DropdownMenuItem onSelect={toggleRuleGroupColumn}>
                 {showRuleGroupColumn ? <Check className="h-4 w-4" /> : <span className="h-4 w-4" aria-hidden="true" />}列表显示分组列
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => confirmResetTraffic({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
   );
@@ -8552,13 +6098,7 @@ function RulesContent() {
         建完自动选中，接着填端口。不跳页 —— 跳出去再回来，填了一半的端口和
         目标地址就没了。
       */}
-      <Dialog
-        open={showDialog}
-        onOpenChange={(open) => {
-          if (!open) resetForm();
-          setShowDialog(open);
-        }}
-      >
+      <Dialog open={showDialog} onOpenChange={ruleDialogGuard.handleOpenChange}>
         <DialogContent className="flex max-h-[96svh] w-[calc(100vw-1rem)] flex-col gap-3 overflow-hidden p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑规则" : "添加转发规则"}</DialogTitle>
@@ -8756,7 +6296,7 @@ function RulesContent() {
             */}
             <div className="grid grid-cols-2 gap-x-2 gap-y-3 sm:gap-3">
               {!isSniEntryMode && (
-              <div className="col-span-2 space-y-1.5 sm:col-span-1">
+              <FormField className="col-span-2 space-y-1.5 sm:col-span-1">
               <div className="flex items-center justify-between gap-2">
               <Label className="flex items-baseline gap-1.5">
               源端口
@@ -8831,7 +6371,7 @@ function RulesContent() {
               ) : null}
               </p>
               ) : null}
-              </div>
+              </FormField>
               )}
               <FormField className={isSniEntryMode ? "col-span-2 space-y-1.5" : "col-span-2 space-y-1.5 sm:col-span-1"}>
               <div className="flex items-center justify-between gap-2">
@@ -9203,7 +6743,7 @@ function RulesContent() {
             <p className="min-h-5 text-xs text-muted-foreground sm:mr-auto" aria-live="polite">
               {!isPending && submitBlocker ? submitBlocker : ""}
             </p>
-            <Button variant="outline" onClick={() => setShowDialog(false)}>
+            <Button variant="outline" onClick={ruleDialogGuard.requestClose}>
               取消
             </Button>
             <Button
@@ -9218,807 +6758,17 @@ function RulesContent() {
 
       <RuleGroupManagerDialog open={ruleGroupManagerOpen} onOpenChange={setRuleGroupManagerOpen} ruleScope={effectiveRulesQuery} />
 
-      <Dialog open={showCopyDialog} onOpenChange={(open) => !copyActionPending && setShowCopyDialog(open)}>
-        <DialogContent className="sm:max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ClipboardCopy className="h-5 w-5" />
-              批量管理转发规则
-            </DialogTitle>
-            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出、删除、调整分组或启停 / 重启。删除、复制、启停和重启在服务端后台执行。</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[72svh] space-y-4 overflow-y-auto pr-1">
-            <div className={segmentedControlClassName}>
-              <div className="grid grid-cols-2 gap-1 sm:grid-cols-6">
-                <button
-                  type="button"
-                  className={routeModeOptionClass(isBatchCopyMode, copyActionPending)}
-                  aria-pressed={isBatchCopyMode}
-                  onClick={() => switchCopyManageMode("copy")}
-                  disabled={copyActionPending || !transferSourceRules.length}
-                >
-                  <ClipboardCopy className="h-4 w-4 shrink-0" />
-                  <span className="truncate">批量复制</span>
-                </button>
-                <button
-                  type="button"
-                  className={routeModeOptionClass(isBatchEditMode, copyActionPending)}
-                  aria-pressed={isBatchEditMode}
-                  onClick={() => switchCopyManageMode("edit")}
-                  disabled={copyActionPending || !transferSourceRules.length}
-                >
-                  <Pencil className="h-4 w-4 shrink-0" />
-                  <span className="truncate">批量编辑</span>
-                </button>
-                <button
-                  type="button"
-                  className={routeModeOptionClass(isBatchExportMode, copyActionPending)}
-                  aria-pressed={isBatchExportMode}
-                  onClick={() => switchCopyManageMode("export")}
-                  disabled={copyActionPending || !transferSourceRules.length}
-                >
-                  <Download className="h-4 w-4 shrink-0" />
-                  <span className="truncate">批量导出</span>
-                </button>
-                <button
-                  type="button"
-                  className={routeModeOptionClass(isBatchImportMode, copyActionPending)}
-                  aria-pressed={isBatchImportMode}
-                  onClick={() => switchCopyManageMode("import")}
-                  disabled={copyActionPending || importingRules || !canAdd}
-                >
-                  <Upload className="h-4 w-4 shrink-0" />
-                  <span className="truncate">批量导入</span>
-                </button>
-                <button
-                  type="button"
-                  className={routeModeOptionClass(isBatchGroupMode, copyActionPending)}
-                  aria-pressed={isBatchGroupMode}
-                  onClick={() => switchCopyManageMode("group")}
-                  disabled={copyActionPending || !transferSourceRules.length}
-                >
-                  <Folder className="h-4 w-4 shrink-0" />
-                  <span className="truncate">调整分组</span>
-                </button>
-                <button
-                  type="button"
-                  className={routeModeOptionClass(isBatchStateMode, copyActionPending)}
-                  aria-pressed={isBatchStateMode}
-                  onClick={() => switchCopyManageMode("state")}
-                  disabled={copyActionPending || !transferSourceRules.length}
-                >
-                  <Play className="h-4 w-4 shrink-0" />
-                  <span className="truncate">启停 / 重启</span>
-                </button>
-              </div>
-            </div>
+      {/* 批量管理弹窗按需加载：第一次打开后一直挂着（state 在页面上，关掉再开不丢，也留得住关闭动画） */}
+      {batchDialogLoaded ? (
+        <Suspense fallback={null}>
+          <RuleBatchManageDialog
+            state={batchState}
+            handle={batchManage}
+            page={{ showCopyDialog, setShowCopyDialog, setRuleGroupManagerOpen, personalGroups, canAdd, forwardTypeDisplayLabel, supportedTunnels, forwardGroupById, canUseSavedLocalForward, canUseGost, canUseForwardChain, canUseFailoverGroup, getTunnelSelectText, renderTunnelSelectLabel, getForwardGroupSelectText, renderForwardGroupSelectLabel, renderTunnelRoute, selectedImportResource, filteredImportResources, renderTransferResourceOption, getForwardGroupMemberLabel, renderRuleGroupIcon }}
+          />
+        </Suspense>
+      ) : null}
 
-            {isBatchImportMode ? (
-              <>
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_3.5rem_minmax(0,0.82fr)] lg:items-start">
-                <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <Label>导入文件</Label>
-                      <div className="text-xs text-muted-foreground">支持从文件导入、手动输入目标地址，或粘贴 ny 导出的规则。</div>
-                    </div>
-                    <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                      <span>待导入</span>
-                      <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{importValidation.rules.length}</span>
-                    </div>
-                  </div>
-                  <div className={segmentedControlClassName}>
-                    <div className="grid grid-cols-3 gap-1">
-                      <button
-                        type="button"
-                        className={routeModeOptionClass(importSourceMode === "file", importingRules)}
-                        aria-pressed={importSourceMode === "file"}
-                        onClick={() => {
-                          setImportSourceMode("file");
-                          setImportManualText("");
-                        }}
-                        disabled={importingRules}
-                      >
-                        <Upload className="h-4 w-4 shrink-0" />
-                        <span className="truncate">文件导入</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={routeModeOptionClass(importSourceMode === "manual", importingRules)}
-                        aria-pressed={importSourceMode === "manual"}
-                        onClick={() => {
-                          setImportSourceMode("manual");
-                          setImportFile(null);
-                          setImportFileName("");
-                          setImportFileError("");
-                          setImportFileInputKey((key) => key + 1);
-                        }}
-                        disabled={importingRules}
-                      >
-                        <Pencil className="h-4 w-4 shrink-0" />
-                        <span className="truncate">手动输入</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={routeModeOptionClass(importSourceMode === "nyanpass", importingRules)}
-                        aria-pressed={importSourceMode === "nyanpass"}
-                        onClick={() => {
-                          setImportSourceMode("nyanpass");
-                          setImportManualText("");
-                          setImportFile(null);
-                          setImportFileName("");
-                          setImportFileError("");
-                          setImportFileInputKey((key) => key + 1);
-                        }}
-                        disabled={importingRules}
-                      >
-                        <ArrowRightLeft className="h-4 w-4 shrink-0" />
-                        <span className="truncate">ny 迁移</span>
-                      </button>
-                    </div>
-                  </div>
-                  {/* 文件框和手填框只会出现一个，共用一个 FormField 的 id 不会撞。 */}
-                  <FormField className="space-y-2">
-                    <Label>{importSourceMode === "file" ? "规则文件" : importSourceMode === "nyanpass" ? "ny 导出的规则" : "目标地址列表"}</Label>
-                    {importSourceMode === "file" ? (
-                      <Input key={importFileInputKey} type="file" accept=".json,.jsonl,.txt,application/json" onChange={handleImportFileChange} />
-                    ) : importSourceMode === "nyanpass" ? (
-                      <Textarea
-                        value={importManualText}
-                        onChange={(event) => setImportManualText(event.target.value)}
-                        placeholder={'一行一条，例如：\n{"name":"HK","listen_port":10001,"dest":["1.2.3.4:443"]}'}
-                        className="min-h-[7.5rem] resize-y font-mono text-xs"
-                      />
-                    ) : (
-                      <Textarea
-                        value={importManualText}
-                        onChange={(event) => setImportManualText(event.target.value)}
-                        placeholder={"每行一个目标地址，格式如：\nexample.com:443\n10.0.0.8:8080\n[2408:xxxx::1]:8443"}
-                        className="min-h-[7.5rem] resize-y"
-                      />
-                    )}
-                  </FormField>
-                  {(importSourceMode === "file" || importFileName || importFileError || importValidation.ok || String(importManualText || "").trim()) && (
-                    <div
-                      className={`rounded-md border px-3 py-2 text-sm ${
-                        importValidation.ok
-                          ? "border-[color-mix(in_srgb,var(--fx-healthy)_30%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]"
-                          : importFileName || importFileError || String(importManualText || "").trim()
-                            ? "border-destructive/30 bg-destructive/10 text-destructive"
-                            : "border-border/60 bg-muted/30 text-muted-foreground"
-                      }`}
-                    >
-                      {importValidation.message}
-                    </div>
-                  )}
-                  {isNyanpassImport ? (
-                    <div className="space-y-2 rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs">
-                      <p className="font-medium text-[var(--fx-warn-text)]">ny / Nyanpass 迁移（实验性）</p>
-                      <p className="leading-5 text-muted-foreground">ny 的导出里没有协议、启停状态和线路拓扑。选一个协议；规则导进来先停用，不迁移历史流量，不覆盖已有规则，入口端口冲突的不换端口、留作失败项。</p>
-                      <Select value={importNyanpassProtocol} onValueChange={(value) => setImportNyanpassProtocol(value as RuleProtocol)} disabled={importingRules}>
-                        <SelectTrigger aria-label="ny 规则的协议" className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {(["tcp", "udp", "both"] as const).map((value) => <SelectItem key={value} value={value}>{formatForwardRuleProtocol(value)}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <label className="flex cursor-pointer items-start gap-2 leading-5">
-                        <Checkbox className="mt-0.5" checked={importNyanpassAcknowledged} onCheckedChange={(checked) => setImportNyanpassAcknowledged(!!checked)} disabled={importingRules} />
-                        <span>我已核对导入目标、协议和下面的预览，接受实验性导入的限制</span>
-                      </label>
-                    </div>
-                  ) : null}
-                  {importValidation.rules.length > 0 && (
-                    <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
-                      {importValidation.rules.map((rule, index) => (
-                        <div key={`${rule.name}-${rule.sourcePort}-${index}`} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
-                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                            <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-                            <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
-                            <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
-                          </div>
-                          <div className="mt-1 truncate text-xs text-muted-foreground">
-                            {rule.sourcePort > 0 ? `:${rule.sourcePort}` : "随机端口"} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)}
-                          </div>
-                          {isNyanpassImport && (rule.failoverEnabled || rule.proxyProtocolReceive || rule.proxyProtocolSend || rule.rateLimitMbps) ? (
-                            <div className="mt-1 break-words text-xs text-muted-foreground">
-                              {[
-                                rule.failoverEnabled ? `另有 ${rule.failoverTargets.length} 个目标 · ${rule.failoverStrategy}` : "",
-                                rule.proxyProtocolReceive || rule.proxyProtocolSend ? `PROXY 收 ${rule.proxyProtocolReceive ? "开" : "关"} · 发 ${rule.proxyProtocolSend ? `v${rule.proxyProtocolVersion}` : "关"}` : "",
-                                rule.rateLimitMbps ? `限速 ${rule.rateLimitMbps} Mbps` : "",
-                                "导入后停用",
-                              ].filter(Boolean).join(" · ")}
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="hidden lg:flex min-h-full items-center justify-center">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="rounded-full border border-primary/20 bg-primary/5 p-3 text-primary shadow-sm">
-                      <ArrowRight className="h-5 w-5" />
-                    </div>
-                    <div data-fx-help="" className="text-center text-[11px] font-medium leading-4 text-muted-foreground">
-                      导入到右侧目标
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <Label>导入目标</Label>
-                      <div className="text-xs text-muted-foreground">选择要导入到哪个端口转发、隧道、转发链或转发组。</div>
-                    </div>
-                    <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-[var(--fx-healthy-soft)] px-3 py-1 text-xs font-medium text-[var(--fx-healthy-text)]">
-                      <span>已选择</span>
-                      <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedImportResource ? 1 : 0}</span>
-                    </div>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                    <Select
-                      value={importScopeType}
-                      onValueChange={(value) => {
-                        setImportScopeType(value as RuleTransferScopeType);
-                        setImportResourceId("");
-                        setImportResourceSearch("");
-                        resetImportDialog();
-                      }}
-                    >
-                      <SelectTrigger aria-label="导入来源类型" className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {importRuleTransferScopeOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={importResourceSearch}
-                        onChange={(event) => setImportResourceSearch(event.target.value)}
-                        placeholder={`查找${ruleTransferScopeLabels[importScopeType]}`}
-                        className="h-9 pl-8 pr-8 text-xs"
-                      />
-                      {importResourceSearch ? (
-                        <button
-                          type="button"
-                          aria-label="清空导入目标查找"
-                          className="absolute right-2 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
-                          onClick={() => setImportResourceSearch("")}
-                        >
-                          <XCircle className="h-3.5 w-3.5" />
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {filteredImportResources.length} 项
-                    </span>
-                  </div>
-                  <div className="max-h-[19rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
-                    {filteredImportResources.length > 0 ? filteredImportResources.map((resource: any) => {
-                      const selected = String(resource.id) === importResourceId;
-                      return (
-                        <button
-                          key={resource.id}
-                          type="button"
-                          title={getTransferResourceLabel(importScopeType, resource)}
-                          aria-pressed={selected}
-                          onClick={() => setImportResourceId(String(resource.id))}
-                          className={`flex w-full min-w-0 items-start gap-3 rounded-md border p-2 text-left transition-colors hover:bg-muted/40 ${
-                            selected
-                              ? "border-[color-mix(in_srgb,var(--fx-healthy)_50%,transparent)] bg-[color-mix(in_srgb,var(--fx-healthy)_5%,transparent)] shadow-sm"
-                              : "border-border/40 bg-background/70"
-                          }`}
-                        >
-                          {selected ? (
-                            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                          ) : (
-                            <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full border border-border/70 bg-background" aria-hidden="true" />
-                          )}
-                          <span className="min-w-0 flex-1">{renderTransferResourceOption(importScopeType, resource, { showStatus: true })}</span>
-                        </button>
-                      );
-                    }) : (
-                      <div className="py-10 text-center text-sm text-muted-foreground">没有可选择的{ruleTransferScopeLabels[importScopeType]}</div>
-                    )}
-                  </div>
-                  <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
-                    {selectedImportResource
-                      ? `将导入到 ${getTransferResourceLabel(importScopeType, selectedImportResource)}`
-                      : `请选择${ruleTransferScopeLabels[importScopeType]}`}
-                  </div>
-                </div>
-              </div>
-              {importSourceMode === "file" && (
-                <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                  导入会保留文件中的规则配置，并应用到右侧当前选择的目标资源。
-                </div>
-              )}
-              </>
-            ) : (
-            <>
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_3.5rem_minmax(0,0.82fr)] lg:items-start">
-              {batchRuleSelectionPanel}
-
-              <div className="hidden lg:flex min-h-full items-center justify-center">
-                <div className="flex flex-col items-center gap-2">
-                  <div className="rounded-full border border-primary/20 bg-primary/5 p-3 text-primary shadow-sm">
-                    <ArrowRight className="h-5 w-5" />
-                  </div>
-                  <div className="text-center text-[11px] font-medium leading-4 text-muted-foreground">
-                    {batchFlowHintLabel}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {isBatchGroupMode ? batchGroupPanel : isBatchStateMode ? batchStatePanel : isBatchExportMode ? (
-                <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <Label>导出内容</Label>
-                      <div className="text-xs text-muted-foreground">将左侧选中的规则导出为 JSON 文件，便于备份或迁移。</div>
-                    </div>
-                    <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-[var(--fx-path-soft)] px-3 py-1 text-xs font-medium text-[var(--fx-path)]">
-                      <span>待导出</span>
-                      <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedBatchRuleCount}</span>
-                    </div>
-                  </div>
-                  <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
-                    {selectedBatchRuleCount > 0 ? `将导出 ${selectedBatchRuleCount} 条选中规则` : "请先在左侧选择要导出的规则"}
-                  </div>
-                  {copySelectedRules.length > 0 ? (
-                    <div className="max-h-[19rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
-                      {copySelectedRules.map((rule: any) => {
-                        const category = getRuleCategory(rule, forwardGroupById);
-                        return (
-                          <div key={rule.id} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
-                            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                              {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
-                              <span className="min-w-0 truncate text-sm font-medium" data-no-translate="">{rule.name}</span>
-                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
-                            </div>
-                            <div className="mt-1 truncate text-xs text-muted-foreground">
-                              :{formatPortSpan(rule.sourcePort, ruleSourcePortEnd(rule))} -&gt; {rule.targetIp}:{formatRuleTargetPort(rule)} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-                ) : isBatchEditMode ? (
-                <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <Label>批量编辑内容</Label>
-                      <div className="text-xs text-muted-foreground">
-                        入口资源和目标地址可独立替换；未填写的项会保留每条规则原来的值。
-                      </div>
-                    </div>
-                    <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-[var(--fx-warn-soft)] px-3 py-1 text-xs font-medium text-[var(--fx-warn-text)]">
-                      {hasBatchEditChanges ? "按填写项替换" : "未设置替换项"}
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label className="text-sm">替换入口资源</Label>
-                      <span className="text-xs text-muted-foreground">
-                        {hasBatchEditRouteSelection ? "已设置新入口" : "保持原入口"}
-                      </span>
-                    </div>
-                    <FormField className="space-y-2">
-                      <Label>入口类型</Label>
-                      <Select
-                        value={batchEditForm.routeMode}
-                        onValueChange={(value) => setBatchEditRouteMode(value as RuleRouteMode)}
-                        disabled={copyActionPending}
-                      >
-                        <SelectTrigger className="h-9 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="local" disabled={!canUseSavedLocalForward}>端口转发</SelectItem>
-                          <SelectItem value="tunnel" disabled={!canUseGost}>隧道转发</SelectItem>
-                          <SelectItem value="chain" disabled={!canUseForwardChain}>转发链</SelectItem>
-                          <SelectItem value="group" disabled={!canUseFailoverGroup}>转发组</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </FormField>
-
-                    {batchEditForm.routeMode === "tunnel" ? (
-                      <FormField className="space-y-2">
-                        <Label>使用隧道</Label>
-                        <Select
-                          value={batchEditForm.tunnelId ? String(batchEditForm.tunnelId) : "none"}
-                          disabled={copyActionPending}
-                          onValueChange={(value) => {
-                            setBatchEditForm((prev) => ({
-                              ...prev,
-                              tunnelId: value === "none" ? null : Number(value),
-                              forwardGroupId: null,
-                              forwardType: "gost",
-                            }));
-                          }}
-                        >
-                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">不替换入口</SelectItem>
-                            {supportedTunnels.map((tunnel: any) => (
-                              <SelectItem key={tunnel.id} value={String(tunnel.id)} textValue={getTunnelSelectText(tunnel)}>
-                                {renderTunnelSelectLabel(tunnel)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {selectedBatchEditTunnel && (
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                            {renderTunnelRoute(selectedBatchEditTunnel, true)}
-                            <code className="rounded bg-background/60 px-1.5 py-0.5">:{selectedBatchEditTunnel.listenPort}</code>
-                            <span className="rounded bg-background/60 px-1.5 py-0.5">{selectedBatchEditTunnelDisplay.shortLabel}</span>
-                          </div>
-                        )}
-                      </FormField>
-                    ) : (
-                      <FormField className="space-y-2">
-                        <Label>{batchEditForm.routeMode === "local" ? "使用端口转发" : batchEditForm.routeMode === "chain" ? "使用转发链" : "使用转发组"}</Label>
-                        <Select
-                          value={batchEditForm.forwardGroupId ? String(batchEditForm.forwardGroupId) : "none"}
-                          disabled={copyActionPending}
-                          onValueChange={(value) => {
-                            const nextGroupId = value === "none" ? null : Number(value);
-                            const group = nextGroupId ? forwardGroupById.get(nextGroupId) : null;
-                            setBatchEditForm((prev) => ({
-                              ...prev,
-                              forwardGroupId: nextGroupId,
-                              tunnelId: null,
-                              forwardType: getForwardGroupRuleForwardType(group, prev.forwardType),
-                            }));
-                          }}
-                        >
-                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">不替换入口</SelectItem>
-                            {batchEditAvailableGroups.map((group: any) => (
-                              <SelectItem key={group.id} value={String(group.id)} textValue={getForwardGroupSelectText(group)}>
-                                {renderForwardGroupSelectLabel(group)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {selectedBatchEditForwardGroup && (
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                            {(selectedBatchEditForwardGroup.members || []).slice(0, 4).map((member: any, index: number) => (
-                              <span key={member.id} className="rounded bg-background/60 px-1.5 py-0.5">
-                                {index + 1}. {getForwardGroupMemberLabel(member)}
-                              </span>
-                            ))}
-                            {(selectedBatchEditForwardGroup.members || []).length > 4 && <span>+{(selectedBatchEditForwardGroup.members || []).length - 4}</span>}
-                          </div>
-                        )}
-                      </FormField>
-                    )}
-                  </div>
-
-                  <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label className="text-sm">替换目标地址</Label>
-                      <span className="text-xs text-muted-foreground">
-                        {hasBatchEditTargetIpChange || hasBatchEditTargetPortChange ? "按填写项替换" : "保持原目标"}
-                      </span>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <FormField className="space-y-2">
-                        <Label>目标地址</Label>
-                        <Input
-                          placeholder="留空则保持原目标地址"
-                          value={batchEditForm.targetIp}
-                          onChange={(event) => setBatchEditForm((prev) => ({ ...prev, targetIp: event.target.value }))}
-                          disabled={copyActionPending}
-                        />
-                      </FormField>
-                      <FormField className="space-y-2">
-                        <Label>目标端口</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={65535}
-                          step={1}
-                          placeholder="留空则保持原目标端口"
-                          value={batchEditForm.targetPort || ""}
-                          onChange={(event) => setBatchEditForm((prev) => ({ ...prev, targetPort: parseInt(event.target.value) || 0 }))}
-                          disabled={copyActionPending}
-                        />
-                      </FormField>
-                    </div>
-                  </div>
-
-                  <FormField className="space-y-2">
-                    <Label>端口冲突处理</Label>
-                    <Select value={copyConflictStrategy} onValueChange={(value) => setCopyConflictStrategy(value as any)} disabled={!hasBatchEditRouteSelection}>
-                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="skip">跳过冲突规则</SelectItem>
-                        <SelectItem value="auto">自动分配新端口</SelectItem>
-                        <SelectItem value="error">遇到冲突时报错</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">仅在替换入口资源且原源端口冲突时生效。</p>
-                  </FormField>
-                </div>
-                ) : (
-                <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <Label>复制目标</Label>
-                      <div className="text-xs text-muted-foreground">可同时选择多个{copyTargetScopeLabel}；搜索仅筛选显示，不会取消已选目标。</div>
-                    </div>
-                    <div className="inline-flex items-center gap-2 self-start rounded-full bg-[var(--fx-healthy-soft)] px-3 py-1 text-xs font-medium text-[var(--fx-healthy-text)]">
-                      <span>已选目标</span>
-                      <span className="rounded-full bg-background/90 px-2 py-0.5 tabular-nums">{selectedBatchTargetCount}</span>
-                    </div>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                    <Select
-                      value={copyTargetScopeType}
-                      disabled={copyActionPending}
-                      onValueChange={(value) => {
-                        commitCopyTargetSelection(value as RuleTransferScopeType, []);
-                        setCopyTargetSearch("");
-                      }}
-                    >
-                      <SelectTrigger aria-label="复制目标类型" className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {ruleTransferScopeOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={copyTargetSearch}
-                        onChange={(event) => setCopyTargetSearch(event.target.value)}
-                        placeholder={"查找" + copyTargetScopeLabel}
-                        className="h-9 pl-8 pr-8 text-xs"
-                        disabled={copyActionPending}
-                      />
-                      {copyTargetSearch ? (
-                        <button
-                          type="button"
-                          aria-label="清空目标查找"
-                          className="absolute right-2 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
-                          onClick={() => setCopyTargetSearch("")}
-                          disabled={copyActionPending}
-                        >
-                          <XCircle className="h-3.5 w-3.5" />
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                  <FormField className="space-y-2">
-                    <Label>端口冲突处理</Label>
-                    <Select value={copyConflictStrategy} onValueChange={(value) => setCopyConflictStrategy(value as any)} disabled={copyActionPending}>
-                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="skip">跳过冲突规则</SelectItem>
-                        <SelectItem value="auto">自动分配新端口</SelectItem>
-                        <SelectItem value="error">遇到冲突时报错</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </FormField>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 px-2 text-xs"
-                      onClick={() => {
-                        const visibleTargetIds = filteredCopyTargetResources.map((resource: any) => Number(resource.id));
-                        const visibleTargetIdSet = new Set(visibleTargetIds);
-                        const current = copyTargetSelectionRef.current;
-                        const renderedScopeType = copyTargetScopeType;
-                        const currentIds = current.scopeType === renderedScopeType ? current.resourceIds : [];
-                        const visibleSelected = visibleTargetIds.length > 0
-                          && visibleTargetIds.every((id) => currentIds.includes(id));
-                        const nextIds = visibleSelected
-                          ? currentIds.filter((id) => !visibleTargetIdSet.has(id))
-                          : Array.from(new Set([...currentIds, ...visibleTargetIds]));
-                        commitCopyTargetSelection(renderedScopeType, nextIds);
-                      }}
-                      disabled={filteredCopyTargetResources.length === 0 || copyActionPending}
-                    >
-                      {allVisibleCopyTargetsSelected ? "取消" : "全选"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2 text-xs"
-                      onClick={() => commitCopyTargetSelection(copyTargetScopeType, [])}
-                      disabled={copyTargetResourceIds.length === 0 || copyActionPending}
-                    >
-                      清空目标
-                    </Button>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {filteredCopyTargetResources.length} 项
-                    </span>
-                  </div>
-                  <div className="max-h-[19rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
-                    {filteredCopyTargetResources.length > 0 ? filteredCopyTargetResources.map((resource: any) => (
-                      <label
-                        key={`${copyTargetScopeType}:${resource.id}`}
-                        className={`flex cursor-pointer items-start gap-3 rounded-md border p-2 transition-colors hover:bg-muted/40 ${
-                          copyTargetResourceIds.includes(Number(resource.id))
-                            ? "border-[color-mix(in_srgb,var(--fx-healthy)_50%,transparent)] bg-[color-mix(in_srgb,var(--fx-healthy)_5%,transparent)] shadow-sm"
-                            : "border-border/40 bg-background/70"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          className="mt-1"
-                          checked={copyTargetResourceIds.includes(Number(resource.id))}
-                          disabled={copyActionPending}
-                          onChange={(event) => toggleCopyTargetResource(Number(resource.id), event.target.checked, copyTargetScopeType)}
-                        />
-                        <span className="min-w-0 flex-1">{renderTransferResourceOption(copyTargetScopeType, resource, { showStatus: true })}</span>
-                      </label>
-                    )) : (
-                      <div className="py-10 text-center text-sm text-muted-foreground">没有可选择的{copyTargetScopeLabel}</div>
-                    )}
-                  </div>
-                  <div className="rounded-md border border-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] bg-[color-mix(in_srgb,var(--fx-healthy)_5%,transparent)] px-3 py-2 text-xs leading-5 text-[var(--fx-healthy-text)]">
-                    {selectedCopyTargetResources.length > 0 ? (
-                      <>
-                        <span className="font-medium">本次复制目标：</span>
-                        <span>
-                          {selectedCopyTargetResources.slice(0, 4).map((resource: any, index: number) => (
-                            <span key={`${copyTargetScopeType}-summary-${resource.id}`}>
-                              {index > 0 ? "、" : ""}{getTransferResourceLabel(copyTargetScopeType, resource)} (#{Number(resource.id)})
-                            </span>
-                          ))}
-                          {selectedCopyTargetResources.length > 4 ? ` 等 ${selectedCopyTargetResources.length} 个目标` : ""}
-                        </span>
-                      </>
-                    ) : (
-                      <span>尚未选择复制目标</span>
-                    )}
-                  </div>
-                </div>
-                )}
-              </div>
-            </div>
-            <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-              {isBatchGroupMode
-                ? "调整分组只改你自己的分组归属，不会重启、停用或修改任何转发规则。"
-                : isBatchStateMode
-                ? "启用、暂停、重启逐条走和单条操作一样的权限检查，在服务端后台执行；任务只保存在面板内存中，面板重启后进度不保留。"
-                : isBatchExportMode
-                ? "批量导出会按左侧当前选中的规则生成 JSON 文件，不会受右侧资源范围限制。"
-                : isBatchEditMode
-                ? "批量编辑会按你实际填写的项逐条覆盖：入口资源未选择则保留原入口，目标地址或端口留空则保留原目标值。"
-                : "复制会保留原规则基础配置，并按当前选择的目标资源生成副本。"}
-            </div>
-            </>
-            )}
-          </div>
-          <DialogFooter className="gap-2 sm:justify-between">
-            {isBatchImportMode ? (
-              <>
-                <div />
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={importingRules}>取消</Button>
-                  <Button type="button" onClick={handleImportRules} disabled={!importValidation.ok || importingRules}>
-                    {importingRules && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    导入规则
-                  </Button>
-                </div>
-              </>
-            ) : isBatchGroupMode ? (
-              <>
-                <div />
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
-                  <Button type="button" onClick={handleBatchGroupRules} disabled={selectedBatchRuleCount === 0 || batchGroupTargetIds.length === 0 || copyActionPending}>
-                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Folder className="mr-2 h-4 w-4" />}
-                    {`${batchGroupMode === "add" ? "加入分组" : "移出分组"}（${selectedBatchRuleCount} 条）`}
-                  </Button>
-                </div>
-              </>
-            ) : isBatchStateMode ? (
-              <>
-                <div className="text-xs text-muted-foreground sm:max-w-[16rem]">重启会按当前配置重新下发，已暂停的保持暂停。</div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
-                  <Button type="button" variant="outline" onClick={() => { void handleBatchStateRules("pause"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
-                    <Pause className="mr-2 h-4 w-4" />暂停所选
-                  </Button>
-                  <Button type="button" variant="outline" onClick={() => { void handleBatchStateRules("restart"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
-                    <RotateCw className="mr-2 h-4 w-4" />重启所选
-                  </Button>
-                  <Button type="button" onClick={() => { void handleBatchStateRules("enable"); }} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
-                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}启用所选（{selectedBatchRuleCount} 条）
-                  </Button>
-                </div>
-              </>
-            ) : isBatchExportMode ? (
-              <>
-                <div />
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setShowCopyDialog(false)}>取消</Button>
-                  <Button type="button" onClick={handleBatchExportRules} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
-                    <Download className="mr-2 h-4 w-4" />
-                    导出规则
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="destructive" onClick={handleBatchDeleteRules} disabled={selectedBatchRuleCount === 0 || copyActionPending}>
-                    {copyWorking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-                    删除所选
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
-                  <Button
-                    type="button"
-                    variant={isBatchEditMode ? "default" : "outline"}
-                    onClick={isBatchEditMode ? handleBatchEditRules : handleCopyRules}
-                    disabled={isBatchEditMode ? batchEditDisabled : batchCopyDisabled}
-                  >
-                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : isBatchEditMode ? <Pencil className="mr-2 h-4 w-4" /> : <ClipboardCopy className="mr-2 h-4 w-4" />}
-                    {isBatchEditMode ? "应用批量编辑" : "复制所选规则"}
-                  </Button>
-                </div>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!resetTrafficTarget} onOpenChange={(open) => !open && !resetTrafficMutation.isPending && setResetTrafficTarget(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{resetTrafficTarget?.scope === "all" ? "重置全部规则数据" : "重置规则数据"}</DialogTitle>
-            <DialogDescription>
-              {resetTrafficTarget?.scope === "all"
-                ? `确认重置当前列表中 ${visibleRuleIdsForMetrics.length} 条规则的所有统计数据？`
-                : `确认重置规则 "${resetTrafficTarget?.rule?.name || ""}" 的所有统计数据？`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_20%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs leading-5 text-[var(--fx-warn-text)]">
-            这里只清除规则页面展示的统计数据，不会清除用户套餐已用流量、余额或流量按量计费记录。
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setResetTrafficTarget(null)}
-              disabled={resetTrafficMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleConfirmResetTraffic}
-              disabled={!resetTrafficTarget || resetTrafficMutation.isPending || (resetTrafficTarget.scope === "all" && visibleRuleIdsForMetrics.length === 0)}
-              className="gap-2"
-            >
-              {resetTrafficMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              {resetTrafficMutation.isPending ? "重置中..." : "确认重置"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {(() => {
         const policyRule = policyRuleId === null ? null : (rules || []).find((rule: any) => Number(rule.id) === policyRuleId);
@@ -10053,30 +6803,6 @@ function RulesContent() {
       })()}
       {/* /rules?line=<规则 id>：线路详情的深链（拓扑、订阅、线路概览都这么跳过来），自己按 id 取规则 */}
       <LineDetailFromUrl />
-      <Dialog open={!!deleteRule} onOpenChange={(open) => !open && setDeleteRule(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>删除转发规则</DialogTitle>
-            <DialogDescription>
-              确认删除 "{deleteRule?.name}"？
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteRule(null)}>取消</Button>
-            <Button
-              variant="destructive"
-              disabled={!deleteRule || deleteMutation.isPending}
-              onClick={() => {
-                if (!deleteRule) return;
-                deleteMutation.mutate({ id: deleteRule.id });
-                setDeleteRule(null);
-              }}
-            >
-              删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

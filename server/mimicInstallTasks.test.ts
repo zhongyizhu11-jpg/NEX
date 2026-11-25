@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
+import { readHeartbeatRouteSource } from "./testing/heartbeatSource";
 import {
   clearMimicInstallTasksForTest,
   enqueueMimicInstallTask,
@@ -90,7 +89,7 @@ test("只有排着、还没取走的任务算 queued：心跳快路径靠它决�
 
 test("心跳稳定快路径把排着的 mimic 任务当成待办，不会把任务吞掉", () => {
   // 2.3.440 的 bug：配置不变的主机每次心跳都走快路径，mimicInstallTask 永远发不下去，页面「安装中」一直到超时。
-  const source = fs.readFileSync(path.join(process.cwd(), "server/agentHeartbeatRoute.ts"), "utf8");
+  const source = readHeartbeatRouteSource();
   const start = source.indexOf("agentStableHeartbeatPlanCache.match(");
   assert.notEqual(start, -1);
   const blockingWork = source.slice(start, source.indexOf("recoveryTriggered,", start));

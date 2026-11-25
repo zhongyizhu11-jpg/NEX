@@ -589,9 +589,7 @@ export default function Store() {
                   </div>
                 )}
                 {!isFreeOrder && paymentMethods.length === 0 && (
-                  <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    暂无在线支付方式。
-                  </div>
+                  <EmptyState title="暂无在线支付方式" description="管理员还没开通在线支付，可以用余额买，或联系他。" />
                 )}
               </div>
             </div>

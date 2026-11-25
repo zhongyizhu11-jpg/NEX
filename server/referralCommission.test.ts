@@ -1,12 +1,8 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runInSharedDatabase } from "./testing/runInDatabase";
 
 /**
- * 邀请返利跑在真数据库上（SQLite）。
+ * 邀请返利跑在真数据库上（SQLite；设了 FORWARDX_TEST_DB_KIND=postgresql 时在 PostgreSQL 上）。
  *
  * 这一组守的是钱：
  * - 该返的返、按套餐比例向下取整到分，不该返的（没开、没邀请人、比例 0、充值单、非人民币单、
@@ -18,70 +14,43 @@ import test from "node:test";
  * - 返利出错只撤销返利本身，被邀请人的购买照常完成；
  * - 返利流水不带被邀请人的订单号（那一列是「这单是否已入账」的判断依据）。
  */
+const REFERRAL_SETUP = String.raw`
+  // 支付模块顶层可能取 fetch，先换成不联网的。
+  globalThis.fetch = async () => { throw new Error("network disabled in test"); };
+
+  const billing = await import(url("server/repositories/billingRepository.ts"));
+  const referral = await import(url("server/repositories/referralRepository.ts"));
+  const settings = await import(url("server/repositories/settingsRepository.ts"));
+  const payment = await import(url("server/payment/payment.ts"));
+
+  // 1 管理员，2 邀请人，3 被邀请人（余额 1 万分），4 没有邀请人的普通用户
+  await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (1, 'admin@example.com', 'h', 'admin', 0)");
+  await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (2, 'inviter@example.com', 'h', 'user', 0)");
+  await exec("INSERT INTO users (id, username, password, role, balanceCents, inviterId) VALUES (3, 'bob@example.com', 'h', 'user', 10000, 2)");
+  await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (4, 'carol@example.com', 'h', 'user', 10000)");
+  await exec("INSERT INTO hosts (id, name, ip, agentToken, userId) VALUES (10, 'hk', '203.0.113.9', 'tok', 1)");
+  await settings.setSetting("referralEnabled", "true");
+  await settings.setSetting("referralMode", "first");
+
+  const makePlan = async (priceCents, referralRateBps) => Number((await billing.createSubscriptionPlan({
+    name: "月付", priceCents, currency: "CNY", durationDays: 30,
+    portCount: 5, maxRules: 10, isActive: true, isStoreVisible: true, referralRateBps,
+  }, [10], [], [], [], [])).id);
+  const balanceOf = async (userId) => Number((await query("SELECT balanceCents FROM users WHERE id = ?", [userId]))[0].balanceCents);
+  const commissions = async () => query("SELECT * FROM referral_commissions ORDER BY id");
+  const referralLedger = async () => query("SELECT * FROM balance_transactions WHERE type = 'referral_commission' ORDER BY id");
+  const subscriptionsOf = async (userId) => query("SELECT * FROM user_subscriptions WHERE userId = ?", [userId]);
+  const makePaidOrder = async (outTradeNo, { userId = 3, planId, amountCents, currency = "CNY", orderType = "plan" }) => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    await exec(
+      "INSERT INTO payment_orders (outTradeNo, userId, provider, paymentType, status, subject, amountCents, currency, orderType, planId, createdAt, updatedAt, paidAt) VALUES (?, ?, 'easypay', 'alipay', 'paid', '测试', ?, ?, ?, ?, ?, ?, ?)",
+      [outTradeNo, userId, amountCents, currency, orderType, planId ?? null, nowSec, nowSec, nowSec],
+    );
+  };
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-referral-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      // 支付模块顶层可能取 fetch，先换成不联网的。
-      globalThis.fetch = async () => { throw new Error("network disabled in test"); };
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const billing = await import(url("server/repositories/billingRepository.ts"));
-      const referral = await import(url("server/repositories/referralRepository.ts"));
-      const settings = await import(url("server/repositories/settingsRepository.ts"));
-      const payment = await import(url("server/payment/payment.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
-
-      // 1 管理员，2 邀请人，3 被邀请人（余额 1 万分），4 没有邀请人的普通用户
-      await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (1, 'admin@example.com', 'h', 'admin', 0)");
-      await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (2, 'inviter@example.com', 'h', 'user', 0)");
-      await exec("INSERT INTO users (id, username, password, role, balanceCents, inviterId) VALUES (3, 'bob@example.com', 'h', 'user', 10000, 2)");
-      await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (4, 'carol@example.com', 'h', 'user', 10000)");
-      await exec("INSERT INTO hosts (id, name, ip, agentToken, userId) VALUES (10, 'hk', '203.0.113.9', 'tok', 1)");
-      await settings.setSetting("referralEnabled", "true");
-      await settings.setSetting("referralMode", "first");
-
-      const makePlan = async (priceCents, referralRateBps) => Number((await billing.createSubscriptionPlan({
-        name: "月付", priceCents, currency: "CNY", durationDays: 30,
-        portCount: 5, maxRules: 10, isActive: true, isStoreVisible: true, referralRateBps,
-      }, [10], [], [], [], [])).id);
-      const balanceOf = async (userId) => Number((await query("SELECT balanceCents FROM users WHERE id = ?", [userId]))[0].balanceCents);
-      const commissions = async () => query("SELECT * FROM referral_commissions ORDER BY id");
-      const referralLedger = async () => query("SELECT * FROM balance_transactions WHERE type = 'referral_commission' ORDER BY id");
-      const subscriptionsOf = async (userId) => query("SELECT * FROM user_subscriptions WHERE userId = ?", [userId]);
-      const makePaidOrder = async (outTradeNo, { userId = 3, planId, amountCents, currency = "CNY", orderType = "plan" }) => {
-        const nowSec = Math.floor(Date.now() / 1000);
-        await exec(
-          "INSERT INTO payment_orders (outTradeNo, userId, provider, paymentType, status, subject, amountCents, currency, orderType, planId, createdAt, updatedAt, paidAt) VALUES (?, ?, 'easypay', 'alipay', 'paid', '测试', ?, ?, ?, ?, ?, ?, ?)",
-          [outTradeNo, userId, amountCents, currency, orderType, planId ?? null, nowSec, nowSec, nowSec],
-        );
-      };
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "referral.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runInSharedDatabase(body, { name: "referral", setup: REFERRAL_SETUP });
 }
 
 test("余额买套餐：按套餐比例返给邀请人，向下取整到分，流水不带订单号", () => {
@@ -233,7 +202,7 @@ test("返利出错不影响购买：撤销的是返利那一段（记录、余�
   runInDatabase(String.raw`
     const planId = await makePlan(1000, 1000);
     // 返利记录已经插进去、邀请人余额也改了，最后写流水时炸掉：保存点要把前两步一起撤掉。
-    await exec("CREATE TRIGGER fail_referral BEFORE INSERT ON balance_transactions WHEN NEW.type = 'referral_commission' BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+    await failWrite("fail_referral", { table: "balance_transactions", event: "INSERT", when: "NEW.type = 'referral_commission'", message: "boom" });
     await billing.purchasePlanWithBalance(3, planId);
     assert.equal((await subscriptionsOf(3)).length, 1, "购买照常完成");
     assert.equal(await balanceOf(3), 9000, "照常扣款");
@@ -248,7 +217,7 @@ test("返利出错不影响购买：撤销的是返利那一段（记录、余�
     assert.equal(await balanceOf(2), 0);
 
     // 返利表整张没了（比如半升级的库）：同样只是不返。
-    await exec("DROP TRIGGER fail_referral");
+    await dropFailWrite("fail_referral", "balance_transactions");
     await exec("DROP TABLE referral_commissions");
     await billing.purchasePlanWithBalance(3, planId, null, Number((await subscriptionsOf(3))[0].id));
     assert.equal(await balanceOf(3), 8000);

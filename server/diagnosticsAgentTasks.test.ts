@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { AGENT_TUNNEL_PATHS } from "./agentEncryptionMiddleware";
+import { readHeartbeatRouteSource } from "./testing/heartbeatSource";
 import {
   clearDiagnosticsAgentTasksForTest,
   completeDiagnosticsAgentTask,
@@ -84,7 +85,7 @@ test("回报收敛：状态不认识当 warn，超长文本截断", () => {
 
 test("诊断结果的上报路径在 /api/sync 白名单里，排着的任务会打断心跳快路径", () => {
   assert.ok(AGENT_TUNNEL_PATHS.has("/api/agent/diagnostics-result"));
-  const source = fs.readFileSync(path.join(process.cwd(), "server/agentHeartbeatRoute.ts"), "utf8");
+  const source = readHeartbeatRouteSource();
   const start = source.indexOf("agentStableHeartbeatPlanCache.match(");
   assert.notEqual(start, -1);
   const blockingWork = source.slice(start, source.indexOf("recoveryTriggered,", start));

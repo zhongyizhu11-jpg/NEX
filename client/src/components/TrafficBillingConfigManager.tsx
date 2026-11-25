@@ -26,6 +26,7 @@ import { OptimisticSwitch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
+import { configQuery, optionsQuery } from "@/lib/queryPresets";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
@@ -255,22 +256,11 @@ export default function TrafficBillingConfigManager({
   const [configForm, setConfigForm] = useState<BillingConfigForm>(() => defaultBillingConfigForm());
   const [configViewMode, setConfigViewMode] = useState<BillingConfigViewMode>(() => getStoredBillingConfigViewMode());
   const lastCreateRequestKey = useRef(createRequestKey);
-  const { data: hosts = [] } = trpc.hosts.options.useQuery(undefined, {
-    enabled: dialogOpen,
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
-  });
-  const { data: tunnels = [] } = trpc.tunnels.options.useQuery(undefined, {
-    enabled: dialogOpen,
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
-  });
-  const { data: forwardGroups = [] } = trpc.forwardGroups.options.useQuery(undefined, {
-    enabled: dialogOpen,
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
-  });
-  const { data, isLoading: configsLoading } = trpc.trafficBilling.configs.useQuery();
+  const { data: hosts = [] } = trpc.hosts.options.useQuery(undefined, { ...optionsQuery, enabled: dialogOpen });
+  const { data: tunnels = [] } = trpc.tunnels.options.useQuery(undefined, { ...optionsQuery, enabled: dialogOpen });
+  const { data: forwardGroups = [] } = trpc.forwardGroups.options.useQuery(undefined, { ...optionsQuery, enabled: dialogOpen });
+  // 和套餐页挂的是同一个缓存键：这边原来用 5 s 默认值，两页同时开着时这边到期就重拉，那边白等。
+  const { data, isLoading: configsLoading } = trpc.trafficBilling.configs.useQuery(undefined, configQuery);
   const { data: summary, isLoading: summaryLoading } = trpc.trafficBilling.status.useQuery();
 
   const portForwardGroups = forwardGroups.filter((group: any) => forwardGroupModeOf(group) === "port");
@@ -585,10 +575,10 @@ export default function TrafficBillingConfigManager({
                 </Select>
               </FormField>
             </div>
-            <div className="space-y-2">
+            <FormField className="space-y-2">
               <Label>单价 / GB</Label>
               <Input type="number" min={0.001} step="0.001" value={configForm.price} onChange={(e) => setConfigForm((current) => ({ ...current, price: e.target.value }))} placeholder="例如 0.001" />
-            </div>
+            </FormField>
             <div className="space-y-2">
               <Label>链路倍率</Label>
               <div className="flex h-10 items-center rounded-md border border-border/60 bg-muted/20 px-3 text-sm">
@@ -619,14 +609,14 @@ export default function TrafficBillingConfigManager({
               onChange={(maxRulesPerUser) => setConfigForm((current) => ({ ...current, maxRulesPerUser }))}
               help="每个账号在这个资源上最多建几条规则，0 为不限。调低不会删已有规则，只拦新增。"
             />
-            <div className="space-y-2 sm:col-span-2">
+            <FormField className="space-y-2 sm:col-span-2">
               <Label>说明</Label>
               <Textarea
                 value={configForm.description}
                 onChange={(e) => setConfigForm((current) => ({ ...current, description: e.target.value }))}
                 placeholder="留空时商店展示系统默认说明"
               />
-            </div>
+            </FormField>
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-3 sm:col-span-2">
               <div className="min-w-0">
                 <Label className="text-sm">启用计费资源</Label>

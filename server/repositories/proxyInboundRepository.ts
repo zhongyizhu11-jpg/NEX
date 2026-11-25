@@ -25,6 +25,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb, insertAndGetId, nowDate } from "../dbRuntime";
 import { dbBool } from "./repositoryUtils";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { getHostEntryAddress } from "../../shared/hostEntryAddress";
 import {
   createEmptyProxyInbound,
@@ -1054,6 +1055,7 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
     for (const node of existing) {
       await db.update(proxyNodes).set({ isEnabled: false, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, node.id));
     }
+    await invalidateProxySubCacheForInbound(Number(row.userId), inboundId, existing.map((node) => Number(node.id)));
     return existing.map((node) => Number(node.id));
   }
 
@@ -1153,7 +1155,27 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
   for (const node of existing) {
     if (!kept.has(Number(node.id))) await deleteProxyNode(Number(node.id));
   }
+  await invalidateProxySubCacheForInbound(Number(row.userId), inboundId, ids);
   return ids;
+}
+
+/**
+ * 入站同步直接写 proxy_nodes（不经 updateProxyNode），订阅缓存不会自己作废：凭据轮换、端口、
+ * 地址变了，主人和拿到分享的人最多要等 cacheTtlSec（可到一小时）才看得到新的。这里补上：
+ * 主人一个，入站上每条共享凭据的收方一个，派生节点被直接分享给的人也一个。尽力而为，不影响同步结果。
+ */
+async function invalidateProxySubCacheForInbound(ownerId: number, inboundId: number, nodeIds: number[]) {
+  invalidateProxySubCacheForUser(ownerId);
+  const users = await getProxyInboundUsers(inboundId).catch(() => []);
+  for (const user of users) {
+    if (Number(user.sharedUserId || 0) > 0) invalidateProxySubCacheForUser(Number(user.sharedUserId));
+  }
+  if (nodeIds.length === 0) return;
+  const { getProxyNodeShareUserIds } = await import("./proxySubscriptionRepository");
+  const shares = await getProxyNodeShareUserIds(nodeIds).catch(() => new Map<number, number[]>());
+  for (const recipients of shares.values()) {
+    for (const recipient of recipients) invalidateProxySubCacheForUser(recipient);
+  }
 }
 
 /**

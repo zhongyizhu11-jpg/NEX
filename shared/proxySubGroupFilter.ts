@@ -20,6 +20,8 @@
   组是动态的：每次渲染订阅都重新按名字挑，订阅刷新多了新节点自动进组。
 */
 
+import { compileSafeRegex, isSafeRegexSource, SAFE_REGEX_MAX_LENGTH } from "./safeRegex";
+
 export const PROXY_SUB_GROUP_MATCHES = ["regex", "any", "all"] as const;
 export type ProxySubGroupMatch = (typeof PROXY_SUB_GROUP_MATCHES)[number];
 
@@ -42,13 +44,11 @@ function compileAtom(raw: string): ((name: string) => boolean) | null {
   if (/^regex:/i.test(atom)) {
     const source = atom.slice("regex:".length).trim();
     if (!source) return null;
-    try {
-      const regex = new RegExp(source, "i");
-      return (name) => regex.test(name);
-    } catch {
-      const lower = source.toLowerCase();
-      return (name) => name.toLowerCase().includes(lower);
-    }
+    // 非法的、会灾难性回溯的（shared/safeRegex.ts）都按子串；编译结果按源记住。
+    const regex = compileSafeRegex(source, "i");
+    if (regex) return (name) => regex.test(name);
+    const lower = source.toLowerCase();
+    return (name) => name.toLowerCase().includes(lower);
   }
   if (atom.startsWith("=")) {
     const exact = atom.slice(1).trim().toLowerCase();
@@ -94,7 +94,8 @@ function parseProxySubGroupTerms(filter: string): Term[] {
 export function validateProxySubGroupFilter(filter: string, match: ProxySubGroupMatch): string | null {
   const text = String(filter || "").trim();
   if (!text) return null;
-  if (match === "regex") return null;
+  // 会灾难性回溯的写法保存时就说清楚：渲染时它会被当成子串，和作者想的不一样。
+  if (match === "regex") return isSafeRegexSource(text) ? null : regexTooComplex(text);
   for (const raw of text.split(/[,，\n]/)) {
     const term = raw.trim();
     if (!term) continue;
@@ -106,6 +107,7 @@ export function validateProxySubGroupFilter(filter: string, match: ProxySubGroup
       if (/^regex:/i.test(piece)) {
         const source = piece.slice("regex:".length).trim();
         if (!source) return "「regex:」后面要跟正则";
+        if (!isSafeRegexSource(source)) return regexTooComplex(source);
         try {
           new RegExp(source, "i");
         } catch {
@@ -118,17 +120,18 @@ export function validateProxySubGroupFilter(filter: string, match: ProxySubGroup
   return null;
 }
 
+function regexTooComplex(source: string): string {
+  return `正则「${source.length > 40 ? `${source.slice(0, 40)}…` : source}」太复杂（量词套量词或套「|」，或超过 ${SAFE_REGEX_MAX_LENGTH} 字），请简化`;
+}
+
 export function compileProxySubGroupFilter(filter: string, match: ProxySubGroupMatch = "regex"): (name: string) => boolean {
   const text = String(filter || "").trim();
   if (!text) return () => true;
   if (match === "regex") {
-    try {
-      const regex = new RegExp(text, "i");
-      return (name) => regex.test(name);
-    } catch {
-      const lower = text.toLowerCase();
-      return (name) => name.toLowerCase().includes(lower);
-    }
+    const regex = compileSafeRegex(text, "i");
+    if (regex) return (name) => regex.test(name);
+    const lower = text.toLowerCase();
+    return (name) => name.toLowerCase().includes(lower);
   }
   const terms = parseProxySubGroupTerms(text);
   const positive = terms.filter((term) => !term.negate);

@@ -30,13 +30,17 @@ export type ProxySubTokenContext = {
 };
 
 export async function loadProxySubTokenContext(token: any): Promise<ProxySubTokenContext | null> {
-  const owner = await db.getUserById(Number(token.userId));
-  if (!owner) return null;
-  const [settings, plan, all] = await Promise.all([
+  /*
+    主人、设置、套餐、站名一起读：套餐那一步不依赖主人行，串着读白等一个往返。
+    站名只要一个键，从设置缓存里取（原来整份设置拷一遍只为取它）。
+  */
+  const [owner, settings, plan, siteTitle] = await Promise.all([
+    db.getUserById(Number(token.userId)),
     loadProxySubSettings(),
     db.getUserPlanSubscriptionInfo(Number(token.userId)),
-    db.getAllSettings(),
+    db.getCachedSetting("siteTitle"),
   ]);
+  if (!owner) return null;
   // 账号到期和这条链接的到期取更早的那个（链接设了到期，信息节点要写出来）。
   const expiresAt = effectiveProxySubExpiry(token.expiresAt, (owner as any).expiresAt);
   return {
@@ -53,7 +57,7 @@ export async function loadProxySubTokenContext(token: any): Promise<ProxySubToke
       nextResetAt: plan.nextResetAt,
     },
     deviceLimit: effectiveDeviceLimit(token.maxDevices, (owner as any).maxProxyDevices, settings.deviceLimitFallback),
-    appName: resolveSiteTitle(all.siteTitle),
+    appName: resolveSiteTitle(siteTitle),
     username: String((owner as any).username || ""),
   };
 }

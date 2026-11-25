@@ -37,7 +37,7 @@ function columnDefault(dialect: Dialect, value: unknown, type: string) {
   if (dialect === "mysql" && (type === "text" || type === "longtext")) return "";
   if (value === "now") {
     if (dialect === "mysql") return " DEFAULT (UNIX_TIMESTAMP())";
-    return dialect === "sqlite" ? " DEFAULT (unixepoch())" : " DEFAULT (EXTRACT(EPOCH FROM NOW())::INT)";
+    return dialect === "sqlite" ? " DEFAULT (unixepoch())" : " DEFAULT (FLOOR(EXTRACT(EPOCH FROM NOW()))::INT)";
   }
   if (typeof value === "boolean") return dialect === "postgresql" ? ` DEFAULT ${value ? "TRUE" : "FALSE"}` : ` DEFAULT ${value ? 1 : 0}`;
   if (typeof value === "number") return ` DEFAULT ${value}`;

@@ -64,10 +64,10 @@ test("SQLite: probe sample reports still land, tunnel last-status columns update
     assert.equal(Number(tcping[0].latencyMs), 5);
     assert.equal(Number(tcping[1].isTimeout), 1);
     assert.ok(Number(tcping[0].recordedAt) >= t0 && Number(tcping[0].recordedAt) <= queuedAt, "recordedAt 是排队时间，不是落库时间");
-    // 读 TCPing 的查询自己先刷
+    // 读 TCPing 的查询自己先刷（订阅路上的 getUnreachableRuleIds 例外：它不刷，见 metricsRepository）
     await metrics.insertTcpingStats([{ ruleId: 12, hostId: 1, latencyMs: null, isTimeout: true, probeCount: 3, probeSuccesses: 0 }]);
     assert.equal(batcher.pendingWriteCount("tcping_stats"), 1);
-    await metrics.getUnreachableRuleIds([12]);
+    await metrics.getTcpingSeriesByRule(12);
     assert.equal(await count("tcping_stats"), 3);
     assert.equal(batcher.pendingWriteCount("tcping_stats"), 0);
 

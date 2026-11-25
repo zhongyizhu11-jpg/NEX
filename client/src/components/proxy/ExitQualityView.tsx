@@ -9,6 +9,7 @@ import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { describeProbeFailure, describeProbeFailureShort } from "@shared/probeFailure";
 import { SITE_FAILURE_LABELS, SITE_LATENCY_BAD_MS, SITE_LATENCY_WARN_MS } from "@shared/siteLatency";
@@ -230,7 +231,7 @@ function ViaHostExitCheck({ nodeId, address, targets }: { nodeId: number; addres
 export function NodeExitDialog({ subject, name, onOpenChange }: { subject: ExitCheckSubject | null; name: string; onOpenChange: (open: boolean) => void }) {
   const query = trpc.proxySubscriptions.exitCheck.useQuery(subject ?? { nodeId: 1 }, {
     enabled: !!subject,
-    refetchInterval: 60_000,
+    refetchInterval: pollingInterval("minute"),
     refetchOnWindowFocus: false,
   });
   const data = query.data;

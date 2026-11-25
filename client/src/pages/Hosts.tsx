@@ -1,16 +1,8 @@
 import { getFormatLocale } from "@/i18n";
-import {
-  describeHostEgressShaping,
-  normalizeHostEgressMbpsInput,
-  normalizeHostEgressShapingMode,
-  type HostEgressShapingMode,
-  HOST_EGRESS_MBPS_MAX,
-} from "@/components/hosts/hostEgressShaping";
+import { normalizeHostEgressMbpsInput, normalizeHostEgressShapingMode, type HostEgressShapingMode } from "@/components/hosts/hostEgressShaping";
 import { readStoredViewMode, viewModeDevice, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useUiPreferences } from "@/hooks/useUiPreferences";
-import { describeHostFlowOffload } from "@/components/hosts/hostFlowOffload";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { HeaderSpark, HeaderStatusChips } from "@/components/HeaderStatusChips";
@@ -30,15 +22,12 @@ import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AgentTokenManager from "@/components/AgentTokenManager";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
-import DateTimePickerInput, {
-  formatDateInputValue as formatDateTimeLocal,
-  parseDateInputValue as parseDateTimeLocal,
-} from "@/components/DatePickerInput";
+import { formatDateInputValue as formatDateTimeLocal, parseDateInputValue as parseDateTimeLocal } from "@/components/DatePickerInput";
 import AddSelfServiceHostDialog from "@/components/hosts/AddSelfServiceHostDialog";
-import { defaultHostCostForm, HostCostFields, hostCostFormFrom, hostCostPayload, type HostCostForm } from "@/components/hosts/HostCostFields";
+import { defaultHostCostForm, hostCostFormFrom, hostCostPayload, type HostCostForm } from "@/components/hosts/HostCostFields";
 import { HostLedgerView } from "@/components/hosts/HostLedgerView";
 import HostTrafficBillingDialog from "@/components/hosts/HostTrafficBillingDialog";
-import HostReplaceDialog, { type HostReplaceTarget } from "@/components/hosts/HostReplaceDialog";
+import type { HostReplaceTarget } from "@/components/hosts/HostReplaceDialog";
 import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
 import HostEntitySummaryCard from "@/components/hosts/HostSummaryCard";
@@ -46,7 +35,8 @@ import { HostDsRow, HostDsTableHead } from "@/components/hosts/HostDsRow";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import HostDetailDialog from "@/components/hosts/HostDetailDialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
-import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ConfirmFacts, useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useLastShown } from "@/components/useDialogTarget";
 import OpsHostsMenuItems from "@/features/ops/slots/HostsMenuItems";
 import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRuntimeBadge";
 import { formatHostLoadAverage } from "@shared/hostLoadAverage";
@@ -71,20 +61,10 @@ import {
 import { HostOsAvatar } from "@/components/hosts/HostOsBadge";
 import { parseHostOs } from "@shared/hostOs";
 import { hostChosenPrimaryAddress } from "@shared/hostPublicAddresses";
-import { HostPrimaryAddressPicker } from "@/components/hosts/HostPrimaryAddressPicker";
-import {
-  ddnsProviderSupportsMultipleValues,
-  hostDdnsProviderValueModeNote,
-  hostDdnsRecordTypeFor,
-  normalizeHostDdnsIpVersion,
-  normalizeHostDdnsValueMode,
-  type HostDdnsIpVersion,
-  type HostDdnsValueMode,
-} from "@shared/hostDdnsPlan";
+import { hostDdnsRecordTypeFor, normalizeHostDdnsIpVersion, normalizeHostDdnsValueMode, type HostDdnsIpVersion, type HostDdnsValueMode } from "@shared/hostDdnsPlan";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
-import { Checkbox } from "@/components/ui/checkbox";
-import { HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT, hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
+import { HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
@@ -101,13 +81,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -115,8 +88,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import HostAgentManagementSection from "@/components/hosts/HostAgentManagementSection";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { TableColumnResizeHandle, TableColumnSettingsMenu, tableColumnsMinWidth, useTableColumnSettings, type TableColumnMeta } from "@/components/TableColumnSettings";
@@ -154,7 +126,6 @@ import {
   Search,
   Key,
   Rows3,
-  RotateCcw,
   XCircle,
   ActivitySquare,
   FolderKanban,
@@ -170,6 +141,9 @@ const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-
 const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
 // 探测延迟曲线（recharts）点开才下载，不跟着主机页一起。
 const HostProbeServiceLatencyDialog = lazy(() => import("@/components/hosts/HostProbeServiceLatencyDialog"));
+// 「换机器」弹窗很少用到，点了再下
+const HostReplaceDialog = lazy(() => import("@/components/hosts/HostReplaceDialog"));
+const HostEditDialog = lazy(() => import("@/components/hosts/HostEditDialog"));
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
 const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.webp";
 const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.webp";
@@ -179,7 +153,7 @@ const HOST_GLOBE_LABEL_PULL_DEGREES = 8.2;
 const HOST_GLOBE_LABEL_ROW_DEGREES = 3.8;
 const HOST_GLOBE_MAX_LABELS_PER_COLUMN = 6;
 
-function parseCustomPortsInput(value: string) {
+export function parseCustomPortsInput(value: string) {
   const text = String(value || "").trim();
   if (!text) return { ports: [] as number[], invalid: [] as string[], normalized: "" };
   const tokens = text.split(",").map((item) => item.trim());
@@ -589,13 +563,13 @@ function HostWorldMap({
   );
 }
 
-type HostTrafficMeasureMode = "outbound" | "both" | "max";
-type HostBillingCycleMonths = 1 | 3 | 6 | 12 | 24 | 36;
-type HostExpiryAction = "none" | "extend_cycle";
+export type HostTrafficMeasureMode = "outbound" | "both" | "max";
+export type HostBillingCycleMonths = 1 | 3 | 6 | 12 | 24 | 36;
+export type HostExpiryAction = "none" | "extend_cycle";
 
 const HOST_TRAFFIC_GB_BYTES = 1024 ** 3;
 
-type HostFormData = {
+export type HostFormData = {
   name: string;
   ip: string;
   hostType: "master" | "slave";
@@ -697,37 +671,37 @@ const defaultFormData: HostFormData = {
   cost: defaultHostCostForm,
 };
 
-function clampMonthlyResetDay(value: number) {
+export function clampMonthlyResetDay(value: number) {
   return Math.min(31, Math.max(1, Math.floor(Number(value) || 1)));
 }
 
-function normalizeHostBillingCycleMonths(value: unknown): HostBillingCycleMonths {
+export function normalizeHostBillingCycleMonths(value: unknown): HostBillingCycleMonths {
   const months = Math.floor(Number(value));
   if (months === 3 || months === 6 || months === 12 || months === 24 || months === 36) return months;
   return 1;
 }
 
-function clampBillingMonth(value: number) {
+export function clampBillingMonth(value: number) {
   return Math.min(12, Math.max(1, Math.floor(Number(value) || 1)));
 }
 
-function clampBillingDay(value: number) {
+export function clampBillingDay(value: number) {
   return Math.min(31, Math.max(1, Math.floor(Number(value) || 1)));
 }
 
-function normalizeHostExpiryAction(value: unknown): HostExpiryAction {
+export function normalizeHostExpiryAction(value: unknown): HostExpiryAction {
   return value === "extend_cycle" ? "extend_cycle" : "none";
 }
 
-function clampTrafficAlertThresholdPercent(value: number) {
+export function clampTrafficAlertThresholdPercent(value: number) {
   return Math.min(99, Math.max(1, Math.floor(Number(value) || 20)));
 }
 
-function clampRenewalReminderDays(value: number) {
+export function clampRenewalReminderDays(value: number) {
   return Math.min(365, Math.max(1, Math.floor(Number(value) || 3)));
 }
 
-function normalizeHostTrafficMeasureMode(value: unknown): HostTrafficMeasureMode {
+export function normalizeHostTrafficMeasureMode(value: unknown): HostTrafficMeasureMode {
   if (value === "outbound" || value === "max") return value;
   return "both";
 }
@@ -1002,7 +976,7 @@ function HostListStatusBadge({ host }: { host: any }) {
 type HostViewMode = "card" | "compact-card" | "table" | "map" | "flat-map";
 type HostManageTab = "hosts" | "ledger" | "groups" | "services" | "tokens";
 type HostManageFilterStats = { filtered: number; total: number };
-type HostDialogTab = "basic" | "other";
+export type HostDialogTab = "basic" | "other";
 
 const HOST_MANAGE_TABS_ADMIN = ["hosts", "ledger", "groups", "tokens", "services"] as const;
 const HOST_MANAGE_TABS_USER = ["hosts"] as const;
@@ -1025,7 +999,7 @@ const HOST_MANAGE_FILTER_CONFIG: Record<HostManageTab, { placeholder: string; un
   services: { placeholder: "搜索服务 / 目标地址 / 类型 / 主机范围", unit: "项" },
 };
 
-const HOST_DIALOG_TABS = [
+export const HOST_DIALOG_TABS = [
   { value: "basic", label: "基础信息", icon: Server },
   { value: "other", label: "其他配置", icon: Gauge },
 ] as const;
@@ -2008,7 +1982,6 @@ function HostsContent() {
 
   const [showDialog, setShowDialog] = useState(false);
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
-  const [upgradeHost, setUpgradeHost] = useState<any>(null);
   const [probeLatencyHost, setProbeLatencyHost] = useState<any>(null);
   // 探测延迟弹窗（recharts）第一次打开才下载、才挂上。
   const probeLatencyDialogMounted = useOpenedOnce(!!probeLatencyHost);
@@ -2017,7 +1990,6 @@ function HostsContent() {
     上一版没有这一层，所有字段都挤在列表里，于是列表既看不清也翻不完。
   */
   const [detailHost, setDetailHost] = useState<any>(null);
-  const [resetTrafficHost, setResetTrafficHost] = useState<any>(null);
   const [resetTrafficHostId, setResetTrafficHostId] = useState<number | null>(null);
   const [trafficCorrectionHost, setTrafficCorrectionHost] = useState<any>(null);
   const [trafficCorrectionInput, setTrafficCorrectionInput] = useState("0");
@@ -2367,7 +2339,6 @@ function HostsContent() {
       utils.hosts.trafficSummary.invalidate();
       utils.hosts.pageLive.invalidate();
       utils.hosts.summary.invalidate();
-      setResetTrafficHost(null);
       toast.success("流量统计已重置");
     },
     onError: (err) => toast.error(err.message || "重置流量统计失败"),
@@ -2392,7 +2363,6 @@ function HostsContent() {
       utils.hosts.options.invalidate();
       utils.hosts.listPage.invalidate();
       utils.hosts.mapPoints.invalidate();
-      setUpgradeHost(null);
       if ((data as any)?.skippedOffline) {
         toast.info("主机离线，已跳过升级任务");
         return;
@@ -2688,7 +2658,8 @@ function HostsContent() {
     }
   };
   const isPending = createMutation.isPending || updateMutation.isPending;
-  const customPortInputState = useMemo(() => parseCustomPortsInput(form.portAllowlist), [form.portAllowlist]);
+  // 编辑主机的弹窗（components/hosts/HostEditDialog，懒加载）：第一次打开后一直挂着
+  const hostDialogLoaded = useLastShown(showDialog, showDialog ? true : null) ?? false;
   const onlineCount = Number(hostPageQuery.data?.onlineItems ?? filteredDisplayHosts.filter((host: any) => !!host.isOnline).length);
   const displayedHostTotal = Number(hostPageQuery.data?.totalItems ?? (isHostMapView ? mapHostTotal : filteredDisplayHosts.length));
   const updateCount = Number(hostPageQuery.data?.outdatedItems || 0);
@@ -2869,16 +2840,29 @@ function HostsContent() {
     actions: hostItemActions,
     clockMinute,
   });
+  /*
+    重置流量 / 升级 Agent 的确认走共享的确认框，主机 / 版本那几行事实放 details 槽：
+    请求在路上时弹窗留着、按钮写「重置中...」「下发中...」，成功了才关。
+  */
   const requestResetHostTraffic = (host: any) => {
     const hostId = Number(host?.id);
     if (!Number.isInteger(hostId) || hostId <= 0) return;
-    setResetTrafficHost(host);
-  };
-  const confirmResetHostTraffic = () => {
-    const hostId = Number(resetTrafficHost?.id);
-    if (!Number.isInteger(hostId) || hostId <= 0) return;
-    setResetTrafficHostId(hostId);
-    resetHostTrafficMutation.mutate({ hostId });
+    void confirmDialog({
+      title: "重置流量统计",
+      description: "确认清空该主机当前累计的流量统计？",
+      details: (
+        <ConfirmFacts rows={[
+          { label: "主机", value: host.name },
+          { label: "Agent", value: host.agentVersion ? `v${host.agentVersion}` : "未上报", mono: true },
+        ]} />
+      ),
+      confirmText: "确认重置",
+      confirmPendingText: "重置中...",
+      onConfirm: async () => {
+        setResetTrafficHostId(hostId);
+        await resetHostTrafficMutation.mutateAsync({ hostId });
+      },
+    });
   };
   const requestCorrectHostTraffic = (host: any) => {
     const hostId = Number(host?.id);
@@ -2917,16 +2901,28 @@ function HostsContent() {
       toast.info("该 Agent 已经是最新版本");
       return;
     }
-    setUpgradeHost(host);
-  };
-  const confirmAgentUpgrade = () => {
-    if (!upgradeHost) return;
-    if (isAgentLatest(upgradeHost)) {
-      toast.info("该 Agent 已经是最新版本");
-      setUpgradeHost(null);
-      return;
-    }
-    upgradeAgentMutation.mutate({ hostId: upgradeHost.id, targetVersion: latestAgentVersion || null });
+    void confirmDialog({
+      title: "升级 Agent",
+      description: "通过 Agent 下发升级任务。",
+      details: (
+        <ConfirmFacts rows={[
+          { label: "主机", value: host.name },
+          { label: "当前 Agent", value: host.agentVersion ? `v${host.agentVersion}` : "未上报", mono: true },
+          { label: "当前 FXP", value: fxpRuntimeDetailText(host), mono: true },
+          { label: "目标版本", value: `v${latestAgentVersion || "-"}`, mono: true },
+        ]} />
+      ),
+      confirmText: "确认升级",
+      confirmPendingText: "下发中...",
+      onConfirm: async () => {
+        // 弹窗开着的时候别人可能已经升完了：下发前再看一眼
+        if (isAgentLatest(host)) {
+          toast.info("该 Agent 已经是最新版本");
+          return;
+        }
+        await upgradeAgentMutation.mutateAsync({ hostId: host.id, targetVersion: latestAgentVersion || null });
+      },
+    });
   };
   const requestAllAgentUpgrades = () => {
     if (onlineOutdatedCount === 0) {
@@ -3475,11 +3471,15 @@ function HostsContent() {
         }}
       />
 
-      <HostReplaceDialog
-        open={!!replaceHost}
-        onOpenChange={(open) => !open && setReplaceHost(null)}
-        host={replaceHost}
-      />
+      {replaceHost ? (
+        <Suspense fallback={null}>
+          <HostReplaceDialog
+            open={!!replaceHost}
+            onOpenChange={(open) => !open && setReplaceHost(null)}
+            host={replaceHost}
+          />
+        </Suspense>
+      ) : null}
       {/* 整台机器的按量计费 —— 底层就是转发找配置时的最后一档兜底。 */}
       <HostTrafficBillingDialog
         open={!!billingHost}
@@ -3487,48 +3487,6 @@ function HostsContent() {
         host={billingHost}
       />
 
-      <Dialog open={!!resetTrafficHost} onOpenChange={(open) => !open && !resetHostTrafficMutation.isPending && setResetTrafficHost(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RotateCcw className="h-5 w-5 text-primary" />
-              重置流量统计
-            </DialogTitle>
-            <DialogDescription>
-              确认清空该主机当前累计的流量统计？
-            </DialogDescription>
-          </DialogHeader>
-          {resetTrafficHost && (
-            <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">主机</span>
-                <span className="font-medium">{resetTrafficHost.name}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Agent</span>
-                <span className="font-mono">{resetTrafficHost.agentVersion ? `v${resetTrafficHost.agentVersion}` : "未上报"}</span>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setResetTrafficHost(null)}
-              disabled={resetHostTrafficMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              className="gap-2"
-              onClick={confirmResetHostTraffic}
-              disabled={!resetTrafficHost || resetHostTrafficMutation.isPending}
-            >
-              {resetHostTrafficMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              {resetHostTrafficMutation.isPending ? "重置中..." : "确认重置"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       {/* Correct Host Traffic Dialog */}
       <Dialog
         open={!!trafficCorrectionHost}
@@ -3601,56 +3559,13 @@ function HostsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Agent Upgrade Dialog */}
-      <Dialog open={!!upgradeHost} onOpenChange={(open) => !open && setUpgradeHost(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Download className="h-5 w-5 text-primary" />
-              升级 Agent
-            </DialogTitle>
-            <DialogDescription>
-              通过 Agent 下发升级任务。
-            </DialogDescription>
-          </DialogHeader>
-          {upgradeHost && (
-            <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">主机</span>
-                <span className="font-medium">{upgradeHost.name}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">当前 Agent</span>
-                <span className="font-mono">{upgradeHost.agentVersion ? `v${upgradeHost.agentVersion}` : "未上报"}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">当前 FXP</span>
-                <span className="font-mono">{fxpRuntimeDetailText(upgradeHost)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">目标版本</span>
-                <span className="font-mono">v{latestAgentVersion || "-"}</span>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUpgradeHost(null)}>
-              取消
-            </Button>
-            <Button
-              className="gap-2"
-              disabled={!upgradeHost || upgradeAgentMutation.isPending}
-              onClick={confirmAgentUpgrade}
-            >
-              {upgradeAgentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              {upgradeAgentMutation.isPending ? "下发中..." : "确认升级"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Bulk Agent Upgrade Dialog */}
-      <Dialog open={bulkUpgradeDialogOpen} onOpenChange={setBulkUpgradeDialogOpen}>
+      {/*
+        仍然手写而不走 useConfirmDialog：候选数量来自 upgradeCandidates 查询（只在弹窗开着时拉），
+        「确认升级」要等它回来、而且一台都没有时得禁用 —— 确认框的 details 槽放不下这层「按查询结果禁用确认按钮」。
+        和确认框保持一致的部分：键值表用 ConfirmFacts；下发中不许关（ESC / 遮罩 / 取消都不响应）。
+      */}
+      <Dialog open={bulkUpgradeDialogOpen} onOpenChange={(open) => { if (!open && upgradeAgentsMutation.isPending) return; setBulkUpgradeDialogOpen(open); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -3661,22 +3576,11 @@ function HostsContent() {
               点击确认后才会向在线且可升级的 Agent 下发升级任务。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">升级数量</span>
-              <span className="font-medium">{bulkUpgradeableHosts.length} 台</span>
-            </div>
-            {offlineUpgradeableHostCount > 0 && (
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">已跳过离线主机</span>
-                <span className="font-medium">{offlineUpgradeableHostCount} 台</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">目标版本</span>
-              <span className="font-mono">v{latestAgentVersion || "-"}</span>
-            </div>
-          </div>
+          <ConfirmFacts rows={[
+            { label: "升级数量", value: `${bulkUpgradeableHosts.length} 台` },
+            ...(offlineUpgradeableHostCount > 0 ? [{ label: "已跳过离线主机", value: `${offlineUpgradeableHostCount} 台` }] : []),
+            { label: "目标版本", value: `v${latestAgentVersion || "-"}`, mono: true },
+          ]} />
           <DialogFooter>
             <Button
               variant="outline"
@@ -3698,660 +3602,29 @@ function HostsContent() {
       </Dialog>
 
       {/* 编辑主机对话框 */}
-      <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="flex h-[min(720px,86svh)] max-h-[86svh] flex-col overflow-hidden sm:max-w-[44rem]">
-          <DialogHeader className="shrink-0 space-y-1">
-            <DialogTitle>编辑主机</DialogTitle>
-            <DialogDescription className="sr-only">
-              修改主机信息
-            </DialogDescription>
-          </DialogHeader>
-          <Tabs
-            value={hostDialogTab}
-            onValueChange={(value) => setHostDialogTab(value as HostDialogTab)}
-            className="min-h-0 flex flex-1 flex-col overflow-hidden"
-          >
-            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 rounded-md bg-muted/50 p-1">
-              {HOST_DIALOG_TABS.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <TabsTrigger key={item.value} value={item.value} className="min-w-0 gap-2 px-3 py-1.5 text-sm">
-                    <Icon className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                  </TabsTrigger>
-                );
-              })}
-            </TabsList>
-            <div className="dialog-scroll-area mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-4 pl-0.5 pr-7">
-              <TabsContent value="basic" className="m-0 space-y-3 !animate-none">
-                <section className="space-y-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <Label className="text-sm font-semibold">基础信息</Label>
-                    <span className="text-xs text-muted-foreground">主机连接</span>
-                  </div>
-                  <div className="grid gap-2.5 sm:grid-cols-2">
-                    <FormField className="space-y-1">
-                      <Label className="text-sm">主机名称</Label>
-                      <Input
-                        className="h-8"
-                        placeholder="例如: 香港节点-01"
-                        value={form.name}
-                        onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      />
-                    </FormField>
-                    <FormField className="space-y-1">
-                      <Label className="text-sm">Agent 检测 IP</Label>
-                      <Input
-                        className="h-8"
-                        placeholder="Agent 自动检测"
-                        value={form.detectedAddress}
-                        onChange={(e) => setForm({ ...form, detectedAddress: e.target.value })}
-                      />
-                      {/*
-                        手改之后地址由用户说了算，心跳不再覆盖（agentAddressState）；清空保存交回 Agent。
-                        IPv4、IPv6 各一个，用逗号或空格隔开。
-                      */}
-                      <p className="text-xs text-muted-foreground">
-                        {editingHostRow?.addressManual
-                          ? "已手动指定，Agent 上报不再覆盖；清空后保存恢复自动检测"
-                          : "可以手改（IPv4、IPv6 用逗号隔开），改了之后 Agent 上报不再覆盖"}
-                      </p>
-                    </FormField>
-                  </div>
-                  {editingId && editingHostRow ? (
-                    <div className="mt-2.5">
-                      <HostPrimaryAddressPicker
-                        host={editingHostRow}
-                        primaryIpv4={form.primaryIpv4}
-                        primaryIpv6={form.primaryIpv6}
-                        onChange={(family, value) => setForm({ ...form, ...(family === "ipv4" ? { primaryIpv4: value } : { primaryIpv6: value }) })}
-                      />
-                    </div>
-                  ) : null}
-                  <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
-                    <FormField className="space-y-1">
-                      <Label className="text-sm">入口 IP / 域名</Label>
-                      <Input
-                        className="h-8"
-                        placeholder="例如: example.com 或 1.2.3.4"
-                        value={form.entryIp}
-                        onChange={(e) => setForm({ ...form, entryIp: e.target.value })}
-                      />
-                      {/* 家里的机器当入口（比如叠加的入口）时，订阅里的地址就是它的内网 IP。 */}
-                      {detectedPrivateIpv4 && !form.entryIp.trim() ? (
-                        <button
-                          type="button"
-                          className="text-left text-xs text-primary hover:underline"
-                          onClick={() => setForm({ ...form, entryIp: detectedPrivateIpv4 })}
-                        >
-                          填内网 IP {detectedPrivateIpv4}
-                        </button>
-                      ) : null}
-                    </FormField>
-                    <FormField className="space-y-1">
-                      <Label className="text-sm">内网地址 <span className="text-xs text-muted-foreground">可选</span></Label>
-                      <Input
-                        className="h-8"
-                        placeholder={detectedPrivateIpv4 ? `检测到 ${detectedPrivateIpv4}` : "10.0.0.8 或 node-a.internal"}
-                        value={form.tunnelEntryIp}
-                        onChange={(e) => setForm({ ...form, tunnelEntryIp: e.target.value })}
-                      />
-                      {/*
-                        Agent 报上来的本机内网 IP 只做建议，点了才填：这一栏决定隧道走内网，
-                        不在同一个内网的机器被自动填上会连不通。
-                      */}
-                      {detectedPrivateIpv4 && form.tunnelEntryIp.trim() !== detectedPrivateIpv4 ? (
-                        <button
-                          type="button"
-                          className="text-left text-xs text-primary hover:underline"
-                          onClick={() => setForm({ ...form, tunnelEntryIp: detectedPrivateIpv4 })}
-                        >
-                          使用检测到的内网 IP {detectedPrivateIpv4}
-                        </button>
-                      ) : null}
-                    </FormField>
-                  </div>
-                  <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
-                    <FormField className="space-y-1">
-                      <Label className="text-sm">网卡名称 <span className="text-xs text-muted-foreground">可选</span></Label>
-                      <Input
-                        className="h-8"
-                        placeholder="eth0, ens33, bond0"
-                        value={form.networkInterface}
-                        onChange={(e) => setForm({ ...form, networkInterface: e.target.value })}
-                      />
-                    </FormField>
-                  </div>
-                </section>
-
-                <section className="space-y-3 border-t border-border/40 pt-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <Label className="text-sm font-semibold">端口限制</Label>
-                    <span className="text-xs text-muted-foreground">留空不限</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <FormField className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">起始端口</Label>
-                      <Input
-                        className="h-8"
-                        type="number"
-                        min={1}
-                        max={65535}
-                        step={1}
-                        placeholder="例如: 10000"
-                        value={form.portRangeStart ?? ""}
-                        onChange={(e) => {
-                          const v = e.target.value ? parseInt(e.target.value) : null;
-                          setForm({ ...form, portRangeStart: v });
-                        }}
-                      />
-                    </FormField>
-                    <FormField className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">结束端口</Label>
-                      <Input
-                        className="h-8"
-                        type="number"
-                        min={1}
-                        max={65535}
-                        step={1}
-                        placeholder="例如: 20000"
-                        value={form.portRangeEnd ?? ""}
-                        onChange={(e) => {
-                          const v = e.target.value ? parseInt(e.target.value) : null;
-                          setForm({ ...form, portRangeEnd: v });
-                        }}
-                      />
-                    </FormField>
-                  </div>
-                  <div className="mt-2.5 space-y-1">
-                    <div className="flex items-center justify-between gap-3">
-                      <Label className="text-xs text-muted-foreground">自定义端口</Label>
-                      {customPortInputState.invalid.length === 0 && customPortInputState.ports.length > 0 ? (
-                        <span className="text-xs text-muted-foreground">{customPortInputState.ports.length} 个</span>
-                      ) : null}
-                    </div>
-                    <Input
-                      placeholder="例如: 80,443,65095"
-                      value={form.portAllowlist}
-                      onChange={(e) => setForm({ ...form, portAllowlist: e.target.value })}
-                      className={`h-8 ${customPortInputState.invalid.length > 0 ? "border-destructive focus-visible:ring-destructive" : ""}`}
-                    />
-                    {customPortInputState.invalid.length > 0 ? (
-                      <p className="text-xs text-destructive">
-                        自定义端口只能填写 1-65535 的整数，多个端口使用英文逗号分隔
-                      </p>
-                    ) : null}
-                  </div>
-                  {form.portRangeStart != null && form.portRangeEnd != null && form.portRangeStart > form.portRangeEnd && (
-                    <p className="mt-3 text-xs text-destructive">
-                      起始端口不能大于结束端口
-                    </p>
-                  )}
-                </section>
-                {user?.role === "admin" && (
-                  <section className="space-y-3 border-t border-border/40 pt-3">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <Label className="text-sm font-semibold">协议屏蔽</Label>
-                      <span className="text-xs text-muted-foreground">访问策略</span>
-                    </div>
-                    <p data-fx-help="" className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-命中的连接会被拒绝，规则仍保持运行。{nginxFeatureEnabled ? "支持 NEX、Realm、GOST、Socat 和 Nginx；不支持 iptables/nftables。" : "支持 NEX、Realm、GOST 和 Socat；不支持 iptables/nftables。"}
-                    </p>
-                    <div className="grid gap-2 sm:grid-cols-3">
-                      <label className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-muted/35 px-2.5 py-2">
-                        <span className="min-w-0 truncate text-sm font-medium">HTTP</span>
-                        <Checkbox aria-label="拦截 HTTP" className="shrink-0" checked={form.blockHttp} onCheckedChange={(checked) => setForm({ ...form, blockHttp: checked })} />
-                      </label>
-                      <label className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-muted/35 px-2.5 py-2">
-                        <span className="min-w-0 truncate text-sm font-medium">SOCKS</span>
-                        <Checkbox aria-label="拦截 SOCKS" className="shrink-0" checked={form.blockSocks} onCheckedChange={(checked) => setForm({ ...form, blockSocks: checked })} />
-                      </label>
-                      <label className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-muted/35 px-2.5 py-2">
-                        <span className="min-w-0 truncate text-sm font-medium">TLS</span>
-                        <Checkbox aria-label="拦截 TLS" className="shrink-0" checked={form.blockTls} onCheckedChange={(checked) => setForm({ ...form, blockTls: checked })} />
-                      </label>
-                    </div>
-                  </section>
-                )}
-              </TabsContent>
-
-              <TabsContent value="other" className="m-0 !animate-none">
-                <section className="space-y-3">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <Label className="text-sm font-semibold">其他配置</Label>
-                    <span className="text-xs text-muted-foreground">主机统计</span>
-                  </div>
-                  {user?.role === "admin" ? (
-                    <>
-                      <div className="grid min-w-0 gap-2.5 px-1 md:grid-cols-2">
-                        <div className="space-y-1">
-                          <Label className="text-sm">机器购买时间</Label>
-                          <DateTimePickerInput
-                            value={form.purchasedAt}
-                            onChange={(value) => setForm({ ...form, purchasedAt: value })}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-sm">机器停止时间</Label>
-                          <DateTimePickerInput
-                            value={form.stoppedAt}
-                            onChange={(value) => setForm({ ...form, stoppedAt: value })}
-                            align="end"
-                          />
-                        </div>
-                        <FormField className="min-w-0 space-y-1">
-                          <Label className="text-sm">账单周期</Label>
-                          <Select
-                            value={String(normalizeHostBillingCycleMonths(form.billingCycleMonths))}
-                            onValueChange={(value) => setForm({ ...form, billingCycleMonths: normalizeHostBillingCycleMonths(value) })}
-                          >
-                            <SelectTrigger className="h-8 min-w-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="1">月付</SelectItem>
-                              <SelectItem value="3">季付</SelectItem>
-                              <SelectItem value="6">半年付</SelectItem>
-                              <SelectItem value="12">年付</SelectItem>
-                              <SelectItem value="24">两年付</SelectItem>
-                              <SelectItem value="36">三年付</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormField>
-                        <div className="min-w-0 space-y-1">
-                          <Label className="text-sm">账单月日</Label>
-                          <div className="grid min-w-0 grid-cols-2 gap-2">
-                            <Select
-                              value={String(clampBillingMonth(form.billingMonth))}
-                              onValueChange={(value) => setForm({ ...form, billingMonth: clampBillingMonth(Number(value)) })}
-                            >
-                              <SelectTrigger aria-label="账单月" className="h-8 min-w-0">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
-                                  <SelectItem key={month} value={String(month)}>{month} 月</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Select
-                              value={String(clampBillingDay(form.billingDay))}
-                              onValueChange={(value) => setForm({ ...form, billingDay: clampBillingDay(Number(value)) })}
-                            >
-                              <SelectTrigger aria-label="账单日" className="h-8 min-w-0">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
-                                  <SelectItem key={day} value={String(day)}>{day} 日</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                        <FormField className="min-w-0 space-y-1">
-                          <Label className="text-sm">机器到期处理</Label>
-                          <Select
-                            value={normalizeHostExpiryAction(form.expiryHandling)}
-                            onValueChange={(value) => setForm({ ...form, expiryHandling: normalizeHostExpiryAction(value) })}
-                          >
-                            <SelectTrigger className="h-8 min-w-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">不处理</SelectItem>
-                              <SelectItem value="extend_cycle">周期顺延</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormField>
-                        <div className="min-w-0 space-y-1">
-                          <Label className="text-sm">套餐流量</Label>
-                          <div className="flex h-8 min-w-0 overflow-hidden rounded-md border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring">
-                            <Input
-                              className="h-8 min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-1 focus-visible:border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                              type="text"
-                              inputMode="decimal"
-                              placeholder="例如: 2000"
-                              value={form.trafficLimitGb}
-                              onChange={(e) => setForm({ ...form, trafficLimitGb: e.target.value })}
-                            />
-                            <span className="flex h-full shrink-0 items-center border-l border-border/60 bg-muted/50 px-2.5 text-sm text-muted-foreground">
-                              GB
-                            </span>
-                          </div>
-                        </div>
-                        <FormField className="min-w-0 space-y-1">
-                          <Label className="text-sm">流量计算</Label>
-                          <Select
-                            value={form.trafficMeasureMode}
-                            onValueChange={(value) => setForm({ ...form, trafficMeasureMode: normalizeHostTrafficMeasureMode(value) })}
-                          >
-                            <SelectTrigger className="h-8 min-w-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="outbound">仅出向</SelectItem>
-                              <SelectItem value="both">双向</SelectItem>
-                              <SelectItem value="max">取最大值</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormField>
-                      </div>
-                      {/* 费用（主机账本用）：默认收起，收起时一行写着填了什么。 */}
-                      <HostCostFields
-                        className="mx-1 mt-2.5"
-                        value={form.cost}
-                        cycleMonths={normalizeHostBillingCycleMonths(form.billingCycleMonths)}
-                        onChange={(cost) => setForm({ ...form, cost })}
-                      />
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">流量故障转移</Label>
-                          {/*
-                            上游 v2.3.281。和下面的「流量耗尽提醒」是两回事：提醒只发消息，这个会真的
-                            把这台从组里摘出去（转发组、入口组、出口组、多出口隧道），组里换别的成员顶上。
-                            只改运行时，成员和端口都不删；流量重置（手动或每月自动）或关掉这个开关就恢复。
-                          */}
-                          <p data-fx-help="" className="text-xs text-muted-foreground">用到这个比例后暂停参与组调度，流量重置后恢复。</p>
-                          {editingHostRow && hostTrafficExcluded(editingHostRow) ? (
-                            <p className="text-xs text-[var(--fx-warn-text)]">已到阈值，正暂停参与组调度。</p>
-                          ) : null}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <div className="flex h-8 w-20 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                            <Input aria-label="流量故障转移阈值（%）"
-                              className="h-8 rounded-none border-0 px-2 text-right focus-visible:ring-0 focus-visible:ring-offset-0"
-                              type="number"
-                              min={1}
-                              max={100}
-                              step={1}
-                              disabled={!form.trafficFailoverEnabled}
-                              value={form.trafficFailoverThresholdPercent}
-                              onChange={(e) => setForm({ ...form, trafficFailoverThresholdPercent: normalizeHostTrafficFailoverPercent(e.target.value) })}
-                            />
-                            <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-1.5 text-sm text-muted-foreground">%</span>
-                          </div>
-                          <Checkbox aria-label="流量故障转移"
-                            checked={form.trafficFailoverEnabled}
-                            onCheckedChange={(checked) => setForm({ ...form, trafficFailoverEnabled: checked })}
-                          />
-                        </div>
-                      </div>
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">上下线通知</Label>
-                          <p data-fx-help="" className="text-xs text-muted-foreground">掉线、恢复时推送给管理员。</p>
-                        </div>
-                        <Checkbox aria-label="上下线通知"
-                          checked={form.hostStatusNotifyEnabled}
-                          onCheckedChange={(checked) => setForm({ ...form, hostStatusNotifyEnabled: checked })}
-                        />
-                      </div>
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">流量耗尽提醒</Label>
-                          {/*
-                            原来这个开关被绑死在「TG 机器人已配置」上，没用 Telegram 的
-                            商家根本打不开 —— 机房流量跑超、机器停机，他名下所有转发和
-                            落地节点一起断，却没有任何人告诉他。现在邮件那一路也会发，
-                            开关只管「这台机器要不要提醒」，走哪个渠道看你配了什么。
-                          */}
-                          <p className="text-xs text-muted-foreground">{reminderChannelHint}</p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <div className="flex h-8 w-20 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                            <Input aria-label="流量耗尽提醒阈值（%）"
-                              className="h-8 rounded-none border-0 px-2 text-right focus-visible:ring-0 focus-visible:ring-offset-0"
-                              type="number"
-                              min={1}
-                              max={99}
-                              step={1}
-                              value={form.trafficAlertThresholdPercent}
-                              onChange={(e) => setForm({ ...form, trafficAlertThresholdPercent: clampTrafficAlertThresholdPercent(Number(e.target.value)) })}
-                            />
-                            <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-1.5 text-sm text-muted-foreground">%</span>
-                          </div>
-                          <Checkbox aria-label="流量耗尽提醒"
-                            checked={form.telegramTrafficAlertEnabled}
-                            onCheckedChange={(checked) => setForm({ ...form, telegramTrafficAlertEnabled: checked })}
-                          />
-                        </div>
-                      </div>
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">续费提醒</Label>
-                          <p className="text-xs text-muted-foreground">
-                            剩余天数不足时提醒。{reminderChannelHint}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <div className="flex h-8 w-24 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                            <Input aria-label="续费提醒提前天数"
-                              className="h-8 rounded-none border-0 px-2 text-right focus-visible:ring-0 focus-visible:ring-offset-0"
-                              type="number"
-                              min={1}
-                              max={365}
-                              step={1}
-                              value={form.renewalReminderDays}
-                              onChange={(e) => setForm({ ...form, renewalReminderDays: clampRenewalReminderDays(Number(e.target.value)) })}
-                            />
-                            <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-sm text-muted-foreground">天</span>
-                          </div>
-                          <Checkbox aria-label="续费提醒"
-                            checked={form.telegramRenewalReminderEnabled}
-                            onCheckedChange={(checked) => setForm({ ...form, telegramRenewalReminderEnabled: checked })}
-                          />
-                        </div>
-                      </div>
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <Label className="text-sm font-medium">自动重置流量</Label>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <Select
-                            value={String(clampMonthlyResetDay(form.trafficResetDay))}
-                            onValueChange={(value) => setForm({ ...form, trafficResetDay: clampMonthlyResetDay(Number(value)) })}
-                          >
-                            <SelectTrigger aria-label="每月流量重置日" className="h-8 w-24">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
-                                <SelectItem key={day} value={String(day)}>{day} 号</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Checkbox aria-label="每月自动清零" checked={form.trafficAutoReset} onCheckedChange={(checked) => setForm({ ...form, trafficAutoReset: checked })} />
-                        </div>
-                      </div>
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">线路带宽</Label>
-                          <p data-fx-help="" className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
-                        </div>
-                        <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                          <Input aria-label="线路带宽（Mbit/s）"
-                            className="h-8 min-w-0 rounded-none border-0 px-2 text-right tabular-nums focus-visible:ring-0 focus-visible:ring-offset-0"
-                            type="number"
-                            min={0}
-                            max={1000000}
-                            inputMode="numeric"
-                            placeholder="没填"
-                            value={form.lineBandwidthMbps > 0 ? form.lineBandwidthMbps : ""}
-                            onChange={(e) => setForm({ ...form, lineBandwidthMbps: Math.min(1_000_000, Math.max(0, Math.floor(Number(e.target.value) || 0))) })}
-                          />
-                          <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
-                        </div>
-                      </div>
-                      {user?.role === "admin" && editingId ? (
-                        <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="min-w-0 space-y-0.5">
-                            <Label className="text-sm font-medium">整台主机转发限速</Label>
-                            <p data-fx-help="" className="text-xs text-muted-foreground">所有用户合计上限，0 = 不限。</p>
-                          </div>
-                          <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                            <Input aria-label="整台主机转发限速（Mbit/s）"
-                              className="h-8 min-w-0 rounded-none border-0 px-2 text-right tabular-nums focus-visible:ring-0 focus-visible:ring-offset-0"
-                              type="number"
-                              min={0}
-                              max={1000000}
-                              inputMode="numeric"
-                              placeholder="不限"
-                              value={form.rateLimitMbps > 0 ? form.rateLimitMbps : ""}
-                              onChange={(e) => setForm({ ...form, rateLimitMbps: Math.min(1_000_000, Math.max(0, Math.floor(Number(e.target.value) || 0))) })}
-                            />
-                            <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
-                          </div>
-                        </div>
-                      ) : null}
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">公网出口整形</Label>
-                          {form.egressShapingMode === "auto" ? (
-                            <p className="text-xs text-muted-foreground" data-host-egress-status="">
-                              {describeHostEgressShaping(editingHostRow?.egressShapingStatus)}
-                            </p>
-                          ) : null}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {form.egressShapingMode === "manual" ? (
-                            <div className="flex h-8 w-36 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-                              <Input aria-label="公网带宽上限（Mbit/s）"
-                                className="h-8 min-w-0 rounded-none border-0 px-2 text-right tabular-nums focus-visible:ring-0 focus-visible:ring-offset-0"
-                                type="number"
-                                min={0}
-                                max={HOST_EGRESS_MBPS_MAX}
-                                inputMode="numeric"
-                                placeholder="例如: 500"
-                                value={form.egressMbps > 0 ? form.egressMbps : ""}
-                                onChange={(e) => setForm({ ...form, egressMbps: normalizeHostEgressMbpsInput(e.target.value) })}
-                              />
-                              <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
-                            </div>
-                          ) : null}
-                          <Select
-                            value={form.egressShapingMode}
-                            onValueChange={(value) => setForm({ ...form, egressShapingMode: normalizeHostEgressShapingMode(value) })}
-                          >
-                            <SelectTrigger aria-label="公网出口整形" className="h-8 w-24">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="auto">自动</SelectItem>
-                              <SelectItem value="manual">手动</SelectItem>
-                              <SelectItem value="off">关</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      {editingId ? (
-                        <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-start justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
-                          <div className="min-w-0 space-y-0.5">
-                            <Label className="text-sm font-medium">内核快速转发</Label>
-                            <p className="text-xs text-muted-foreground">
-                              跳过逐包检查，更省 CPU（Linux 6.1 起）。
-                            </p>
-                            {form.flowOffload && editingHostRow?.flowOffloadStatus ? (
-                              <p className="text-xs text-muted-foreground" data-host-flow-offload-status="">
-                                {describeHostFlowOffload(editingHostRow.flowOffloadStatus)}
-                              </p>
-                            ) : null}
-                          </div>
-                          <Checkbox
-                            aria-label="内核快速转发"
-                            checked={form.flowOffload}
-                            onCheckedChange={(checked) => setForm({ ...form, flowOffload: checked })}
-                          />
-                        </div>
-                      ) : null}
-                      <div data-fx-setting-box="" className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
-                        <FormField className="flex min-h-8 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <RadioTower className="h-4 w-4 shrink-0 text-muted-foreground" />
-                            <Label className="text-sm font-medium">DDNS 服务</Label>
-                            {!ddnsProviderEnabled ? (
-                              <Badge variant="secondary" className="shrink-0 text-[11px]">未配置服务商</Badge>
-                            ) : null}
-                          </div>
-                          <Checkbox
-                            checked={form.ddnsEnabled}
-                            disabled={!ddnsProviderEnabled && !form.ddnsEnabled}
-                            onCheckedChange={(checked) => setForm({ ...form, ddnsEnabled: checked })}
-                          />
-                        </FormField>
-                        <div className="grid min-w-0 gap-2.5 sm:grid-cols-[8rem_7rem_minmax(0,1fr)]">
-                          <Select
-                            value={form.ddnsIpVersion}
-                            disabled={!ddnsProviderEnabled}
-                            onValueChange={(value) => setForm({ ...form, ddnsIpVersion: normalizeHostDdnsIpVersion(value) })}
-                          >
-                            <SelectTrigger aria-label="DDNS 记录类型" className="h-8 min-w-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="ipv4">IPv4 / A</SelectItem>
-                              <SelectItem value="ipv6">IPv6 / AAAA</SelectItem>
-                              <SelectItem value="dual">双栈 / A + AAAA</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          {/* 仅主 IP（老配置默认）/ 全部 IP：检测到的每个地址各发一条同名记录（shared/hostDdnsPlan） */}
-                          <Select
-                            value={form.ddnsValueMode}
-                            disabled={!ddnsProviderEnabled}
-                            onValueChange={(value) => setForm({ ...form, ddnsValueMode: normalizeHostDdnsValueMode(value) })}
-                          >
-                            <SelectTrigger aria-label="DDNS 记录值" className="h-8 min-w-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="primary">仅主 IP</SelectItem>
-                              <SelectItem value="all">全部 IP</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <Input
-                            className="h-8 min-w-0"
-                            placeholder="例如: node.example.com"
-                            value={form.ddnsDomain}
-                            disabled={!ddnsProviderEnabled}
-                            onChange={(e) => setForm({ ...form, ddnsDomain: e.target.value })}
-                          />
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          IP 变了自动更新解析。{form.ddnsIpVersion === "dual" ? "双栈：A 发 IPv4、AAAA 发 IPv6，哪一族没有地址就先不动那一族。" : ""}
-                        </p>
-                        {form.ddnsValueMode === "all" ? (
-                          <p
-                            className={`text-xs ${ddnsProviderSupportsMultipleValues(panelFlags.ddnsProvider) ? "text-muted-foreground" : "text-[var(--fx-warn-text)]"}`}
-                            data-host-ddns-value-mode-note=""
-                          >
-                            全部 IP：Agent 检测到的每个公网地址各一条同名记录，主 IP 排第一；旧 Agent 没报列表时只发主 IP。
-                            {hostDdnsProviderValueModeNote(panelFlags.ddnsProvider)}
-                          </p>
-                        ) : null}
-                      </div>
-                      {/* Agent 面板连接地址 / 流量阈值关机 / 本机资源告警 / 安装实例：单独保存，见 HostAgentManagementSection */}
-                      {editingId ? <HostAgentManagementSection hostId={Number(editingId)} /> : null}
-                    </>
-                  ) : (
-                    <div className="rounded-md bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
-                      仅管理员可配置主机其他配置。
-                    </div>
-                  )}
-                </section>
-              </TabsContent>
-
-            </div>
-          </Tabs>
-          <DialogFooter className="shrink-0 pt-2">
-            <Button variant="outline" onClick={() => setShowDialog(false)}>
-              取消
-            </Button>
-            <Button onClick={handleSubmit} disabled={isPending || !form.name}>
-              {isPending ? "处理中..." : "保存"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* 编辑主机的弹窗按需加载：第一次打开后一直挂着（表单 state 在页面上；也留得住关闭动画） */}
+      {hostDialogLoaded ? (
+        <Suspense fallback={null}>
+          <HostEditDialog
+            open={showDialog}
+            onOpenChange={setShowDialog}
+            form={form}
+            setForm={setForm}
+            editingId={editingId}
+            editingHostRow={editingHostRow}
+            detectedPrivateIpv4={detectedPrivateIpv4}
+            handleSubmit={handleSubmit}
+            isPending={isPending}
+            hostDialogTab={hostDialogTab}
+            setHostDialogTab={setHostDialogTab}
+            user={user}
+            panelFlags={panelFlags}
+            nginxFeatureEnabled={nginxFeatureEnabled}
+            ddnsProviderEnabled={ddnsProviderEnabled}
+            reminderChannelHint={reminderChannelHint}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

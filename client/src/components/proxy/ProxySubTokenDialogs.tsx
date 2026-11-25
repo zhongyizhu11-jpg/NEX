@@ -17,7 +17,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import DatePickerInput, { formatDateInputValue } from "@/components/DatePickerInput";
+import DataSectionLoading from "@/components/DataSectionLoading";
+import EmptyState from "@/components/EmptyState";
+import { QueryErrorRow } from "@/components/QueryErrorState";
 import { formatDateTime as formatTime } from "@/lib/formatTime";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { PROXY_NODE_PROTOCOLS, PROXY_NODE_PROTOCOL_LABELS, type ProxyNodeProtocol } from "@shared/proxyNode";
@@ -208,9 +212,14 @@ export function ProxySubTokenEditDialog({
   const [regionsText, setRegionsText] = useState("");
 
   const templatesQuery = trpc.proxySubscriptions.adminListTemplates.useQuery(undefined, { enabled: isAdmin && open });
+  /*
+    校验的键是整段文本，不防抖就是每敲一个键一次请求。停手 400 ms 再发，
+    期间留着上一轮的结果 —— 不然每个键击都把「N 条规则，写法正确」闪成空白。
+  */
+  const customRulesToValidate = useDebouncedValue(options.customRules, 400);
   const validateQuery = trpc.proxySubscriptions.validateCustomRules.useQuery(
-    { text: options.customRules },
-    { enabled: open && options.customRules.trim().length > 0 },
+    { text: customRulesToValidate },
+    { enabled: open && customRulesToValidate.trim().length > 0, placeholderData: (previous) => previous },
   );
 
   useEffect(() => {
@@ -685,10 +694,15 @@ const RESULT_LABELS: Record<string, string> = {
   ...PROXY_SUB_TOKEN_FAILURE_LABELS,
 };
 
+/** 拉取记录弹窗一次取多少条。 */
+const LOGS_DIALOG_LIMIT = 200;
+
 export function ProxySubTokenLogsDialog({ open, onOpenChange, tokenId, tokenName, admin }: { open: boolean; onOpenChange: (open: boolean) => void; tokenId: number | null; tokenName: string; admin?: boolean }) {
-  const userQuery = trpc.proxySubscriptions.tokenAccessLogs.useQuery({ id: tokenId || 0, limit: 100 }, { enabled: open && !!tokenId && !admin });
-  const adminQuery = trpc.proxySubscriptions.adminAccessLogs.useQuery({ tokenId: tokenId || undefined, limit: 200 }, { enabled: open && !!tokenId && !!admin });
-  const rows = (admin ? adminQuery.data : userQuery.data) || [];
+  // 用户和管理员看同一条令牌的记录，条数一样：两个接口都收 200（tokenAccessLogs 的上限就是 200），原来 100 / 200 只是各写各的。
+  const userQuery = trpc.proxySubscriptions.tokenAccessLogs.useQuery({ id: tokenId || 0, limit: LOGS_DIALOG_LIMIT }, { enabled: open && !!tokenId && !admin });
+  const adminQuery = trpc.proxySubscriptions.adminAccessLogs.useQuery({ tokenId: tokenId || undefined, limit: LOGS_DIALOG_LIMIT }, { enabled: open && !!tokenId && !!admin });
+  const query = admin ? adminQuery : userQuery;
+  const rows = query.data || [];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-3xl">
@@ -697,10 +711,20 @@ export function ProxySubTokenLogsDialog({ open, onOpenChange, tokenId, tokenName
           <DialogDescription className="text-xs">最近的拉取，成功和被拒都在。保留天数由管理员设置。</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto">
-          {rows.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">还没有记录。</p>
-          ) : (
+          {/* 「还没有记录」是一句结论：还在读、或者没读到，都不能说这句。 */}
+          {query.isLoading ? (
+            <DataSectionLoading label="正在读取拉取记录" minHeight="min-h-[120px]" />
+          ) : query.isError && rows.length === 0 ? (
             <Table>
+              <TableBody>
+                <QueryErrorRow colSpan={5} label="拉取记录" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} />
+              </TableBody>
+            </Table>
+          ) : rows.length === 0 ? (
+            <EmptyState title="还没有记录" description="这条地址还没被客户端拉过。" />
+          ) : (
+            // 手机上一行堆成一张小卡（fx-table-stack），五列横着排在 375px 上根本看不全。
+            <Table className="fx-table-stack">
               <TableHeader>
                 <TableRow>
                   <TableHead>时间</TableHead>
@@ -713,13 +737,13 @@ export function ProxySubTokenLogsDialog({ open, onOpenChange, tokenId, tokenName
               <TableBody>
                 {rows.map((row: any) => (
                   <TableRow key={row.id}>
-                    <TableCell className="whitespace-nowrap text-xs">{formatTime(row.at)}</TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell data-label="时间" className="whitespace-nowrap text-xs">{formatTime(row.at)}</TableCell>
+                    <TableCell data-label="结果" className="text-xs">
                       <Badge variant={row.result === "ok" || row.result === "page" ? "secondary" : "destructive"}>{RESULT_LABELS[row.result] || row.result}</Badge>
                     </TableCell>
-                    <TableCell className="text-xs" title={row.userAgent || ""}>{row.clientLabel || "未识别"}{row.clientVersion ? ` ${row.clientVersion}` : ""}</TableCell>
-                    <TableCell className="text-xs">{row.format || "—"}{row.profile ? "（规则）" : ""}</TableCell>
-                    <TableCell className="font-mono text-xs">{row.ip || "—"}</TableCell>
+                    <TableCell data-label="客户端" className="text-xs" title={row.userAgent || ""}>{row.clientLabel || "未识别"}{row.clientVersion ? ` ${row.clientVersion}` : ""}</TableCell>
+                    <TableCell data-label="格式" className="text-xs">{row.format || "—"}{row.profile ? "（规则）" : ""}</TableCell>
+                    <TableCell data-label="IP" className="font-mono text-xs">{row.ip || "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -768,7 +792,7 @@ export function ProxySubTokenDevicesDialog({ open, onOpenChange, tokenId, tokenN
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto">
           {rows.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">还没有设备来拉过。</p>
+            <EmptyState title="还没有设备来拉过" description="客户端用这条地址拉过一次之后，这里会按设备（或来源 IP）列出来。" />
           ) : (
             <Table>
               <TableHeader>
@@ -826,7 +850,7 @@ export function ProxySubTokenPreviewDialog({ open, onOpenChange, tokenId, tokenN
           {data && data.deviceLimit > 0 ? <Badge variant="outline">设备上限 {data.deviceLimit}</Badge> : null}
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain text-sm">
-          {query.isLoading ? <p className="text-muted-foreground">计算中…</p> : null}
+          {query.isLoading ? <DataSectionLoading label="正在生成预览" minHeight="min-h-[120px]" /> : null}
           {data?.customRuleErrors.length ? (
             <div className="rounded-md border border-[var(--fx-warn)] p-2 text-xs">
               <p className="font-medium">自定义规则里有写坏的行（已跳过）：</p>
