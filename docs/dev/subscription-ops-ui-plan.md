@@ -86,3 +86,15 @@
 3. 客户端按 `result.status`（running / queued）给手动同步不同的提示。
 4. 字节上限的渲染结果缓存；套餐更新对订户的扇出改后台任务；到期处理补 (status, expiresAt) 索引已加，扫表语句本身可再看。
 5. 一处要手动看一眼：Rules 编辑器打开后若有查询驱动的回填晚于 1.2 秒，关闭时可能多问一次「放弃修改？」。
+
+## 七、第三批结果（2026-11-25）
+
+第六节「剩下没做的」五项全部做完：
+- proxy_nodes (sourceId, sourceKey) 唯一索引 + 去重回填（三种方言，撞唯一冲突才去重，失败只警告不阻止启动）；渲染结果缓存 128 MB 字节上限、按用户失效立刻删；
+  套餐更新 > 3 个订户时后台刷新；事务内多路读改顺序；到期处理按索引 200 个一批。
+- 手动同步 running / queued 有了各自的提示；日期金额格式统一；Billing / Wallet 手机只渲染一种列表；空态 / 加载态与 aria-label 收尾。
+- Rules 批量管理弹窗抽成两个 hook + 懒加载组件（Rules 8516 → 6815 行，块 307.8 → 280.5 kB）；Hosts / ForwardGroups 编辑弹窗懒加载（Hosts 4305 → 3638、ForwardGroups 3221 → 2376 行）；
+  Rules 编辑器未保存保护复核无需改动。
+
+还开着的小尾巴：UserTrafficSettingsDialog 里 5 个只有 title 的「移除授权」图标按钮；DatePickerInput / DateTimePickerInput 不接 FormField 的 id，所以日期类 Label 还没绑上；
+Rules / ForwardGroups 的行类型仍是 any 别名；MySQL 路径（唯一索引 191 前缀、INSERT IGNORE）只做了代码审阅没有实跑。
