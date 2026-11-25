@@ -284,7 +284,9 @@ async function syncProxySubSourceNow(sourceId: number, options: { force?: boolea
     const staleIds: number[] = [];
     for (const row of existing) {
       const key = row.sourceKey ? String(row.sourceKey) : "";
-      // 没有身份键的、或者同一个身份有两行（串行化之前并发同步留下的）：多出来的当成上游去掉的，留 id 最小的那一条。
+      // 没有身份键的、或者同一个身份有两行：多出来的当成上游去掉的，留 id 最小的那一条。
+      // 库里有 (sourceId, sourceKey) 唯一索引后正常不会再有两行，但 SQLite 上那条索引建不成时面板照样启动
+      //（dbSchema 里只记警告），MySQL 上 text 列的唯一键只看前 191 个字符，所以这里留着兜底。
       const kept = key ? existingByKey.get(key) : undefined;
       if (!key || (kept && Number(kept.id) <= Number(row.id))) {
         staleIds.push(Number(row.id));

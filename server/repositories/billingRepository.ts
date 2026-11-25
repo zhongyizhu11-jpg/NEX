@@ -29,6 +29,7 @@ import {
   type PlanPriceTier,
 } from "../../shared/planPricing";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, quoteDbIdentifier, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
+import { mapReads, readAll } from "../dbConcurrentReads";
 import { getForwardRulesForUserSync, resetForwardRulesForUserSync } from "./forwardRuleRepository";
 import { getForwardGroupEntryPortRange } from "../forwardGroups/portPolicy";
 import { getHostById } from "./hostRepository";
@@ -477,7 +478,8 @@ async function snapshotForPlanId(planId: number) {
 }
 
 async function attachSubscriptionSnapshots<T extends { planId: number; planSnapshot?: string | null }>(subscriptions: T[]) {
-  return Promise.all(subscriptions.map(async (subscription: any) => {
+  // 事务里（购买 / 到期处理读订阅）按顺序查，事务外并行（见 dbConcurrentReads）。
+  return mapReads(subscriptions, async (subscription: any) => {
     const snapshot = parsePlanSnapshot(subscription.planSnapshot);
     const addonTraffic = await getActiveTrafficAddonBreakdownForSubscription(Number(subscription.id));
     return {
@@ -500,7 +502,7 @@ async function attachSubscriptionSnapshots<T extends { planId: number; planSnaps
       purchasedTrafficAddonBytes: addonTraffic.purchasedBytes,
       grantedTrafficAddonBytes: addonTraffic.grantedBytes,
     };
-  }));
+  });
 }
 
 
@@ -519,16 +521,17 @@ async function attachPlanResources<T extends { id: number }>(plans: T[]) {
     }));
   }
   const planIds = Array.from(new Set(plans.map((plan) => Number(plan.id)).filter((id) => id > 0)));
-  const [hostRows, tunnelRows, groupRows, proxyNodeRows, priceRows, addonRows] = await Promise.all([
-    db.select({
+  // 购买 / 续费事务里也会走到这里（getSubscriptionPlanById）：事务里这几条按顺序发（见 dbConcurrentReads）。
+  const [hostRows, tunnelRows, groupRows, proxyNodeRows, priceRows, addonRows] = await readAll([
+    () => db.select({
       planId: subscriptionPlanHosts.planId,
       hostId: subscriptionPlanHosts.hostId,
     }).from(subscriptionPlanHosts).where(inArray(subscriptionPlanHosts.planId, planIds)),
-    db.select({
+    () => db.select({
       planId: subscriptionPlanTunnels.planId,
       tunnelId: subscriptionPlanTunnels.tunnelId,
     }).from(subscriptionPlanTunnels).where(inArray(subscriptionPlanTunnels.planId, planIds)),
-    db.select({
+    () => db.select({
       planId: subscriptionPlanForwardGroups.planId,
       forwardGroupId: subscriptionPlanForwardGroups.forwardGroupId,
       groupMode: forwardGroups.groupMode,
@@ -537,18 +540,18 @@ async function attachPlanResources<T extends { id: number }>(plans: T[]) {
       .from(subscriptionPlanForwardGroups)
       .leftJoin(forwardGroups, eq(forwardGroups.id, subscriptionPlanForwardGroups.forwardGroupId))
       .where(inArray(subscriptionPlanForwardGroups.planId, planIds)),
-    db.select({
+    () => db.select({
       planId: subscriptionPlanProxyNodes.planId,
       nodeId: subscriptionPlanProxyNodes.nodeId,
     }).from(subscriptionPlanProxyNodes).where(inArray(subscriptionPlanProxyNodes.planId, planIds)),
-    db.select({
+    () => db.select({
       planId: subscriptionPlanPrices.planId,
       durationDays: subscriptionPlanPrices.durationDays,
       priceCents: subscriptionPlanPrices.priceCents,
     }).from(subscriptionPlanPrices)
       .where(inArray(subscriptionPlanPrices.planId, planIds))
       .orderBy(asc(subscriptionPlanPrices.planId), asc(subscriptionPlanPrices.durationDays)),
-    db.select()
+    () => db.select()
       .from(subscriptionPlanTrafficAddons)
       .where(inArray(subscriptionPlanTrafficAddons.planId, planIds))
       .orderBy(
@@ -695,15 +698,15 @@ export async function getSubscriptionPlanSummary() {
       },
     };
   }
-  const [planRows, hostRows, tunnelRows, groupRows] = await Promise.all([
-    db.select({
+  const [planRows, hostRows, tunnelRows, groupRows] = await readAll([
+    () => db.select({
       totalItems: sql<number>`COUNT(*)`,
       activeItems: sql<number>`COALESCE(SUM(CASE WHEN ${subscriptionPlans.isActive} = ${sqlBool(true)} THEN 1 ELSE 0 END), 0)`,
       storeVisibleItems: sql<number>`COALESCE(SUM(CASE WHEN ${subscriptionPlans.isActive} = ${sqlBool(true)} AND ${subscriptionPlans.isStoreVisible} = ${sqlBool(true)} THEN 1 ELSE 0 END), 0)`,
     }).from(subscriptionPlans),
-    db.select({ count: sql<number>`COUNT(*)` }).from(subscriptionPlanHosts),
-    db.select({ count: sql<number>`COUNT(*)` }).from(subscriptionPlanTunnels),
-    db.select({
+    () => db.select({ count: sql<number>`COUNT(*)` }).from(subscriptionPlanHosts),
+    () => db.select({ count: sql<number>`COUNT(*)` }).from(subscriptionPlanTunnels),
+    () => db.select({
       groupMode: forwardGroups.groupMode,
       count: sql<number>`COUNT(*)`,
     })
@@ -1845,46 +1848,77 @@ export async function setUserSubscriptionAutoRenew(
   return true;
 }
 
+/*
+  到期处理每批 200 个用户：候选按 userId 游标分页取（user_subscriptions 走 (status, expiresAt) 索引，
+  user_traffic_addons 走 (userId, status, expiresAt)），每个用户仍然各自一个事务。原来一次把全体候选读进内存，
+  用户多、到期集中（比如大批赠送同一天到期）时一口气几千个用户。游标只向前，某个用户这一轮没处理成也不会原地打转。
+*/
+const EXPIRE_BATCH_SIZE = 200;
+
+async function listDueSubscriptionUserIds(nowSec: number, afterUserId: number, limit: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.selectDistinct({ userId: userSubscriptions.userId })
+    .from(userSubscriptions)
+    .where(and(
+      eq(userSubscriptions.status, "active"),
+      sql`${userSubscriptions.expiresAt} <= ${nowSec}`,
+      sql`${userSubscriptions.userId} > ${afterUserId}`,
+    ))
+    .orderBy(asc(userSubscriptions.userId))
+    .limit(limit);
+  return (rows as any[]).map((row) => Number(row.userId || 0)).filter((userId) => userId > 0);
+}
+
+/*
+  还在生效的加油包里，自己到期的、或者挂着的订阅已经不是 active / 已经到期的。订阅那一半的条件和
+  listDueSubscriptionUserIds 一样写成 status = 'active' AND expiresAt <= ?（走 (status, expiresAt)），不再用 OR 混在一起。
+*/
+async function listDueAddonUserIds(nowSec: number, afterUserId: number, limit: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.selectDistinct({ userId: userTrafficAddons.userId })
+    .from(userTrafficAddons)
+    .innerJoin(userSubscriptions, eq(userTrafficAddons.subscriptionId, userSubscriptions.id))
+    .where(and(
+      eq(userTrafficAddons.status, "active"),
+      sql`${userTrafficAddons.userId} > ${afterUserId}`,
+      or(
+        sql`${userTrafficAddons.expiresAt} <= ${nowSec}`,
+        ne(userSubscriptions.status, "active"),
+        and(eq(userSubscriptions.status, "active"), sql`${userSubscriptions.expiresAt} <= ${nowSec}`),
+      ),
+    ))
+    .orderBy(asc(userTrafficAddons.userId))
+    .limit(limit);
+  return (rows as any[]).map((row) => Number(row.userId || 0)).filter((userId) => userId > 0);
+}
+
 export async function expireUserSubscriptions() {
   const db = await getDb();
   if (!db) return 0;
   const now = nowDate();
   const nowSec = Math.floor(now.getTime() / 1000);
-  const [subscriptionCandidates, addonCandidates] = await Promise.all([
-    db.select({ userId: userSubscriptions.userId })
-      .from(userSubscriptions)
-      .where(and(
-        eq(userSubscriptions.status, "active"),
-        isNotNull(userSubscriptions.expiresAt),
-        sql`${userSubscriptions.expiresAt} <= ${nowSec}`,
-      )),
-    db.select({ userId: userTrafficAddons.userId })
-      .from(userTrafficAddons)
-      .innerJoin(userSubscriptions, eq(userTrafficAddons.subscriptionId, userSubscriptions.id))
-      .where(and(
-        eq(userTrafficAddons.status, "active"),
-        or(
-          and(
-            isNotNull(userTrafficAddons.expiresAt),
-            sql`${userTrafficAddons.expiresAt} <= ${nowSec}`,
-          ),
-          ne(userSubscriptions.status, "active"),
-          and(
-            isNotNull(userSubscriptions.expiresAt),
-            sql`${userSubscriptions.expiresAt} <= ${nowSec}`,
-          ),
-        ),
-      )),
-  ]);
-  const userIds = Array.from(new Set([
-    ...(subscriptionCandidates as any[]).map((row) => Number(row.userId || 0)),
-    ...(addonCandidates as any[]).map((row) => Number(row.userId || 0)),
-  ].filter((userId) => userId > 0)));
-  const addonCandidateUserIds = new Set(
-    (addonCandidates as any[])
-      .map((row) => Number(row.userId || 0))
-      .filter((userId) => userId > 0),
-  );
+  let expiredCount = 0;
+  let subscriptionCursor = 0;
+  let addonCursor = 0;
+  let subscriptionsDone = false;
+  let addonsDone = false;
+  while (!subscriptionsDone || !addonsDone) {
+    const subscriptionCandidates = subscriptionsDone ? [] : await listDueSubscriptionUserIds(nowSec, subscriptionCursor, EXPIRE_BATCH_SIZE);
+    const addonCandidates = addonsDone ? [] : await listDueAddonUserIds(nowSec, addonCursor, EXPIRE_BATCH_SIZE);
+    if (subscriptionCandidates.length < EXPIRE_BATCH_SIZE) subscriptionsDone = true;
+    if (addonCandidates.length < EXPIRE_BATCH_SIZE) addonsDone = true;
+    if (subscriptionCandidates.length > 0) subscriptionCursor = subscriptionCandidates[subscriptionCandidates.length - 1];
+    if (addonCandidates.length > 0) addonCursor = addonCandidates[addonCandidates.length - 1];
+    const userIds = Array.from(new Set([...subscriptionCandidates, ...addonCandidates]));
+    const addonCandidateUserIds = new Set(addonCandidates);
+    expiredCount += await expireUserSubscriptionsBatch(userIds, addonCandidateUserIds, now, nowSec);
+  }
+  return expiredCount;
+}
+
+async function expireUserSubscriptionsBatch(userIds: number[], addonCandidateUserIds: Set<number>, now: Date, nowSec: number) {
   let expiredCount = 0;
   for (const userId of userIds) {
     await withTrafficBillingUserLock(userId, async () => {

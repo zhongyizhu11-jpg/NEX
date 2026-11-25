@@ -112,9 +112,13 @@ test("外部订阅的拉取、对账与 SSRF 拦截", () => {
     assert.equal(direct.status, undefined);
     assert.equal(direct.nodeCount, 3);
 
-    // 串行化之前并发留下的重复行：对账时留 id 最小的那条、多的删掉。
+    // 同一个来源同一个身份键：库里的 (sourceId, sourceKey) 唯一索引直接拦住。
     const [dupSource] = await runtime.queryRaw("SELECT id, sourceKey FROM proxy_nodes WHERE sourceId = ? ORDER BY id LIMIT 1", [Number(sourceId)]);
-    await exec("INSERT INTO proxy_nodes (userId, name, protocol, address, port, isEnabled, sourceId, sourceKey) VALUES (1, '重复的', 'vless', 'dup.example.com', 443, 1, ?, ?)", [Number(sourceId), dupSource.sourceKey]);
+    const insertDuplicate = () => exec("INSERT INTO proxy_nodes (userId, name, protocol, address, port, isEnabled, sourceId, sourceKey) VALUES (1, '重复的', 'vless', 'dup.example.com', 443, 1, ?, ?)", [Number(sourceId), dupSource.sourceKey]);
+    await assert.rejects(insertDuplicate, /UNIQUE/i);
+    // 索引建不成的面板（dbSchema 只记警告）：对账时的去重兜底 —— 留 id 最小的那条、多的删掉。
+    await exec('DROP INDEX "' + schema.PROXY_NODE_SOURCE_UNIQUE_INDEX + '"');
+    await insertDuplicate();
     const dedup = await sync.syncProxySubSource(Number(sourceId), { force: true });
     assert.equal(dedup.removed, 1, "重复的那一行该被删掉");
     nodes = await nodesRepo.getProxyNodesByUser(1);

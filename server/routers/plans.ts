@@ -4,6 +4,7 @@ import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
 import { refreshUserForwardEndpoints } from "./helpers";
+import { refreshPlanSubscribers } from "../planSubscriberRefresh";
 import { parseExpiryReminderDays } from "@shared/expiryReminder";
 import { findPricingOption, normalizePlanPriceTiers, planPricingOptions, PLAN_PRICE_TIER_LIMIT } from "@shared/planPricing";
 import { REFERRAL_MAX_RATE_BPS } from "@shared/referral";
@@ -157,13 +158,15 @@ export const plansRouter = router({
       } as any, hostIds, tunnelIds, forwardGroupIds, trafficAddons, proxyNodeIds, tiers);
       if (syncExistingSubscribers) {
         const userIds = await db.syncPlanSubscribers(id);
-        for (const userId of userIds) {
-          await refreshUserForwardEndpoints(userId, "plan-updated");
-        }
-        appendPanelLog("info", `[Plan] updated plan=${id} syncSubscribers=true users=${userIds.length} operator=${ctx.user.id}`);
-      } else {
-        appendPanelLog("info", `[Plan] updated plan=${id} syncSubscribers=false operator=${ctx.user.id}`);
+        // 订户不多于 3 个在请求里刷完；更多的放后台 3 路并发（见 planSubscriberRefresh），请求立刻返回排了多少个。
+        const refresh = await refreshPlanSubscribers(id, userIds, "plan-updated", {
+          refresh: (userId, reason) => refreshUserForwardEndpoints(userId, reason),
+          log: (level, message) => appendPanelLog(level, message),
+        });
+        appendPanelLog("info", `[Plan] updated plan=${id} syncSubscribers=true users=${userIds.length} refresh=${refresh.mode} operator=${ctx.user.id}`);
+        return { ...result, subscriberRefresh: { mode: refresh.mode, queued: refresh.queued } };
       }
+      appendPanelLog("info", `[Plan] updated plan=${id} syncSubscribers=false operator=${ctx.user.id}`);
       return result;
     }),
   updateStatus: adminProcedure
