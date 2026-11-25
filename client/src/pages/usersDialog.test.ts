@@ -8,7 +8,14 @@ import test from "node:test";
  * 订阅卡三个按钮收成「加赠流量 + ···」。两种布局都这样（2026-10-21 用户定的：除了四个主页面的卡片，
  * 五个工作包就是标准布局）。守在源码上。
  */
-const source = fs.readFileSync(path.resolve(import.meta.dirname, "Users.tsx"), "utf8");
+/*
+  「流量与权限设置」弹窗抽成了 components/users/UserTrafficSettingsDialog.tsx（懒加载）：
+  这里把页面和弹窗拼成一份看，源码断言不用跟着搬家改。
+*/
+const source = [
+  fs.readFileSync(path.resolve(import.meta.dirname, "Users.tsx"), "utf8"),
+  fs.readFileSync(path.resolve(import.meta.dirname, "../components/users/UserTrafficSettingsDialog.tsx"), "utf8"),
+].join("\n");
 
 test("资源授权：按类型切换（八类各自只按选中项显示，顶上一排药丸，不分布局）", () => {
   assert.equal((source.match(/\{resourceGrantKind === "\w+" && \(/g) ?? []).length, 8);
@@ -59,7 +66,9 @@ test("权限弹窗：每次打开都从缓存重新种子，加载判断看 data
   for (const name of perms) assert.match(guard, new RegExp(`${name} === undefined`), `permissionDataLoading 要看 ${name} 是否到了`);
   assert.doesNotMatch(guard, /(Perms|Shares)Loading\b/, "permissionDataLoading 不能再用 isLoading");
   // 打开时五个列表一起清空，sharedProxyNodeIds 不能漏
-  const opener = source.slice(source.indexOf("const openTrafficSettings = "), source.indexOf("setShowTrafficSettings(true);"));
+  // 种子函数在弹窗组件里（页面那头同名函数只做管理员拦截 + 打开），取组件里那一份：到它的 `};` 为止
+  const openerStart = source.lastIndexOf("const openTrafficSettings = ");
+  const opener = source.slice(openerStart, source.indexOf("\n  };", openerStart));
   for (const setter of ["setAllowedHostIds", "setAllowedForwardGroupIds", "setAllowedTunnelIds", "setSharedProxyNodeIds", "setTrafficBillingHostIds", "setTrafficBillingTunnelIds", "setTrafficBillingForwardGroupIds"]) {
     assert.match(opener, new RegExp(`${setter}\\(\\[\\]\\);`), `打开时要清空 ${setter}`);
   }

@@ -62,7 +62,8 @@ for (const [file, mutation] of [
  */
 function confirmCallsContaining(source: string, needle: string) {
   const calls: string[] = [];
-  const pattern = /\bconfirm\(\{/g;
+  // 调用方拿到的 hook 有的叫 confirm、有的叫 confirmDialog
+  const pattern = /\bconfirm(?:Dialog)?\(\{/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source))) {
     // 从 `{` 起数括号，取到配对的 `}` 为止：参数对象里可能嵌着模板串和三元表达式
@@ -94,5 +95,42 @@ for (const [file, needle] of [
     for (const call of calls) {
       assert.match(call, /tone: "destructive"/, `确认框少了 tone: "destructive"：${call.slice(0, 120)}…`);
     }
+  });
+}
+
+/**
+ * 手写的确认弹窗换成了 useConfirmDialog（第二批）：Rules 的删除 / 重置统计、Users 的删除用户 / 移除 2FA /
+ * 重置流量 / 取消订阅、AgentTokenManager 删 Token、Telegram 删机器人、DeepSeek 删 Key、Hosts 重置流量 / 升级 Agent。
+ *
+ * 换掉的原因是 hook 原来没有 pending 态：请求在路上时弹窗要留着、按钮写「删除中...」、成功了才关。
+ * 所以这里守两件事：每一处都把请求交给 onConfirm（而不是点了就关再 mutate），
+ * 以及按钮上的字含「删除 / 移除 / 重置」的会被认成破坏性语气（或者明说了 tone）。
+ * 反向对照：那几个标题不能再以 <DialogTitle> 的形式出现在页面里 —— 出现了说明有人又手写了一个。
+ */
+for (const [file, title, needle, destructive] of [
+  // Rules 的批量删除也叫「删除转发规则」，但它把活交给后台任务（没有 onConfirm），所以按说明那句认
+  ["Rules.tsx", "删除转发规则", "确认删除 \"${rule?.name}\"？", true],
+  ["Rules.tsx", "重置规则数据", "重置全部规则数据", true],
+  ["Users.tsx", "删除用户", "title: \"删除用户\"", true],
+  ["Users.tsx", "移除双因素认证", "title: \"移除双因素认证\"", true],
+  ["Users.tsx", "重置流量统计", "title: \"重置流量统计\"", true],
+  ["Users.tsx", "取消订阅", "title: \"取消订阅\"", true],
+  ["Hosts.tsx", "重置流量统计", "title: \"重置流量统计\"", true],
+  ["Hosts.tsx", "升级 Agent", "title: \"升级 Agent\"", false],
+  ["../components/AgentTokenManager.tsx", "删除 Agent Token", "title: \"删除 Agent Token\"", true],
+  ["../components/settings/TelegramBotSettingsCard.tsx", "删除 Telegram 机器人", "title: \"删除 Telegram 机器人\"", true],
+  ["../components/settings/DeepSeekSettingsCard.tsx", "删除 AI API Key", "title: \"删除 AI API Key\"", true],
+] as const) {
+  test(`${file}：「${title}」走 useConfirmDialog，请求交给 onConfirm${destructive ? "，破坏性语气" : ""}`, () => {
+    const source = read(file);
+    const calls = confirmCallsContaining(source, needle);
+    assert.ok(calls.length >= 1, `没找到含「${needle}」的 confirm 调用`);
+    for (const call of calls) {
+      assert.match(call, /onConfirm: /, `「${title}」的请求没交给 onConfirm：${call.slice(0, 120)}…`);
+      const confirmText = /confirmText: "([^"]+)"/.exec(call)?.[1] || "确认";
+      const inferredDestructive = /tone: "destructive"/.test(call) || /删除|移除|清空|重置/.test(confirmText);
+      assert.equal(inferredDestructive, destructive, `「${title}」的语气不对：confirmText=${confirmText}`);
+    }
+    assert.doesNotMatch(source, new RegExp(`<DialogTitle[^>]*>\\s*(?:<[^>]+>\\s*)?${title}\\s*</DialogTitle>`), `「${title}」又被手写成了 Dialog`);
   });
 }

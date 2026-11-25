@@ -64,6 +64,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DeleteWithImpactDialog } from "@/components/DeleteWithImpactDialog";
+import { useDialogTarget } from "@/components/useDialogTarget";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -1074,7 +1076,9 @@ function TunnelsContent() {
   const [linkWizardOpen, setLinkWizardOpen] = useState(false);
   const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | "hot_standby" | null>(null);
   const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: BalanceStrategy } | null>(null);
-  const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
+  // 删除确认对着哪条链路；关闭动画期间标题里的名字用 shown 接着画
+  const deleteTunnelDialog = useDialogTarget<any>();
+  const deleteTunnel = deleteTunnelDialog.target;
   const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
   const setReplicateMutation = trpc.tunnels.setReplicate.useMutation({
     onSuccess: (result) => {
@@ -1813,7 +1817,7 @@ function TunnelsContent() {
       utils.tunnels.listPage.invalidate();
       utils.tunnels.mapItems.invalidate();
       utils.rules.list.invalidate();
-      setDeleteTunnel(null);
+      deleteTunnelDialog.close();
       toast.success("隧道已删除");
     },
     onError: (e) => toast.error(e.message || "删除失败"),
@@ -3101,7 +3105,7 @@ function TunnelsContent() {
           icon: <ArrowRightLeft className="h-3.5 w-3.5" />,
           onSelect: () => setParallelStreamsTunnel({ id: Number(tunnel.id), name: String(tunnel.name || ""), parallelStreams: tunnel.parallelStreams }),
         }] : []),
-        { key: "delete", label: "删除", ariaLabel: `删除隧道 ${tunnel.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteTunnel(tunnel) },
+        { key: "delete", label: "删除", ariaLabel: `删除隧道 ${tunnel.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => deleteTunnelDialog.open(tunnel) },
       ]}
       menuLabel={`隧道 ${tunnel.name} 的更多操作`}
     />
@@ -3888,54 +3892,15 @@ function TunnelsContent() {
           />
         </Suspense>
       )}
-      <Dialog open={!!deleteTunnel} onOpenChange={(open) => !open && setDeleteTunnel(null)}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>删除链路</DialogTitle>
-            <DialogDescription>
-              确认删除 "{deleteTunnel?.name}"？此操作会解除关联转发规则的隧道绑定，并停止这些规则的运行状态。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            {deleteImpactQuery.isLoading ? (
-              <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
-                正在检查关联转发规则...
-              </div>
-            ) : deleteImpactQuery.data?.forwardRuleCount ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
-                <p className="font-medium text-destructive">
-                  当前链路仍关联 {deleteImpactQuery.data.forwardRuleCount} 条转发规则
-                </p>
-                <div className="mt-2 max-h-44 space-y-1 overflow-auto text-xs text-muted-foreground">
-                  {(deleteImpactQuery.data.forwardRules || []).map((rule: any) => (
-                    <div key={rule.id} className="rounded border border-border/40 bg-background/60 px-2 py-1">
-                      <span className="font-medium text-foreground">{rule.name}</span>
-                      <span className="ml-2">:{rule.sourcePort} -&gt; {rule.targetIp}:{rule.targetPort}</span>
-                    </div>
-                  ))}
-                  {deleteImpactQuery.data.forwardRuleCount > (deleteImpactQuery.data.forwardRules || []).length && (
-                    <p>还有 {deleteImpactQuery.data.forwardRuleCount - (deleteImpactQuery.data.forwardRules || []).length} 条未显示。</p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
-                未发现关联转发规则。
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTunnel(null)}>取消</Button>
-            <Button
-              variant="destructive"
-              disabled={!deleteTunnel || deleteMutation.isPending || deleteImpactQuery.isLoading}
-              onClick={() => deleteTunnel && deleteMutation.mutate({ id: deleteTunnel.id, confirmRules: true })}
-            >
-              {deleteMutation.isPending ? "删除中..." : "确认删除"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteWithImpactDialog
+        {...deleteTunnelDialog.dialogProps}
+        title="删除链路"
+        description={<>确认删除 "{deleteTunnelDialog.shown?.name}"？此操作会解除关联转发规则的隧道绑定，并停止这些规则的运行状态。</>}
+        entityLabel="链路"
+        impactQuery={deleteImpactQuery}
+        pending={deleteMutation.isPending}
+        onConfirm={() => deleteTunnel && deleteMutation.mutate({ id: deleteTunnel.id, confirmRules: true })}
+      />
 
       <Dialog open={showCreateTypeDialog} onOpenChange={setShowCreateTypeDialog}>
         <DialogContent className="flex h-[min(92svh,48rem)] w-[calc(100vw-1rem)] max-w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl sm:p-0">

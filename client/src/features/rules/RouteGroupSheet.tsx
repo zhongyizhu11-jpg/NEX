@@ -1,4 +1,5 @@
-import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
+import { useLastShown } from "@/components/useDialogTarget";
 import { balanceStrategyHint, normalizeBalanceStrategy } from "@shared/loadBalance";
 import { Pencil } from "lucide-react";
 import { toast } from "sonner";
@@ -354,9 +355,7 @@ export function RouteGroupSheet({
     动画里先塌成只剩标题再消失。
   */
   const [, setLocation] = useLocation();
-  const last = useRef<{ subjectName: string; policy: RoutePolicy; rule: LineRuleRow | null } | null>(null);
-  if (open && policy) last.current = { subjectName, policy, rule: rule ?? null };
-  const shown = last.current;
+  const shown = useLastShown(open, policy ? { subjectName, policy, rule: rule ?? null } : null);
   const status = (statusQuery.data as RouteStatus | null | undefined) ?? null;
   const events = (eventsQuery.data as RouteEvent[] | undefined) ?? [];
   const mode = shown?.policy.mode ?? "failover";

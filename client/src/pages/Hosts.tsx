@@ -46,7 +46,8 @@ import { HostDsRow, HostDsTableHead } from "@/components/hosts/HostDsRow";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import HostDetailDialog from "@/components/hosts/HostDetailDialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
-import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ConfirmFacts, useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useDialogCloseGuard, useFormDirty } from "@/components/ui/form-dialog";
 import OpsHostsMenuItems from "@/features/ops/slots/HostsMenuItems";
 import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRuntimeBadge";
 import { formatHostLoadAverage } from "@shared/hostLoadAverage";
@@ -154,7 +155,6 @@ import {
   Search,
   Key,
   Rows3,
-  RotateCcw,
   XCircle,
   ActivitySquare,
   FolderKanban,
@@ -2010,7 +2010,6 @@ function HostsContent() {
 
   const [showDialog, setShowDialog] = useState(false);
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
-  const [upgradeHost, setUpgradeHost] = useState<any>(null);
   const [probeLatencyHost, setProbeLatencyHost] = useState<any>(null);
   // 探测延迟弹窗（recharts）第一次打开才下载、才挂上。
   const probeLatencyDialogMounted = useOpenedOnce(!!probeLatencyHost);
@@ -2019,7 +2018,6 @@ function HostsContent() {
     上一版没有这一层，所有字段都挤在列表里，于是列表既看不清也翻不完。
   */
   const [detailHost, setDetailHost] = useState<any>(null);
-  const [resetTrafficHost, setResetTrafficHost] = useState<any>(null);
   const [resetTrafficHostId, setResetTrafficHostId] = useState<number | null>(null);
   const [trafficCorrectionHost, setTrafficCorrectionHost] = useState<any>(null);
   const [trafficCorrectionInput, setTrafficCorrectionInput] = useState("0");
@@ -2369,7 +2367,6 @@ function HostsContent() {
       utils.hosts.trafficSummary.invalidate();
       utils.hosts.pageLive.invalidate();
       utils.hosts.summary.invalidate();
-      setResetTrafficHost(null);
       toast.success("流量统计已重置");
     },
     onError: (err) => toast.error(err.message || "重置流量统计失败"),
@@ -2394,7 +2391,6 @@ function HostsContent() {
       utils.hosts.options.invalidate();
       utils.hosts.listPage.invalidate();
       utils.hosts.mapPoints.invalidate();
-      setUpgradeHost(null);
       if ((data as any)?.skippedOffline) {
         toast.info("主机离线，已跳过升级任务");
         return;
@@ -2690,6 +2686,9 @@ function HostsContent() {
     }
   };
   const isPending = createMutation.isPending || updateMutation.isPending;
+  // 编辑主机的弹窗：改过没保存就关要先问「放弃修改？」；请求在路上时不许关（ui/form-dialog）
+  const hostFormDirty = useFormDirty(showDialog, form);
+  const hostDialogGuard = useDialogCloseGuard({ open: showDialog, dirty: hostFormDirty, pending: isPending, onOpenChange: setShowDialog });
   const customPortInputState = useMemo(() => parseCustomPortsInput(form.portAllowlist), [form.portAllowlist]);
   const onlineCount = Number(hostPageQuery.data?.onlineItems ?? filteredDisplayHosts.filter((host: any) => !!host.isOnline).length);
   const displayedHostTotal = Number(hostPageQuery.data?.totalItems ?? (isHostMapView ? mapHostTotal : filteredDisplayHosts.length));
@@ -2871,16 +2870,29 @@ function HostsContent() {
     actions: hostItemActions,
     clockMinute,
   });
+  /*
+    重置流量 / 升级 Agent 的确认走共享的确认框，主机 / 版本那几行事实放 details 槽：
+    请求在路上时弹窗留着、按钮写「重置中...」「下发中...」，成功了才关。
+  */
   const requestResetHostTraffic = (host: any) => {
     const hostId = Number(host?.id);
     if (!Number.isInteger(hostId) || hostId <= 0) return;
-    setResetTrafficHost(host);
-  };
-  const confirmResetHostTraffic = () => {
-    const hostId = Number(resetTrafficHost?.id);
-    if (!Number.isInteger(hostId) || hostId <= 0) return;
-    setResetTrafficHostId(hostId);
-    resetHostTrafficMutation.mutate({ hostId });
+    void confirmDialog({
+      title: "重置流量统计",
+      description: "确认清空该主机当前累计的流量统计？",
+      details: (
+        <ConfirmFacts rows={[
+          { label: "主机", value: host.name },
+          { label: "Agent", value: host.agentVersion ? `v${host.agentVersion}` : "未上报", mono: true },
+        ]} />
+      ),
+      confirmText: "确认重置",
+      confirmPendingText: "重置中...",
+      onConfirm: async () => {
+        setResetTrafficHostId(hostId);
+        await resetHostTrafficMutation.mutateAsync({ hostId });
+      },
+    });
   };
   const requestCorrectHostTraffic = (host: any) => {
     const hostId = Number(host?.id);
@@ -2919,16 +2931,28 @@ function HostsContent() {
       toast.info("该 Agent 已经是最新版本");
       return;
     }
-    setUpgradeHost(host);
-  };
-  const confirmAgentUpgrade = () => {
-    if (!upgradeHost) return;
-    if (isAgentLatest(upgradeHost)) {
-      toast.info("该 Agent 已经是最新版本");
-      setUpgradeHost(null);
-      return;
-    }
-    upgradeAgentMutation.mutate({ hostId: upgradeHost.id, targetVersion: latestAgentVersion || null });
+    void confirmDialog({
+      title: "升级 Agent",
+      description: "通过 Agent 下发升级任务。",
+      details: (
+        <ConfirmFacts rows={[
+          { label: "主机", value: host.name },
+          { label: "当前 Agent", value: host.agentVersion ? `v${host.agentVersion}` : "未上报", mono: true },
+          { label: "当前 FXP", value: fxpRuntimeDetailText(host), mono: true },
+          { label: "目标版本", value: `v${latestAgentVersion || "-"}`, mono: true },
+        ]} />
+      ),
+      confirmText: "确认升级",
+      confirmPendingText: "下发中...",
+      onConfirm: async () => {
+        // 弹窗开着的时候别人可能已经升完了：下发前再看一眼
+        if (isAgentLatest(host)) {
+          toast.info("该 Agent 已经是最新版本");
+          return;
+        }
+        await upgradeAgentMutation.mutateAsync({ hostId: host.id, targetVersion: latestAgentVersion || null });
+      },
+    });
   };
   const requestAllAgentUpgrades = () => {
     if (onlineOutdatedCount === 0) {
@@ -3493,48 +3517,6 @@ function HostsContent() {
         host={billingHost}
       />
 
-      <Dialog open={!!resetTrafficHost} onOpenChange={(open) => !open && !resetHostTrafficMutation.isPending && setResetTrafficHost(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RotateCcw className="h-5 w-5 text-primary" />
-              重置流量统计
-            </DialogTitle>
-            <DialogDescription>
-              确认清空该主机当前累计的流量统计？
-            </DialogDescription>
-          </DialogHeader>
-          {resetTrafficHost && (
-            <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">主机</span>
-                <span className="font-medium">{resetTrafficHost.name}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Agent</span>
-                <span className="font-mono">{resetTrafficHost.agentVersion ? `v${resetTrafficHost.agentVersion}` : "未上报"}</span>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setResetTrafficHost(null)}
-              disabled={resetHostTrafficMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              className="gap-2"
-              onClick={confirmResetHostTraffic}
-              disabled={!resetTrafficHost || resetHostTrafficMutation.isPending}
-            >
-              {resetHostTrafficMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              {resetHostTrafficMutation.isPending ? "重置中..." : "确认重置"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       {/* Correct Host Traffic Dialog */}
       <Dialog
         open={!!trafficCorrectionHost}
@@ -3607,54 +3589,6 @@ function HostsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Agent Upgrade Dialog */}
-      <Dialog open={!!upgradeHost} onOpenChange={(open) => !open && setUpgradeHost(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Download className="h-5 w-5 text-primary" />
-              升级 Agent
-            </DialogTitle>
-            <DialogDescription>
-              通过 Agent 下发升级任务。
-            </DialogDescription>
-          </DialogHeader>
-          {upgradeHost && (
-            <div className="space-y-3 rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">主机</span>
-                <span className="font-medium">{upgradeHost.name}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">当前 Agent</span>
-                <span className="font-mono">{upgradeHost.agentVersion ? `v${upgradeHost.agentVersion}` : "未上报"}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">当前 FXP</span>
-                <span className="font-mono">{fxpRuntimeDetailText(upgradeHost)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">目标版本</span>
-                <span className="font-mono">v{latestAgentVersion || "-"}</span>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUpgradeHost(null)}>
-              取消
-            </Button>
-            <Button
-              className="gap-2"
-              disabled={!upgradeHost || upgradeAgentMutation.isPending}
-              onClick={confirmAgentUpgrade}
-            >
-              {upgradeAgentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              {upgradeAgentMutation.isPending ? "下发中..." : "确认升级"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Bulk Agent Upgrade Dialog */}
       <Dialog open={bulkUpgradeDialogOpen} onOpenChange={setBulkUpgradeDialogOpen}>
         <DialogContent className="sm:max-w-md">
@@ -3704,7 +3638,7 @@ function HostsContent() {
       </Dialog>
 
       {/* 编辑主机对话框 */}
-      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+      <Dialog open={showDialog} onOpenChange={hostDialogGuard.handleOpenChange}>
         <DialogContent className="flex h-[min(720px,86svh)] max-h-[86svh] flex-col overflow-hidden sm:max-w-[44rem]">
           <DialogHeader className="shrink-0 space-y-1">
             <DialogTitle>编辑主机</DialogTitle>
@@ -4349,7 +4283,7 @@ function HostsContent() {
             </div>
           </Tabs>
           <DialogFooter className="shrink-0 pt-2">
-            <Button variant="outline" onClick={() => setShowDialog(false)}>
+            <Button variant="outline" onClick={hostDialogGuard.requestClose}>
               取消
             </Button>
             <Button onClick={handleSubmit} disabled={isPending || !form.name}>

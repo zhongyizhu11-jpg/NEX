@@ -4,13 +4,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { trpc } from "@/lib/trpc";
-import { Trash2, Send, Globe, ExternalLink, AlertTriangle } from "lucide-react";
+import { Trash2, Send, Globe, ExternalLink } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useState, useEffect } from "react";
 import { useSaveDockItem } from "@/components/settings/SaveDock";
@@ -27,7 +27,7 @@ export default function TelegramBotSettingsCard() {
   const [telegramTrafficThreshold, setTelegramTrafficThreshold] = useState(20);
   /** 提前几天提醒。邮件、Telegram、面板顶上那条横幅共用这一个值。 */
   const [expiryReminderDays, setExpiryReminderDays] = useState("7,3,1");
-  const [showDeleteTelegramBot, setShowDeleteTelegramBot] = useState(false);
+  const confirmDialog = useConfirmDialog();
 
   useEffect(() => {
     if (settings) {
@@ -115,16 +115,33 @@ export default function TelegramBotSettingsCard() {
     },
   });
 
-  const handleClearTelegramToken = () => {
-    updateSettingsMutation.mutate({
-      telegram: {
-        enabled: false,
-        clearToken: true,
+  /*
+    删机器人走共享的确认框：请求在路上时弹窗留着、成功了才关，本地的开关和输入框也等成功了再清 ——
+    原来是点下去先清本地状态、再发请求，失败了界面已经显示「未配置」。
+  */
+  const confirmClearTelegramToken = () => {
+    void confirmDialog({
+      title: "删除 Telegram 机器人",
+      description: "删除当前 Bot Token。",
+      details: (
+        <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
+          <p className="text-xs text-muted-foreground">当前机器人</p>
+          <p className="mt-1 font-medium">{settings?.telegram?.botUsername ? `@${settings.telegram.botUsername}` : "Telegram 机器人"}</p>
+          <p className="mt-2 font-mono text-xs text-muted-foreground">{settings?.telegram?.tokenMasked || "-"}</p>
+        </div>
+      ),
+      confirmText: "确认删除",
+      onConfirm: async () => {
+        await updateSettingsMutation.mutateAsync({
+          telegram: {
+            enabled: false,
+            clearToken: true,
+          },
+        });
+        setTelegramEnabled(false);
+        setTelegramBotTokenInput("");
       },
     });
-    setTelegramEnabled(false);
-    setTelegramBotTokenInput("");
-    setShowDeleteTelegramBot(false);
   };
 
   const tokenSourceLabel =
@@ -304,7 +321,7 @@ export default function TelegramBotSettingsCard() {
                 <Button
                   variant="outline"
                   className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                  onClick={() => setShowDeleteTelegramBot(true)}
+                  onClick={confirmClearTelegramToken}
                   disabled={updateSettingsMutation.isPending}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
@@ -325,32 +342,6 @@ export default function TelegramBotSettingsCard() {
       </CardContent>
     </Card>
 
-    <Dialog open={showDeleteTelegramBot} onOpenChange={setShowDeleteTelegramBot}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-destructive">
-            <AlertTriangle className="h-5 w-5" />
-            删除 Telegram 机器人
-          </DialogTitle>
-          <DialogDescription>
-            删除当前 Bot Token。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm">
-          <p className="text-xs text-muted-foreground">当前机器人</p>
-          <p className="mt-1 font-medium">{settings?.telegram?.botUsername ? `@${settings.telegram.botUsername}` : "Telegram 机器人"}</p>
-          <p className="mt-2 font-mono text-xs text-muted-foreground">{settings?.telegram?.tokenMasked || "-"}</p>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setShowDeleteTelegramBot(false)}>
-            取消
-          </Button>
-          <Button variant="destructive" onClick={handleClearTelegramToken} disabled={updateSettingsMutation.isPending}>
-            确认删除
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
     </>
   );
 }

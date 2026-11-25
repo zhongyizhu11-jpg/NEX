@@ -1,4 +1,5 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { useLastShown } from "@/components/useDialogTarget";
 
 import { EntityTag } from "@/components/entity/EntityCard";
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
@@ -262,9 +263,7 @@ export function RoutePolicySheet({
     动画里先塌成只剩标题再消失。上一次没点完的「换首选」选择不会留着：面板在动画结束
     后整个卸掉，下次打开是新的。
   */
-  const last = useRef<{ subjectName: string; policy: RoutePolicy } | null>(null);
-  if (open && policy) last.current = { subjectName, policy };
-  const shown = last.current;
+  const shown = useLastShown(open, policy ? { subjectName, policy } : null);
   const group = shown?.policy.subject === "group";
   return (
     <Dialog open={open && !!policy} onOpenChange={onOpenChange}>

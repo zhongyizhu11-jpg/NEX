@@ -11,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -416,7 +417,6 @@ export default function AgentTokenManager({
   const [description, setDescription] = useState("");
   const [editingToken, setEditingToken] = useState<any>(null);
   const [editDescription, setEditDescription] = useState("");
-  const [tokenToDelete, setTokenToDelete] = useState<any | null>(null);
   const [internalViewMode, setInternalViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [installAddressMode, setInstallAddressMode] = useState<InstallAddressMode>("public");
   const lastCreateSignalRef = useRef(0);
@@ -546,8 +546,6 @@ export default function AgentTokenManager({
       utils.hosts.summary.invalidate();
       utils.hosts.statusSummary.invalidate();
       utils.hosts.pageLive.invalidate();
-      // 成功了才关确认框（和 Tunnels 的删除框一样）：之前是点下去先关、再发请求，失败了用户什么都没看到
-      setTokenToDelete(null);
       const released = Number(data?.releasedPendingCleanup || 0);
       const removedHosts = Number(data?.removedHosts || 0);
       toast.success(released > 0
@@ -558,6 +556,29 @@ export default function AgentTokenManager({
     },
     onError: (err) => toast.error(err.message || "删除 Token 失败"),
   });
+
+  /*
+    删除确认走共享的确认框：请求在路上时弹窗留着、按钮写「删除中...」，成功了才关
+    （和 Tunnels 的删除框一样）—— 之前是点下去先关、再发请求，失败了用户什么都没看到。
+    要删的那串 Token 和描述放进 details 槽。
+  */
+  const confirmDeleteToken = (token: any) => {
+    void confirmDialog({
+      title: "删除 Agent Token",
+      description: "删除后该 Token 将失效；如果关联主机没有转发规则、转发组或隧道引用，会同步从主机管理中移除。",
+      details: (
+        <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-sm">
+          <div className="font-mono break-all">{token?.token}</div>
+          {token?.description && (
+            <div className="mt-2 text-xs text-muted-foreground">{token.description}</div>
+          )}
+        </div>
+      ),
+      confirmText: "确认删除",
+      confirmPendingText: "删除中...",
+      onConfirm: () => deleteTokenMutation.mutateAsync({ id: token.id }),
+    });
+  };
 
   const updateTokenMutation = trpc.agentTokens.update.useMutation({
     onSuccess: () => {
@@ -710,7 +731,7 @@ export default function AgentTokenManager({
                               loadingScriptTokenId={loadingScriptTokenId}
                               onOpenScript={openScriptDialog}
                               onEdit={openEditToken}
-                              onDelete={setTokenToDelete}
+                              onDelete={confirmDeleteToken}
                               dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={tokenReorderPending} />}
                               sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
                             />
@@ -733,7 +754,7 @@ export default function AgentTokenManager({
                             loadingScriptTokenId={loadingScriptTokenId}
                             onOpenScript={openScriptDialog}
                             onEdit={openEditToken}
-                            onDelete={setTokenToDelete}
+                            onDelete={confirmDeleteToken}
                             dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={tokenReorderPending} />}
                             sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
                           />
@@ -799,7 +820,7 @@ export default function AgentTokenManager({
                             loadingScriptTokenId={loadingScriptTokenId}
                             onOpenScript={openScriptDialog}
                             onEdit={openEditToken}
-                            onDelete={setTokenToDelete}
+                            onDelete={confirmDeleteToken}
                           />
                         </TableCell>
                       </TableRow>
@@ -830,37 +851,29 @@ export default function AgentTokenManager({
       </>
       )}
 
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>添加主机</DialogTitle>
-            <DialogDescription data-fx-help="">
-              先生成 Agent 安装 Token，再复制命令到目标主机执行。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <FormField className="space-y-2">
-              <Label>描述（可选）</Label>
-              <Input
-                placeholder="例如: 香港节点 Agent"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </FormField>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreate(false)}>
-              取消
-            </Button>
-            <Button
-              onClick={() => createTokenMutation.mutate({ description: description || undefined })}
-              disabled={createTokenMutation.isPending}
-            >
-              生成安装命令
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* FormDialog：描述框里按回车就生成；描述填了一半关之前先问；生成中不许关 */}
+      <FormDialog
+        open={showCreate}
+        onOpenChange={setShowCreate}
+        title="添加主机"
+        description="先生成 Agent 安装 Token，再复制命令到目标主机执行。"
+        descriptionProps={{ "data-fx-help": "" }}
+        onSubmit={() => createTokenMutation.mutate({ description: description || undefined })}
+        submitText="生成安装命令"
+        pendingText="生成中..."
+        pending={createTokenMutation.isPending}
+        dirty={description.trim() !== ""}
+      >
+        <FormField className="space-y-2">
+          <Label>描述（可选）</Label>
+          <Input
+            placeholder="例如: 香港节点 Agent"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            autoFocus
+          />
+        </FormField>
+      </FormDialog>
 
       {/* 命令里带着刚生成的 Token：SecretRevealDialog，ESC / 点遮罩关不掉，只能点「确定」 */}
       <SecretRevealDialog
@@ -939,39 +952,6 @@ export default function AgentTokenManager({
               })}
             >
               保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!tokenToDelete} onOpenChange={(open) => !open && !deleteTokenMutation.isPending && setTokenToDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              删除 Agent Token
-            </DialogTitle>
-            <DialogDescription>
-              删除后该 Token 将失效；如果关联主机没有转发规则、转发组或隧道引用，会同步从主机管理中移除。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-sm">
-            <div className="font-mono break-all">{tokenToDelete?.token}</div>
-            {tokenToDelete?.description && (
-              <div className="mt-2 text-xs text-muted-foreground">{tokenToDelete.description}</div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTokenToDelete(null)}>取消</Button>
-            <Button
-              variant="destructive"
-              disabled={deleteTokenMutation.isPending || !tokenToDelete}
-              onClick={() => {
-                if (!tokenToDelete) return;
-                deleteTokenMutation.mutate({ id: tokenToDelete.id });
-              }}
-            >
-              {deleteTokenMutation.isPending ? "删除中..." : "确认删除"}
             </Button>
           </DialogFooter>
         </DialogContent>

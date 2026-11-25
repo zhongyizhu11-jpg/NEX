@@ -60,6 +60,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DeleteWithImpactDialog } from "@/components/DeleteWithImpactDialog";
+import { useDialogTarget } from "@/components/useDialogTarget";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -113,6 +115,7 @@ import {
 import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useDialogCloseGuard, useFormDirty } from "@/components/ui/form-dialog";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { LoadBalanceFields } from "@/features/links/LoadBalanceFields";
 import { exitManualWeights, exitStrategyNote } from "@/lib/exitGroupBalance";
@@ -655,7 +658,9 @@ export function ForwardGroupsContent({
   const [dragMemberKey, setDragMemberKey] = useState<string | null>(null);
   const [internalViewMode, setInternalViewMode] = useState<ForwardGroupViewMode>(() => getStoredForwardGroupViewMode());
   const [testGroup, setTestGroup] = useState<{ id: number; name: string } | null>(null);
-  const [deleteGroup, setDeleteGroup] = useState<any | null>(null);
+  // 删除确认对着哪个组；关闭动画期间标题里的名字用 shown 接着画
+  const deleteGroupDialog = useDialogTarget<any>();
+  const deleteGroup = deleteGroupDialog.target;
   // 点开故障转移策略面板的那个组。只存 id：面板跟着列表轮询刷新，不拿一份旧快照。
   const [policyGroupId, setPolicyGroupId] = useState<number | null>(null);
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
@@ -724,6 +729,8 @@ export function ForwardGroupsContent({
     { id: Number(deleteGroup?.id || 0) },
     { enabled: !!deleteGroup },
   );
+  const deleteGroupKind = normalizeGroupMode(deleteGroupDialog.shown?.groupMode);
+  const deleteGroupLabel = deleteGroupKind === "port" ? "端口转发" : deleteGroupKind === "chain" ? "转发链" : deleteGroupKind === "entry" ? "入口组" : deleteGroupKind === "exit" ? "出口组" : "转发组";
 
   const hostById = useMemo(() => new Map<number, any>((hosts || []).map((h: any) => [Number(h.id), h])), [hosts]);
   const tunnelById = useMemo(() => new Map<number, any>((tunnels || []).map((t: any) => [Number(t.id), t])), [tunnels]);
@@ -1054,7 +1061,7 @@ export function ForwardGroupsContent({
       utils.forwardGroups.options.invalidate();
       utils.forwardGroups.listPage.invalidate();
       utils.rules.list.invalidate();
-      setDeleteGroup(null);
+      deleteGroupDialog.close();
       toast.success("已删除，引用规则将同步清理");
     },
     onError: (e) => toast.error(e.message || "删除失败"),
@@ -2117,7 +2124,7 @@ export function ForwardGroupsContent({
             disabled: syncMutation.isPending,
             onSelect: () => syncMutation.mutate({ id: group.id }),
           },
-          { key: "delete", label: "删除", ariaLabel: `删除${resource} ${group.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteGroup(group) },
+          { key: "delete", label: "删除", ariaLabel: `删除${resource} ${group.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => deleteGroupDialog.open(group) },
         ]}
         menuLabel={`${resource} ${group.name} 的更多操作`}
         menuOnly={menuOnly}
@@ -2126,6 +2133,9 @@ export function ForwardGroupsContent({
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+  // 编辑弹窗：改过没保存就关要先问「放弃修改？」；请求在路上时不许关（ui/form-dialog）
+  const groupFormDirty = useFormDirty(showDialog, form);
+  const groupDialogGuard = useDialogCloseGuard({ open: showDialog, dirty: groupFormDirty, pending: isPending, onOpenChange: handleDialogOpenChange });
   const handleViewModeChange = (nextViewMode: ForwardGroupViewMode) => {
     if (onViewModeChange) {
       onViewModeChange(nextViewMode);
@@ -2372,7 +2382,7 @@ export function ForwardGroupsContent({
 
       <Dialog
         open={showDialog}
-        onOpenChange={handleDialogOpenChange}
+        onOpenChange={groupDialogGuard.handleOpenChange}
       >
         <DialogContent className={"flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-4 sm:p-5 " + (isChainMode || isPortMode ? "sm:max-w-xl" : "sm:max-w-2xl")}>
           <DialogHeader>
@@ -3144,7 +3154,7 @@ export function ForwardGroupsContent({
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeDialog}>取消</Button>
+            <Button variant="outline" onClick={groupDialogGuard.requestClose}>取消</Button>
             <Button onClick={handleSubmit} disabled={isPending}>{isPending ? "保存中..." : editingId ? "保存" : "创建"}</Button>
           </DialogFooter>
         </DialogContent>
@@ -3192,57 +3202,20 @@ export function ForwardGroupsContent({
           />
         );
       })()}
-      <Dialog open={!!deleteGroup} onOpenChange={(open) => !open && setDeleteGroup(null)}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{normalizeGroupMode(deleteGroup?.groupMode) === "port" ? "删除端口转发" : normalizeGroupMode(deleteGroup?.groupMode) === "chain" ? "删除转发链" : normalizeGroupMode(deleteGroup?.groupMode) === "entry" ? "删除入口组" : normalizeGroupMode(deleteGroup?.groupMode) === "exit" ? "删除出口组" : "删除转发组"}</DialogTitle>
-            <DialogDescription>
-              确认删除 "{deleteGroup?.name}"？引用它的转发规则会被同步清理，已下发到 Agent 的运行状态也会刷新。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            {deleteImpactQuery.isLoading ? (
-              <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
-                正在检查关联转发规则...
-              </div>
-            ) : deleteImpactQuery.data?.forwardRuleCount ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
-                <p className="font-medium text-destructive">
-                  当前{normalizeGroupMode(deleteGroup?.groupMode) === "port" ? "端口转发" : normalizeGroupMode(deleteGroup?.groupMode) === "chain" ? "转发链" : normalizeGroupMode(deleteGroup?.groupMode) === "entry" ? "入口组" : normalizeGroupMode(deleteGroup?.groupMode) === "exit" ? "出口组" : "转发组"}仍关联 {deleteImpactQuery.data.forwardRuleCount} 条转发规则
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  包含 {deleteImpactQuery.data.templateRuleCount || 0} 条用户规则和 {deleteImpactQuery.data.childRuleCount || 0} 条成员运行规则。
-                </p>
-                <div className="mt-2 max-h-44 space-y-1 overflow-auto text-xs text-muted-foreground">
-                  {(deleteImpactQuery.data.forwardRules || []).map((rule: any) => (
-                    <div key={rule.id} className="rounded border border-border/40 bg-background/60 px-2 py-1">
-                      <span className="font-medium text-foreground">{rule.name}</span>
-                      <span className="ml-2">:{rule.sourcePort} -&gt; {rule.targetIp}:{rule.targetPort}</span>
-                    </div>
-                  ))}
-                  {deleteImpactQuery.data.forwardRuleCount > (deleteImpactQuery.data.forwardRules || []).length && (
-                    <p>还有 {deleteImpactQuery.data.forwardRuleCount - (deleteImpactQuery.data.forwardRules || []).length} 条未显示。</p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm text-muted-foreground">
-                未发现关联转发规则。
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteGroup(null)}>取消</Button>
-            <Button
-              variant="destructive"
-              disabled={!deleteGroup || deleteMutation.isPending || deleteImpactQuery.isLoading}
-              onClick={() => deleteGroup && deleteMutation.mutate({ id: deleteGroup.id, confirmRules: true })}
-            >
-              {deleteMutation.isPending ? "删除中..." : "确认删除"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteWithImpactDialog
+        {...deleteGroupDialog.dialogProps}
+        title={`删除${deleteGroupLabel}`}
+        description={<>确认删除 "{deleteGroupDialog.shown?.name}"？引用它的转发规则会被同步清理，已下发到 Agent 的运行状态也会刷新。</>}
+        entityLabel={deleteGroupLabel}
+        impactQuery={deleteImpactQuery}
+        impactExtra={deleteImpactQuery.data ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            包含 {deleteImpactQuery.data.templateRuleCount || 0} 条用户规则和 {deleteImpactQuery.data.childRuleCount || 0} 条成员运行规则。
+          </p>
+        ) : null}
+        pending={deleteMutation.isPending}
+        onConfirm={() => deleteGroup && deleteMutation.mutate({ id: deleteGroup.id, confirmRules: true })}
+      />
     </div>
   );
 }

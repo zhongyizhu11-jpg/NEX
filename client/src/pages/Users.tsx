@@ -1,6 +1,5 @@
 import { getFormatLocale } from "@/i18n";
 import { FormField } from "@/components/ui/form-field";
-import UserProxySubConfig from "@/components/proxy/UserProxySubConfig";
 import OpsUserMenuItems from "@/features/ops/slots/UserMenuItems";
 import { UserOnlineIpsDialogHost } from "@/features/ops/online/UserOnlineIpsMenuItem";
 import { UserTrafficHistoryDialogHost } from "@/components/users/UserTrafficHistory";
@@ -34,7 +33,10 @@ import { migrateLegacyAvatarValue } from "@/lib/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { FilterChips } from "@/components/ui/filter-chips";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog, useFormDirty } from "@/components/ui/form-dialog";
+import { useDialogTarget } from "@/components/useDialogTarget";
+import { parseTrafficInputGB } from "@/components/users/trafficInputs";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -55,13 +57,6 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -71,12 +66,10 @@ import {
 } from "@/components/ui/table";
 import { OptimisticSwitch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { pollingInterval } from "@/lib/polling";
-import { getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { trpc } from "@/lib/trpc";
 import AdminUserReferralPanel from "@/components/referral/AdminUserReferralPanel";
@@ -86,16 +79,12 @@ import {
   ShieldOff,
   Package,
   Plus,
-  Shield,
   ShieldCheck,
   Trash2,
   User,
   Users as UsersIcon,
   RotateCcw,
   CalendarClock,
-  Database,
-  Server,
-  Gauge,
   WalletCards,
   Send,
   Mail,
@@ -105,24 +94,10 @@ import {
 } from "lucide-react";
 import { openUserBackend } from "@/lib/userImpersonation";
 import { mobileAuth } from "@/lib/mobileAuth";
-import { useState, useEffect, useMemo } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
-import { BILLING_DATE_TIME_FORMAT_OPTIONS, BILLING_TIME_ZONE, MONTHLY_RESET_MAX_DAY, billingCalendarParts, formatBillingDateInput, parseBillingDateInput } from "@shared/billingTime";
-import { FORWARD_TYPES } from "@shared/forwardTypes";
-
-function parseTrafficInputGB(value: string): number {
-  // 纯数字输入，单位 GB，0 表示不限制
-  const num = parseFloat(String(value).trim());
-  if (isNaN(num) || num <= 0) return 0;
-  return Math.floor(num * 1024 * 1024 * 1024);
-}
-
-function parseSpeedInputMbps(value: string): number {
-  const num = parseFloat(String(value).trim());
-  if (isNaN(num) || num <= 0) return 0;
-  return Math.floor(num);
-}
+import { BILLING_DATE_TIME_FORMAT_OPTIONS, BILLING_TIME_ZONE, formatBillingDateInput, parseBillingDateInput } from "@shared/billingTime";
 
 function formatSpeedMbps(mbps: number | string | null | undefined): string {
   const num = Number(mbps);
@@ -137,6 +112,9 @@ function formatForwardRateLimit(inMbps: unknown, outMbps: unknown): string {
   if (up === down) return `上下行 ${formatSpeedMbps(up)}`;
   return `上行 ${up > 0 ? formatSpeedMbps(up) : "不限"} / 下行 ${down > 0 ? formatSpeedMbps(down) : "不限"}`;
 }
+
+// 「流量与权限设置」近 800 行，只有点开某个用户时才用：拆成独立模块按需加载
+const UserTrafficSettingsDialog = lazy(() => import("@/components/users/UserTrafficSettingsDialog"));
 
 function userLabel(user: any) {
   return user?.name || user?.username || `#${user?.id}`;
@@ -157,10 +135,6 @@ function billingDateTimeText(value?: string | Date | null) {
   return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale(), BILLING_DATE_TIME_FORMAT_OPTIONS);
 }
 
-function currentBillingResetDay() {
-  return Math.min(billingCalendarParts(new Date()).day, MONTHLY_RESET_MAX_DAY);
-}
-
 function isSubscriptionActive(sub: any) {
   return sub?.status === "active" && (!sub.expiresAt || new Date(sub.expiresAt).getTime() > Date.now());
 }
@@ -169,6 +143,11 @@ function UsersContent() {
   const { user: currentUser } = useAuth();
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
+  /*
+    删用户 / 移除 2FA / 重置流量 / 取消订阅四个确认都走共享的确认框：请求在路上时弹窗留着、
+    按钮写「删除中...」，成功才关。原来每个都是一套 show / id / name 三元组加一个手写 Dialog。
+  */
+  const confirmDialog = useConfirmDialog();
 
   // Create user dialog
   const [showCreateUser, setShowCreateUser] = useState(false);
@@ -179,51 +158,37 @@ function UsersContent() {
   const [newCanAddRules, setNewCanAddRules] = useState(true);
   // 默认关：订阅地址里带着全部节点凭据，得管理员显式给。
   const [newAllowProxySubscription, setNewAllowProxySubscription] = useState(false);
+  // 填了一半点遮罩不该直接没了：改过就在关前问「放弃修改？」（ui/form-dialog）
+  const createUserDirty = useFormDirty(showCreateUser, { newUsername, newUserPassword, newUserName, newCanAddRules, newAllowProxySubscription });
   // Reset password dialog
-  const [showResetPassword, setShowResetPassword] = useState(false);
-  const [resetUserId, setResetUserId] = useState<number | null>(null);
-  const [resetUserName, setResetUserName] = useState("");
+  /*
+    「弹窗对着哪个用户」收成 useDialogTarget：原来每个弹窗 show / id / name 三个 state，开关各三连。
+    xxxUserId 看 target（关了就是 null，mutation 不会打到旧人），xxxUserName 看 shown（关闭动画里名字不闪没）。
+  */
+  const accountDialog = useDialogTarget<{ id: number; name: string }>();
+  const resetUserId = accountDialog.target?.id ?? null;
+  const resetUserName = accountDialog.shown?.name ?? "";
   const [resetUsernameInput, setResetUsernameInput] = useState("");
   const [resetDisplayNameInput, setResetDisplayNameInput] = useState("");
   const [resetNewPassword, setResetNewPassword] = useState("");
   const [resetAvatarInput, setResetAvatarInput] = useState("");
-  const [showResetTraffic, setShowResetTraffic] = useState(false);
-  const [resetTrafficUserId, setResetTrafficUserId] = useState<number | null>(null);
-  const [resetTrafficUserName, setResetTrafficUserName] = useState("");
-  const [showRecharge, setShowRecharge] = useState(false);
-  const [rechargeUserId, setRechargeUserId] = useState<number | null>(null);
-  const [rechargeUserName, setRechargeUserName] = useState("");
+  const rechargeDialog = useDialogTarget<{ id: number; name: string }>();
+  const rechargeUserId = rechargeDialog.target?.id ?? null;
+  const rechargeUserName = rechargeDialog.shown?.name ?? "";
   const [rechargeAmount, setRechargeAmount] = useState("");
-  const [showSetBalance, setShowSetBalance] = useState(false);
-  const [setBalanceUserId, setSetBalanceUserId] = useState<number | null>(null);
-  const [setBalanceUserName, setSetBalanceUserName] = useState("");
+  const setBalanceDialog = useDialogTarget<{ id: number; name: string }>();
+  const setBalanceUserId = setBalanceDialog.target?.id ?? null;
+  const setBalanceUserName = setBalanceDialog.shown?.name ?? "";
   const [setBalanceAmount, setSetBalanceAmount] = useState("");
-  const [showSendEmail, setShowSendEmail] = useState(false);
-  const [emailUserId, setEmailUserId] = useState<number | null>(null);
-  const [emailUserName, setEmailUserName] = useState("");
+  const emailDialog = useDialogTarget<{ id: number; name: string }>();
+  const emailUserId = emailDialog.target?.id ?? null;
+  const emailUserName = emailDialog.shown?.name ?? "";
   const [emailTo, setEmailTo] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailContent, setEmailContent] = useState("");
-  const [deleteUserId, setDeleteUserId] = useState<number | null>(null);
-  const [deleteUserName, setDeleteUserName] = useState("");
-  const [showDeleteUser, setShowDeleteUser] = useState(false);
-  const [removeTwoFactorUserId, setRemoveTwoFactorUserId] = useState<number | null>(null);
-  const [removeTwoFactorUserName, setRemoveTwoFactorUserName] = useState("");
-  const [showRemoveTwoFactor, setShowRemoveTwoFactor] = useState(false);
 
-  // Traffic settings dialog
-  const [showTrafficSettings, setShowTrafficSettings] = useState(false);
-  const [trafficUserId, setTrafficUserId] = useState<number | null>(null);
-  const [trafficUserName, setTrafficUserName] = useState("");
-  const [trafficDisplayRemark, setTrafficDisplayRemark] = useState("");
-  const [trafficLimitInput, setTrafficLimitInput] = useState("");
-  const [gostRateLimitInInput, setGostRateLimitInInput] = useState("");
-  const [gostRateLimitOutInput, setGostRateLimitOutInput] = useState("");
-  const [forwardBurstMbpsInput, setForwardBurstMbpsInput] = useState("");
-  const [forwardBurstSecondsInput, setForwardBurstSecondsInput] = useState("");
-  const [expiresAtInput, setExpiresAtInput] = useState("");
-  const [trafficAutoReset, setTrafficAutoReset] = useState(false);
-  const [trafficResetDay, setTrafficResetDay] = useState(1);
+  // 「流量与权限设置」对着哪个用户；表单本身在 components/users/UserTrafficSettingsDialog 里
+  const trafficDialog = useDialogTarget<any>();
 
   // Subscription management dialogs
   const [manageType, setManageType] = useUrlTab<UserManageType>({
@@ -236,103 +201,17 @@ function UsersContent() {
     旧数字（余额刚充完、开关刚拨过），而这一屏正是拿来看这些数的。
   */
   const [detailUserId, setDetailUserId] = useState<number | null>(null);
-  const [showAddonDialog, setShowAddonDialog] = useState(false);
-  const [addonUserId, setAddonUserId] = useState<number | null>(null);
-  const [addonUserName, setAddonUserName] = useState("");
+  const addonDialog = useDialogTarget<{ id: number; name: string }>();
+  const addonUserId = addonDialog.target?.id ?? null;
+  const addonUserName = addonDialog.shown?.name ?? "";
   const [addonSubscriptionId, setAddonSubscriptionId] = useState("");
   const [addonSubscriptionLabel, setAddonSubscriptionLabel] = useState("");
   const [addonTrafficGB, setAddonTrafficGB] = useState("");
-  const [showExtendDialog, setShowExtendDialog] = useState(false);
-  const [extendSubscriptionId, setExtendSubscriptionId] = useState<number | null>(null);
-  const [extendSubscriptionLabel, setExtendSubscriptionLabel] = useState("");
+  const extendDialog = useDialogTarget<{ id: number; label: string }>();
+  const extendSubscriptionId = extendDialog.target?.id ?? null;
+  const extendSubscriptionLabel = extendDialog.shown?.label ?? "";
   const [extendExpiresAtInput, setExtendExpiresAtInput] = useState("");
-  const [showCancelSubscriptionDialog, setShowCancelSubscriptionDialog] = useState(false);
-  const [cancelSubscriptionId, setCancelSubscriptionId] = useState<number | null>(null);
-  const [cancelSubscriptionLabel, setCancelSubscriptionLabel] = useState("");
-  const [cancelSubscriptionPlanLabel, setCancelSubscriptionPlanLabel] = useState("");
   const [hiddenCancelledSubscriptionIds, setHiddenCancelledSubscriptionIds] = useState<number[]>([]);
-  const [maxRules, setMaxRules] = useState(0);
-  /** 自建落地节点数上限。0 = 不限，与其他配额一致。 */
-  const [maxProxyInbounds, setMaxProxyInbounds] = useState(0);
-  /**
-   * 能自助加几台机器。存成字符串，因为**空串和 "0" 是两回事**：
-   * 空 = 跟随系统设置，0 = 一台都不许加。用 number 的话两者都会塌成 0。
-   */
-  const [maxSelfServiceHosts, setMaxSelfServiceHosts] = useState("");
-  /** 订阅地址条数上限。0 = 不限。 */
-  const [maxProxySubTokens, setMaxProxySubTokens] = useState(0);
-  const [maxProxyDevices, setMaxProxyDevices] = useState(0);
-  const [maxPorts, setMaxPorts] = useState(0);
-  const [maxConnections, setMaxConnections] = useState(0);
-  const [allowProxySubscription, setAllowProxySubscription] = useState(false);
-  const [maxIPs, setMaxIPs] = useState(0);
-  // 允许使用的转发方式：默认三种全部允许
-  const [allowIptables, setAllowIptables] = useState(true);
-  const [allowNftables, setAllowNftables] = useState(true);
-  const [allowRealm, setAllowRealm] = useState(true);
-  const [allowSocat, setAllowSocat] = useState(true);
-  const [allowGost, setAllowGost] = useState(true);
-
-  // Agent 权限
-  const [allowedHostIds, setAllowedHostIds] = useState<number[]>([]);
-  const [allowedForwardGroupIds, setAllowedForwardGroupIds] = useState<number[]>([]);
-  const [allowedTunnelIds, setAllowedTunnelIds] = useState<number[]>([]);
-  type ResourceGrantKind = "port" | "group" | "tunnel" | "node" | "lgHost" | "billingGroup" | "billingHost" | "billingTunnel";
-  const [resourceGrantKind, setResourceGrantKind] = useState<ResourceGrantKind>("port");
-  // 精简布局：资源授权按类型切换、用户表一行一人、订阅卡按钮收进菜单；标准布局照旧
-  const [trafficBillingHostIds, setTrafficBillingHostIds] = useState<number[]>([]);
-  const [trafficBillingTunnelIds, setTrafficBillingTunnelIds] = useState<number[]>([]);
-  const [trafficBillingForwardGroupIds, setTrafficBillingForwardGroupIds] = useState<number[]>([]);
-  const [addAllowedHostId, setAddAllowedHostId] = useState("");
-  const [addAllowedPortForwardId, setAddAllowedPortForwardId] = useState("");
-  const [addAllowedForwardGroupId, setAddAllowedForwardGroupId] = useState("");
-  const [addAllowedTunnelId, setAddAllowedTunnelId] = useState("");
-  const [sharedProxyNodeIds, setSharedProxyNodeIds] = useState<number[]>([]);
-  const [addSharedProxyNodeId, setAddSharedProxyNodeId] = useState("");
-  const [addBillingHostId, setAddBillingHostId] = useState("");
-  const [addBillingTunnelId, setAddBillingTunnelId] = useState("");
-  const [addBillingForwardGroupId, setAddBillingForwardGroupId] = useState("");
-  const { data: allHosts } = trpc.hosts.options.useQuery(undefined, { enabled: showTrafficSettings });
-  const { data: allTunnels } = trpc.tunnels.options.useQuery(undefined, { enabled: showTrafficSettings });
-  const { data: allForwardGroups } = trpc.forwardGroups.options.useQuery(undefined, { enabled: showTrafficSettings });
-  const { data: trafficBillingConfigs } = trpc.trafficBilling.configs.useQuery(undefined, { enabled: showTrafficSettings });
-  const { data: userHostPerms } = trpc.users.getHostPermissions.useQuery(
-    { userId: trafficUserId! },
-    { enabled: showTrafficSettings && !!trafficUserId }
-  );
-  const { data: userForwardGroupPerms } = trpc.users.getForwardGroupPermissions.useQuery(
-    { userId: trafficUserId! },
-    { enabled: showTrafficSettings && !!trafficUserId }
-  );
-  const { data: userTunnelPerms } = trpc.users.getTunnelPermissions.useQuery(
-    { userId: trafficUserId! },
-    { enabled: showTrafficSettings && !!trafficUserId }
-  );
-  const { data: userTrafficBillingPerms } = trpc.users.getTrafficBillingPermissions.useQuery(
-    { userId: trafficUserId! },
-    { enabled: showTrafficSettings && !!trafficUserId }
-  );
-  const { data: userProxyNodeShares } = trpc.users.getProxyNodeShares.useQuery(
-    { userId: trafficUserId! },
-    { enabled: showTrafficSettings && !!trafficUserId }
-  );
-  const { data: proxyNodeShareOptions } = trpc.users.proxyNodeShareOptions.useQuery(undefined, { enabled: showTrafficSettings });
-  /*
-    「权限加载中」看的是**这个用户的数据到了没**，不是 isLoading。
-
-    同一个用户关了再开，五个查询全是热缓存：isLoading 是 false、data 的引用也没变。上一版打开时
-    先把列表清成 []，再靠「data 变了」的 effect 回填 —— 这时一个 effect 都不跑，列表停在 []，
-    保存按钮却能点，一点就把他的主机 / 转发组 / 隧道授权全写成空（2.3.5xx 线上踩过）。
-    现在 effect 以「弹窗打开 + 用户」为键重新种子（见下面），这里按 data 是否 undefined 判断：
-    换到另一个用户时 query key 一换，data 立刻是 undefined，保存按钮就禁住，直到他的数据回来。
-  */
-  const permissionDataLoading = showTrafficSettings && !!trafficUserId && (
-    userHostPerms === undefined
-    || userForwardGroupPerms === undefined
-    || userTunnelPerms === undefined
-    || userTrafficBillingPerms === undefined
-    || userProxyNodeShares === undefined
-  );
   const { data: userSummary, isLoading: summaryLoading } = trpc.users.summary.useQuery(undefined, {
     enabled: currentUser?.role === "admin",
     refetchInterval: pollingInterval("slow"),
@@ -345,106 +224,6 @@ function UsersContent() {
   }, { enabled: currentUser?.role === "admin" && manageType === "subscriptions", placeholderData: (previousData) => previousData });
   const allSubscriptions = subscriptionPageQuery.data?.items || [];
   const subscriptionsLoading = subscriptionPageQuery.isLoading;
-  const updateForwardGroupPermsMutation = trpc.users.setForwardGroupPermissions.useMutation({
-    onSuccess: () => {
-      utils.users.options.invalidate();
-      utils.users.listPage.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "更新转发组授权失败"),
-  });
-  const updateHostPermsMutation = trpc.users.setHostPermissions.useMutation({
-    onSuccess: () => {
-      utils.users.options.invalidate();
-      utils.users.listPage.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "更新主机授权失败"),
-  });
-  const updateTunnelPermsMutation = trpc.users.setTunnelPermissions.useMutation({
-    onSuccess: () => {
-      utils.users.options.invalidate();
-      utils.users.listPage.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "更新隧道权限失败"),
-  });
-  const updateProxyNodeSharesMutation = trpc.users.setProxyNodeShares.useMutation({
-    /**
-     * 没生效的要当场说出来。
-     *
-     * 原来这里只报「已保存」：挑了几个节点、点保存、一切正常，而实际上一条都没
-     * 写进去（比如挑到了他自己的节点）—— 只能等租户来说「我这儿没有」才发现。
-     */
-    onSuccess: (result: any) => {
-      const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
-      if (skipped.length > 0) {
-        const self = skipped.filter((item: any) => item.reason === "self");
-        const gone = skipped.filter((item: any) => item.reason === "missing");
-        const failed = skipped.filter((item: any) => item.reason === "credential");
-        const parts = [
-          self.length ? `${self.length} 个是他自己的节点（本来就在他订阅里）` : "",
-          gone.length ? `${gone.length} 个节点已不存在` : "",
-          failed.length ? `${failed.length} 个发不出凭据` : "",
-        ].filter(Boolean);
-        toast.warning(`有 ${skipped.length} 个没有生效：${parts.join("；")}`);
-      }
-      const ownerCredential = Array.isArray(result?.sharedOwnerCredential) ? result.sharedOwnerCredential : [];
-      if (ownerCredential.length > 0) {
-        // 这类节点分出去的是主人的真实密码，取消分享 / 对方到期都收不回来。
-        const names = ownerCredential.slice(0, 3).map((item: any) => item.name || `#${item.nodeId}`).join("、");
-        toast.warning(`${names}${ownerCredential.length > 3 ? " 等" : ""} 分享的是节点主人的真实凭据：以后取消分享或对方到期，他手上的配置仍然能连，只能靠换密码收回。能用多用户入站的话，改用多用户入站分享`);
-      }
-      if (result?.recipientCanUse === false) {
-        toast.warning("这个用户还没有客户端订阅权限，分享了他也看不到 —— 在上面「权限」里打开后才生效");
-      }
-    },
-    onError: (err) => toast.error(err.message || "更新节点分享失败"),
-  });
-  const updateTrafficBillingPermsMutation = trpc.users.setTrafficBillingPermissions.useMutation({
-    onSuccess: () => {
-      utils.users.listPage.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "更新流量计费授权失败"),
-  });
-
-
-  /*
-    权限数据到了就同步到表单状态。
-
-    依赖里带上 showTrafficSettings 和 trafficUserId，不能只看 data：openTrafficSettings 每次打开都把
-    列表清成 []，而同一个用户再次打开时 data 还是缓存里那个引用，只看 data 的 effect 不会再跑，
-    列表就停在 []（见上面 permissionDataLoading 的注释）。以「打开 + 用户 + 数据」为键，每次打开都
-    从缓存重新种子；换用户时 data 先是 undefined，等他的数据回来再种。
-  */
-  useEffect(() => {
-    if (userHostPerms) {
-      setAllowedHostIds([...userHostPerms]);
-    }
-  }, [showTrafficSettings, trafficUserId, userHostPerms]);
-
-  useEffect(() => {
-    if (userForwardGroupPerms) {
-      setAllowedForwardGroupIds([...userForwardGroupPerms]);
-    }
-  }, [showTrafficSettings, trafficUserId, userForwardGroupPerms]);
-
-  useEffect(() => {
-    if (userTunnelPerms) {
-      setAllowedTunnelIds([...userTunnelPerms]);
-    }
-  }, [showTrafficSettings, trafficUserId, userTunnelPerms]);
-
-  useEffect(() => {
-    if (userProxyNodeShares) {
-      setSharedProxyNodeIds([...userProxyNodeShares]);
-    }
-  }, [showTrafficSettings, trafficUserId, userProxyNodeShares]);
-
-  useEffect(() => {
-    if (userTrafficBillingPerms) {
-      setTrafficBillingHostIds([...(userTrafficBillingPerms.hostIds || [])]);
-      setTrafficBillingTunnelIds([...(userTrafficBillingPerms.tunnelIds || [])]);
-      setTrafficBillingForwardGroupIds([...(userTrafficBillingPerms.forwardGroupIds || [])]);
-    }
-  }, [showTrafficSettings, trafficUserId, userTrafficBillingPerms]);
 
   useEffect(() => {
     if (currentUser && currentUser.role !== "admin") {
@@ -500,7 +279,7 @@ function UsersContent() {
       utils.users.options.invalidate();
       utils.users.listPage.invalidate();
       toast.success("账户信息已更新");
-      setShowResetPassword(false);
+      accountDialog.close();
       setResetUsernameInput("");
       setResetNewPassword("");
       setResetAvatarInput("");
@@ -518,9 +297,6 @@ function UsersContent() {
       utils.rules.listSummary.invalidate();
       utils.rules.mapItems.invalidate();
       toast.success("用户已删除");
-      setShowDeleteUser(false);
-      setDeleteUserId(null);
-      setDeleteUserName("");
     },
     onError: (err) => toast.error(err.message || "删除用户失败"),
   });
@@ -529,9 +305,6 @@ function UsersContent() {
     onSuccess: (data) => {
       utils.users.listPage.invalidate();
       toast.success(data.removed ? "双因素认证已移除" : "该用户未绑定双因素认证");
-      setShowRemoveTwoFactor(false);
-      setRemoveTwoFactorUserId(null);
-      setRemoveTwoFactorUserName("");
     },
     onError: (err) => toast.error(err.message || "移除双因素认证失败"),
   });
@@ -539,38 +312,13 @@ function UsersContent() {
   const sendEmailMutation = trpc.users.sendEmail.useMutation({
     onSuccess: () => {
       toast.success("邮件已发送");
-      setShowSendEmail(false);
+      emailDialog.close();
       setEmailSubject("");
       setEmailContent("");
     },
     onError: (err) => toast.error(err.message || "邮件发送失败"),
   });
 
-  const updateTrafficMutation = trpc.users.updateTrafficSettings.useMutation({
-    onSuccess: (_, variables) => {
-      patchCachedUser(variables.userId, {
-        displayRemark: variables.displayRemark,
-        manualTrafficLimit: variables.trafficLimit,
-        manualGostRateLimitIn: variables.gostRateLimitIn,
-        manualGostRateLimitOut: variables.gostRateLimitOut,
-        manualExpiresAt: variables.expiresAt ? parseBillingDateInput(variables.expiresAt) : null,
-        trafficAutoReset: variables.trafficAutoReset,
-        trafficResetDay: variables.trafficResetDay,
-        manualMaxRules: variables.maxRules,
-        manualMaxProxyInbounds: variables.maxProxyInbounds,
-        manualMaxProxySubTokens: variables.maxProxySubTokens,
-        manualMaxProxyDevices: variables.maxProxyDevices,
-        manualMaxPorts: variables.maxPorts,
-        manualMaxConnections: variables.maxConnections,
-        manualMaxIPs: variables.maxIPs,
-        allowedForwardTypes: variables.allowedForwardTypes,
-      });
-      utils.users.listPage.invalidate();
-      toast.success("流量设置已更新");
-      setShowTrafficSettings(false);
-    },
-    onError: (err) => toast.error(err.message || "更新流量设置失败"),
-  });
 
   const resetTrafficMutation = trpc.users.resetTraffic.useMutation({
     onSuccess: (data, variables) => {
@@ -580,9 +328,6 @@ function UsersContent() {
       });
       utils.users.listPage.invalidate();
       toast.success(withRestoredNote("流量统计已重置", (data as any)?.forwardAccessRestored));
-      setShowResetTraffic(false);
-      setResetTrafficUserId(null);
-      setResetTrafficUserName("");
     },
     onError: (err) => toast.error(err.message || "重置流量失败"),
   });
@@ -671,7 +416,7 @@ function UsersContent() {
       utils.billing.ledgerPage.invalidate();
       utils.billing.listTransactionsPage.invalidate();
       toast.success(withRestoredNote("余额已充值", (data as any)?.forwardAccessRestored));
-      setShowRecharge(false);
+      rechargeDialog.close();
       setRechargeAmount("");
     },
     onError: (err) => toast.error(err.message || "充值失败"),
@@ -684,7 +429,7 @@ function UsersContent() {
       utils.billing.ledgerPage.invalidate();
       utils.billing.listTransactionsPage.invalidate();
       toast.success(withRestoredNote(data.changed ? "余额已修改" : "余额未变化", (data as any)?.forwardAccessRestored));
-      setShowSetBalance(false);
+      setBalanceDialog.close();
       setSetBalanceAmount("");
     },
     onError: (err) => toast.error(err.message || "修改余额失败"),
@@ -696,8 +441,7 @@ function UsersContent() {
       utils.plans.subscriptions.invalidate();
       utils.plans.subscriptionsPage.invalidate();
       toast.success("本周期附加流量已生效");
-      setShowAddonDialog(false);
-      setAddonUserId(null);
+      addonDialog.close();
       setAddonSubscriptionId("");
       setAddonSubscriptionLabel("");
       setAddonTrafficGB("");
@@ -712,9 +456,7 @@ function UsersContent() {
       utils.plans.subscriptions.invalidate();
       utils.plans.subscriptionsPage.invalidate();
       toast.success("订阅到期时间已更新");
-      setShowExtendDialog(false);
-      setExtendSubscriptionId(null);
-      setExtendSubscriptionLabel("");
+      extendDialog.close();
       setExtendExpiresAtInput("");
     },
     onError: (err) => toast.error(err.message || "更新订阅到期时间失败"),
@@ -733,10 +475,6 @@ function UsersContent() {
       utils.plans.subscriptions.invalidate();
       utils.plans.subscriptionsPage.invalidate();
       toast.success("订阅已取消");
-      setShowCancelSubscriptionDialog(false);
-      setCancelSubscriptionId(null);
-      setCancelSubscriptionLabel("");
-      setCancelSubscriptionPlanLabel("");
     },
     onError: (err, variables) => {
       const id = Number(variables.id);
@@ -785,6 +523,14 @@ function UsersContent() {
 
   if (currentUser?.role !== "admin") return null;
 
+  const openTrafficSettings = (u: any) => {
+    if (u.role === "admin") {
+      toast.info("管理员默认拥有全部权限，且不受流量/资源限制");
+      return;
+    }
+    trafficDialog.open(u);
+  };
+
   const handleCreateUser = () => {
     if (!newUsername.trim()) {
       toast.error("请输入用户名");
@@ -832,62 +578,53 @@ function UsersContent() {
     });
   };
 
-  const handleResetTraffic = () => {
-    if (!resetTrafficUserId) return;
-    resetTrafficMutation.mutate({ userId: resetTrafficUserId });
-  };
-
   const openRechargeDialog = (u: any) => {
-    setRechargeUserId(u.id);
-    setRechargeUserName(userLabel(u));
+    rechargeDialog.open({ id: u.id, name: userLabel(u) });
     setRechargeAmount("");
-    setShowRecharge(true);
   };
 
   const openSetBalanceDialog = (u: any) => {
-    setSetBalanceUserId(u.id);
-    setSetBalanceUserName(userLabel(u));
+    setBalanceDialog.open({ id: u.id, name: userLabel(u) });
     setSetBalanceAmount((Number(u.balanceCents || 0) / 100).toFixed(2));
-    setShowSetBalance(true);
   };
 
   const openResetTrafficDialog = (u: any) => {
-    setResetTrafficUserId(u.id);
-    setResetTrafficUserName(userLabel(u));
-    setShowResetTraffic(true);
+    void confirmDialog({
+      title: "重置流量统计",
+      description: `确认重置 "${userLabel(u)}" 的套餐/分配流量和按量计费流量统计？已产生的扣费记录不会撤销。`,
+      confirmText: "确认重置",
+      confirmPendingText: "重置中...",
+      onConfirm: () => resetTrafficMutation.mutateAsync({ userId: u.id }),
+    });
   };
 
   const openAccountDialog = (u: any) => {
-    setResetUserId(u.id);
-    setResetUserName(userLabel(u));
+    accountDialog.open({ id: u.id, name: userLabel(u) });
     setResetUsernameInput(u.username || "");
     setResetDisplayNameInput(u.name || u.username || "");
     setResetNewPassword("");
     setResetAvatarInput(migrateLegacyAvatarValue(u.avatar, `user-${u.id}`));
-    setShowResetPassword(true);
   };
 
   const confirmDeleteUser = (u: any) => {
     if (u.id === currentUser?.id) return;
-    setDeleteUserId(u.id);
-    setDeleteUserName(userLabel(u));
-    setShowDeleteUser(true);
+    void confirmDialog({
+      title: "删除用户",
+      description: `确认删除用户 "${userLabel(u)}"？该操作会同时删除该用户名下的全部转发规则（先结算流量并停止转发）和权限配置，且不可撤销。该用户名下还有隧道、转发组或主机时无法删除，请先转移给其他用户或删除。`,
+      confirmText: "确认删除",
+      confirmPendingText: "删除中...",
+      onConfirm: () => deleteMutation.mutateAsync({ userId: u.id }),
+    });
   };
 
   const openRemoveTwoFactorDialog = (u: any) => {
-    setRemoveTwoFactorUserId(u.id);
-    setRemoveTwoFactorUserName(userLabel(u));
-    setShowRemoveTwoFactor(true);
-  };
-
-  const handleDeleteUser = () => {
-    if (!deleteUserId) return;
-    deleteMutation.mutate({ userId: deleteUserId });
-  };
-
-  const handleRemoveTwoFactor = () => {
-    if (!removeTwoFactorUserId) return;
-    removeTwoFactorMutation.mutate({ userId: removeTwoFactorUserId });
+    void confirmDialog({
+      title: "移除双因素认证",
+      description: `确认移除 "${userLabel(u)}" 已绑定的 2FA？移除后该用户下次登录不再需要双因素验证码。`,
+      confirmText: "确认移除",
+      confirmPendingText: "移除中...",
+      onConfirm: () => removeTwoFactorMutation.mutateAsync({ userId: u.id }),
+    });
   };
 
   const openSendEmail = (u: any) => {
@@ -895,12 +632,10 @@ function UsersContent() {
       toast.error("该用户邮箱尚未验证，不能发送邮件");
       return;
     }
-    setEmailUserId(u.id);
-    setEmailUserName(userLabel(u));
+    emailDialog.open({ id: u.id, name: userLabel(u) });
     setEmailTo(u.email);
     setEmailSubject("");
     setEmailContent("");
-    setShowSendEmail(true);
   };
 
   const handleSendEmail = () => {
@@ -916,181 +651,6 @@ function UsersContent() {
     });
   };
 
-  const openTrafficSettings = (u: any) => {
-    if (u.role === "admin") {
-      toast.info("管理员默认拥有全部权限，且不受流量/资源限制");
-      return;
-    }
-    setTrafficUserId(u.id);
-    setTrafficUserName(userLabel(u));
-    setTrafficDisplayRemark(String(u.displayRemark || ""));
-    const limitBytes = Number(u.manualTrafficLimit) || 0;
-    if (limitBytes > 0) {
-      const gb = limitBytes / (1024 * 1024 * 1024);
-      // 以 GB 为单位、保留最多 2 位小数（去尾零）
-      setTrafficLimitInput(parseFloat(gb.toFixed(2)).toString());
-    } else {
-      setTrafficLimitInput("0");
-    }
-    setExpiresAtInput(formatBillingDateInput(u.manualExpiresAt));
-    setTrafficAutoReset(!!u.trafficAutoReset);
-    setTrafficResetDay(u.trafficResetDay || 1);
-    setGostRateLimitInInput(String(Math.max(0, Number(u.manualGostRateLimitIn) || 0)));
-    setGostRateLimitOutInput(String(Math.max(0, Number(u.manualGostRateLimitOut) || 0)));
-    setForwardBurstMbpsInput(String(Math.max(0, Number(u.forwardBurstMbps) || 0)));
-    setForwardBurstSecondsInput(String(Math.max(0, Number(u.forwardBurstSeconds) || 0)));
-    setMaxRules(u.manualMaxRules || 0);
-    setMaxProxyInbounds(u.manualMaxProxyInbounds || 0);
-    setMaxSelfServiceHosts(u.maxSelfServiceHosts == null ? "" : String(u.maxSelfServiceHosts));
-    setMaxProxySubTokens(u.manualMaxProxySubTokens || 0);
-    setMaxProxyDevices(u.manualMaxProxyDevices || 0);
-    setMaxPorts(u.manualMaxPorts || 0);
-    setMaxConnections(u.manualMaxConnections || 0);
-    setAllowProxySubscription(!!u.manualAllowProxySubscription);
-    setMaxIPs(u.manualMaxIPs || 0);
-    // 转发方式权限：allowedForwardTypes 为 null 表示全部允许，空串表示全部禁用
-    const allowedRaw = (u.allowedForwardTypes as string | null) || "";
-    if (u.allowedForwardTypes === null || u.allowedForwardTypes === undefined) {
-      setAllowIptables(true); setAllowNftables(true); setAllowRealm(true); setAllowSocat(true); setAllowGost(true);
-    } else {
-      const set = new Set(allowedRaw.split(",").map((s: string) => s.trim()));
-      setAllowIptables(set.has("iptables"));
-      setAllowNftables(set.has("nftables"));
-      setAllowRealm(set.has("realm"));
-      setAllowSocat(set.has("socat"));
-      setAllowGost(set.has("gost"));
-    }
-    // 五个列表一起清空，等上面的 effect 按「打开 + 用户」从缓存种子；少清一个就会把上一个用户的留给这一个。
-    setAllowedForwardGroupIds([]);
-    setAllowedHostIds([]);
-    setAllowedTunnelIds([]);
-    setSharedProxyNodeIds([]);
-    setTrafficBillingHostIds([]);
-    setTrafficBillingTunnelIds([]);
-    setTrafficBillingForwardGroupIds([]);
-    setAddAllowedPortForwardId("");
-    setAddAllowedForwardGroupId("");
-    setAddAllowedTunnelId("");
-    setAddBillingHostId("");
-    setAddBillingTunnelId("");
-    setAddBillingForwardGroupId("");
-    setShowTrafficSettings(true);
-  };
-
-  const handleSaveTrafficSettings = () => {
-    if (!trafficUserId) return;
-    const limitBytes = parseTrafficInputGB(trafficLimitInput);
-    // 拼接转发方式权限：三种都允许时传 null（后端为 null 表示全部）
-    const allowed: string[] = [];
-    if (allowIptables) allowed.push("iptables");
-    if (allowNftables) allowed.push("nftables");
-    if (allowRealm) allowed.push("realm");
-    if (allowSocat) allowed.push("socat");
-    if (allowGost) allowed.push("gost");
-    const allowedForwardTypes = allowed.length === FORWARD_TYPES.length ? null : allowed.join(",");
-    const rateLimitIn = parseSpeedInputMbps(gostRateLimitInInput);
-    const rateLimitOut = parseSpeedInputMbps(gostRateLimitOutInput);
-    const burstMbps = parseSpeedInputMbps(forwardBurstMbpsInput);
-    const burstSeconds = Math.min(3600, parseSpeedInputMbps(forwardBurstSecondsInput));
-    const displayRemark = trafficDisplayRemark.trim().slice(0, 24);
-    const expiresAt = expiresAtInput.trim() || null;
-    updateTrafficMutation.mutate({
-      userId: trafficUserId,
-      displayRemark: displayRemark || null,
-      trafficLimit: limitBytes,
-      gostRateLimitIn: rateLimitIn,
-      gostRateLimitOut: rateLimitOut,
-      forwardBurstMbps: burstMbps,
-      forwardBurstSeconds: burstSeconds,
-      expiresAt,
-      trafficAutoReset,
-      trafficResetDay,
-      maxRules,
-      maxProxyInbounds,
-      // 空串要送 null（跟随全局），不能送 0 —— 0 是「一台都不许加」。
-      maxSelfServiceHosts: maxSelfServiceHosts.trim() === "" ? null : Math.max(0, parseInt(maxSelfServiceHosts, 10) || 0),
-      maxProxySubTokens,
-      maxProxyDevices,
-      maxPorts,
-      maxConnections,
-      maxIPs,
-      allowedForwardTypes,
-      allowProxySubscription,
-    });
-    // 保留旧版主机授权。新版资源授权与历史主机授权是并行权限，保存流量设置不能清空后者。
-    updateHostPermsMutation.mutate({
-      userId: trafficUserId,
-      hostIds: allowedHostIds,
-    });
-    updateForwardGroupPermsMutation.mutate({
-      userId: trafficUserId,
-      forwardGroupIds: allowedForwardGroupIds,
-    });
-    updateTunnelPermsMutation.mutate({
-      userId: trafficUserId,
-      tunnelIds: allowedTunnelIds,
-    });
-    updateProxyNodeSharesMutation.mutate({
-      userId: trafficUserId,
-      nodeIds: sharedProxyNodeIds,
-    });
-    updateTrafficBillingPermsMutation.mutate({
-      userId: trafficUserId,
-      hostIds: trafficBillingHostIds,
-      tunnelIds: trafficBillingTunnelIds,
-      forwardGroupIds: trafficBillingForwardGroupIds,
-    });
-  };
-
-  const addForwardGroupPermission = (value: string) => {
-    const forwardGroupId = Number(value);
-    if (!Number.isFinite(forwardGroupId)) return;
-    setAllowedForwardGroupIds(prev => (prev.includes(forwardGroupId) ? prev : [...prev, forwardGroupId]));
-    setAddAllowedPortForwardId("");
-    setAddAllowedForwardGroupId("");
-  };
-
-  const addHostPermission = (value: string) => {
-    const hostId = Number(value);
-    if (!Number.isFinite(hostId)) return;
-    setAllowedHostIds(prev => (prev.includes(hostId) ? prev : [...prev, hostId]));
-    setAddAllowedHostId("");
-  };
-
-  const addProxyNodeShare = (value: string) => {
-    const nodeId = Number(value);
-    if (!Number.isFinite(nodeId)) return;
-    setSharedProxyNodeIds(prev => (prev.includes(nodeId) ? prev : [...prev, nodeId]));
-    setAddSharedProxyNodeId("");
-  };
-
-  const addTunnelPermission = (value: string) => {
-    const tunnelId = Number(value);
-    if (!Number.isFinite(tunnelId)) return;
-    setAllowedTunnelIds(prev => (prev.includes(tunnelId) ? prev : [...prev, tunnelId]));
-    setAddAllowedTunnelId("");
-  };
-
-  const addTrafficBillingHost = (value: string) => {
-    const hostId = Number(value);
-    if (!Number.isFinite(hostId)) return;
-    setTrafficBillingHostIds(prev => (prev.includes(hostId) ? prev : [...prev, hostId]));
-    setAddBillingHostId("");
-  };
-
-  const addTrafficBillingTunnel = (value: string) => {
-    const tunnelId = Number(value);
-    if (!Number.isFinite(tunnelId)) return;
-    setTrafficBillingTunnelIds(prev => (prev.includes(tunnelId) ? prev : [...prev, tunnelId]));
-    setAddBillingTunnelId("");
-  };
-
-  const addTrafficBillingForwardGroup = (value: string) => {
-    const forwardGroupId = Number(value);
-    if (!Number.isFinite(forwardGroupId)) return;
-    setTrafficBillingForwardGroupIds(prev => (prev.includes(forwardGroupId) ? prev : [...prev, forwardGroupId]));
-    setAddBillingForwardGroupId("");
-  };
 
   const handleRecharge = () => {
     if (!rechargeUserId) return;
@@ -1116,12 +676,10 @@ function UsersContent() {
       toast.error("只有生效中的流量套餐可以附加流量");
       return;
     }
-    setAddonUserId(Number(sub.userId));
-    setAddonUserName(userLabel({ username: sub.username, name: sub.name, id: sub.userId }));
+    addonDialog.open({ id: Number(sub.userId), name: userLabel({ username: sub.username, name: sub.name, id: sub.userId }) });
     setAddonSubscriptionId(String(sub.id));
     setAddonSubscriptionLabel(`${sub.planName || `套餐 #${sub.planId}`} · ${formatBytes(sub.trafficLimit)}`);
     setAddonTrafficGB("");
-    setShowAddonDialog(true);
   };
 
   const openExtendDialog = (sub: any) => {
@@ -1129,10 +687,8 @@ function UsersContent() {
       toast.error("已取消的订阅不能更改到期时间");
       return;
     }
-    setExtendSubscriptionId(Number(sub.id));
-    setExtendSubscriptionLabel(`${userLabel({ username: sub.username, name: sub.name, id: sub.userId })} · ${sub.planName || `套餐 #${sub.planId}`}`);
+    extendDialog.open({ id: Number(sub.id), label: `${userLabel({ username: sub.username, name: sub.name, id: sub.userId })} · ${sub.planName || `套餐 #${sub.planId}`}` });
     setExtendExpiresAtInput(formatBillingDateInput(sub.expiresAt));
-    setShowExtendDialog(true);
   };
 
   const openCancelSubscriptionDialog = (sub: any) => {
@@ -1140,10 +696,21 @@ function UsersContent() {
       toast.error("只有生效中的订阅可以取消");
       return;
     }
-    setCancelSubscriptionId(Number(sub.id));
-    setCancelSubscriptionLabel(userLabel({ username: sub.username, name: sub.name, id: sub.userId }));
-    setCancelSubscriptionPlanLabel(sub.planName || `套餐 #${sub.planId}`);
-    setShowCancelSubscriptionDialog(true);
+    const label = userLabel({ username: sub.username, name: sub.name, id: sub.userId });
+    const planLabel = sub.planName || `套餐 #${sub.planId}`;
+    void confirmDialog({
+      title: "取消订阅",
+      description: `确认取消 "${label}" 的 ${planLabel || "当前套餐"} 订阅？`,
+      details: (
+        <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-muted-foreground">
+          取消后该订阅会立即停止生效，关联的本周期附加流量也会失效。用户账户和历史记录不会被删除。
+        </div>
+      ),
+      confirmText: "确认取消",
+      confirmPendingText: "取消中...",
+      tone: "destructive",
+      onConfirm: () => cancelSubscriptionMutation.mutateAsync({ id: Number(sub.id) }),
+    });
   };
 
   const handleAdminAddTrafficAddon = () => {
@@ -1168,56 +735,6 @@ function UsersContent() {
     });
   };
 
-  const handleCancelSubscription = () => {
-    if (!cancelSubscriptionId) return;
-    cancelSubscriptionMutation.mutate({ id: cancelSubscriptionId });
-  };
-  const tunnelRouteText = (tunnel: any) => getTunnelRouteText(tunnel, allHosts);
-  const billableHostIds = new Set((trafficBillingConfigs?.configs || []).filter((item: any) => item.resourceType === "host" && item.enabled && item.requiresPermission).map((item: any) => Number(item.resourceId)));
-  const billableTunnelIds = new Set((trafficBillingConfigs?.configs || []).filter((item: any) => item.resourceType === "tunnel" && item.enabled && item.requiresPermission).map((item: any) => Number(item.resourceId)));
-  const billableForwardGroupIds = new Set((trafficBillingConfigs?.configs || []).filter((item: any) => item.resourceType === "forward_group" && item.enabled && item.requiresPermission).map((item: any) => Number(item.resourceId)));
-  const normalizeForwardGroupModeForAuth = (group: any | null | undefined) => {
-    const mode = String(group?.groupMode || "failover");
-    return mode === "port" || mode === "chain" || mode === "failover" ? mode : "other";
-  };
-  const forwardGroupAuthLabel = (group: any | null | undefined) => {
-    const mode = normalizeForwardGroupModeForAuth(group);
-    if (mode === "port") return "端口转发";
-    if (mode === "chain") return "转发链";
-    return "转发组";
-  };
-  const authForwardGroups = (allForwardGroups || []).filter((group: any) => {
-    const mode = normalizeForwardGroupModeForAuth(group);
-    return mode === "port" || mode === "chain" || mode === "failover";
-  });
-  const portForwardGroups = authForwardGroups.filter((group: any) => normalizeForwardGroupModeForAuth(group) === "port");
-  const chainAndFailoverGroups = authForwardGroups.filter((group: any) => normalizeForwardGroupModeForAuth(group) !== "port");
-  const selectedAllowedPortForwards = portForwardGroups.filter((group: any) => allowedForwardGroupIds.includes(Number(group.id)));
-  const availableAllowedPortForwards = portForwardGroups.filter((group: any) => !allowedForwardGroupIds.includes(Number(group.id)));
-  const selectedAllowedChainAndFailoverGroups = chainAndFailoverGroups.filter((group: any) => allowedForwardGroupIds.includes(Number(group.id)));
-  const availableAllowedChainAndFailoverGroups = chainAndFailoverGroups.filter((group: any) => !allowedForwardGroupIds.includes(Number(group.id)));
-  const selectedAllowedHosts = (allHosts || []).filter((host: any) => allowedHostIds.includes(Number(host.id)));
-  const availableAllowedHosts = (allHosts || []).filter((host: any) => !allowedHostIds.includes(Number(host.id)));
-  /**
-   * 分享候选：排掉他自己的节点 —— 自己的节点本来就在他订阅里，再分享一遍
-   * 客户端里会出现两条一模一样的线路。
-   */
-  const shareableProxyNodes = (proxyNodeShareOptions || []).filter(
-    (node: any) => Number(node.userId) !== Number(trafficUserId || 0),
-  );
-  const selectedSharedProxyNodes = shareableProxyNodes.filter((node: any) => sharedProxyNodeIds.includes(Number(node.id)));
-  const availableSharedProxyNodes = shareableProxyNodes.filter((node: any) => !sharedProxyNodeIds.includes(Number(node.id)));
-  const selectedAllowedTunnels = (allTunnels || []).filter((t: any) => allowedTunnelIds.includes(Number(t.id)));
-  const availableAllowedTunnels = (allTunnels || []).filter((t: any) => !allowedTunnelIds.includes(Number(t.id)));
-  const billableHosts = (allHosts || []).filter((h: any) => billableHostIds.has(Number(h.id)));
-  const availableBillingHosts = billableHosts.filter((h: any) => !trafficBillingHostIds.includes(Number(h.id)));
-  const selectedBillingHosts = billableHosts.filter((h: any) => trafficBillingHostIds.includes(Number(h.id)));
-  const billableTunnels = (allTunnels || []).filter((t: any) => billableTunnelIds.has(Number(t.id)));
-  const availableBillingTunnels = billableTunnels.filter((t: any) => !trafficBillingTunnelIds.includes(Number(t.id)));
-  const selectedBillingTunnels = billableTunnels.filter((t: any) => trafficBillingTunnelIds.includes(Number(t.id)));
-  const billableForwardGroups = authForwardGroups.filter((group: any) => billableForwardGroupIds.has(Number(group.id)));
-  const availableBillingForwardGroups = billableForwardGroups.filter((group: any) => !trafficBillingForwardGroupIds.includes(Number(group.id)));
-  const selectedBillingForwardGroups = billableForwardGroups.filter((group: any) => trafficBillingForwardGroupIds.includes(Number(group.id)));
 
   /**
    * 一个用户的全部细节 —— 就是原来窄屏那张大卡的内容，一项没少，只是挪进了弹窗。
@@ -1863,83 +1380,94 @@ function UsersContent() {
         </TabsContent>
       </Tabs>
 
-      {/* Create User Dialog */}
-      <Dialog open={showCreateUser} onOpenChange={setShowCreateUser}>
-        <DialogContent className="sm:max-w-md">
-          <DialogTitle>添加用户</DialogTitle>
-          <DialogDescription data-fx-help="">创建系统用户。</DialogDescription>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="create-username">用户名</Label>
-              <Input
-                id="create-username"
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                placeholder="请输入用户名"
-                autoFocus
-              />
+      {/* 流量与权限设置：懒加载，第一次打开才拉这个模块；关闭动画期间 shown 还在，面板不会先塌掉 */}
+      {trafficDialog.shown ? (
+        <Suspense fallback={null}>
+          <UserTrafficSettingsDialog
+            open={trafficDialog.isOpen}
+            onOpenChange={(open) => { if (!open) trafficDialog.close(); }}
+            user={trafficDialog.shown}
+            userName={userLabel(trafficDialog.shown)}
+            patchCachedUser={patchCachedUser}
+          />
+        </Suspense>
+      ) : null}
+
+      {/* Create User Dialog：FormDialog —— 回车提交、填了一半关之前先问、创建中不许关 */}
+      <FormDialog
+        open={showCreateUser}
+        onOpenChange={setShowCreateUser}
+        title="添加用户"
+        description="创建系统用户。"
+        descriptionProps={{ "data-fx-help": "" }}
+        className="sm:max-w-md"
+        onSubmit={handleCreateUser}
+        submitText="创建用户"
+        pendingText="创建中..."
+        pending={createUserMutation.isPending}
+        dirty={createUserDirty}
+      >
+        <div className="space-y-2">
+          <Label htmlFor="create-username">用户名</Label>
+          <Input
+            id="create-username"
+            value={newUsername}
+            onChange={(e) => setNewUsername(e.target.value)}
+            placeholder="请输入用户名"
+            autoFocus
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="create-password">密码</Label>
+          <PasswordInput
+            id="create-password"
+            value={newUserPassword}
+            onChange={(e) => setNewUserPassword(e.target.value)}
+            placeholder="请输入密码（至少6个字符）"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="create-name">显示名称（可选）</Label>
+          <Input
+            id="create-name"
+            value={newUserName}
+            onChange={(e) => setNewUserName(e.target.value)}
+            placeholder="请输入显示名称"
+            maxLength={24}
+          />
+        </div>
+        <FormField className="space-y-2">
+          <Label>转发总开关</Label>
+          <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
+            <div className="min-w-0 pr-3">
+              <p data-fx-help="" className="text-xs text-muted-foreground">关闭后不能创建或启用规则。</p>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-password">密码</Label>
-              <PasswordInput
-                id="create-password"
-                value={newUserPassword}
-                onChange={(e) => setNewUserPassword(e.target.value)}
-                placeholder="请输入密码（至少6个字符）"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-name">显示名称（可选）</Label>
-              <Input
-                id="create-name"
-                value={newUserName}
-                onChange={(e) => setNewUserName(e.target.value)}
-                placeholder="请输入显示名称"
-                maxLength={24}
-              />
-            </div>
-            <FormField className="space-y-2">
-              <Label>转发总开关</Label>
-              <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
-                <div className="min-w-0 pr-3">
-                  <p data-fx-help="" className="text-xs text-muted-foreground">关闭后不能创建或启用规则。</p>
-                </div>
-                <Checkbox
-                  checked={newCanAddRules}
-                  onCheckedChange={(checked) => {
-                    setNewCanAddRules(checked);
-                  }}
-                />
-              </div>
-            </FormField>
-            <FormField className="space-y-2">
-              <Label>客户端订阅</Label>
-              <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
-                <div className="min-w-0 pr-3">
-                  <p data-fx-help="" className="text-xs text-muted-foreground">
-                    允许生成订阅地址导入客户端。与转发权限互不影响。
-                  </p>
-                </div>
-                <Checkbox
-                  checked={newAllowProxySubscription}
-                  onCheckedChange={setNewAllowProxySubscription}
-                />
-              </div>
-            </FormField>
+            <Checkbox
+              checked={newCanAddRules}
+              onCheckedChange={(checked) => {
+                setNewCanAddRules(checked);
+              }}
+            />
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateUser(false)}>
-              取消
-            </Button>
-            <Button onClick={handleCreateUser} disabled={createUserMutation.isPending}>
-              {createUserMutation.isPending ? "创建中..." : "创建用户"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </FormField>
+        <FormField className="space-y-2">
+          <Label>客户端订阅</Label>
+          <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
+            <div className="min-w-0 pr-3">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
+                允许生成订阅地址导入客户端。与转发权限互不影响。
+              </p>
+            </div>
+            <Checkbox
+              checked={newAllowProxySubscription}
+              onCheckedChange={setNewAllowProxySubscription}
+            />
+          </div>
+        </FormField>
+      </FormDialog>
 
       {/* Account Dialog */}
-      <Dialog open={showResetPassword} onOpenChange={setShowResetPassword}>
+      <Dialog {...accountDialog.dialogProps}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>账户信息</DialogTitle>
           <DialogDescription>修改 "{resetUserName}" 的账号信息。</DialogDescription>
@@ -1985,7 +1513,7 @@ function UsersContent() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowResetPassword(false)}>
+            <Button variant="outline" onClick={accountDialog.close}>
               取消
             </Button>
             <Button onClick={handleResetPassword} disabled={resetPasswordMutation.isPending}>
@@ -1995,75 +1523,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
 
-      {/* Reset Traffic Dialog */}
-      <Dialog open={showResetTraffic} onOpenChange={setShowResetTraffic}>
-        <DialogContent className="sm:max-w-md">
-          <DialogTitle>重置流量统计</DialogTitle>
-          <DialogDescription>
-            确认重置 "{resetTrafficUserName}" 的套餐/分配流量和按量计费流量统计？已产生的扣费记录不会撤销。
-          </DialogDescription>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowResetTraffic(false)}
-              disabled={resetTrafficMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button onClick={handleResetTraffic} disabled={resetTrafficMutation.isPending}>
-              {resetTrafficMutation.isPending ? "重置中..." : "确认重置"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showRemoveTwoFactor} onOpenChange={setShowRemoveTwoFactor}>
-        <DialogContent className="sm:max-w-md">
-          <DialogTitle>移除双因素认证</DialogTitle>
-          <DialogDescription>
-            确认移除 "{removeTwoFactorUserName}" 已绑定的 2FA？移除后该用户下次登录不再需要双因素验证码。
-          </DialogDescription>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowRemoveTwoFactor(false)}
-              disabled={removeTwoFactorMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleRemoveTwoFactor}
-              disabled={removeTwoFactorMutation.isPending}
-            >
-              {removeTwoFactorMutation.isPending ? "移除中..." : "确认移除"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showDeleteUser} onOpenChange={setShowDeleteUser}>
-        <DialogContent className="sm:max-w-md">
-          <DialogTitle>删除用户</DialogTitle>
-          <DialogDescription>
-            确认删除用户 "{deleteUserName}"？该操作会同时删除该用户名下的全部转发规则（先结算流量并停止转发）和权限配置，且不可撤销。该用户名下还有隧道、转发组或主机时无法删除，请先转移给其他用户或删除。
-          </DialogDescription>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowDeleteUser(false)}
-              disabled={deleteMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteUser} disabled={deleteMutation.isPending}>
-              {deleteMutation.isPending ? "删除中..." : "确认删除"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showRecharge} onOpenChange={setShowRecharge}>
+      <Dialog {...rechargeDialog.dialogProps}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>余额充值</DialogTitle>
           <DialogDescription>给 "{rechargeUserName}" 增加余额。</DialogDescription>
@@ -2081,7 +1541,7 @@ function UsersContent() {
             </FormField>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowRecharge(false)}>
+            <Button variant="outline" onClick={rechargeDialog.close}>
               取消
             </Button>
             <Button onClick={handleRecharge} disabled={adminRechargeMutation.isPending}>
@@ -2091,7 +1551,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showSetBalance} onOpenChange={setShowSetBalance}>
+      <Dialog {...setBalanceDialog.dialogProps}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>修改余额</DialogTitle>
           <DialogDescription>直接设置 "{setBalanceUserName}" 的当前余额。</DialogDescription>
@@ -2109,7 +1569,7 @@ function UsersContent() {
             </FormField>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowSetBalance(false)} disabled={adminSetBalanceMutation.isPending}>
+            <Button variant="outline" onClick={setBalanceDialog.close} disabled={adminSetBalanceMutation.isPending}>
               取消
             </Button>
             <Button onClick={handleSetBalance} disabled={adminSetBalanceMutation.isPending}>
@@ -2119,7 +1579,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showSendEmail} onOpenChange={setShowSendEmail}>
+      <Dialog {...emailDialog.dialogProps}>
         <DialogContent className="sm:max-w-lg">
           <DialogTitle>发送邮件</DialogTitle>
           <DialogDescription>发送给用户 "{emailUserName}" 的已验证邮箱：{emailTo}</DialogDescription>
@@ -2146,7 +1606,7 @@ function UsersContent() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowSendEmail(false)}>
+            <Button variant="outline" onClick={emailDialog.close}>
               取消
             </Button>
             <Button onClick={handleSendEmail} disabled={sendEmailMutation.isPending}>
@@ -2184,7 +1644,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showAddonDialog} onOpenChange={setShowAddonDialog}>
+      <Dialog {...addonDialog.dialogProps}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>加赠本周期流量</DialogTitle>
           <DialogDescription>
@@ -2209,7 +1669,7 @@ function UsersContent() {
             </FormField>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddonDialog(false)}>
+            <Button variant="outline" onClick={addonDialog.close}>
               取消
             </Button>
             <Button onClick={handleAdminAddTrafficAddon} disabled={adminAddTrafficAddonMutation.isPending}>
@@ -2219,7 +1679,7 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showExtendDialog} onOpenChange={setShowExtendDialog}>
+      <Dialog {...extendDialog.dialogProps}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>更改到期时间</DialogTitle>
           <DialogDescription>给 "{extendSubscriptionLabel}" 设置订阅到期时间。</DialogDescription>
@@ -2240,7 +1700,7 @@ function UsersContent() {
             </FormField>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowExtendDialog(false)}>
+            <Button variant="outline" onClick={extendDialog.close}>
               取消
             </Button>
             <Button onClick={handleExtendSubscription} disabled={extendSubscriptionMutation.isPending}>
@@ -2250,840 +1710,6 @@ function UsersContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={showCancelSubscriptionDialog}
-        onOpenChange={(open) => {
-          if (cancelSubscriptionMutation.isPending) return;
-          setShowCancelSubscriptionDialog(open);
-          if (!open) {
-            setCancelSubscriptionId(null);
-            setCancelSubscriptionLabel("");
-            setCancelSubscriptionPlanLabel("");
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogTitle>取消订阅</DialogTitle>
-          <DialogDescription>
-            确认取消 "{cancelSubscriptionLabel}" 的 {cancelSubscriptionPlanLabel || "当前套餐"} 订阅？
-          </DialogDescription>
-          <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-muted-foreground">
-            取消后该订阅会立即停止生效，关联的本周期附加流量也会失效。用户账户和历史记录不会被删除。
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowCancelSubscriptionDialog(false)}
-              disabled={cancelSubscriptionMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleCancelSubscription}
-              disabled={!cancelSubscriptionId || cancelSubscriptionMutation.isPending}
-            >
-              {cancelSubscriptionMutation.isPending ? "取消中..." : "确认取消"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Traffic & Permission Settings Dialog */}
-      <Dialog open={showTrafficSettings} onOpenChange={setShowTrafficSettings}>
-        {/* overflow-hidden：滚动只交给下面的 TabsContent，否则 DialogContent 默认的 overflow-y-auto 会再套一层滚动区 */}
-        <DialogContent className="sm:max-w-lg max-h-[90svh] flex flex-col overflow-hidden">
-          <DialogTitle>流量与权限设置</DialogTitle>
-          <DialogDescription data-fx-help="">
-            设置 "{trafficUserName}" 的管理员额外配额和权限；套餐权益在订阅管理中单独体现。
-          </DialogDescription>
-          <Tabs defaultValue="permission" className="flex-1 min-h-0 flex flex-col">
-            <TabsList className="grid grid-cols-3 w-full">
-              <TabsTrigger value="permission" className="gap-1.5">
-                <Shield className="h-3.5 w-3.5" />
-                <span>权限</span>
-              </TabsTrigger>
-              <TabsTrigger value="traffic" className="gap-1.5">
-                <Database className="h-3.5 w-3.5" />
-                <span>流量</span>
-              </TabsTrigger>
-              <TabsTrigger value="hosts" className="gap-1.5">
-                <Server className="h-3.5 w-3.5" />
-                <span>授权</span>
-              </TabsTrigger>
-            </TabsList>
-
-            {/* 权限标签页 */}
-            <TabsContent value="permission" className="flex-1 min-h-0 overflow-y-auto pr-1 mt-3 space-y-3 data-[state=inactive]:hidden">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <FormField className="space-y-2 sm:col-span-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <Label>用户备注</Label>
-                    <span className="text-xs text-muted-foreground">{trafficDisplayRemark.trim().length}/24</span>
-                  </div>
-                  <Input
-                    value={trafficDisplayRemark}
-                    maxLength={24}
-                    onChange={(e) => setTrafficDisplayRemark(e.target.value.slice(0, 24))}
-                    placeholder="可选，留空则不显示"
-                  />
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>最大规则数</Label>
-                  <Input
-                    type="number"
-                    value={maxRules || ""}
-                    onChange={(e) => setMaxRules(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">0 或留空表示不限制</p>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>最大落地节点数</Label>
-                  <Input
-                    type="number"
-                    value={maxProxyInbounds || ""}
-                    onChange={(e) => setMaxProxyInbounds(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">
-                    他自己能在被授权的主机上开几个落地节点。管理员替他开的也算在内。0 或留空表示不限制。
-                  </p>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>能自助加几台机器</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={maxSelfServiceHosts}
-                    onChange={(e) => setMaxSelfServiceHosts(e.target.value)}
-                    placeholder="留空=按系统设置"
-                  />
-                  {/*
-                    空和 0 刻意分开：这是个数量字段，人填 0 就是想说「一台都不给他」。
-                    当成「不限」就把他放开了，当成「跟随全局」就等于根本没法卡死某一个人。
-                  */}
-                  <p data-fx-help="" className="text-xs text-muted-foreground">
-                    他自己能在「我的机器」里加几台。<strong>留空</strong>＝跟随系统设置里的全局上限；<strong>填 0</strong>＝一台都不许加。
-                  </p>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>最大订阅地址数</Label>
-                  <Input
-                    type="number"
-                    value={maxProxySubTokens || ""}
-                    onChange={(e) => setMaxProxySubTokens(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">
-                    他能生成几条订阅地址。每条都是一份完整凭据，发出去就只能靠吊销那一条收回。0 或留空表示不限制。
-                  </p>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>订阅设备数上限</Label>
-                  <Input
-                    type="number"
-                    value={maxProxyDevices || ""}
-                    onChange={(e) => setMaxProxyDevices(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">
-                    一条订阅地址最多在几台设备上用。要在「订阅运营 → 设置」里开了设备数限制才生效；和套餐、令牌上的上限取最严。0 或留空表示不限制。
-                  </p>
-                </FormField>
-                <div className="sm:col-span-2">
-                  <UserProxySubConfig userId={trafficUserId} />
-                </div>
-                <FormField className="space-y-2">
-                  <Label>最大端口数</Label>
-                  <Input
-                    type="number"
-                    value={maxPorts || ""}
-                    onChange={(e) => setMaxPorts(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">0 或留空表示不限制</p>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>最大连接数</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={maxConnections || ""}
-                    onChange={(e) => setMaxConnections(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
-                </FormField>
-                <FormField className="space-y-2">
-                  <Label>单 IP 接入限制</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={maxIPs || ""}
-                    onChange={(e) => setMaxIPs(parseInt(e.target.value) || 0)}
-                    placeholder="0=不限制"
-                  />
-                  <p data-fx-help="" className="text-xs text-muted-foreground">限制每个来源 IP 的 TCP 并发连接数，不是 IP 个数。隧道按规则计数；普通转发要在系统设置里打开「普通转发接入限制」才执行，按用户、入口主机共享。UDP 不适用。</p>
-                </FormField>
-              </div>
-              <Separator />
-              <FormField className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <Label>客户端订阅</Label>
-                  <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">
-                    允许生成订阅地址导入客户端，与转发权限互不影响。
-                    套餐已附带该权限的用户不受这里影响；流量用尽或账号被停时自动收回。
-                  </p>
-                </div>
-                <Checkbox
-                  checked={allowProxySubscription}
-                  onCheckedChange={setAllowProxySubscription}
-                  className="mt-1 shrink-0"
-                />
-              </FormField>
-              <Separator />
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">允许使用的转发方式</Label>
-                <p data-fx-help="" className="text-xs text-muted-foreground">全部关闭则禁止转发。</p>
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(132px,1fr))] gap-2">
-                  <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
-                    <span className="min-w-0 truncate text-xs font-medium">iptables</span>
-                    <Checkbox aria-label="允许使用 iptables" className="shrink-0" checked={allowIptables} onCheckedChange={setAllowIptables} />
-                  </div>
-                  <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
-                    <span className="min-w-0 truncate text-xs font-medium">nftables</span>
-                    <Checkbox aria-label="允许使用 nftables" className="shrink-0" checked={allowNftables} onCheckedChange={setAllowNftables} />
-                  </div>
-                  <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
-                    <span className="min-w-0 truncate text-xs font-medium">realm</span>
-                    <Checkbox aria-label="允许使用 realm" className="shrink-0" checked={allowRealm} onCheckedChange={setAllowRealm} />
-                  </div>
-                  <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
-                    <span className="min-w-0 truncate text-xs font-medium">socat</span>
-                    <Checkbox aria-label="允许使用 socat" className="shrink-0" checked={allowSocat} onCheckedChange={setAllowSocat} />
-                  </div>
-                  <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
-                    <span className="min-w-0 truncate text-xs font-medium">gost</span>
-                    <Checkbox aria-label="允许使用 gost" className="shrink-0" checked={allowGost} onCheckedChange={setAllowGost} />
-                  </div>
-                </div>
-              </div>
-            </TabsContent>
-
-            {/* 流量标签页 */}
-            <TabsContent value="traffic" className="flex-1 min-h-0 overflow-y-auto pr-1 mt-3 space-y-4 data-[state=inactive]:hidden">
-              <div className="space-y-2">
-                <Label className="flex items-center gap-1.5 text-sm">
-                  <Database className="h-3.5 w-3.5" />
-                  流量限额
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    min={0}
-                    step="0.01"
-                    value={trafficLimitInput}
-                    onChange={(e) => setTrafficLimitInput(e.target.value)}
-                    placeholder="0"
-                    className="flex-1"
-                  />
-                  <span className="text-sm text-muted-foreground select-none">GB</span>
-                </div>
-                <p data-fx-help="" className="text-xs text-muted-foreground">
-                  单位 GB，0 表示不限。
-                </p>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-3 rounded-lg border border-border/50 bg-muted/20 p-3">
-                <div className="space-y-1">
-                  <Label className="flex items-center gap-1.5 text-sm">
-                    <Gauge className="h-3.5 w-3.5" />
-                    转发限速
-                  </Label>
-                  <p data-fx-help="" className="text-xs text-muted-foreground">
-                    对普通端口转发和隧道入口生效。同一用户在一台主机上的所有规则、所有连接共用这个速度，开多线程也绕不过去。
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {([
-                    ["上行（客户端 → 目标）", gostRateLimitInInput, setGostRateLimitInInput],
-                    ["下行（目标 → 客户端）", gostRateLimitOutInput, setGostRateLimitOutInput],
-                  ] as const).map(([label, value, setValue]) => (
-                    <div key={label} className="space-y-2">
-                      <Label className="text-xs">{label}</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          min={0}
-                          max={1000000}
-                          step="1"
-                          value={value}
-                          onChange={(e) => setValue(e.target.value)}
-                          placeholder="0"
-                          aria-label={label}
-                        />
-                        <span className="text-xs text-muted-foreground select-none whitespace-nowrap">Mbps</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label className="text-xs">突发峰值</Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        max={1000000}
-                        step="1"
-                        value={forwardBurstMbpsInput}
-                        onChange={(e) => setForwardBurstMbpsInput(e.target.value)}
-                        placeholder="0"
-                        aria-label="突发峰值"
-                      />
-                      <span className="text-xs text-muted-foreground select-none whitespace-nowrap">Mbps</span>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs">突发时长</Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        min={0}
-                        max={3600}
-                        step="1"
-                        value={forwardBurstSecondsInput}
-                        onChange={(e) => setForwardBurstSecondsInput(e.target.value)}
-                        placeholder="0"
-                        aria-label="突发时长"
-                      />
-                      <span className="text-xs text-muted-foreground select-none whitespace-nowrap">秒</span>
-                    </div>
-                  </div>
-                </div>
-                <p data-fx-help="" className="text-xs text-muted-foreground">
-                  填 0 表示不限速。突发：先按峰值跑这么多秒，用满了降回上面的速度，用得少时额度慢慢回满；峰值不高于上下行速度时不生效。
-                  上下行分开和突发需要 Agent 2.2.230 以上，gost 转发和隧道入口只按上下行速度限、不做突发。
-                </p>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-2">
-                <Label className="flex items-center gap-1.5 text-sm">
-                  <CalendarClock className="h-3.5 w-3.5" />
-                  到期日期
-                </Label>
-                <DatePickerInput
-                  value={expiresAtInput}
-                  onChange={setExpiresAtInput}
-                  placeholder="永久有效"
-                />
-                <p data-fx-help="" className="text-xs text-muted-foreground">
-                  留空表示永久有效。
-                </p>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
-                  <div className="min-w-0 pr-3">
-                    <p className="text-sm font-medium flex items-center gap-1.5">
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      启用月度自动重置
-                    </p>
-                    <p data-fx-help="" className="text-xs text-muted-foreground">每月自动清零已用流量。</p>
-                  </div>
-                  <Checkbox aria-label="启用月度自动重置"
-                    checked={trafficAutoReset}
-                    onCheckedChange={(checked) => {
-                      setTrafficAutoReset(checked);
-                      // 启用时默认以当前日期作为重置日；29–31 日在小月按月末重置
-                      if (checked) {
-                        const today = currentBillingResetDay();
-                        setTrafficResetDay(today);
-                      }
-                    }}
-                  />
-                </div>
-                {trafficAutoReset && (
-                  <FormField className="space-y-2 pt-1">
-                    <Label>重置日期（每月第几天）</Label>
-                    <Select
-                      value={String(trafficResetDay)}
-                      onValueChange={(v) => setTrafficResetDay(parseInt(v))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Array.from({ length: MONTHLY_RESET_MAX_DAY }, (_, i) => i + 1).map((d) => (
-                          <SelectItem key={d} value={String(d)}>
-                            每月 {d} 日
-                            {d === currentBillingResetDay() ? "（今日）" : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p data-fx-help="" className="text-xs text-muted-foreground">
-                      默认以启用当天作为重置日，可修改为每月 1–{MONTHLY_RESET_MAX_DAY} 号中任意一天；小月在月末重置（如 31 日在 2 月按 28/29 日）
-                    </p>
-                  </FormField>
-                )}
-              </div>
-            </TabsContent>
-
-            {/* 授权标签页 */}
-            <TabsContent value="hosts" className="flex-1 min-h-0 overflow-y-auto pr-1 mt-3 space-y-4 data-[state=inactive]:hidden">
-              <p data-fx-help="" className="text-xs text-muted-foreground">
-                默认不展开全部资源，按需选择要授权给该用户的端口转发、转发链、转发组、隧道、网络测试主机和计费资源。
-              </p>
-              {/*
-                八类资源原来一段接一段竖着排、各带一个表头和空提示，一屏翻不完（标准布局重构工作包二）。
-                现在一排药丸选类型，只列选中的那一类；数字是已授权的个数。两种布局都这样。
-              */}
-              <FilterChips
-                ariaLabel="资源类型"
-                wrap
-                value={resourceGrantKind}
-                onChange={setResourceGrantKind}
-                items={[
-                  { value: "port", label: "端口转发", count: selectedAllowedPortForwards.length },
-                  { value: "group", label: "转发链/转发组", count: selectedAllowedChainAndFailoverGroups.length },
-                  { value: "tunnel", label: "隧道转发", count: allowedTunnelIds.length },
-                  { value: "node", label: "订阅节点分享", count: sharedProxyNodeIds.length },
-                  { value: "lgHost", label: "网络测试主机", count: allowedHostIds.length },
-                  { value: "billingGroup", label: "流量计费资源", count: trafficBillingForwardGroupIds.length },
-                  { value: "billingHost", label: "历史计费主机", count: trafficBillingHostIds.length },
-                  { value: "billingTunnel", label: "流量计费隧道", count: trafficBillingTunnelIds.length },
-                ]}
-              />
-
-              {resourceGrantKind === "port" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">端口转发授权</Label>
-                  <Badge variant="outline" className="text-[11px]">{selectedAllowedPortForwards.length} 条</Badge>
-                </div>
-                <Select value={addAllowedPortForwardId} onValueChange={addForwardGroupPermission} disabled={!availableAllowedPortForwards.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableAllowedPortForwards.length ? "选择要授权的端口转发" : "暂无可添加端口转发"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableAllowedPortForwards.map((group: any) => (
-                      <SelectItem key={group.id} value={String(group.id)}>
-                        {group.name} · {String(group.forwardType || "-")}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedAllowedPortForwards.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedAllowedPortForwards.map((group: any) => (
-                      <div key={group.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm font-medium truncate">{group.name}</span>
-                          <span className="text-[11px] text-muted-foreground font-mono truncate">{String(group.forwardType || "-")}</span>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setAllowedForwardGroupIds(prev => prev.filter(id => id !== Number(group.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未授权端口转发，可从上方选择添加。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "group" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">转发链/转发组授权</Label>
-                  <Badge variant="outline" className="text-[11px]">{selectedAllowedChainAndFailoverGroups.length} 条</Badge>
-                </div>
-                <Select value={addAllowedForwardGroupId} onValueChange={addForwardGroupPermission} disabled={!availableAllowedChainAndFailoverGroups.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableAllowedChainAndFailoverGroups.length ? "选择要授权的转发链或转发组" : "暂无可添加转发链或转发组"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableAllowedChainAndFailoverGroups.map((group: any) => (
-                      <SelectItem key={group.id} value={String(group.id)}>
-                        {group.name} · {forwardGroupAuthLabel(group)} · {String(group.forwardType || "-")}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedAllowedChainAndFailoverGroups.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedAllowedChainAndFailoverGroups.map((group: any) => (
-                      <div key={group.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm font-medium truncate">{group.name}</span>
-                          <Badge variant="outline" className="text-[11px] px-1.5 py-0">{forwardGroupAuthLabel(group)}</Badge>
-                          <span className="text-[11px] text-muted-foreground font-mono truncate">{String(group.forwardType || "-")}</span>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setAllowedForwardGroupIds(prev => prev.filter(id => id !== Number(group.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未授权转发链或转发组，可从上方选择添加。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "tunnel" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">隧道转发</Label>
-                  <Badge variant="outline" className="text-[11px]">{allowedTunnelIds.length} 条</Badge>
-                </div>
-                <Select value={addAllowedTunnelId} onValueChange={addTunnelPermission} disabled={!availableAllowedTunnels.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableAllowedTunnels.length ? "选择要授权的隧道" : "暂无可添加隧道"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableAllowedTunnels.map((t: any) => (
-                      <SelectItem key={t.id} value={String(t.id)}>
-                        {t.name} · {tunnelRouteText(t)} :{t.listenPort}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedAllowedTunnels.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedAllowedTunnels.map((t: any) => (
-                      <div key={t.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium truncate">{t.name}</span>
-                            <Badge variant="outline" className="text-[11px] px-1.5 py-0">{String(t.mode || "tls")}</Badge>
-                          </div>
-                          <p className="text-[11px] text-muted-foreground truncate">
-                            {tunnelRouteText(t)} :{t.listenPort}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setAllowedTunnelIds(prev => prev.filter(id => id !== Number(t.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未授权隧道，可从上方选择添加。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "node" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">订阅节点分享</Label>
-                  <Badge variant="outline" className="text-[11px]">{sharedProxyNodeIds.length} 个</Badge>
-                </div>
-                <p data-fx-help="" className="text-xs text-muted-foreground">
-                  选中的节点会直接出现在他的订阅里，节点仍然是原主人的，他改不了也删不掉。
-                  流量记在节点主人名下 —— 同一个端口分给几个人用，面板按端口计量，拆不开。
-                  {/* 找不到东西在哪儿，是这个功能最常见的「以为没生效」。 */}
-                  他在「订阅管理 → 我的节点」里看到它们，标着「管理员分享」；「我的套餐」那一页只管套餐，不列节点。
-                </p>
-                <Select value={addSharedProxyNodeId} onValueChange={addProxyNodeShare} disabled={!availableSharedProxyNodes.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableSharedProxyNodes.length ? "选择要分享的节点" : "暂无可分享的节点"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableSharedProxyNodes.map((node: any) => (
-                      <SelectItem key={node.id} value={String(node.id)}>
-                        {node.name} · {String(node.protocol || "-")} · {String(node.address || "-")}:{node.port}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedSharedProxyNodes.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedSharedProxyNodes.map((node: any) => (
-                      <div key={node.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium truncate">{node.name}</span>
-                            <Badge variant="outline" className="text-[11px] px-1.5 py-0">{String(node.protocol || "-")}</Badge>
-                            {!node.isEnabled ? (
-                              <Badge variant="outline" className="text-[11px] px-1.5 py-0 text-muted-foreground">已停用</Badge>
-                            ) : null}
-                          </div>
-                          <p className="text-[11px] text-muted-foreground font-mono truncate">
-                            {String(node.address || "-")}:{node.port}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="取消分享"
-                          onClick={() => setSharedProxyNodeIds(prev => prev.filter(id => id !== Number(node.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未分享节点。只租一两个落地、不值得单开端口的用户可以从上方选。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "lgHost" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">网络测试主机授权</Label>
-                  <Badge variant="outline" className="text-[11px]">{allowedHostIds.length} 台</Badge>
-                </div>
-                <p data-fx-help="" className="text-xs text-muted-foreground">
-                  网络测试会展示用户自己创建、通过主机授权或套餐授权获得的主机；这里用于手动增加授权。端口转发、转发链或转发组的成员主机不会因此单独展示。
-                </p>
-                <Select value={addAllowedHostId} onValueChange={addHostPermission} disabled={!availableAllowedHosts.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableAllowedHosts.length ? "选择要授权用于网络测试的主机" : "暂无可添加网络测试主机"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableAllowedHosts.map((host: any) => (
-                      <SelectItem key={host.id} value={String(host.id)} textValue={String(host.name || host.ip || `主机 #${host.id}`)}>
-                        {String(host.name || host.ip || `主机 #${host.id}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedAllowedHosts.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedAllowedHosts.map((host: any) => (
-                      <div key={host.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <span className="min-w-0 truncate text-sm font-medium">{String(host.name || host.ip || `主机 #${host.id}`)}</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setAllowedHostIds(prev => prev.filter(id => id !== Number(host.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未额外授权网络测试主机。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "billingGroup" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">流量计费转发资源</Label>
-                  <Badge variant="outline" className="text-[11px]">{trafficBillingForwardGroupIds.length} 个</Badge>
-                </div>
-                <Select value={addBillingForwardGroupId} onValueChange={addTrafficBillingForwardGroup} disabled={!availableBillingForwardGroups.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableBillingForwardGroups.length ? "选择要授权的计费转发资源" : "暂无可添加计费转发资源"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableBillingForwardGroups.map((group: any) => (
-                      <SelectItem key={group.id} value={String(group.id)}>
-                        {group.name || `转发资源 #${group.id}`} · {forwardGroupAuthLabel(group)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedBillingForwardGroups.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedBillingForwardGroups.map((group: any) => (
-                      <div key={group.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-sm font-medium">{group.name || `转发资源 #${group.id}`}</span>
-                            <Badge variant="outline" className="px-1.5 py-0 text-[11px]">{forwardGroupAuthLabel(group)}</Badge>
-                          </div>
-                          <p className="truncate text-[11px] text-muted-foreground">
-                            {(group.members || []).length ? `${group.members.length} 成员` : "链路管理资源"}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setTrafficBillingForwardGroupIds(prev => prev.filter(id => id !== Number(group.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未授权计费转发资源，可从上方选择添加。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "billingHost" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">历史计费主机</Label>
-                  <Badge variant="outline" className="text-[11px]">{trafficBillingHostIds.length} 台</Badge>
-                </div>
-                <Select value={addBillingHostId} onValueChange={addTrafficBillingHost} disabled={!availableBillingHosts.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableBillingHosts.length ? "选择要授权的历史计费主机" : "暂无可添加历史计费主机"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableBillingHosts.map((h: any) => (
-                      <SelectItem key={h.id} value={String(h.id)}>
-                        {h.name} {h.ip ? `· ${h.ip}` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedBillingHosts.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedBillingHosts.map((h: any) => (
-                      <div key={h.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-sm font-medium">{h.name}</span>
-                          <span className="truncate font-mono text-[11px] text-muted-foreground">{h.ip}</span>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setTrafficBillingHostIds(prev => prev.filter(id => id !== Number(h.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未授权历史计费主机。
-                  </p>
-                )}
-              </FormField>
-              )}
-
-              {resourceGrantKind === "billingTunnel" && (
-              <FormField className="space-y-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <Label className="text-sm font-medium">流量计费隧道</Label>
-                  <Badge variant="outline" className="text-[11px]">{trafficBillingTunnelIds.length} 条</Badge>
-                </div>
-                <Select value={addBillingTunnelId} onValueChange={addTrafficBillingTunnel} disabled={!availableBillingTunnels.length}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder={availableBillingTunnels.length ? "选择要授权计费的隧道" : "暂无可添加计费隧道"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableBillingTunnels.map((t: any) => (
-                      <SelectItem key={t.id} value={String(t.id)}>
-                        {t.name} · {tunnelRouteText(t)} :{t.listenPort}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedBillingTunnels.length > 0 ? (
-                  <AutoAnimateContainer className="space-y-2">
-                    {selectedBillingTunnels.map((t: any) => (
-                      <div key={t.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-sm font-medium">{t.name}</span>
-                            <Badge variant="outline" className="px-1.5 py-0 text-[11px]">{String(t.mode || "tls")}</Badge>
-                          </div>
-                          <p className="truncate text-[11px] text-muted-foreground">
-                            {tunnelRouteText(t)} :{t.listenPort}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          title="移除授权"
-                          onClick={() => setTrafficBillingTunnelIds(prev => prev.filter(id => id !== Number(t.id)))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </AutoAnimateContainer>
-                ) : (
-                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
-                    暂未授权计费隧道，可从上方选择添加。
-                  </p>
-                )}
-              </FormField>
-              )}
-            </TabsContent>
-          </Tabs>
-          <DialogFooter className="shrink-0">
-            <Button variant="outline" onClick={() => setShowTrafficSettings(false)}>
-              取消
-            </Button>
-            <Button onClick={handleSaveTrafficSettings} disabled={updateTrafficMutation.isPending || permissionDataLoading}>
-              {updateTrafficMutation.isPending ? "保存中..." : permissionDataLoading ? "权限加载中..." : "保存设置"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <UserOnlineIpsDialogHost />
       <UserTrafficHistoryDialogHost />
     </div>

@@ -34,6 +34,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useDialogCloseGuard, useFormDirty } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -2144,10 +2145,8 @@ function RulesContent() {
   const [editingLimitBaseline, setEditingLimitBaseline] = useState<any>(null);
   const [editingOriginalProtocol, setEditingOriginalProtocol] = useState<RuleProtocol | null>(null);
   const [legacyLocalRuleEditId, setLegacyLocalRuleEditId] = useState<number | null>(null);
-  const [deleteRule, setDeleteRule] = useState<any | null>(null);
   // 主备策略面板开着的是哪条规则。存 id 不存整行：强制走之后列表会刷新，面板要跟着新数据走。
   const [policyRuleId, setPolicyRuleId] = useState<number | null>(null);
-  const [resetTrafficTarget, setResetTrafficTarget] = useState<{ scope: "all" } | { scope: "rule"; rule: any } | null>(null);
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [form, setForm] = useState<RuleFormData>(defaultForm);
   const filterResourceStorageKey = ruleFilterStorageKey(RULE_FILTER_RESOURCE_STORAGE_KEY, user);
@@ -4091,18 +4090,36 @@ function RulesContent() {
     if (submitted) setShowCopyDialog(false);
   };
 
-  const handleConfirmResetTraffic = () => {
-    if (!resetTrafficTarget) return;
-    if (resetTrafficTarget.scope === "rule") {
-      resetTrafficMutation.mutate({
-        scope: "rule",
-        ruleId: Number(resetTrafficTarget.rule?.id || 0),
-      });
-      return;
-    }
-    resetTrafficMutation.mutate({
-      scope: "all",
-      ruleIds: visibleRuleIdsForMetrics,
+  /*
+    「重置统计」和「删除规则」都走共享的确认框：请求在路上时弹窗留着、按钮写「重置中...」，
+    成功了才关。原来这两处各自手写一个 Dialog，就是因为 useConfirmDialog 没有 pending 态和 details 槽。
+  */
+  const confirmResetTraffic = (target: { scope: "all" } | { scope: "rule"; rule: any }) => {
+    if (target.scope === "all" && visibleRuleIdsForMetrics.length === 0) return;
+    void confirmDialog({
+      title: target.scope === "all" ? "重置全部规则数据" : "重置规则数据",
+      description: target.scope === "all"
+        ? `确认重置当前列表中 ${visibleRuleIdsForMetrics.length} 条规则的所有统计数据？`
+        : `确认重置规则 "${target.rule?.name || ""}" 的所有统计数据？`,
+      details: (
+        <div className="rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_20%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs leading-5 text-[var(--fx-warn-text)]">
+          这里只清除规则页面展示的统计数据，不会清除用户套餐已用流量、余额或流量按量计费记录。
+        </div>
+      ),
+      confirmText: "确认重置",
+      confirmPendingText: "重置中...",
+      onConfirm: () => resetTrafficMutation.mutateAsync(target.scope === "rule"
+        ? { scope: "rule", ruleId: Number(target.rule?.id || 0) }
+        : { scope: "all", ruleIds: visibleRuleIdsForMetrics }),
+    });
+  };
+  const confirmDeleteRule = (rule: any) => {
+    void confirmDialog({
+      title: "删除转发规则",
+      description: `确认删除 "${rule?.name}"？`,
+      confirmText: "删除",
+      confirmPendingText: "删除中...",
+      onConfirm: () => deleteMutation.mutateAsync({ id: rule.id }),
     });
   };
 
@@ -4311,6 +4328,17 @@ function RulesContent() {
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+  // 编辑规则的弹窗：改过没保存就关要先问「放弃修改？」；请求在路上时不许关（ui/form-dialog）
+  const ruleFormDirty = useFormDirty(showDialog, form);
+  const ruleDialogGuard = useDialogCloseGuard({
+    open: showDialog,
+    dirty: ruleFormDirty,
+    pending: isPending,
+    onOpenChange: (open) => {
+      if (!open) resetForm();
+      setShowDialog(open);
+    },
+  });
 
   const ruleFilters = useMemo<RuleFilterState>(() => ({
     filterUser,
@@ -4855,7 +4883,6 @@ function RulesContent() {
         utils.dashboard.trafficSeries.invalidate(),
         utils.dashboard.trafficBreakdown.invalidate(),
       ]);
-      setResetTrafficTarget(null);
       toast.success("规则统计数据已重置");
     },
     onError: (err) => toast.error(err.message || "重置数据失败"),
@@ -5915,7 +5942,9 @@ function RulesContent() {
     const ruleCategory = getRuleCategory(rule, forwardGroupById);
     const isForwardChainRule = ruleCategory === "chain";
     const probeMethod = ruleLatencyProbeMethodForRule(rule);
-    const resetting = resetTrafficMutation.isPending && resetTrafficTarget?.scope === "rule" && Number(resetTrafficTarget.rule?.id) === Number(rule.id);
+    // 哪条规则正在重置看 mutation 自己记的 variables，不另存一份目标
+    const resettingVariables = resetTrafficMutation.variables;
+    const resetting = resetTrafficMutation.isPending && resettingVariables?.scope === "rule" && Number(resettingVariables.ruleId) === Number(rule.id);
     const readOnly = user?.role !== "admin" && isAdminManagedRule(rule);
     const testAction = {
       key: "test",
@@ -5938,9 +5967,9 @@ function RulesContent() {
             ariaLabel: `重置 ${rule.name} 的统计数据`,
             icon: resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />,
             disabled: resetTrafficMutation.isPending,
-            onSelect: () => setResetTrafficTarget({ scope: "rule", rule }),
+            onSelect: () => confirmResetTraffic({ scope: "rule", rule }),
           },
-          { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
+          { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => confirmDeleteRule(rule) },
         ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
@@ -6406,6 +6435,7 @@ function RulesContent() {
   const ruleCardIsAdmin = user?.role === "admin";
   const ruleCardCompact = effectiveRuleCardSize === "compact";
   const ruleCardResetPending = resetTrafficMutation.isPending;
+  const ruleCardResetVariables = resetTrafficMutation.variables;
   const ruleCardPage = useMemo<RuleCardPage>(() => ({
     compact: ruleCardCompact,
     compactLayout,
@@ -6426,7 +6456,7 @@ function RulesContent() {
       getRuleProtocolKey,
       protocolUnsupportedLabel,
       ruleCardResetPending,
-      resetTrafficTarget,
+      ruleCardResetVariables,
     ],
   }), [
     compactLayout,
@@ -6438,10 +6468,10 @@ function RulesContent() {
     isRuleSupported,
     protocolUnsupportedLabel,
     proxyNodeNameById,
-    resetTrafficTarget,
     ruleCardCompact,
     ruleCardIsAdmin,
     ruleCardResetPending,
+    ruleCardResetVariables,
     ruleCardUi,
     ruleReorderPending,
     subscriptionAllowed,
@@ -6526,7 +6556,7 @@ function RulesContent() {
               <DropdownMenuItem onSelect={toggleRuleGroupColumn}>
                 {showRuleGroupColumn ? <Check className="h-4 w-4" /> : <span className="h-4 w-4" aria-hidden="true" />}列表显示分组列
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => confirmResetTraffic({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
   );
@@ -7012,13 +7042,7 @@ function RulesContent() {
         建完自动选中，接着填端口。不跳页 —— 跳出去再回来，填了一半的端口和
         目标地址就没了。
       */}
-      <Dialog
-        open={showDialog}
-        onOpenChange={(open) => {
-          if (!open) resetForm();
-          setShowDialog(open);
-        }}
-      >
+      <Dialog open={showDialog} onOpenChange={ruleDialogGuard.handleOpenChange}>
         <DialogContent className="flex max-h-[96svh] w-[calc(100vw-1rem)] flex-col gap-3 overflow-hidden p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑规则" : "添加转发规则"}</DialogTitle>
@@ -7663,7 +7687,7 @@ function RulesContent() {
             <p className="min-h-5 text-xs text-muted-foreground sm:mr-auto" aria-live="polite">
               {!isPending && submitBlocker ? submitBlocker : ""}
             </p>
-            <Button variant="outline" onClick={() => setShowDialog(false)}>
+            <Button variant="outline" onClick={ruleDialogGuard.requestClose}>
               取消
             </Button>
             <Button
@@ -8446,39 +8470,6 @@ function RulesContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!resetTrafficTarget} onOpenChange={(open) => !open && !resetTrafficMutation.isPending && setResetTrafficTarget(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{resetTrafficTarget?.scope === "all" ? "重置全部规则数据" : "重置规则数据"}</DialogTitle>
-            <DialogDescription>
-              {resetTrafficTarget?.scope === "all"
-                ? `确认重置当前列表中 ${visibleRuleIdsForMetrics.length} 条规则的所有统计数据？`
-                : `确认重置规则 "${resetTrafficTarget?.rule?.name || ""}" 的所有统计数据？`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_20%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs leading-5 text-[var(--fx-warn-text)]">
-            这里只清除规则页面展示的统计数据，不会清除用户套餐已用流量、余额或流量按量计费记录。
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setResetTrafficTarget(null)}
-              disabled={resetTrafficMutation.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleConfirmResetTraffic}
-              disabled={!resetTrafficTarget || resetTrafficMutation.isPending || (resetTrafficTarget.scope === "all" && visibleRuleIdsForMetrics.length === 0)}
-              className="gap-2"
-            >
-              {resetTrafficMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              {resetTrafficMutation.isPending ? "重置中..." : "确认重置"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {(() => {
         const policyRule = policyRuleId === null ? null : (rules || []).find((rule: any) => Number(rule.id) === policyRuleId);
@@ -8513,30 +8504,6 @@ function RulesContent() {
       })()}
       {/* /rules?line=<规则 id>：线路详情的深链（拓扑、订阅、线路概览都这么跳过来），自己按 id 取规则 */}
       <LineDetailFromUrl />
-      <Dialog open={!!deleteRule} onOpenChange={(open) => !open && setDeleteRule(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>删除转发规则</DialogTitle>
-            <DialogDescription>
-              确认删除 "{deleteRule?.name}"？
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteRule(null)}>取消</Button>
-            <Button
-              variant="destructive"
-              disabled={!deleteRule || deleteMutation.isPending}
-              onClick={() => {
-                if (!deleteRule) return;
-                deleteMutation.mutate({ id: deleteRule.id });
-                setDeleteRule(null);
-              }}
-            >
-              删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
