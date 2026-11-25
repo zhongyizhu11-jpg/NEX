@@ -1,0 +1,335 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [netcatty-ipa]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 生成项目并编译
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          pip install pillow
+
+          mkdir -p app/Sources/Assets.xcassets/AppIcon.appiconset
+          cd app
+
+          # ---------- XcodeGen 项目配置 ----------
+          cat > project.yml <<'EOF'
+          name: Netcatty
+          options:
+            bundleIdPrefix: net.ccuu
+            deploymentTarget:
+              iOS: "15.0"
+          targets:
+            Netcatty:
+              type: application
+              platform: iOS
+              sources: [Sources]
+              info:
+                path: Info.plist
+                properties:
+                  CFBundleDisplayName: Netcatty
+                  CFBundleDevelopmentRegion: zh_CN
+                  CFBundleLocalizations: [zh-Hans]
+                  CFBundleShortVersionString: "1.0"
+                  CFBundleVersion: "1"
+                  UILaunchScreen: {}
+                  UIStatusBarHidden: true
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+                  UISupportedInterfaceOrientations~ipad:
+                    - UIInterfaceOrientationPortrait
+                    - UIInterfaceOrientationPortraitUpsideDown
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: net.ccuu.netcatty
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  SWIFT_VERSION: "5.0"
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                  CODE_SIGNING_ALLOWED: "NO"
+          EOF
+
+          # ---------- App 源码 ----------
+          cat > Sources/App.swift <<'EOF'
+          import SwiftUI
+          import WebKit
+          import UIKit
+
+          func validURL(_ s: String) -> URL? {
+              let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+              guard let u = URL(string: t), u.scheme == "https", u.host != nil else { return nil }
+              return u
+          }
+
+          @main
+          struct NetcattyApp: App {
+              @AppStorage("loginURL") private var loginURL = ""
+
+              var body: some Scene {
+                  WindowGroup {
+                      ZStack {
+                          Color.black.ignoresSafeArea()
+                          if let url = validURL(loginURL) {
+                              WebView(url: url, onReset: { loginURL = "" })
+                          } else {
+                              SetupView(loginURL: $loginURL)
+                          }
+                      }
+                      .preferredColorScheme(.dark)
+                      .statusBarHidden(true)
+                  }
+              }
+          }
+
+          // 首次启动：填写登录链接
+          struct SetupView: View {
+              @Binding var loginURL: String
+              @State private var input = ""
+              @State private var invalid = false
+
+              var body: some View {
+                  VStack(spacing: 16) {
+                      Text("Netcatty").font(.largeTitle.bold())
+                      Text("首次使用，请粘贴你的登录链接")
+                          .foregroundColor(.secondary)
+                      TextField("https://你的域名/login-…", text: $input)
+                          .textInputAutocapitalization(.never)
+                          .disableAutocorrection(true)
+                          .keyboardType(.URL)
+                          .padding(12)
+                          .background(Color(UIColor.secondarySystemBackground))
+                          .cornerRadius(10)
+                      if invalid {
+                          Text("链接格式不对，需要以 https:// 开头")
+                              .font(.footnote)
+                              .foregroundColor(.red)
+                      }
+                      HStack(spacing: 12) {
+                          Button {
+                              input = UIPasteboard.general.string ?? ""
+                          } label: {
+                              Text("从剪贴板粘贴")
+                                  .frame(maxWidth: .infinity)
+                                  .padding(12)
+                                  .background(Color(UIColor.secondarySystemBackground))
+                                  .cornerRadius(10)
+                          }
+                          Button {
+                              if validURL(input) != nil {
+                                  loginURL = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                              } else {
+                                  invalid = true
+                              }
+                          } label: {
+                              Text("保存并连接")
+                                  .frame(maxWidth: .infinity)
+                                  .padding(12)
+                                  .background(Color.blue)
+                                  .foregroundColor(.white)
+                                  .cornerRadius(10)
+                          }
+                      }
+                  }
+                  .padding(24)
+                  .frame(maxWidth: 500)
+              }
+          }
+
+          // 网页容器
+          struct WebView: UIViewRepresentable {
+              let url: URL
+              let onReset: () -> Void
+
+              func makeCoordinator() -> Coordinator {
+                  Coordinator(url: url, onReset: onReset)
+              }
+
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.websiteDataStore = .default()
+                  config.allowsInlineMediaPlayback = true
+                  config.mediaTypesRequiringUserActionForPlayback = []
+                  let web = WKWebView(frame: .zero, configuration: config)
+                  web.navigationDelegate = context.coordinator
+                  web.uiDelegate = context.coordinator
+                  web.isOpaque = false
+                  web.backgroundColor = .black
+                  web.scrollView.backgroundColor = .black
+                  web.scrollView.bounces = false
+                  context.coordinator.web = web
+                  web.load(URLRequest(url: url))
+                  return web
+              }
+
+              func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+              @MainActor
+              final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+                  let url: URL
+                  let onReset: () -> Void
+                  weak var web: WKWebView?
+
+                  init(url: URL, onReset: @escaping () -> Void) {
+                      self.url = url
+                      self.onReset = onReset
+                  }
+
+                  func reload() {
+                      web?.load(URLRequest(url: url))
+                  }
+
+                  func webView(_ webView: WKWebView,
+                               decidePolicyFor navigationResponse: WKNavigationResponse,
+                               decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+                      if navigationResponse.isForMainFrame,
+                         let http = navigationResponse.response as? HTTPURLResponse,
+                         http.statusCode == 403 {
+                          decisionHandler(.cancel)
+                          showAlert(title: "登录链接已失效", message: "服务器拒绝访问，请重新填写登录链接。")
+                          return
+                      }
+                      decisionHandler(.allow)
+                  }
+
+                  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+                      handle(error)
+                  }
+
+                  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+                      handle(error)
+                  }
+
+                  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+                      reload()
+                  }
+
+                  private func handle(_ error: Error) {
+                      let ns = error as NSError
+                      if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
+                      if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }
+                      showAlert(title: "连接失败", message: ns.localizedDescription)
+                  }
+
+                  private func showAlert(title: String, message: String) {
+                      let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                      alert.addAction(UIAlertAction(title: "重试", style: .default) { [weak self] _ in
+                          self?.reload()
+                      })
+                      alert.addAction(UIAlertAction(title: "修改登录链接", style: .destructive) { [weak self] _ in
+                          self?.onReset()
+                      })
+                      guard let top = Self.topViewController(), !(top is UIAlertController) else { return }
+                      top.present(alert, animated: true)
+                  }
+
+                  static func topViewController() -> UIViewController? {
+                      let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                      let windows = scenes.flatMap { $0.windows }
+                      let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first
+                      var vc = window?.rootViewController
+                      while let next = vc?.presentedViewController { vc = next }
+                      return vc
+                  }
+
+                  // 网页里的提示框改成中文按钮
+                  func webView(_ webView: WKWebView,
+                               runJavaScriptAlertPanelWithMessage message: String,
+                               initiatedByFrame frame: WKFrameInfo,
+                               completionHandler: @escaping () -> Void) {
+                      let a = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+                      a.addAction(UIAlertAction(title: "好", style: .default) { _ in completionHandler() })
+                      if let top = Self.topViewController() {
+                          top.present(a, animated: true)
+                      } else {
+                          completionHandler()
+                      }
+                  }
+
+                  func webView(_ webView: WKWebView,
+                               runJavaScriptConfirmPanelWithMessage message: String,
+                               initiatedByFrame frame: WKFrameInfo,
+                               completionHandler: @escaping (Bool) -> Void) {
+                      let a = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+                      a.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(false) })
+                      a.addAction(UIAlertAction(title: "确定", style: .default) { _ in completionHandler(true) })
+                      if let top = Self.topViewController() {
+                          top.present(a, animated: true)
+                      } else {
+                          completionHandler(false)
+                      }
+                  }
+              }
+          }
+          EOF
+
+          # ---------- 图标 ----------
+          cat > Sources/Assets.xcassets/Contents.json <<'EOF'
+          {"info":{"author":"xcode","version":1}}
+          EOF
+          cat > Sources/Assets.xcassets/AppIcon.appiconset/Contents.json <<'EOF'
+          {"images":[{"filename":"icon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+          EOF
+          python - <<'EOF'
+          from PIL import Image, ImageDraw, ImageFont
+          W = 1024
+          img = Image.new("RGB", (W, W), (11, 18, 32))
+          d = ImageDraw.Draw(img)
+          try:
+              f = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 480, index=1)
+          except Exception:
+              f = ImageFont.load_default(size=480)
+          t = ">_"
+          b = d.textbbox((0, 0), t, font=f)
+          x = (W - (b[2] - b[0])) / 2 - b[0]
+          y = (W - (b[3] - b[1])) / 2 - b[1]
+          d.text((x, y), t, font=f, fill=(56, 189, 248))
+          img.save("Sources/Assets.xcassets/AppIcon.appiconset/icon.png")
+          EOF
+
+          # ---------- 编译（不签名，留给自签） ----------
+          xcodegen generate
+          xcodebuild -project Netcatty.xcodeproj -target Netcatty \
+            -configuration Release -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/Netcatty.app Payload/
+          zip -qry ../Netcatty.ipa Payload
+          ls -lh ../Netcatty.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Netcatty-ipa
+          path: Netcatty.ipa
+
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="netcatty-ipa-${{ github.run_number }}"
+          gh release create "$TAG" Netcatty.ipa \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Netcatty iOS #${{ github.run_number }}" \
+            --notes "未签名 IPA，自签后安装" \
+            --prerelease
