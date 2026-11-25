@@ -25,6 +25,7 @@ import {
   type ProxySubTokenOptions,
   type ProxySubTokenScope,
 } from "./proxySubTokenScope";
+import { compileSafeRegex } from "./safeRegex";
 
 /** 每条条目带的元信息；plan 构建时填，处理器按它改名。 */
 type ProxySubEntryMeta = {
@@ -129,14 +130,9 @@ export function applyProxySubNaming(plan: ProxySubscriptionPlan, context: ProxyS
   const template = options.nameTemplate || settings.nameTemplateDefault || PROXY_SUB_DEFAULT_NAME_TEMPLATE;
   const useFlag = resolveTriState(options.flagEmoji, settings.flagEmojiDefault);
   const useProtocol = resolveTriState(options.protocolPrefix, settings.protocolPrefixDefault);
+  // 非法的、会灾难性回溯的（shared/safeRegex.ts）按字面量替换；编译结果按源记住，不每次渲染都编。
   const renames = options.renames
-    .map((rule) => {
-      try {
-        return { regex: new RegExp(rule.from, "g"), to: rule.to };
-      } catch {
-        return { regex: null, from: rule.from, to: rule.to };
-      }
-    });
+    .map((rule) => ({ regex: compileSafeRegex(rule.from, "g"), from: rule.from, to: rule.to }));
   const templateHasFlag = /\{flag\}/i.test(template);
   // 不是默认模板的话，手填的名字照样套：用户选模板就是想统一外观；默认模板下保留原来的行为。
   // 默认模板就是「用生成时起好的名字」（规则名，没起名才是「入口 → 落地」）。以前存下来的
@@ -169,7 +165,7 @@ export function applyProxySubNaming(plan: ProxySubscriptionPlan, context: ProxyS
     if (options.suffix) name = `${name}${options.suffix}`;
     for (const rule of renames) {
       if (rule.regex) name = name.replace(rule.regex, rule.to);
-      else name = name.split((rule as any).from).join(rule.to);
+      else name = name.split(rule.from).join(rule.to);
     }
     name = tidyName(name) || entry.node.name || "节点";
     return {

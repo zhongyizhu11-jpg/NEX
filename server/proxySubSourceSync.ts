@@ -9,8 +9,10 @@
  *   - 只收 http(s)，解析出来的目标不能是私网 / 环回 / 链路本地 / 唯一本地地址；
  *     检查放在连接用的 lookup 里，连接只落在检查过的地址上（防 DNS 重绑定到内网，见 ssrf.ts）；
  *   - 不跟随跨主机跳转；同主机最多跟 3 次；
- *   - 正文最多 2 MB，边读边数、超了就断，15 秒超时；
- *   - 同一时间最多 3 路在拉。
+ *   - 正文最多 2 MB，边读边数、超了就断，15 秒超时；DNS 解析 3 秒超时；
+ *   - 定时任务同一时间最多 3 路在拉，界面上的「立即同步」最多 2 路；
+ *   - 同一个来源的同步排队跑（面板是单进程，内存里的队列就够）：原来定时任务和「立即同步」撞上时
+ *     两边都看到同一份「现有节点」、都插一遍，节点就重了。对账在一个事务里，没变的节点不写。
  */
 
 import { createHash } from "node:crypto";
@@ -20,13 +22,17 @@ import net from "node:net";
 import * as db from "./db";
 import { classifyIpAddress } from "../shared/ipAddress";
 import { parseProxySubSourceContent, parseSubscriptionUserinfoHeader } from "../shared/proxySubSource";
+import { withDatabaseTransaction } from "./dbRuntime";
+import { createKeyedSerial } from "./keyedSerial";
 import { invalidateProxySubCacheForUser } from "./proxySubCache";
 import { loadProxySubSettings } from "./proxySubSettings";
 import { SafeOutboundError, safeHttpGet } from "./ssrf";
 import type { ProxyNode } from "../shared/proxyNode";
+import type { InsertProxyNode } from "../drizzle/schema";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const TIMEOUT_MS = 15_000;
+const DNS_TIMEOUT_MS = 3_000;
 const MAX_REDIRECTS = 3;
 const DEFAULT_UA = "NEX-Subscription-Sync/1.0 (+clash.meta; mihomo)";
 
@@ -46,10 +52,29 @@ export async function assertPublicHost(hostname: string): Promise<void> {
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
     throw new ProxySubSourceFetchError("不能拉取内网地址");
   }
-  const addresses: string[] = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true }).catch(() => [])).map((item) => item.address);
+  const addresses: string[] = net.isIP(host) ? [host] : await lookupAddresses(host);
   if (addresses.length === 0) throw new ProxySubSourceFetchError(`解析不了 ${host}`);
   for (const address of addresses) {
     if (classifyIpAddress(address) !== "public") throw new ProxySubSourceFetchError("不能拉取内网地址");
+  }
+}
+
+/**
+ * 解析主机名，最多等 3 秒。dns.lookup 走系统解析器、自己没有超时：上游 DNS 挂了，「立即同步」的
+ * 请求就一直吊在那里。解析不出来（含超时）当成没有地址，上面统一报「解析不了」。
+ */
+async function lookupAddresses(host: string): Promise<string[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("dns timeout")), DNS_TIMEOUT_MS);
+  });
+  try {
+    const records = await Promise.race([dns.lookup(host, { all: true }), timeout]);
+    return records.map((item) => item.address);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -143,19 +168,60 @@ function nodeToRow(node: ProxyNode) {
   };
 }
 
+type ProxySubSourceSyncStatus = "done" | "queued" | "running";
+
 export type ProxySubSourceSyncResult = {
   ok: boolean;
   error?: string;
   added: number;
+  /** 这次真改了字段的节点数（没变的不写、也不算）。 */
   updated: number;
   removed: number;
   unchanged: boolean;
   nodeCount: number;
   parseErrors: number;
+  /** 「立即同步」走队列：queued = 并发满了、排上了稍后跑；running = 这个来源正有一次在跑，没有再排。没带 = 这次跑完了。 */
+  status?: ProxySubSourceSyncStatus;
 };
 
-/** 拉一次、对账一次。来源行的状态也在这里写。 */
+/** 同一个来源的同步一个接一个跑（见文件头）。 */
+const sourceSyncSerial = createKeyedSerial<number>();
+/** 正在跑或排着的同步，按来源计数：「立即同步」据此直接回「正在跑」而不是再排一次。 */
+const inFlight = new Map<number, number>();
+
+function isProxySubSourceSyncInFlight(sourceId: number): boolean {
+  return (inFlight.get(Number(sourceId)) || 0) > 0;
+}
+
+/**
+ * 拉一次、对账一次。来源行的状态也在这里写。同一个来源同时只跑一次，后来的排在后面。
+ * 定时任务直接调它；界面走 requestProxySubSourceSync。
+ * @public 测试经 import(url(...)) 动态引用，knip 看不见
+ */
 export async function syncProxySubSource(sourceId: number, options: { force?: boolean } = {}): Promise<ProxySubSourceSyncResult> {
+  const id = Number(sourceId);
+  inFlight.set(id, (inFlight.get(id) || 0) + 1);
+  try {
+    return await sourceSyncSerial(id, () => syncProxySubSourceNow(id, options));
+  } finally {
+    const left = (inFlight.get(id) || 0) - 1;
+    if (left > 0) inFlight.set(id, left);
+    else inFlight.delete(id);
+  }
+}
+
+/** 节点行上的一个字段和解析出来的值是不是一样（库里的布尔在 MySQL 下是 0 / 1，空字符串和 null 同义）。 */
+function sameNodeValue(current: unknown, next: unknown): boolean {
+  if (typeof next === "boolean") return !!current === next;
+  if (typeof next === "number") return Number(current ?? 0) === next;
+  return String(current ?? "") === String(next ?? "");
+}
+
+function nodeRowChanged(current: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  return Object.entries(next).some(([key, value]) => !sameNodeValue(current[key], value));
+}
+
+async function syncProxySubSourceNow(sourceId: number, options: { force?: boolean }): Promise<ProxySubSourceSyncResult> {
   const source = await db.getProxySubSourceById(sourceId) as any;
   if (!source) return { ok: false, error: "来源不存在", added: 0, updated: 0, removed: 0, unchanged: false, nodeCount: 0, parseErrors: 0 };
   const userId = Number(source.userId);
@@ -193,6 +259,8 @@ export async function syncProxySubSource(sourceId: number, options: { force?: bo
       nodeCount: parsed.nodes.length,
       lastContentHash: fetched.contentHash,
     } as any);
+    // 透传来源进订阅的 proxy-providers（按用户缓存在组装上下文里）：刚建的那一次要让它出现。
+    invalidateProxySubCacheForUser(userId);
     return { ok: true, added: 0, updated: 0, removed: 0, unchanged: false, nodeCount: parsed.nodes.length, parseErrors: parsed.errors.length };
   }
 
@@ -201,53 +269,144 @@ export async function syncProxySubSource(sourceId: number, options: { force?: bo
     return fail(parsed.errors[0]?.error || "订阅里没有能识别的节点");
   }
 
-  const existing = await db.listProxyNodesBySource(sourceId) as any[];
-  const existingByKey = new Map<string, any>();
-  for (const row of existing) if (row.sourceKey) existingByKey.set(String(row.sourceKey), row);
-
   let added = 0;
   let updated = 0;
+  let removed = 0;
   const seen = new Set<string>();
-  for (const node of parsed.nodes) {
-    const key = identityKey(node);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const name = node.name || `${node.address}:${node.port}`;
-    const current = existingByKey.get(key);
-    if (current) {
-      await db.updateProxyNode(Number(current.id), { ...nodeToRow(node), name } as any);
-      updated += 1;
-    } else {
-      await db.createProxyNode({
-        userId,
-        name,
-        ...nodeToRow(node),
-        sourceId,
-        sourceKey: key,
-        // 外部节点就是落地本身，直连进订阅；多台中转指向它时照常可以绑转发。
-        includeDirect: true,
-        autoGroup: "off",
-      } as any);
-      added += 1;
+  const changedIds: number[] = [];
+  /*
+    对账一个事务：读现有、改、插、删、写来源状态要么全成要么全不成。原来每条一个事务，
+    中途断了就留下一半新一半旧，下一次按哈希一比「没变」还不再对账。
+  */
+  await withDatabaseTransaction(async () => {
+    const existing = await db.listProxyNodesBySource(sourceId) as any[];
+    const existingByKey = new Map<string, any>();
+    const staleIds: number[] = [];
+    for (const row of existing) {
+      const key = row.sourceKey ? String(row.sourceKey) : "";
+      // 没有身份键的、或者同一个身份有两行（串行化之前并发同步留下的）：多出来的当成上游去掉的，留 id 最小的那一条。
+      const kept = key ? existingByKey.get(key) : undefined;
+      if (!key || (kept && Number(kept.id) <= Number(row.id))) {
+        staleIds.push(Number(row.id));
+        continue;
+      }
+      if (kept) staleIds.push(Number(kept.id));
+      existingByKey.set(key, row);
+    }
+
+    const toInsert: InsertProxyNode[] = [];
+    for (const node of parsed.nodes) {
+      const key = identityKey(node);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const name = node.name || `${node.address}:${node.port}`;
+      const current = existingByKey.get(key);
+      if (current) {
+        // 字段一样就不写：上游每次给的几十条大多没变，原来每条一次 UPDATE。
+        const next = { ...nodeToRow(node), name };
+        if (nodeRowChanged(current, next)) {
+          await db.updateProxyNodeFields(Number(current.id), next);
+          changedIds.push(Number(current.id));
+          updated += 1;
+        }
+      } else {
+        toInsert.push({
+          userId,
+          name,
+          ...nodeToRow(node),
+          sourceId,
+          sourceKey: key,
+          // 外部节点就是落地本身，直连进订阅；多台中转指向它时照常可以绑转发。
+          includeDirect: true,
+          autoGroup: "off",
+        });
+        added += 1;
+      }
+    }
+    await db.createProxyNodes(toInsert);
+    const stale = new Set(staleIds);
+    for (const row of existing) {
+      if (row.sourceKey && seen.has(String(row.sourceKey)) && existingByKey.get(String(row.sourceKey)) === row) continue;
+      stale.add(Number(row.id));
+    }
+    removed = stale.size;
+    // 一条 IN 删完，缓存等事务提交后作废一次（deleteProxyNodes 里 afterDatabaseCommit）。
+    await db.deleteProxyNodes([...stale]);
+
+    await db.updateProxySubSource(sourceId, {
+      lastFetchAt: new Date(),
+      lastStatus: "ok",
+      lastError: parsed.errors.length > 0 ? `${parsed.errors.length} 条解析不了：${parsed.errors[0].error}` : null,
+      upstreamUserinfo: userinfo ? JSON.stringify(userinfo) : null,
+      nodeCount: seen.size,
+      lastContentHash: fetched.contentHash,
+    } as any);
+  });
+  // 主人作废一次；改过的节点若分享给了别人，收件人也作废一次（原来 updateProxyNode 按节点各查一遍）。
+  invalidateProxySubCacheForUser(userId);
+  if (changedIds.length > 0) {
+    for (const recipients of (await db.getProxyNodeShareUserIds(changedIds)).values()) {
+      for (const recipient of recipients) invalidateProxySubCacheForUser(recipient);
     }
   }
-  let removed = 0;
-  for (const row of existing) {
-    if (row.sourceKey && seen.has(String(row.sourceKey))) continue;
-    await db.deleteProxyNode(Number(row.id));
-    removed += 1;
-  }
-
-  await db.updateProxySubSource(sourceId, {
-    lastFetchAt: new Date(),
-    lastStatus: "ok",
-    lastError: parsed.errors.length > 0 ? `${parsed.errors.length} 条解析不了：${parsed.errors[0].error}` : null,
-    upstreamUserinfo: userinfo ? JSON.stringify(userinfo) : null,
-    nodeCount: seen.size,
-    lastContentHash: fetched.contentHash,
-  } as any);
-  invalidateProxySubCacheForUser(userId);
   return { ok: true, added, updated, removed, unchanged: false, nodeCount: seen.size, parseErrors: parsed.errors.length };
+}
+
+/*
+  界面上的「立即同步」：最多 2 路同时拉，再来的排队、请求立刻回「已排队」；这个来源正有一次在跑
+  （定时任务的或别人点的）就回「正在跑」，不再排一次。原来请求里同步等最多 4 跳 × 15 秒，
+  几个人同时点就是几路公网请求一起吊着。
+*/
+const MANUAL_SYNC_CONCURRENCY = 2;
+let manualActive = 0;
+const manualWaiting: Array<() => void> = [];
+const manualQueued = new Set<number>();
+
+async function acquireManualSlot(): Promise<void> {
+  if (manualActive < MANUAL_SYNC_CONCURRENCY) {
+    manualActive += 1;
+    return;
+  }
+  // 释放的那一方把名额直接交给排队的第一个（不先减再加，免得中间被新来的插队到 3 路）。
+  await new Promise<void>((resolve) => manualWaiting.push(resolve));
+}
+
+function releaseManualSlot() {
+  const next = manualWaiting.shift();
+  if (next) next();
+  else manualActive -= 1;
+}
+
+async function runManualSync(sourceId: number, options: { force?: boolean }): Promise<ProxySubSourceSyncResult> {
+  await acquireManualSlot();
+  try {
+    return await syncProxySubSource(sourceId, options);
+  } finally {
+    releaseManualSlot();
+  }
+}
+
+async function placeholderResult(sourceId: number, status: ProxySubSourceSyncStatus): Promise<ProxySubSourceSyncResult> {
+  const source = await db.getProxySubSourceById(sourceId) as any;
+  return { ok: true, status, added: 0, updated: 0, removed: 0, unchanged: false, nodeCount: Number(source?.nodeCount || 0), parseErrors: 0 };
+}
+
+/** 「立即同步」/ 新建来源后的第一次拉取走这里（见上面的说明）。 */
+export async function requestProxySubSourceSync(sourceId: number, options: { force?: boolean } = {}): Promise<ProxySubSourceSyncResult> {
+  const id = Number(sourceId);
+  if (manualQueued.has(id)) return placeholderResult(id, "queued");
+  if (isProxySubSourceSyncInFlight(id)) return placeholderResult(id, "running");
+  if (manualActive >= MANUAL_SYNC_CONCURRENCY) {
+    manualQueued.add(id);
+    void runManualSync(id, options)
+      .then((result) => {
+        if (!result.ok) console.warn(`[proxy-subscription] 外部订阅 #${id} 排队同步失败: ${result.error}`);
+      })
+      .catch((error) => console.warn(`[proxy-subscription] 外部订阅 #${id} 排队同步出错:`, error instanceof Error ? error.message : error))
+      .finally(() => manualQueued.delete(id));
+    return placeholderResult(id, "queued");
+  }
+  return runManualSync(id, options);
 }
 
 let running = 0;

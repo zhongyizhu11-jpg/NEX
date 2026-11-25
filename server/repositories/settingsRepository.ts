@@ -1,7 +1,7 @@
 ﻿import { createHash } from "node:crypto";
 import { eq, inArray, like } from "drizzle-orm";
 import { systemSettings } from "../../drizzle/schema";
-import { executeRaw, getDatabaseKind, getDb, rawAffectedRows } from "../dbRuntime";
+import { executeRaw, getDatabaseKind, getDb, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
 import {
   SETTINGS_SECRETS_MIGRATION_KEY,
   decodeStoredSettingValue,
@@ -287,11 +287,45 @@ export async function claimSettingKey(key: string, rawValue = "1"): Promise<bool
   return claimed;
 }
 
-/** 批量 UPSERT */
+/**
+ * 批量 UPSERT：一条多行 INSERT … ON CONFLICT 写完，整批一个事务。
+ * 原来按键逐条 setSetting，保存一页设置就是几十次往返、几十次提交，而且每条都把设置缓存作废一遍。
+ * 每 200 行一条语句（参数数留足余量）；缓存只在写前写后各作废一次，口径和 setSetting 一样。
+ */
 export async function setSettings(map: Record<string, string | null>): Promise<void> {
-  for (const [k, v] of Object.entries(map)) {
-    await setSetting(k, v);
-  }
+  const entries = Object.entries(map);
+  if (entries.length === 0) return;
+  const db = await getDb();
+  if (!db) return;
+  const invalidatesCache = entries.some(([key]) => affectsAllSettingsCache(key));
+  if (invalidatesCache) invalidateAllSettingsCache();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const kind = getDatabaseKind();
+  await withDatabaseTransaction(async () => {
+    for (let offset = 0; offset < entries.length; offset += 200) {
+      const chunk = entries.slice(offset, offset + 200);
+      const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
+      // 密钥类设置加密后再写，和 setSetting 一样。
+      const params = chunk.flatMap(([key, value]) => [key, encodeSettingValueForStorage(key, value), nowSec]);
+      if (kind === "sqlite") {
+        await executeRaw(
+          `INSERT INTO system_settings (key, value, updatedAt) VALUES ${placeholders} ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt`,
+          params,
+        );
+      } else if (kind === "postgresql") {
+        await executeRaw(
+          `INSERT INTO system_settings ("key", value, "updatedAt") VALUES ${placeholders} ON CONFLICT ("key") DO UPDATE SET value=excluded.value, "updatedAt"=excluded."updatedAt"`,
+          params,
+        );
+      } else {
+        await executeRaw(
+          `INSERT INTO system_settings (\`key\`, value, updatedAt) VALUES ${placeholders} ON DUPLICATE KEY UPDATE value=VALUES(value), updatedAt=VALUES(updatedAt)`,
+          params,
+        );
+      }
+    }
+  });
+  if (invalidatesCache) invalidateAllSettingsCache();
 }
 
 /**

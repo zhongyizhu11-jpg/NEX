@@ -10,10 +10,11 @@ import {
   proxySubTokens,
   subscriptionPlanProxyNodes,
   tunnels,
+  type InsertForwardRule,
   type InsertProxyNode,
   type InsertProxySubToken,
 } from "../../drizzle/schema";
-import { getDb, insertAndGetId, nowDate } from "../dbRuntime";
+import { afterDatabaseCommit, getDb, insertAndGetId, nowDate, withDatabaseTransaction } from "../dbRuntime";
 import {
   buildProxySubscriptionDocument,
   buildProxySubscriptionPlan,
@@ -29,7 +30,7 @@ import { getRuleEntryDomainRuntimeSettings } from "./ruleEntryDomainRepository";
 import { getCachedSetting, setSetting } from "./settingsRepository";
 import { getTrafficSummaryByRule, getUnreachableRuleIds } from "./metricsRepository";
 import { signalRuleEntryDomainChanged } from "../ruleEntryDomainSignals";
-import { invalidateProxySubCacheForUser } from "../proxySubCache";
+import { getProxySubContextCached, invalidateProxySubCacheForUser, proxySubCacheKey, setProxySubContextCached } from "../proxySubCache";
 import { loadProxySubUnlockStatuses } from "../proxySubUnlock";
 import { buildProxySubPipelineDocument, type ProxySubPipelineDocument, type ProxySubPipelineInput } from "../../shared/proxySubscriptionPipeline";
 
@@ -85,6 +86,27 @@ export async function createProxyNode(data: InsertProxyNode) {
   return id;
 }
 
+/**
+ * 一批新节点一条多行 INSERT（外部订阅对账时上游新来的那几条），每 50 行一条。
+ * 不作废缓存：对账完调用方统一作废一次，不按节点各作废一遍。
+ */
+export async function createProxyNodes(rows: readonly InsertProxyNode[]) {
+  if (rows.length === 0) return;
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  for (let offset = 0; offset < rows.length; offset += 50) {
+    await db.insert(proxyNodes).values(rows.slice(offset, offset + 50) as InsertProxyNode[]);
+  }
+}
+
+/** 只改字段，不去查主人和分享、不作废缓存（外部订阅对账用：调用方成批作废）。 */
+export async function updateProxyNodeFields(id: number, data: Partial<InsertProxyNode>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const patch: Partial<InsertProxyNode> = { ...data, updatedAt: nowDate() };
+  await db.update(proxyNodes).set(patch).where(eq(proxyNodes.id, Number(id)));
+}
+
 export async function updateProxyNode(id: number, data: Partial<InsertProxyNode>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -100,14 +122,17 @@ export async function reorderProxyNodes(userId: number, orderedIds: readonly num
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const ids = orderedIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
-  const own = await db.select({ id: proxyNodes.id }).from(proxyNodes).where(eq(proxyNodes.userId, Number(userId)));
-  const ownIds = new Set((own as any[]).map((row) => Number(row.id)));
-  let position = 0;
-  for (const id of ids) {
-    if (!ownIds.has(id)) continue;
-    position += 1;
-    await db.update(proxyNodes).set({ sortOrder: position, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, id));
-  }
+  // 整个重排一个事务：几百条逐条 UPDATE 各自提交，中途断了订阅里就是一半新序一半旧序；SQLite 下也省几百次 WAL 提交。
+  await withDatabaseTransaction(async () => {
+    const own = await db.select({ id: proxyNodes.id }).from(proxyNodes).where(eq(proxyNodes.userId, Number(userId)));
+    const ownIds = new Set((own as any[]).map((row) => Number(row.id)));
+    let position = 0;
+    for (const id of ids) {
+      if (!ownIds.has(id)) continue;
+      position += 1;
+      await db.update(proxyNodes).set({ sortOrder: position, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, id));
+    }
+  });
   invalidateProxySubCacheForUser(userId);
 }
 
@@ -145,6 +170,41 @@ export async function deleteProxyNode(id: number) {
   await db.delete(proxyNodes).where(eq(proxyNodes.id, id));
   invalidateProxySubCacheForUser(Number((owner as any)?.userId || 0));
   for (const recipient of recipients) invalidateProxySubCacheForUser(recipient);
+}
+
+/**
+ * 一批节点一起删（外部订阅对账时上游去掉的那几条、删来源时它同步来的全部）。
+ *
+ * 和 deleteProxyNode 做的事一样（解绑转发、撤域名、删分享、删套餐绑定），只是每一步一条 IN 语句，
+ * 不是每个节点八条；缓存也只作废一次，而且等事务提交之后再作废 —— 在事务里先作废的话，别的请求
+ * 会拿着提交前的旧数据重建缓存，再存到新版本号底下，就一直陈旧到 TTL 为止。
+ */
+export async function deleteProxyNodes(nodeIds: readonly number[]) {
+  const ids = Array.from(new Set(nodeIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) return;
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const owners = new Set<number>();
+  const unboundRuleIds: number[] = [];
+  await withDatabaseTransaction(async () => {
+    const rows = await db.select({ userId: proxyNodes.userId }).from(proxyNodes).where(inArray(proxyNodes.id, ids));
+    for (const row of rows as Array<{ userId: unknown }>) owners.add(Number(row.userId || 0));
+    const unboundRules = await db.select({ id: forwardRules.id }).from(forwardRules).where(inArray(forwardRules.proxyNodeId, ids));
+    for (const rule of unboundRules as Array<{ id: unknown }>) unboundRuleIds.push(Number(rule.id));
+    if (unboundRuleIds.length > 0) {
+      const unbind: Partial<InsertForwardRule> = { proxyNodeId: null, updatedAt: nowDate() };
+      await db.update(forwardRules).set(unbind).where(inArray(forwardRules.proxyNodeId, ids));
+    }
+    for (const recipients of (await getProxyNodeShareUserIds(ids)).values()) for (const recipient of recipients) owners.add(recipient);
+    await db.delete(proxyNodeShares).where(inArray(proxyNodeShares.nodeId, ids));
+    await db.delete(subscriptionPlanProxyNodes).where(inArray(subscriptionPlanProxyNodes.nodeId, ids));
+    await db.delete(proxyNodes).where(inArray(proxyNodes.id, ids));
+  });
+  // 调用方自己在事务里时（外部订阅对账），这两步等它提交了再做。
+  await afterDatabaseCommit(() => {
+    for (const ruleId of unboundRuleIds) signalRuleEntryDomainChanged(ruleId, "proxy-node-deleted");
+    for (const owner of owners) invalidateProxySubCacheForUser(owner);
+  });
 }
 
 /**
@@ -1390,6 +1450,8 @@ export async function getProxySubHideUnreachable(userId: number): Promise<boolea
 
 export async function setProxySubHideUnreachable(userId: number, enabled: boolean): Promise<void> {
   await setSetting(`${HIDE_UNREACHABLE_KEY_PREFIX}${Number(userId)}`, enabled ? "true" : "false");
+  // 开关改了，缓存着的正文和组装上下文都按旧开关算的：立刻作废，不等 TTL。
+  invalidateProxySubCacheForUser(userId);
 }
 
 /**
@@ -1443,14 +1505,54 @@ export async function getProxySubscriptionPreviewForUser(
 export async function buildProxySubscriptionForToken(
   userId: number,
   input: Omit<ProxySubPipelineInput, "plan" | "templates" | "providers" | "unlockStatuses">,
+  /**
+   * 订阅路由带上：按用户缓存组装上下文（见 proxySubCache 里 contextEntries 的说明），TTL 和正文缓存一样，
+   * 键里放设置指纹（路由已经算好的那一个）。界面上的预览不带，每次都是现查的。
+   */
+  cache?: { ttlSec: number; settingsFingerprint: string },
 ): Promise<ProxySubPipelineDocument> {
-  const { plan, templates } = await buildProxySubscriptionContextForUser(userId, { withLatency: input.options.sortMode === "latency", withAddressFamilies: !!input.ipVersion });
+  const { plan, templates, providers } = await loadProxySubscriptionContext(userId, { withLatency: input.options.sortMode === "latency", withAddressFamilies: !!input.ipVersion }, cache);
+  // 解锁出口分流：按条目的出口主机查最新检测结论（不带规则时用不上，不查）。
+  const unlockStatuses = input.rulePreset === "off" || input.options.unlockGroups === false ? null : await loadProxySubUnlockStatuses(plan.entries);
+  return buildProxySubPipelineDocument({ ...input, plan, templates: templates as any, providers, unlockStatuses });
+}
+
+type ProxySubscriptionContext = Awaited<ReturnType<typeof buildProxySubscriptionContextForUser>> & {
+  providers: Array<{ name: string; url: string; intervalSec: number }>;
+};
+
+/** 正在组装的同一份上下文：几台设备同时来、都没命中时，只查一遍，后到的等同一个 Promise。 */
+const pendingContexts = new Map<string, Promise<ProxySubscriptionContext>>();
+
+async function loadProxySubscriptionContext(
+  userId: number,
+  options: { withLatency: boolean; withAddressFamilies: boolean },
+  cache?: { ttlSec: number; settingsFingerprint: string },
+): Promise<ProxySubscriptionContext> {
+  if (!cache || cache.ttlSec <= 0) return buildProxySubscriptionContextWithProviders(userId, options);
+  // 按延迟排序 / 按地址族输出会多查、多填几样，和不要这些的不共用一份。
+  const key = proxySubCacheKey(userId, ["ctx1", options.withLatency, options.withAddressFamilies, cache.settingsFingerprint]);
+  const hit = getProxySubContextCached<ProxySubscriptionContext>(key);
+  if (hit) return hit;
+  let pending = pendingContexts.get(key);
+  if (!pending) {
+    pending = buildProxySubscriptionContextWithProviders(userId, options).then((context) => {
+      setProxySubContextCached(key, context, cache.ttlSec);
+      return context;
+    }).finally(() => {
+      if (pendingContexts.get(key) === pending) pendingContexts.delete(key);
+    });
+    pendingContexts.set(key, pending);
+  }
+  return pending;
+}
+
+async function buildProxySubscriptionContextWithProviders(userId: number, options: { withLatency: boolean; withAddressFamilies: boolean }): Promise<ProxySubscriptionContext> {
+  const context = await buildProxySubscriptionContextForUser(userId, options);
   // 透传模式的外部订阅：不存节点，写成 proxy-providers 让客户端自己拉。
   const { listProxySubSourcesByUser } = await import("./proxySubExtraRepository");
   const providers = (await listProxySubSourcesByUser(userId) as any[])
     .filter((source) => source.isEnabled && String(source.mode) === "provider")
     .map((source) => ({ name: String(source.name || `订阅 #${source.id}`), url: String(source.url), intervalSec: Number(source.intervalSec || 21600) }));
-  // 解锁出口分流：按条目的出口主机查最新检测结论（不带规则时用不上，不查）。
-  const unlockStatuses = input.rulePreset === "off" || input.options.unlockGroups === false ? null : await loadProxySubUnlockStatuses(plan.entries);
-  return buildProxySubPipelineDocument({ ...input, plan, templates: templates as any, providers, unlockStatuses });
+  return { ...context, providers };
 }

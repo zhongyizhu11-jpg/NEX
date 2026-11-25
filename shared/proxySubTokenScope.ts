@@ -10,6 +10,7 @@
 
 import { PROXY_NODE_PROTOCOLS, type ProxyNodeProtocol } from "./proxyNode";
 import { PROXY_SUB_REGION_GROUP_TYPES, type ProxySubRegionGroupType } from "./proxySubRegion";
+import { compileSafeRegex } from "./safeRegex";
 
 export type ProxySubTokenScope = {
   /** 只要这些节点模板（proxy_nodes.id）；空 = 全部。 */
@@ -292,19 +293,16 @@ export function proxySubAliasLongEnough(alias: string): boolean {
 }
 
 /**
- * 正则匹配的宽松版：非法正则退化成不区分大小写的子串匹配，不让一个写坏的表达式
- * 把整条订阅弄成 500。
+ * 正则匹配的宽松版：非法正则（或会灾难性回溯的，见 shared/safeRegex.ts）退化成不区分大小写的
+ * 子串匹配，不让一个写坏的表达式把整条订阅弄成 500、或把面板卡住。编译结果按源记住，不每次渲染都编。
  */
 export function makeLooseMatcher(pattern: string): ((text: string) => boolean) | null {
   const source = String(pattern || "").trim();
   if (!source) return null;
-  try {
-    const regex = new RegExp(source, "i");
-    return (text) => regex.test(text);
-  } catch {
-    const lower = source.toLowerCase();
-    return (text) => text.toLowerCase().includes(lower);
-  }
+  const regex = compileSafeRegex(source, "i");
+  if (regex) return (text) => regex.test(text);
+  const lower = source.toLowerCase();
+  return (text) => text.toLowerCase().includes(lower);
 }
 
 /**

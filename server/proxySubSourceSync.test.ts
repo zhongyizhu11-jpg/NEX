@@ -83,6 +83,44 @@ test("外部订阅的拉取、对账与 SSRF 拦截", () => {
     nodes = await nodesRepo.getProxyNodesByUser(1);
     assert.deepEqual(nodes.map((node) => node.name).sort(), ["HK-renamed", "US-01"]);
 
+    // 内容一样再强制同步：没有一个字段变，updated 该是 0（没变的节点不写）。
+    const forcedSame = await sync.syncProxySubSource(Number(sourceId), { force: true });
+    assert.deepEqual({ added: forcedSame.added, updated: forcedSame.updated, removed: forcedSame.removed }, { added: 0, updated: 0, removed: 0 });
+
+    /*
+      并发：定时任务和「立即同步」撞上。同一个来源的几次同步排队跑，谁都不该把别人刚插的节点再插一遍。
+      上游再换一次内容，三路一起 force，节点数还是两条、身份键不重。
+    */
+    body = [
+      "vless://11111111-1111-1111-1111-111111111111@hk.example.com:443?encryption=none&security=tls&sni=hk.example.com&type=ws&path=%2Fray#HK-renamed",
+      "trojan://pw@us.example.com:443?sni=us.example.com#US-01",
+      "ss://YWVzLTEyOC1nY206cGFzcw@sg.example.com:8388#SG-01",
+    ].join("\n");
+    const racing = sync.syncProxySubSource(Number(sourceId), { force: true });
+    // 第一路还在拉：「立即同步」的请求不再排一次，直接回「正在跑」。
+    const whileRunning = await sync.requestProxySubSourceSync(Number(sourceId), { force: true });
+    assert.equal(whileRunning.status, "running");
+    assert.equal(whileRunning.ok, true);
+    const results = await Promise.all([racing, sync.syncProxySubSource(Number(sourceId), { force: true }), sync.syncProxySubSource(Number(sourceId), { force: true })]);
+    assert.ok(results.every((result) => result.ok), JSON.stringify(results));
+    assert.equal(results.reduce((sum, result) => sum + result.added, 0), 1, "三路一起同步，新节点只该插一次");
+    nodes = await nodesRepo.getProxyNodesByUser(1);
+    assert.deepEqual(nodes.map((node) => node.name).sort(), ["HK-renamed", "SG-01", "US-01"]);
+    assert.equal(new Set(nodes.map((node) => node.sourceKey)).size, nodes.length, "身份键不能重");
+    // 没人在跑时「立即同步」就地跑完，带回结果。
+    const direct = await sync.requestProxySubSourceSync(Number(sourceId), { force: true });
+    assert.equal(direct.status, undefined);
+    assert.equal(direct.nodeCount, 3);
+
+    // 串行化之前并发留下的重复行：对账时留 id 最小的那条、多的删掉。
+    const [dupSource] = await runtime.queryRaw("SELECT id, sourceKey FROM proxy_nodes WHERE sourceId = ? ORDER BY id LIMIT 1", [Number(sourceId)]);
+    await exec("INSERT INTO proxy_nodes (userId, name, protocol, address, port, isEnabled, sourceId, sourceKey) VALUES (1, '重复的', 'vless', 'dup.example.com', 443, 1, ?, ?)", [Number(sourceId), dupSource.sourceKey]);
+    const dedup = await sync.syncProxySubSource(Number(sourceId), { force: true });
+    assert.equal(dedup.removed, 1, "重复的那一行该被删掉");
+    nodes = await nodesRepo.getProxyNodesByUser(1);
+    assert.equal(nodes.length, 3);
+    assert.ok(nodes.some((node) => Number(node.id) === Number(dupSource.id)), "留的是 id 最小的那条");
+
     // 删来源连节点一起删。
     await repo.deleteProxySubSource(Number(sourceId));
     assert.equal((await nodesRepo.getProxyNodesByUser(1)).length, 0);

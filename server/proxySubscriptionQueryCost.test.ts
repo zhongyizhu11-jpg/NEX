@@ -220,3 +220,105 @@ test("SQLite 预览订阅内容不把整份订阅组装两遍", () => {
   fs.rmSync(directory, { recursive: true, force: true });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+/**
+ * 订阅路由那一路：同一个用户的第二条令牌、换一种格式来拉，不该把这个用户的转发、模板、主机再查一遍。
+ *
+ * 正文缓存按「令牌 × 格式 × 客户端 × 选项……」分键，一个人手机、电脑、路由器各拉各的，每一种组合
+ * 第一次来都要把这个用户的东西从头查一遍（8～10 条），而这些只跟用户有关。所以正文缓存底下再垫一层
+ * 按用户的组装上下文（proxySubCache.ts 的 contextEntries）：第二次只剩透传来源之外的零星查询。
+ * 这里把两次的条数都打出来，基线按「第二次远少于第一次、且不超过 1 条」订。
+ */
+test("SQLite 同一用户换令牌 / 格式再组装，命中按用户的上下文缓存", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-sub-ctx-cost-"));
+  const databasePath = path.join(directory, "sub-ctx-cost.db");
+  const script = String.raw`
+    import assert from "node:assert/strict";
+    import path from "node:path";
+    import { pathToFileURL } from "node:url";
+
+    const Database = (await import("better-sqlite3")).default;
+    const originalPrepare = Database.prototype.prepare;
+    let recording = false;
+    const statements = [];
+    Database.prototype.prepare = function (sql) {
+      if (recording) statements.push(String(sql));
+      return originalPrepare.call(this, sql);
+    };
+
+    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+    const runtime = await import(url("server/dbRuntime.ts"));
+    const schema = await import(url("server/dbSchema.ts"));
+    const subs = await import(url("server/repositories/proxySubscriptionRepository.ts"));
+    const cache = await import(url("server/proxySubCache.ts"));
+    const { parseProxySubSettings } = await import(url("shared/proxySubSettings.ts"));
+    const { PROXY_SUB_DEFAULT_TOKEN_OPTIONS, PROXY_SUB_EMPTY_SCOPE } = await import(url("shared/proxySubTokenScope.ts"));
+
+    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+    await schema.ensureDatabaseSchema();
+    const exec = (sql, p = []) => runtime.executeRaw(sql, p);
+
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (1,'t','h','user',1)");
+    for (let i = 1; i <= 3; i++) {
+      await exec("INSERT INTO hosts (id,name,ip,ipv4,agentToken,userId) VALUES (?,?,?,?,?,1)", [i, "机器" + i, "10.0.0." + i, "10.0.0." + i, "tok" + i]);
+      await exec("INSERT INTO proxy_nodes (id,userId,name,protocol,address,port,uuid,tls,isEnabled,includeDirect) VALUES (?,1,?,'vless',?,443,'u',1,1,1)", [i, "节点" + i, "198.51.100." + i]);
+      await exec("INSERT INTO forward_rules (id,hostId,name,forwardType,protocol,sourcePort,targetIp,targetPort,userId,isEnabled,proxyNodeId,proxyNodeVisible) VALUES (?,?,?,'direct','tcp',?,?,443,1,1,?,1)",
+        [i, i, "转发" + i, 20000 + i, "198.51.100." + i, i]);
+    }
+
+    const settings = parseProxySubSettings({});
+    const build = (format) => subs.buildProxySubscriptionForToken(1, {
+      rulePreset: "off",
+      scope: PROXY_SUB_EMPTY_SCOPE,
+      options: PROXY_SUB_DEFAULT_TOKEN_OPTIONS,
+      settings,
+      template: null,
+      info: null,
+      vars: { appName: "NEX", panelUrl: "", subUrl: "", username: "t", format },
+    }, { ttlSec: 60, settingsFingerprint: "fp" });
+    const measure = async (run) => {
+      statements.length = 0;
+      recording = true;
+      const value = await run();
+      recording = false;
+      return { value, count: statements.length, sql: statements.slice() };
+    };
+
+    // 预热：首次会有建表 / 兼容性检查之类的杂音；然后清掉缓存，让第一次是实打实的组装。
+    await build("clash");
+    cache.clearProxySubCacheForTests();
+    const first = await measure(() => build("clash"));
+    const second = await measure(() => build("singbox"));
+    console.log("statements first=" + first.count + " second=" + second.count);
+    assert.ok(first.count >= 5, "第一次该是实打实的组装（" + first.count + " 条）：\n" + first.sql.join("\n"));
+    assert.ok(second.count <= 1, "第二次该命中按用户的上下文缓存，实际 " + second.count + " 条：\n" + second.sql.join("\n"));
+    assert.equal(second.value.document.nodes.length, first.value.document.nodes.length);
+
+    // 这个用户的内容一变（任何一条按用户作废的路），下一次重新组装。
+    cache.invalidateProxySubCacheForUser(1);
+    const rebuilt = await measure(() => build("clash"));
+    assert.ok(rebuilt.count >= 5, "作废后该重新组装，实际 " + rebuilt.count + " 条");
+    // 全站作废同样。
+    cache.invalidateProxySubCacheAll();
+    const rebuiltAll = await measure(() => build("clash"));
+    assert.ok(rebuiltAll.count >= 5, "全站作废后该重新组装，实际 " + rebuiltAll.count + " 条");
+    // 不带缓存参数（界面预览）每次都现查。
+    const preview = await measure(() => subs.getProxySubscriptionPreviewForUser(1));
+    assert.ok(preview.count >= 5, "预览不走上下文缓存，实际 " + preview.count + " 条");
+
+    console.log("OK");
+    Database.prototype.prepare = originalPrepare;
+    await runtime.closeDatabase();
+  `;
+  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
+    encoding: "utf8",
+    timeout: 90_000,
+  });
+  fs.rmSync(directory, { recursive: true, force: true });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const counts = /statements first=(\d+) second=(\d+)/.exec(result.stdout);
+  assert.ok(counts, result.stdout);
+  console.log(`上下文缓存：第一次 ${counts[1]} 条，第二次 ${counts[2]} 条`);
+});

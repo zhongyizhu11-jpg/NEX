@@ -482,7 +482,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
         vars,
         visitor,
         ipVersion,
-      });
+      }, { ttlSec: settings.cacheTtlSec, settingsFingerprint: proxySubSettingsFingerprint(settings) });
       skippedEntries = ipVersion ? countProxySubAddressFamilySkips(built.plan) : 0;
       /*
         要了 v6、却一条都不剩：回 422 说清楚，而不是 200 一份空订阅 —— 客户端会显示「更新成功」，
@@ -588,7 +588,7 @@ async function renderLandingPage(req: Request, context: ProxySubTokenContext, pa
       template: null,
       info: null,
       vars: { appName: context.appName, panelUrl, subUrl: "", username: context.username },
-    }).catch(() => null),
+    }, { ttlSec: settings.cacheTtlSec, settingsFingerprint: proxySubSettingsFingerprint(settings) }).catch(() => null),
   ]);
   // 从短链打开的：页面上（含二维码）只出现短链，不出现令牌。
   const viaAlias = byAlias && !!token.alias;

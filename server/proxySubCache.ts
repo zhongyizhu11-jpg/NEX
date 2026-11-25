@@ -94,6 +94,45 @@ export function setProxySubCached(key: string, prepared: ProxySubPreparedBody, t
   setBoundedMapValue(entries, key, { prepared, expiresAt: now + ttlSec * 1000 }, MAX_ENTRIES);
 }
 
+/*
+  正文缓存底下再垫一层：按用户缓存组装好的上下文（plan、模板、透传来源）。
+
+  正文缓存按「令牌 × 格式 × 规则 × 客户端 × 选项……」分键，同一个用户的手机、电脑、路由器各拉各的，
+  每一种组合第一次来都要把这个用户的转发、模板、主机、分享、探测再查一遍（8～10 条），而这些只跟
+  用户有关、跟令牌和格式无关。这一层的键只有用户 + 版本号 + 几个影响组装的开关，几个客户端共用一份；
+  TTL 跟正文缓存一样（设置里的 cacheTtlSec），所以陈旧程度不会比正文缓存更差。
+  键里同样带全局版本和这个用户的版本号：每一条让正文作废的路（invalidateProxySubCacheForUser / All）
+  同时让它作废，不用另记一套失效。
+*/
+const MAX_CONTEXT_ENTRIES = 1_000;
+const contextEntries = new Map<string, { value: unknown; expiresAt: number }>();
+
+export function getProxySubContextCached<T>(key: string, now = Date.now()): T | null {
+  const hit = contextEntries.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt <= now) {
+    contextEntries.delete(key);
+    return null;
+  }
+  return hit.value as T;
+}
+
+export function setProxySubContextCached(key: string, value: unknown, ttlSec: number, now = Date.now()) {
+  if (ttlSec <= 0) return;
+  if (contextEntries.size >= MAX_CONTEXT_ENTRIES) pruneMapEntries(contextEntries, (entry) => entry.expiresAt <= now);
+  setBoundedMapValue(contextEntries, key, { value, expiresAt: now + ttlSec * 1000 }, MAX_CONTEXT_ENTRIES);
+}
+
+/**
+ * 全站作废时顺带要清的别的内存缓存（比如模板清单）在这里登记：改模板、改设置、改规则域名这些路
+ * 本来就都走 invalidateProxySubCacheAll，不用每条路再多记一个调用。
+ */
+const invalidateAllListeners = new Set<() => void>();
+
+export function onProxySubCacheInvalidateAll(listener: () => void) {
+  invalidateAllListeners.add(listener);
+}
+
 /** 这个用户的订阅内容变了（转发、节点、分享、令牌、作用域……）。 */
 export function invalidateProxySubCacheForUser(userId: unknown) {
   const id = Number(userId);
@@ -111,6 +150,8 @@ export function invalidateProxySubCacheForUser(userId: unknown) {
 export function invalidateProxySubCacheAll() {
   globalVersion += 1;
   entries.clear();
+  contextEntries.clear();
+  for (const listener of invalidateAllListeners) listener();
 }
 
 export function proxySubCacheSizeForTests() {
@@ -119,6 +160,7 @@ export function proxySubCacheSizeForTests() {
 
 export function clearProxySubCacheForTests() {
   entries.clear();
+  contextEntries.clear();
   versions.clear();
   globalVersion = 0;
 }
