@@ -60,6 +60,8 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Activity, CheckCircle2, Globe, Layers3, LayoutGrid, List, Loader2, Network, Pencil, Plus, RefreshCw, Stethoscope, Trash2, XCircle, Clock, FileJson } from "lucide-react";
 import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useLastShown } from "@/components/useDialogTarget";
@@ -87,8 +89,11 @@ import { normalizeAggregationMinMembers, normalizeAggregationRecordSlots, normal
 // 延迟曲线按需加载：recharts 不跟着组列表一起下，点开延迟弹窗才取。
 const GroupLatencyAreaChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.GroupLatencyAreaChart })));
 // 诊断框只在点了「诊断」之后才要，和规则、链路页一样抽成模块懒加载（components/forwardGroups/ForwardGroupSelfTestDialog）。
-const ForwardGroupSelfTestDialog = lazy(() => import("@/components/forwardGroups/ForwardGroupSelfTestDialog"));
-const ForwardGroupEditDialog = lazy(() => import("@/components/forwardGroups/ForwardGroupEditDialog"));
+// 懒加载的弹窗：页面闲下来先把 JS 热进缓存（lib/lazyWarm.ts），点开时不用再等一次网络往返
+const loadForwardGroupSelfTestDialog = () => import("@/components/forwardGroups/ForwardGroupSelfTestDialog");
+const ForwardGroupSelfTestDialog = lazy(loadForwardGroupSelfTestDialog);
+const loadForwardGroupEditDialog = () => import("@/components/forwardGroups/ForwardGroupEditDialog");
+const ForwardGroupEditDialog = lazy(loadForwardGroupEditDialog);
 
 /** MySQL 会把布尔返回成 0 / 1 或 "0" / "1"。 */
 const dbFlag = (value: unknown) => value === true || value === 1 || value === "1";
@@ -552,6 +557,8 @@ export function ForwardGroupsContent({
   searchQuery = "",
 }: ForwardGroupsContentProps) {
   const utils = trpc.useUtils();
+  // 编辑和自测两个弹窗这页的人都能点开，闲时先热
+  useWarmLazyChunks([loadForwardGroupEditDialog, loadForwardGroupSelfTestDialog]);
   const faultBundle = useFaultBundleExport();
   // 精简布局：卡片和隧道链路那一页同一种（名字 + 一行说明 + 成员一行 + 右下一枚状态 / 延迟标签）
   const compactLayout = useCompactLayout();
@@ -2306,7 +2313,7 @@ export function ForwardGroupsContent({
 
       {/* 编辑弹窗按需加载：第一次打开后一直挂着（表单 state 在页面上；也留得住关闭动画） */}
       {groupDialogLoaded ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={showDialog} />}>
           <ForwardGroupEditDialog
             open={showDialog}
             onOpenChange={handleDialogOpenChange}
@@ -2315,7 +2322,7 @@ export function ForwardGroupsContent({
         </Suspense>
       ) : null}
       {testGroup && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback />}>
         <ForwardGroupSelfTestDialog
           groupId={testGroup.id}
           groupName={testGroup.name}

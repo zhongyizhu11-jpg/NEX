@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import {
   createDefaultLandingConfig,
@@ -91,18 +88,7 @@ test("表单进来：改名不换凭据；换协议整份换新；新用户补�
  * 去掉一台收掉它的入站、目标是池的转发做成线路组、分享每人一份凭据。
  */
 test("落地池同步：每台一样的入站、被占换端口、池节点一条、转发做成线路组、分享每人一份", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-landing-pool-"));
-  try {
-    const script = String.raw`
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
+  const result = runInDatabase(String.raw`
       await exec("INSERT INTO users (id, username, password, role, \"allowProxySubscription\") VALUES (1, 'admin', 'hash', 'admin', 1), (2, 'tenant', 'hash', 'user', 1)");
       const now = Math.floor(Date.now() / 1000);
       for (const id of [1, 2, 3, 4]) {
@@ -187,48 +173,37 @@ test("落地池同步：每台一样的入站、被占换端口、池节点一�
       await landing.syncLandingPool(poolId, { reason: "test" });
       out.retired = [Number((await query('SELECT COUNT(*) AS n FROM proxy_inbounds WHERE "nodePoolId" = ?', [poolId]))[0].n), (await landing.getLandingPoolNodes(poolId)).length];
       console.log("RESULT " + JSON.stringify(out));
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "landing.db"), FORWARDX_LOG_DIR: directory },
-      timeout: 180000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
-    assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
-    const out = JSON.parse(line.slice("RESULT ".length));
-    assert.deepEqual(out.first.map((row: any[]) => [row[0], row[1] === 443, row[2], row[3]]), [[1, true, false, null], [2, true, false, null], [3, false, true, null]], "H3 的 443 被占，换了端口");
-    assert.deepEqual(out.memberHosts, [1, 2, 3]);
-    assert.equal(out.sameKeys, true, "每台的 REALITY 密钥一样");
-    assert.equal(out.sameUuid, true, "每台的用户凭据一样");
-    assert.equal(out.derivedPerMember, 0, "成员入站不各派生节点");
-    assert.deepEqual(out.poolNodes, [["203.0.113.1", 443, false]], "订阅里一条池节点；没设域名不出直连");
-    assert.deepEqual(out.agentH1, [[443, 1]]);
-    assert.match(out.memberEdit, /落地池/);
-    assert.deepEqual(out.withDomain, [[1, 443, null], [2, 443, null], [3, 0, "error"]], "开了域名直连，H3 换不了端口就不开");
-    assert.equal(out.dnsError, "has", "DDNS 没配，写不了解析要报出来");
-    assert.deepEqual(out.domainNode, [["hk.example.com", true]], "池节点地址是域名，直连进订阅");
-    assert.equal(out.converted, true);
-    assert.equal(out.ruleGroup[0], true);
-    assert.equal(out.ruleGroup[1], "weighted", "目标是落地池：按负载在几台里分");
-    assert.deepEqual(out.ruleGroup[2].map((row: any[]) => [row[0], row[1]]), [[true, 1], [true, 2], [true, 3]], "一台一条路径");
-    assert.deepEqual(out.using, [7]);
-    assert.deepEqual(out.leave, [false, null], "目标不再是池：自动做的线路组退回普通转发");
-    assert.match(out.deleteGuard, /还有 1 条转发/);
-    assert.deepEqual(out.afterRemove, [1, 3]);
-    assert.deepEqual(out.afterRemovePaths.sort(), [1, 3], "去掉一台，线路跟着少一条");
-    assert.equal(out.shareNode, true);
-    assert.deepEqual(out.perMemberUsers, [2, 2], "每台都多一份分享的凭据");
-    assert.equal(out.ownerSees, 1, "分享发的那份不进主人自己的订阅");
-    assert.equal(out.released, true);
-    assert.equal(out.afterRelease, 1);
-    assert.equal(out.rotated, true, "换密钥每台一起换");
-    assert.deepEqual(out.retired, [0, 0]);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "landing-pool", timeoutMs: 180000 });
+  const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
+  assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
+  const out = JSON.parse(line.slice("RESULT ".length));
+  assert.deepEqual(out.first.map((row: any[]) => [row[0], row[1] === 443, row[2], row[3]]), [[1, true, false, null], [2, true, false, null], [3, false, true, null]], "H3 的 443 被占，换了端口");
+  assert.deepEqual(out.memberHosts, [1, 2, 3]);
+  assert.equal(out.sameKeys, true, "每台的 REALITY 密钥一样");
+  assert.equal(out.sameUuid, true, "每台的用户凭据一样");
+  assert.equal(out.derivedPerMember, 0, "成员入站不各派生节点");
+  assert.deepEqual(out.poolNodes, [["203.0.113.1", 443, false]], "订阅里一条池节点；没设域名不出直连");
+  assert.deepEqual(out.agentH1, [[443, 1]]);
+  assert.match(out.memberEdit, /落地池/);
+  assert.deepEqual(out.withDomain, [[1, 443, null], [2, 443, null], [3, 0, "error"]], "开了域名直连，H3 换不了端口就不开");
+  assert.equal(out.dnsError, "has", "DDNS 没配，写不了解析要报出来");
+  assert.deepEqual(out.domainNode, [["hk.example.com", true]], "池节点地址是域名，直连进订阅");
+  assert.equal(out.converted, true);
+  assert.equal(out.ruleGroup[0], true);
+  assert.equal(out.ruleGroup[1], "weighted", "目标是落地池：按负载在几台里分");
+  assert.deepEqual(out.ruleGroup[2].map((row: any[]) => [row[0], row[1]]), [[true, 1], [true, 2], [true, 3]], "一台一条路径");
+  assert.deepEqual(out.using, [7]);
+  assert.deepEqual(out.leave, [false, null], "目标不再是池：自动做的线路组退回普通转发");
+  assert.match(out.deleteGuard, /还有 1 条转发/);
+  assert.deepEqual(out.afterRemove, [1, 3]);
+  assert.deepEqual(out.afterRemovePaths.sort(), [1, 3], "去掉一台，线路跟着少一条");
+  assert.equal(out.shareNode, true);
+  assert.deepEqual(out.perMemberUsers, [2, 2], "每台都多一份分享的凭据");
+  assert.equal(out.ownerSees, 1, "分享发的那份不进主人自己的订阅");
+  assert.equal(out.released, true);
+  assert.equal(out.afterRelease, 1);
+  assert.equal(out.rotated, true, "换密钥每台一起换");
+  assert.deepEqual(out.retired, [0, 0]);
 });
 
 test("直连域名「自动」：池名拼得出英文用池名，拼不出用机器的地区，再不行用 lp；挂在 DDNS 管的主域名下", () => {
@@ -244,18 +219,7 @@ test("直连域名「自动」：池名拼得出英文用池名，拼不出用�
 });
 
 test("直连域名只有管理员能设、能改；「自动」只给管理员，按 DDNS 主域名和机器地区起名", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-landing-domain-"));
-  try {
-    const script = String.raw`
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
+  const result = runInDatabase(String.raw`
       await exec("INSERT INTO users (id, username, password, role, \"allowProxySubscription\") VALUES (1, 'admin', 'hash', 'admin', 1), (2, 'tenant', 'hash', 'user', 1)");
       const now = Math.floor(Date.now() / 1000);
       for (const id of [1, 2]) {
@@ -286,35 +250,24 @@ test("直连域名只有管理员能设、能改；「自动」只给管理员�
       await db.setSettings({ ddnsProvider: "webhook", ddnsWebhookUrl: "https://hook.example.com" });
       out.adminWebhook = await admin.nodePoolSuggestDomain({ name: "x" });
       console.log("RESULT " + JSON.stringify(out));
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "domain.db"), FORWARDX_LOG_DIR: directory },
-      timeout: 180000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
-    assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
-    const out = JSON.parse(line.slice("RESULT ".length));
-    assert.equal(out.created, true, "普通用户照样能建落地池（不带域名）");
-    assert.match(out.tenantNewWithDomain, /只有管理员能设/, "普通用户新建时带域名：拦");
-    assert.match(out.tenantSet, /只有管理员能设/, "普通用户给已有的池设域名：拦");
-    assert.equal(out.tenantUnchanged, "ok", "送的和原来一样（都没有）：不拦，改名照常");
-    assert.equal(out.tenantOmitted, "ok", "不送域名 = 不改");
-    assert.equal(out.domainAfter, null);
-    assert.match(out.tenantSuggest, /只有管理员/);
-    assert.equal(out.adminNoDdns.domain, null);
-    assert.match(String(out.adminNoDdns.reason), /DDNS/, "没配 DDNS：说去哪配");
-    assert.match(String(out.adminChinese.domain), /^hk-[0-9a-f]{4}\.example\.com$/, "中文名：用机器的地区");
-    assert.equal(out.adminChinese.root, "example.com");
-    assert.match(String(out.adminEnglish.domain), /^tokyo-edge-[0-9a-f]{4}\.example\.com$/);
-    assert.equal(out.adminWebhook.domain, null);
-    assert.match(String(out.adminWebhook.reason), /Webhook/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "landing-domain", timeoutMs: 180000 });
+  const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
+  assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
+  const out = JSON.parse(line.slice("RESULT ".length));
+  assert.equal(out.created, true, "普通用户照样能建落地池（不带域名）");
+  assert.match(out.tenantNewWithDomain, /只有管理员能设/, "普通用户新建时带域名：拦");
+  assert.match(out.tenantSet, /只有管理员能设/, "普通用户给已有的池设域名：拦");
+  assert.equal(out.tenantUnchanged, "ok", "送的和原来一样（都没有）：不拦，改名照常");
+  assert.equal(out.tenantOmitted, "ok", "不送域名 = 不改");
+  assert.equal(out.domainAfter, null);
+  assert.match(out.tenantSuggest, /只有管理员/);
+  assert.equal(out.adminNoDdns.domain, null);
+  assert.match(String(out.adminNoDdns.reason), /DDNS/, "没配 DDNS：说去哪配");
+  assert.match(String(out.adminChinese.domain), /^hk-[0-9a-f]{4}\.example\.com$/, "中文名：用机器的地区");
+  assert.equal(out.adminChinese.root, "example.com");
+  assert.match(String(out.adminEnglish.domain), /^tokyo-edge-[0-9a-f]{4}\.example\.com$/);
+  assert.equal(out.adminWebhook.domain, null);
+  assert.match(String(out.adminWebhook.reason), /Webhook/);
 });
 
 /*
@@ -326,20 +279,9 @@ test("直连域名只有管理员能设、能改；「自动」只给管理员�
   用 Webhook 服务商、把 fetch 换成假的来数每次写了什么；时间用 Date.now 加偏移往前拨。
 */
 test("落地池直连域名：流量暂停的不发布、加回去等一分钟、写失败退避重试、TTL 跟着 DDNS 设置", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-landing-dns-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
       console.info = () => {};
       console.warn = () => {};
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
       const realNow = Date.now.bind(Date);
       let skew = 0;
       Date.now = () => realNow() + skew;
@@ -428,18 +370,5 @@ test("落地池直连域名：流量暂停的不发布、加回去等一分钟�
       assert.equal(writes.length, count + 4);
       assert.deepEqual(last(), ["203.0.113.1", "203.0.113.2", "203.0.113.3"]);
       assert.deepEqual(landing.LANDING_DNS_RETRY_DELAYS_MS.map((ms) => ms / 60_000), [1, 2, 5]);
-      console.log("OK");
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "dns.db"), FORWARDX_LOG_DIR: directory },
-      timeout: 180000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "landing-dns", timeoutMs: 180000 });
 });

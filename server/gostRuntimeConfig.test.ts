@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 下发给落地机的 GOST 运行时配置。
@@ -29,20 +26,9 @@ type GostConfig = {
 };
 
 function loadConfig(): { config: GostConfig; hash: string } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-gost-cfg-"));
-  const databasePath = path.join(directory, "gost.db");
-  const script = String.raw`
-    import crypto from "node:crypto";
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const crypto = (await import("node:crypto")).default;
+    const http = (await import("node:http")).default;
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec(
@@ -107,14 +93,7 @@ function loadConfig(): { config: GostConfig; hash: string } {
       config: JSON.parse(text),
       hash: crypto.createHash("sha256").update(text).digest("hex").slice(0, 16),
     }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "gost-cfg" });
   const line = result.stdout.split("\n").find((row) => row.startsWith("GOSTCFG "));
   assert.ok(line, `没拿到配置：\n${result.stdout}`);
   return JSON.parse(line.slice("GOSTCFG ".length));

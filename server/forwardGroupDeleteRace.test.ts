@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   评审 F4：删组时要清的「面板发布过的值」必须在评估锁里读。以前删组先读一份组（锁外），再拿锁清解析：
@@ -11,24 +7,13 @@ import test from "node:test";
   这里让服务商写得慢一点，评估写到一半时删组；两边都完了之后，这个名字上不能留任何面板写的记录。
 */
 test("评估正在写服务商时删组：删组等这一轮写完，按写完后的值清掉，不留孤儿记录", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-delete-race-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
-    const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-    const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
-    const repo = await import(moduleUrl("server/db.ts"));
-    const fast = await import(moduleUrl("server/agentFastLiveness.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+    const settings = await import(url("server/repositories/settingsRepository.ts"));
+    const service = await import(url("server/services/forwardGroupService.ts"));
+    const repo = await import(url("server/db.ts"));
+    const fast = await import(url("server/agentFastLiveness.ts"));
     const now = Math.floor(Date.now() / 1000);
 
     let records = [];
@@ -74,20 +59,7 @@ test("评估正在写服务商时删组：删组等这一轮写完，按写完�
     await postSeen;
     const deletion = service.deleteForwardGroupWithImpact(20, true);
     await Promise.all([evaluation.catch(() => undefined), deletion]);
-    assert.equal((await runtime.queryRaw("SELECT id FROM forward_groups WHERE id = 20")).length, 0);
+    assert.equal((await query("SELECT id FROM forward_groups WHERE id = 20")).length, 0);
     assert.deepEqual(records.filter((record) => record.name === "race.example.test").map((record) => record.content), [], "评估写到一半时删组：写上去的记录没人清，组没了它还在");
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "race.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "group-delete-race" });
 });

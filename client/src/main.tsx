@@ -160,6 +160,16 @@ const criticalQueryPaths = new Set([
   "dashboard.userTraffic",
 ]);
 
+/*
+  慢一点、又不该挡住别人的查询：单独发，不进批量。tRPC 的批量请求要等批里最慢的那个算完才一起回，
+  规则页的「绑定对不上」要先组装一遍订阅计划（100 台主机约 100 ms），放进批里会把同批的规则流量汇总一起拖住。
+*/
+const isolatedQueryPaths = new Set([
+  "proxySubscriptions.targetMismatchRuleIds",
+  // 规则卡片要等当日流量汇总回来才画（先画会闪一下错误的状态）：它在首屏关键路径上，不能被同批更慢的查询拖住
+  "rules.trafficSummary",
+]);
+
 const trpcFetch = (input: RequestInfo | URL, init?: RequestInit) => {
   let requestInput = input;
   if (mobileAuth.isNative) {
@@ -190,7 +200,7 @@ const trpcFetch = (input: RequestInfo | URL, init?: RequestInit) => {
 const trpcClient = trpc.createClient({
   links: [
     splitLink({
-      condition: (op) => op.type === "query" && criticalQueryPaths.has(op.path),
+      condition: (op) => op.type === "query" && (criticalQueryPaths.has(op.path) || isolatedQueryPaths.has(op.path)),
       true: httpLink({
         url: "/api/trpc",
         transformer: superjson,

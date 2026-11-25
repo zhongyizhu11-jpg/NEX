@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   DNSPod 解析记录管理（server/dnspodRecords.ts）。DNSPod 换成一个假的传输层：按 action 记账、
@@ -439,21 +439,9 @@ test("日志里不出现记录值和服务商原文", async () => {
 });
 
 test("托管名字从库里读：主机 DDNS、入口组、规则域名、待删域名、落地池直连域名", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-dns-managed-"));
-  const scriptPath = path.join(directory, "managed.mjs");
-  fs.writeFileSync(scriptPath, String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    try {
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-      const managed = await import(moduleUrl("server/dnsManagedNames.ts"));
-      const exec = runtime.executeRaw;
+  runInDatabase(String.raw`
+      const settings = await import(url("server/repositories/settingsRepository.ts"));
+      const managed = await import(url("server/dnsManagedNames.ts"));
       await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, ddnsEnabled, ddnsDomain) VALUES (1, '香港-1', '198.51.100.1', 'slave', 't1', 1, 1, 'HK1.Example.com.')");
       await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, ddnsEnabled, ddnsDomain) VALUES (2, 'off', '198.51.100.2', 'slave', 't2', 1, 0, 'off.example.com')");
       await exec('INSERT INTO "forward_groups" ("id", "name", "groupMode", "targetIp", "isEnabled", "userId", "domain", "ddnsAutoResolveEnabled") VALUES (3, ?, ?, ?, 0, 1, ?, 1)', ["主入口", "entry", "127.0.0.1", "edge.example.com"]);
@@ -471,15 +459,5 @@ test("托管名字从库里读：主机 DDNS、入口组、规则域名、待删
       assert.match(owners("r8.node.example.com")[0], /等待面板删除/);
       assert.match(owners("r9.node.example.com")[0], /后缀/);
       assert.deepEqual(owners("direct.example.com"), ["落地池直连域名：落地池"]);
-    } finally {
-      await runtime.closeDatabase().catch(() => undefined);
-    }
-  `, "utf8");
-  const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "managed.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-    encoding: "utf8",
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, result.error?.stack || result.stderr || result.stdout);
+  `, { name: "dns-managed" });
 });

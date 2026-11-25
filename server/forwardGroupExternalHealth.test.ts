@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   转发组 / 入口组评估的两件新事，接着真的库和一个假的 DDNS 服务商（Webhook）跑一遍：
@@ -17,14 +13,8 @@ import test from "node:test";
 */
 
 const PRELUDE = String.raw`
-  import assert from "node:assert/strict";
-  import http from "node:http";
-  import path from "node:path";
-  import { pathToFileURL } from "node:url";
+  const http = (await import("node:http")).default;
 
-  const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-  const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-  const schema = await import(moduleUrl("server/dbSchema.ts"));
   const requests = [];
   const webhook = http.createServer((request, response) => {
     let body = "";
@@ -42,12 +32,10 @@ const PRELUDE = String.raw`
     if (address && typeof address === "object" && address.port > 10080) break;
     await new Promise((resolve) => webhook.close(resolve));
   }
-  await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-  await schema.ensureDatabaseSchema();
-  const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-  const groups = await import(moduleUrl("server/db.ts"));
-  const fast = await import(moduleUrl("server/agentFastLiveness.ts"));
-  const readiness = await import(moduleUrl("server/forwardGroups/readiness.ts"));
+  const settings = await import(url("server/repositories/settingsRepository.ts"));
+  const groups = await import(url("server/db.ts"));
+  const fast = await import(url("server/agentFastLiveness.ts"));
+  const readiness = await import(url("server/forwardGroups/readiness.ts"));
   await settings.setSettings({
     ddnsEnabled: "true",
     ddnsProvider: "webhook",
@@ -56,13 +44,13 @@ const PRELUDE = String.raw`
   });
   const q = (name) => '"' + name + '"';
   const insert = async (table, columns, values) => {
-    await runtime.executeRaw(
+    await exec(
       "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
       values,
     );
   };
   const now = Math.floor(Date.now() / 1000);
-  const groupState = async (id) => (await runtime.queryRaw('SELECT "activeMemberId", "lastDdnsValue", "lastStatus", "lastMessage" FROM "forward_groups" WHERE "id" = ?', [id]))[0];
+  const groupState = async (id) => (await query('SELECT "activeMemberId", "lastDdnsValue", "lastStatus", "lastMessage" FROM "forward_groups" WHERE "id" = ?', [id]))[0];
   // 面板确认一台主机离线要等 90 秒没动静的定时器；测试里直接把内存状态改成「已确认离线」。
   const confirmOffline = (hostId, lastSeenMsAgo) => {
     const state = fast.agentFastLivenessTracker.hosts.get(hostId);
@@ -73,26 +61,18 @@ const PRELUDE = String.raw`
     state.transitionEpoch += 1000;
   };
   const finish = async () => {
-    await runtime.closeDatabase().catch(() => undefined);
     await new Promise((resolve) => webhook.close(resolve));
   };
 `;
 
 function runIsolatedScript(name: string, body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `forwardx-${name}-`));
-  const scriptPath = path.join(directory, `${name}.mjs`);
-  fs.writeFileSync(scriptPath, `${PRELUDE}\ntry {\n${body}\n} finally {\n  await finish();\n}\n`, "utf8");
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
-      cwd: process.cwd(),
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "test.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      encoding: "utf8",
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, result.error?.stack || result.stderr || result.stdout);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runInDatabase(`${PRELUDE}
+try {
+${body}
+} finally {
+  await finish();
+}
+`, { name });
 }
 
 test("外部观察：观察点连不上的成员被拿掉，面板连不上但访客可达的成员留着", () => {
@@ -281,9 +261,9 @@ test("多实例：观察点连在非持有实例上，结果交给持有实例�
       ["id", "hostId", "name", "forwardType", "protocol", "tunnelId", "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning"],
       [900, 1, "web", "gost", "tcp", 9, 8443, "203.0.113.10", 80, 1, 1, 1],
     );
-    const leaseModule = await import(moduleUrl("server/panelLease.ts"));
-    const work = await import(moduleUrl("server/panelWorkRequests.ts"));
-    const peers = await import(moduleUrl("server/forwardGroups/peerObservations.ts"));
+    const leaseModule = await import(url("server/panelLease.ts"));
+    const work = await import(url("server/panelWorkRequests.ts"));
+    const peers = await import(url("server/forwardGroups/peerObservations.ts"));
     const store = new leaseModule.SqlPanelLeaseStore();
     const quiet = { info: () => {}, warn: () => {} };
     const makeLease = (instanceId) => new leaseModule.PanelLease({ store, instanceId, logger: quiet, setTimer: () => ({ unref() {} }), clearTimer: () => {} });

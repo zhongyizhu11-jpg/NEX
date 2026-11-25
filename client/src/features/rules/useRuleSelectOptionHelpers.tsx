@@ -1,7 +1,8 @@
 /*
   从 client/src/pages/Rules.tsx 第 5161-5264 行抽出（scripts/extract-block.mjs），行为不变。
 */
-import { getForwardGroupRouteLabel, getTunnelDisplay } from "../../pages/Rules";
+import { type ReactElement } from "react";
+import { getForwardGroupRouteLabel, getTunnelDisplay, type RuleResourceRow } from "../../pages/Rules";
 import { TRAFFIC_MULTIPLIER_DEFAULT, formatTrafficMultiplier, normalizeTrafficMultiplier } from "@shared/trafficMultiplier";
 
 export type UseRuleSelectOptionHelpersContext = {
@@ -16,14 +17,14 @@ export type UseRuleSelectOptionHelpersContext = {
 export type UseRuleSelectOptionHelpersResult = {
   isTrafficBillingForwardGroup: (group: any) => any;
   getForwardGroupSelectName: (group: any) => string;
-  renderTrafficMultiplierBadge: any /* 原类型 (value: unknown) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
-  renderTrafficBillingResourceBadge: any /* 原类型 (enabled?: boolean) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
+  renderTrafficMultiplierBadge: (value: unknown) => ReactElement;
+  renderTrafficBillingResourceBadge: (enabled?: boolean) => ReactElement | null;
   getHostName: (hostId: number) => any;
   getTunnelSelectName: (tunnel: any) => string;
   getTunnelSelectText: (tunnel: any) => string;
-  renderTunnelSelectLabel: any /* 原类型 (tunnel: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
+  renderTunnelSelectLabel: (tunnel: RuleResourceRow) => ReactElement;
   getHostOptionText: (host: any) => string;
-  renderHostStatusLabel: any /* 原类型 (host: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
+  renderHostStatusLabel: (host: any) => ReactElement;
 };
 
 export function useRuleSelectOptionHelpers(ctx: UseRuleSelectOptionHelpersContext): UseRuleSelectOptionHelpersResult {

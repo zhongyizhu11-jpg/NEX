@@ -1,7 +1,8 @@
 /*
   从 client/src/pages/Rules.tsx 第 6477-6552 行抽出（scripts/extract-block.mjs），行为不变。
 */
-import { formatProbeAge } from "../../pages/Rules";
+import { type ReactElement } from "react";
+import { formatProbeAge, type RuleCardRule } from "../../pages/Rules";
 import { LatencyRating } from "@/components/LatencyRating";
 import { describeRuleLatency } from "@/features/rules/ruleCardProps";
 import { formatBytes } from "@shared/formatBytes";
@@ -16,9 +17,9 @@ export type UseRuleTrafficCellsContext = {
 };
 
 export type UseRuleTrafficCellsResult = {
-  renderTableRuleDailyTraffic: any /* 原类型 (rule: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
-  renderTableRuleTotalTraffic: any /* 原类型 (rule: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
-  renderTableRuleLatency: any /* 原类型 (rule: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
+  renderTableRuleDailyTraffic: (rule: RuleCardRule) => ReactElement;
+  renderTableRuleTotalTraffic: (rule: RuleCardRule) => ReactElement;
+  renderTableRuleLatency: (rule: RuleCardRule) => ReactElement;
 };
 
 export function useRuleTrafficCells(ctx: UseRuleTrafficCellsContext): UseRuleTrafficCellsResult {

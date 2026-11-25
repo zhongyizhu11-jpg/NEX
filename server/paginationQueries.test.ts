@@ -337,6 +337,22 @@ test("database-backed list queries page, search, scope, and hydrate only request
         search: "Alice Owned Template",
       });
       assert.deepEqual(ownedRulePage.items.map((item) => Number(item.id)), [105]);
+      assert.equal("trafficSummary24h" in ownedRulePage, false, "不要求时不顺带算汇总");
+      // 规则页首屏顺带要这一页的当日汇总：和单独调 trafficSummary 拿到的同一份
+      const withSummaryPage = await rulesCaller.listPage({
+        page: 1,
+        pageSize: 10,
+        category: "all",
+        search: "Alice Owned Template",
+        withTrafficSummary24h: true,
+      });
+      assert.deepEqual(withSummaryPage.items.map((item) => Number(item.id)), [105]);
+      assert.ok(Array.isArray(withSummaryPage.trafficSummary24h));
+      assert.deepEqual(
+        withSummaryPage.trafficSummary24h,
+        await rulesCaller.trafficSummary({ hours: 24, range: "24h", ruleIds: [105] }),
+        "顺带的那份必须和 trafficSummary 一致，前端才敢直接当初始数据",
+      );
       const revokedGroupRulePage = await rulesCaller.listPage({
         page: 1,
         pageSize: 10,

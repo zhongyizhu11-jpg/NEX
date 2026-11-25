@@ -1,9 +1,10 @@
 /*
   从 client/src/pages/Rules.tsx 第 5583-5619 行抽出（scripts/extract-block.mjs），行为不变。
 */
+import { type RuleResourceRow } from "../../pages/Rules";
 import { getTunnelExitNames, getTunnelHopIds, getTunnelRouteText, tunnelHopHostName } from "@/lib/tunnelDisplay";
 import { ArrowRight } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, type ReactElement } from "react";
 
 export type UseRenderTunnelRouteContext = {
   forwardGroupById: Map<number, any>;
@@ -12,7 +13,7 @@ export type UseRenderTunnelRouteContext = {
 };
 
 export type UseRenderTunnelRouteResult = {
-  renderTunnelRoute: any /* 原类型 (tunnel: any, compact?: boolean) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
+  renderTunnelRoute: (tunnel: RuleResourceRow, compact?: boolean) => ReactElement;
 };
 
 export function useRenderTunnelRoute(ctx: UseRenderTunnelRouteContext): UseRenderTunnelRouteResult {

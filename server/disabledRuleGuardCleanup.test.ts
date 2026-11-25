@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 停用一条转发时，端口上的**故障转移守护后端**要不要一起清掉。
@@ -23,19 +20,8 @@ import test from "node:test";
 type GuardCounts = Record<string, number>;
 
 function guardCleanupCounts(protocolsEnabled: boolean): GuardCounts {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-guard-cleanup-"));
-  const databasePath = path.join(directory, "guard.db");
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
 
     const TYPES = ["iptables", "nftables", "realm", "socat", "nginx", "gost"];
     const enabled = process.env.PROTOCOLS_ENABLED === "1";
@@ -99,19 +85,7 @@ function guardCleanupCounts(protocolsEnabled: boolean): GuardCounts {
         .length;
     }
     console.log("GUARD " + JSON.stringify(counts));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_TYPE: "sqlite",
-      FORWARDX_TEST_DB: databasePath,
-      PROTOCOLS_ENABLED: protocolsEnabled ? "1" : "0",
-    },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "guard-cleanup", env: { PROTOCOLS_ENABLED: protocolsEnabled ? "1" : "0" } });
   const line = result.stdout.split("\n").find((row) => row.startsWith("GUARD "));
   assert.ok(line, `没拿到计数：\n${result.stdout}`);
   return JSON.parse(line.slice("GUARD ".length)) as GuardCounts;

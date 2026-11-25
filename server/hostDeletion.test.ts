@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 删主机时「还有规则在机器上等清理」这件事怎么处理（照上游 poouo/Forwardx server/hostDeletion.ts 移植）：
@@ -13,22 +9,15 @@ import test from "node:test";
  * - 检查前先修好转发组模板上过期的主机引用，别让一条早就不在这台机器上的模板挡住删除。
  */
 function runScenario(name: string, body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `forwardx-host-delete-${name}-`));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import { EventEmitter } from "node:events";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    const agentEvents = await import(moduleUrl("server/agentEvents.ts"));
+  runInDatabase(String.raw`
+    const { EventEmitter } = await import("node:events");
+    const agentEvents = await import(url("server/agentEvents.ts"));
     const q = (name) => '"' + name + '"';
-    const insert = (table, columns, values) => runtime.executeRaw(
+    const insert = (table, columns, values) => exec(
       "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
       values,
     );
-    const one = async (sqlText, params = []) => (await runtime.queryRaw(sqlText, params))[0];
+    const one = async (sqlText, params = []) => (await query(sqlText, params))[0];
     const context = (user) => ({
       req: { headers: {} },
       res: { clearCookie() {} },
@@ -52,34 +41,12 @@ function runScenario(name: string, body: string) {
       agentEvents.registerAgentEventClient(hostId, "token-" + hostId, response);
       return response;
     };
-    try {
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      await insert("users", ["id", "username", "password", "role", "canAddRules"], [1, "admin", "x", "admin", 1]);
-      await insert("users", ["id", "username", "password", "role", "canAddRules", "name"], [99, "customer-a", "x", "user", 1, "Customer A"]);
-      const { hostsRouter } = await import(moduleUrl("server/routers/hosts.ts"));
-      const caller = hostsRouter.createCaller(context(admin));
-      ${body}
-    } finally {
-      await runtime.closeDatabase().catch(() => undefined);
-    }
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "host-delete.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-      },
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+    await insert("users", ["id", "username", "password", "role", "canAddRules"], [1, "admin", "x", "admin", 1]);
+    await insert("users", ["id", "username", "password", "role", "canAddRules", "name"], [99, "customer-a", "x", "user", 1, "Customer A"]);
+    const { hostsRouter } = await import(url("server/routers/hosts.ts"));
+    const caller = hostsRouter.createCaller(context(admin));
+    ${body}
+  `, { name: `host-delete-${name}` });
 }
 
 test("在线主机还有待清理的规则：拒绝删除，并催 Agent 刷新", () => {
@@ -168,7 +135,7 @@ test("检查和删除在一个事务里：删到一半失败，权限、待清�
     await insert("hosts", hostCols, [7, "fragile", "198.51.100.7", "slave", 1, 0, null]);
     await insert("forward_rules", ruleCols, [70, 7, "removed", "gost", "tcp", 10000, "203.0.113.1", 80, 1, 0, 1, 1, 0, null]);
     await insert("user_host_permissions", ["id", "userId", "hostId"], [7, 99, 7]);
-    await runtime.executeRaw('CREATE TRIGGER fail_host_delete BEFORE DELETE ON "hosts" BEGIN SELECT RAISE(ABORT, ' + "'boom'" + '); END');
+    await failWrite("fail_host_delete", { table: '"hosts"', event: "DELETE", message: "boom" });
 
     await assert.rejects(() => caller.delete({ id: 7, confirmOfflineCleanup: true }), /boom/);
     assert.ok(await one('SELECT "id" FROM "hosts" WHERE "id" = 7'));

@@ -33,8 +33,17 @@ Docker 部署时，环境变量通常写在部署目录的 `.env` 文件中。�
 ::: tip Docker 与时间校准
 Docker 容器与宿主机共享系统时钟，不能独立运行一套时间。NEX 会使用多个 HTTPS 来源校准旧版 Agent/FXP 加密协议的时间基准；新版 Agent 与 NEX FXP 面板上报使用一次性挑战认证，不再依赖双方系统时间。宿主机仍建议开启 NTP。外网受限时，可通过 `FORWARDX_PANEL_TIME_SOURCES` 指向部署方可信且会返回标准 `Date` 响应头的 HTTPS 服务。
 
-官方 Docker 部署默认只有一个面板进程。自行横向扩容面板时，请保持单副本或为 `/api/agent/*`、`/api/sync` 和 `/api/stream` 配置粘性路由，确保一次性挑战由同一面板进程签发和消费。
+官方 Docker 部署默认只有一个面板进程。自行横向扩容面板时（见下面的 `FORWARDX_SHARED_STATE`），仍要为 `/api/agent/*`、`/api/sync` 和 `/api/stream` 配置粘性路由，确保 Agent 的一次性挑战由同一面板进程签发和消费。
 :::
+
+## 多个面板实例
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `FORWARDX_SHARED_STATE` | `auto` | 登录失败锁定、登录 / 2FA / 找回密码的限频、验证码挑战和接口限流的计数放哪：`auto` = 库是 MySQL / PostgreSQL 并且检测到别的面板实例（`panel_leases` 里的实例登记）时放库里共享，否则放本进程内存；`db` = 一直放库里（单实例上提前验证、或者前面的负载均衡让实例互相看不见时）；`memory` = 一直放内存（明知多实例也各算各的，比如负载均衡已经按来源 IP 粘性）。SQLite 只支持单实例，这一项对它没有意义。改了要重启 |
+
+放库里之后判断仍然是同步的、看本进程的缓存：每次计数同步记进缓存、异步写库，库回来的总数（全体实例的）覆盖缓存，判断时顺手异步刷新一次。所以同一个键每个实例最多比阈值「多放一次」（另一个实例刚计满的那一刻本实例还没收到），锁定阈值 8 次、限流每分钟上千次，多一次无妨。接口限流每放行一次请求多一条库的 upsert（已经超额的客户端不再碰库）；登录相关的计数本来就低频。库写不进去时按本进程的计数继续，不影响登录和接口。多实例的部署说明见[部署面板](./deploy-panel.md#docker-部署)。
+
 
 ## 数据库变量
 
@@ -75,6 +84,8 @@ Docker 场景下数据库地址可以按下面判断：
 | `FORWARDX_RUN_AS_ROOT` | 空 | Docker 镜像默认以 `forwardx`（uid 10001）运行；设为 `1` 让容器保持 root（挂了 `/var/run/docker.sock` 时自动保持 root，见[部署面板](./deploy-panel.md)） |
 | `FORWARDX_AGENT_ASSET_CACHE_DIR` | 数据目录下的 `agent-assets` | 面板替主机缓存 Agent 二进制（含按需下载的 gost 运行时、mita）的目录；默认跟数据库同一个数据目录，Docker 里是 `/data/agent-assets`。见[部署面板](./deploy-panel.md#agent-二进制默认按需下载离线用完整包) |
 | `FORWARDX_SQLITE_WAL_AUTOCHECKPOINT` | `10000` | SQLite 的 WAL 累积多少页做一次检查点（页 4 KB）。默认 10000 页（WAL 最多约 40 MB）比 SQLite 自带的 1000 页少约四分之一的磁盘写入；机器磁盘特别小可以调低 |
+| `FORWARDX_TRAFFIC_BATCH_MS` | `500` | Agent 流量上报攒批提交的窗口（毫秒）：窗口内到达的上报合成一个事务写库，100 台主机时磁盘写入约少 30%，代价是上报回包慢至多一个窗口（Agent 端异步上报，不影响转发）。`0` 关掉，每份单独提交；上限 5000。 |
+| `FORWARDX_PROXY_SUB_CACHE_MAX_BYTES` | `134217728`（128 MB） | 订阅渲染结果缓存的内存上限（含压缩副本），超出按先进先出淘汰；小于 1 MB 的值忽略。 |
 | `FORWARDX_TRUSTED_ORIGINS` | 空 | 跨站写操作防护（CSRF）额外放行的浏览器来源，逗号分隔，可写完整来源（`https://ops.example.com`）或裸主机名。面板自己的域名（按请求 Host / 反代传来的 `X-Forwarded-Host` 比主机名）和手机 App 的固定源默认就放行；只有把面板 API 嵌进别的站点时才需要填。用 API 令牌（Bearer）认证的请求不受此限制 |
 
 ## 数据库连接池

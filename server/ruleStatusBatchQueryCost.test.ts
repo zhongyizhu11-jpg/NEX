@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * Agent 批量上报规则状态（/api/agent/rule-status-batch）打多少次库。
@@ -24,12 +21,8 @@ type Probe = {
 };
 
 function runProbe(): Probe {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-rule-status-cost-"));
-  const databasePath = path.join(directory, "status.db");
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
 
     const Database = (await import("better-sqlite3")).default;
     const originalPrepare = Database.prototype.prepare;
@@ -39,13 +32,6 @@ function runProbe(): Probe {
       if (recording) statements.push(String(sql));
       return originalPrepare.call(this, sql);
     };
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'h', 'admin')");
     for (let h = 1; h <= 4; h++) {
@@ -101,7 +87,7 @@ function runProbe(): Probe {
       if (result.status !== 200 || result.body.accepted !== ids.length) throw new Error("batch failed: " + JSON.stringify(result));
       cost[label] = statements.length;
     }
-    const running = (await runtime.queryRaw('SELECT id FROM forward_rules WHERE "isRunning" = 1 AND id <= 12 ORDER BY id')).map((row) => Number(row.id));
+    const running = (await query('SELECT id FROM forward_rules WHERE "isRunning" = 1 AND id <= 12 ORDER BY id')).map((row) => Number(row.id));
 
     // 出口机 2 号有权；和隧道无关的机器（这里改用一条挂在别的隧道上的规则来构造）应被拒
     await exec('INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", secret, "userId", "isEnabled") VALUES (6, ?, 2, 4, ?, 30010, ?, 1, 1)', ["别的隧道", "tls", "s2"]);
@@ -113,20 +99,11 @@ function runProbe(): Probe {
     const forbiddenStatus = Number(forbidden.body.rejected?.[0]?.status || 0);
 
     await post("tok1", [{ statusType: "rule", ruleId: 50, tunnelId: 5, isRunning: false, sourcePort: 20050 }]);
-    const pendingDeleteGone = (await runtime.queryRaw("SELECT id FROM forward_rules WHERE id = 50")).length === 0;
+    const pendingDeleteGone = (await query("SELECT id FROM forward_rules WHERE id = 50")).length === 0;
 
     server.close();
     console.log("STATUSCOST " + JSON.stringify({ cost, running, forbiddenStatus, pendingDeleteGone }));
-    await runtime.closeDatabase().catch(() => undefined);
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-    timeout: 120000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "rule-status-cost", env: { NODE_ENV: "test" } });
   const line = result.stdout.split("\n").find((row) => row.startsWith("STATUSCOST "));
   assert.ok(line, `没拿到探测结果：\n${result.stdout}`);
   return JSON.parse(line.slice("STATUSCOST ".length)) as Probe;

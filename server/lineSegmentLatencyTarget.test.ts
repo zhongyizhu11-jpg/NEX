@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 逐段测延迟（P1-3）：普通用户借共享主机测「落地」时，落地地址按规则那套受限目标策略查
@@ -11,20 +8,7 @@ import test from "node:test";
  * 拨落地的是他自己的主机时照旧；管理员不受限。另外接上「网络测试」开关。
  */
 test("逐段测延迟：别人的主机不能拿来测内网落地，接上网络测试开关", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-line-segment-latency-"));
-  const databasePath = path.join(directory, "segment.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
+  const result = runInDatabase(String.raw`
     const latency = await import(url("server/lineSegmentLatency.ts"));
     const { lineDiagnosticsRouter } = await import(url("server/routers/lineDiagnostics.ts"));
     const settings = await import(url("server/repositories/settingsRepository.ts"));
@@ -85,17 +69,6 @@ test("逐段测延迟：别人的主机不能拿来测内网落地，接上网�
     const adminCaller = lineDiagnosticsRouter.createCaller(context(admin));
     assert.ok((await adminCaller.segmentLatencyStart({ entryHostId: 1, hops: [], dest: { ip: "8.8.8.8", port: 53 } })).runId);
     console.log("ok");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /ok/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "line-segment-latency" });
+  assert.match(result.stdout, /ok/);
 });

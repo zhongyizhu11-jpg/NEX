@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { canAddSelfServiceHost, selfServiceHostLimitForUser } from "./routers/hosts";
 
@@ -68,23 +65,12 @@ test("管理员不受这个限制 —— 拦了反而碍事", () => {
 
 /** 光有解析逻辑不够：这一列得真的存得下、读得回来。 */
 test("SQLite 管理员设的台数存得下、读得回来", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-limit-"));
-  const databasePath = path.join(directory, "host-limit.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const users = await import(url("server/repositories/userRepository.ts"));
     const billing = await import(url("server/repositories/billingRepository.ts"));
     const { selfServiceHostLimitForUser } = await import(url("server/routers/hosts.ts"));
 
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    await runtime.executeRaw("INSERT INTO users (id, username, password, role) VALUES (1,'tenant','h','user')");
+    await exec("INSERT INTO users (id, username, password, role) VALUES (1,'tenant','h','user')");
 
     const fresh = await users.getUserById(1);
     assert.equal(fresh.maxSelfServiceHosts ?? null, null, "新用户是留空 = 跟随全局");
@@ -95,16 +81,5 @@ test("SQLite 管理员设的台数存得下、读得回来", () => {
     const capped = await users.getUserById(1);
     assert.equal(Number(capped.maxSelfServiceHosts), 3, "管理员设的数要真的落库");
     assert.equal(selfServiceHostLimitForUser(capped, 10), 3, "落库之后要压过全局");
-
-    console.log("OK");
-    await runtime.closeDatabase();
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-    encoding: "utf8",
-    timeout: 90_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  `, { name: "host-limit" });
 });

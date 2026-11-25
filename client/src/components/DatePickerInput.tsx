@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useFormFieldId } from "@/components/ui/form-field";
 import { useOverlayContainer } from "@/components/ui/overlay-root";
 import { cn } from "@/lib/utils";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
@@ -49,6 +50,8 @@ type DatePickerInputProps = {
   align?: "start" | "end";
   className?: string;
   placeholder?: string;
+  /** 触发按钮的 id；在 FormField 里不传也会拿到 FormField 发的 id，让同层的 Label 绑上 */
+  id?: string;
 };
 
 export default function DatePickerInput({
@@ -57,7 +60,11 @@ export default function DatePickerInput({
   align = "start",
   className,
   placeholder = "年/月/日",
+  id,
 }: DatePickerInputProps) {
+  // 渲染出来的是 <button>，<label for> 对 button 同样有效（见 accessibleNames.test.ts 的实测说明），
+  // 接上 FormField 的 id 之后日期类 Label 就能和 Input 一样绑到控件上
+  const fieldId = useFormFieldId();
   const selected = useMemo(() => parseDateInputValue(value), [value]);
   const selectedTime = selected?.getTime() ?? null;
   const [open, setOpen] = useState(false);
@@ -201,6 +208,7 @@ export default function DatePickerInput({
     <div ref={rootRef} className={cn("relative", className)}>
       <button
         ref={triggerRef}
+        id={id ?? fieldId}
         type="button"
         className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-left text-sm transition-colors hover:border-primary/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         onClick={() => {

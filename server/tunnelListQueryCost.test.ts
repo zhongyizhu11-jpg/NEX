@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 隧道列表页打多少次库，以及打完之后内容对不对。
@@ -26,12 +23,7 @@ type Probe = {
 };
 
 function runProbe(): Probe {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-tunnel-cost-"));
-  const databasePath = path.join(directory, "tunnel.db");
-  const script = String.raw`
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
+  const result = runInDatabase(String.raw`
     // 钩子挂在建库之前：drizzle 的和裸 SQL 的语句都从 prepare 过。
     const Database = (await import("better-sqlite3")).default;
     const originalPrepare = Database.prototype.prepare;
@@ -41,13 +33,6 @@ function runProbe(): Probe {
       if (recording) statements.push(String(sql));
       return originalPrepare.call(this, sql);
     };
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     for (let h = 1; h <= 12; h++) {
@@ -111,15 +96,7 @@ function runProbe(): Probe {
     const scrub = (value) => JSON.parse(JSON.stringify(value, (key, item) =>
       (key === "lastHeartbeat" || key === "createdAt" || key === "updatedAt" || key === "lastTestAt") ? "<ts>" : item));
     console.log("TUNNELCOST " + JSON.stringify({ cost, page: scrub(page) }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-    timeout: 120000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "tunnel-cost" });
   const line = result.stdout.split("\n").find((row) => row.startsWith("TUNNELCOST "));
   assert.ok(line, `没拿到探测结果：\n${result.stdout}`);
   return JSON.parse(line.slice("TUNNELCOST ".length)) as Probe;

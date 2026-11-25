@@ -293,21 +293,21 @@ export default function HostEditDialog({
               {user?.role === "admin" ? (
                 <>
                   <div className="grid min-w-0 gap-2.5 px-1 md:grid-cols-2">
-                    <div className="space-y-1">
+                    <FormField className="space-y-1">
                       <Label className="text-sm">机器购买时间</Label>
                       <DateTimePickerInput
                         value={form.purchasedAt}
                         onChange={(value) => setForm({ ...form, purchasedAt: value })}
                       />
-                    </div>
-                    <div className="space-y-1">
+                    </FormField>
+                    <FormField className="space-y-1">
                       <Label className="text-sm">机器停止时间</Label>
                       <DateTimePickerInput
                         value={form.stoppedAt}
                         onChange={(value) => setForm({ ...form, stoppedAt: value })}
                         align="end"
                       />
-                    </div>
+                    </FormField>
                     <FormField className="min-w-0 space-y-1">
                       <Label className="text-sm">账单周期</Label>
                       <Select

@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { ROUTE_POLICY_RULE_FIELDS } from "../shared/routePolicyFields";
 
@@ -24,17 +21,7 @@ type Outcome = {
 };
 
 function runScenario(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-route-policy-template-sync-"));
-  const databasePath = path.join(directory, "sync.db");
-  const script = String.raw`
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
     const q = (name) => '"' + name + '"';
     const insert = (table, columns, values) => exec(
       "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
@@ -94,7 +81,7 @@ function runScenario(): Outcome {
       await rules.updateForwardRule(300, { [field]: value });
       await forwardGroups.syncForwardGroupRules(10);
       const template = await rules.getForwardRuleById(300);
-      const child = (await runtime.queryRaw('SELECT "id" FROM forward_rules WHERE "forwardGroupRuleId" = 300 AND "isForwardGroupTemplate" = 0 AND "pendingDelete" = 0'))[0];
+      const child = (await query('SELECT "id" FROM forward_rules WHERE "forwardGroupRuleId" = 300 AND "isForwardGroupTemplate" = 0 AND "pendingDelete" = 0'))[0];
       const childRule = await rules.getForwardRuleById(Number(child.id));
       const templatePolicy = routeGroupOf(template, { nowMs })?.policy ?? null;
       const childPolicy = routeGroupOf(childRule, { nowMs })?.policy ?? null;
@@ -102,7 +89,7 @@ function runScenario(): Outcome {
     }
     // —— 升级后自动补齐：把子规则的几列改回「老版本没带上」的样子，跑一次升级同步 ——
     const dbModule = await import(url("server/db.ts"));
-    const childId = Number((await runtime.queryRaw('SELECT "id" FROM forward_rules WHERE "forwardGroupRuleId" = 300 AND "isForwardGroupTemplate" = 0 AND "pendingDelete" = 0'))[0].id);
+    const childId = Number((await query('SELECT "id" FROM forward_rules WHERE "forwardGroupRuleId" = 300 AND "isForwardGroupTemplate" = 0 AND "pendingDelete" = 0'))[0].id);
     await exec('UPDATE forward_rules SET "failoverPinnedIndex" = NULL, "failoverPinnedUntil" = NULL, "failoverMinHoldSeconds" = 0, "isRunning" = 1 WHERE "id" = ?', [childId]);
     const policyOf = async (id) => routeGroupOf(await rules.getForwardRuleById(id), { nowMs })?.policy ?? null;
     const staleSame = JSON.stringify(await policyOf(300)) === JSON.stringify(await policyOf(childId));
@@ -117,16 +104,7 @@ function runScenario(): Outcome {
     const updatedAtAfter = String((await rules.getForwardRuleById(childId)).updatedAt);
     const upgrade = { staleSame, first, repairedSame, stillRunning, second, third, untouched: updatedAtBefore === updatedAtAfter };
     console.log("OUTCOME " + JSON.stringify({ steps, covered: Array.from(new Set(changes.map(([field]) => field))), upgrade }));
-    await runtime.closeDatabase();
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: path.join(directory, "logs") },
-    timeout: 180_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "route-policy-template-sync", timeoutMs: 180_000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
   return JSON.parse(line.slice("OUTCOME ".length));

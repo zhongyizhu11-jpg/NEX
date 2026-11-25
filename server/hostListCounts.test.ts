@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 主机卡片上「几条转发 / 几条隧道」那两个数得是真的。
@@ -14,16 +10,7 @@ import test from "node:test";
  * 只能算一次，否则「在 2 条隧道里」会被报成 3。
  */
 test("主机列表要带上每台机器的转发数和隧道数", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-counts-"));
-  const databasePath = path.join(directory, "host-counts.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const rules = await import(url("server/repositories/forwardRuleRepository.ts"));
     const tunnels = await import(url("server/repositories/tunnelRepository.ts"));
     const { hostsRouter } = await import(url("server/routers/hosts.ts"));
@@ -37,10 +24,6 @@ test("主机列表要带上每台机器的转发数和隧道数", () => {
     });
     const admin = { id: 1, username: "admin", role: "admin", accountEnabled: true };
     const tenant = { id: 2, username: "tenant", role: "user", accountEnabled: true };
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, p = []) => runtime.executeRaw(sql, p);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'tenant', 'hash', 'user')");
@@ -109,17 +92,5 @@ test("主机列表要带上每台机器的转发数和隧道数", () => {
     assert.equal(rows.get(10).tunnelCount, 3);
 
     console.log("HOST_COUNTS_OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /HOST_COUNTS_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "host-counts", env: { NODE_ENV: "test" } });
 });

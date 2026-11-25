@@ -5,17 +5,23 @@
  * the 2FA paths on the same counters prevents an attacker from moving between
  * login, challenge verification, and 2FA-management endpoints to reset the
  * failure budget.
+ *
+ * 多实例（server/sharedState.ts 判断为 db 模式）时这些计数经 SharedCounter 写进 auth_attempt_counters，
+ * 各实例共享：攻击者的请求轮着落到几个实例上，锁定阈值仍然是 8 次，不是 8 × 实例数。接口保持同步
+ * （登录流程里是同步判断）：判断看本进程的缓存，失败同步记进缓存、异步写库，库回来的总数覆盖缓存，
+ * 判断时顺手异步刷新 —— 每个实例对同一个键最多多放一次，见 sharedStateCounter.ts。SQLite 部署永远是内存。
  */
 
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { ipRateLimitScope } from "./ipRateLimitScope";
+import { registerSharedStateCleanup, sharedStateMode } from "./sharedState";
+import { SharedCounter } from "./sharedStateCounter";
+import { SqlAttemptCounterStore } from "./sharedStateStore";
 
 export type AuthRateLimitState = {
   limited: boolean;
   retryAfterSeconds: number;
 };
-
-type FailureEntry = { count: number; lastFailAt: number };
 
 export const LOGIN_FAIL_WINDOW_MS = 30 * 60 * 1000;
 export const LOGIN_BLOCK_MS = 15 * 60 * 1000;
@@ -25,13 +31,26 @@ export const LOGIN_BLOCK_THRESHOLD_PER_IP = 40;
 export const TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS = 60 * 1000;
 export const TWO_FACTOR_CHALLENGE_ISSUE_MAX = 5;
 
-const loginFailStore = new Map<string, FailureEntry>();
-const loginAccountFailStore = new Map<string, FailureEntry>();
-const loginIpFailStore = new Map<string, FailureEntry>();
+const AUTH_RATE_LIMIT_MAX_KEYS = 50_000;
+
+/*
+  失败计数：IP + 账户、账户、IP 三个维度各一份。「最近一次失败后 30 分钟内再失败就累加，隔了 30 分钟
+  没动静就从头数」—— SharedCounter 的 anchor = last。内存模式下和以前的 Map 一模一样。
+*/
+const loginFailStore = new SharedCounter({ scope: "login-pair", windowMs: LOGIN_FAIL_WINDOW_MS, anchor: "last", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
+const loginAccountFailStore = new SharedCounter({ scope: "login-account", windowMs: LOGIN_FAIL_WINDOW_MS, anchor: "last", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
+const loginIpFailStore = new SharedCounter({ scope: "login-ip", windowMs: LOGIN_FAIL_WINDOW_MS, anchor: "last", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
+
+/*
+  2FA 挑战签发次数：内存模式是时间戳列表（滑动窗口，老的一个个滑出去）；db 模式是 SharedCounter（anchor = first，
+  一分钟内最多 5 次、到点清零）—— 一行能原子更新，列表不能。两套各自独立，切换模式那一刻不互通。
+*/
 const challengeIssueStore = new Map<string, number[]>();
 const challengeIssueAccountStore = new Map<string, number[]>();
 const challengeIssueIpStore = new Map<string, number[]>();
-const AUTH_RATE_LIMIT_MAX_KEYS = 50_000;
+const sharedChallengeIssueStore = new SharedCounter({ scope: "2fa-issue-pair", windowMs: TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS, anchor: "first", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
+const sharedChallengeIssueAccountStore = new SharedCounter({ scope: "2fa-issue-account", windowMs: TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS, anchor: "first", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
+const sharedChallengeIssueIpStore = new SharedCounter({ scope: "2fa-issue-ip", windowMs: TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS, anchor: "first", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
 
 function normalizeIp(ip: string) {
   // IPv6 按 /64 归并，见 ipRateLimitScope。
@@ -46,36 +65,17 @@ export function getAuthAttemptKey(ip: string, username: string) {
   return `${normalizeIp(ip)}:${normalizeUsername(username)}`;
 }
 
-function activeFailureEntry(store: Map<string, FailureEntry>, key: string, now = Date.now()) {
-  const entry = store.get(key);
-  if (!entry) return null;
-  if (now - entry.lastFailAt < LOGIN_FAIL_WINDOW_MS) return entry;
-  store.delete(key);
-  return null;
-}
-
-function recordFailure(store: Map<string, FailureEntry>, key: string, now = Date.now()) {
-  const entry = activeFailureEntry(store, key, now);
-  if (entry) {
-    entry.count += 1;
-    entry.lastFailAt = now;
-    setBoundedMapValue(store, key, entry, AUTH_RATE_LIMIT_MAX_KEYS);
-  } else {
-    setBoundedMapValue(store, key, { count: 1, lastFailAt: now }, AUTH_RATE_LIMIT_MAX_KEYS);
-  }
-}
-
 /** Record a 2FA failure for pair, account, and IP scopes. */
 export function recordAuthFailure(ip: string, username: string, now = Date.now()) {
-  recordFailure(loginFailStore, getAuthAttemptKey(ip, username), now);
-  recordFailure(loginAccountFailStore, normalizeUsername(username), now);
-  recordFailure(loginIpFailStore, normalizeIp(ip), now);
+  loginFailStore.bump(getAuthAttemptKey(ip, username), now);
+  loginAccountFailStore.bump(normalizeUsername(username), now);
+  loginIpFailStore.bump(normalizeIp(ip), now);
 }
 
 /** Password failures remain scoped to the source IP to avoid account lockout DoS. */
 export function recordPasswordFailure(ip: string, username: string, now = Date.now()) {
-  recordFailure(loginFailStore, getAuthAttemptKey(ip, username), now);
-  recordFailure(loginIpFailStore, normalizeIp(ip), now);
+  loginFailStore.bump(getAuthAttemptKey(ip, username), now);
+  loginIpFailStore.bump(normalizeIp(ip), now);
 }
 
 /** Explicit name for callers handling a known account's 2FA proof. */
@@ -84,14 +84,14 @@ export const recordTwoFactorFailure = recordAuthFailure;
 /** Return the same block state used by the password login endpoint. */
 export function authRateLimitState(ip: string, username: string, now = Date.now()): AuthRateLimitState {
   const checks = [
-    { entry: activeFailureEntry(loginFailStore, getAuthAttemptKey(ip, username), now), threshold: LOGIN_BLOCK_THRESHOLD_PER_ACCOUNT },
-    { entry: activeFailureEntry(loginAccountFailStore, normalizeUsername(username), now), threshold: LOGIN_BLOCK_THRESHOLD_PER_ACCOUNT },
-    { entry: activeFailureEntry(loginIpFailStore, normalizeIp(ip), now), threshold: LOGIN_BLOCK_THRESHOLD_PER_IP },
+    { entry: loginFailStore.state(getAuthAttemptKey(ip, username), now), threshold: LOGIN_BLOCK_THRESHOLD_PER_ACCOUNT },
+    { entry: loginAccountFailStore.state(normalizeUsername(username), now), threshold: LOGIN_BLOCK_THRESHOLD_PER_ACCOUNT },
+    { entry: loginIpFailStore.state(normalizeIp(ip), now), threshold: LOGIN_BLOCK_THRESHOLD_PER_IP },
   ];
   for (const check of checks) {
     const entry = check.entry;
     if (!entry || entry.count < check.threshold) continue;
-    const retryAt = entry.lastFailAt + LOGIN_BLOCK_MS;
+    const retryAt = entry.lastAt + LOGIN_BLOCK_MS;
     if (retryAt > now) {
       return {
         limited: true,
@@ -104,12 +104,20 @@ export function authRateLimitState(ip: string, username: string, now = Date.now(
 
 /** Clear the target account's failures after a successful authentication. */
 export function clearAuthAccountFailures(ip: string, username: string) {
-  loginFailStore.delete(getAuthAttemptKey(ip, username));
-  loginAccountFailStore.delete(normalizeUsername(username));
+  loginFailStore.clear(getAuthAttemptKey(ip, username));
+  loginAccountFailStore.clear(normalizeUsername(username));
 }
 
 function challengeIssueKey(ip: string, username: string) {
   return getAuthAttemptKey(ip, username);
+}
+
+function challengeIssueScopes(ip: string, username: string) {
+  return [
+    { store: challengeIssueStore, shared: sharedChallengeIssueStore, key: challengeIssueKey(ip, username) },
+    { store: challengeIssueAccountStore, shared: sharedChallengeIssueAccountStore, key: normalizeUsername(username) },
+    { store: challengeIssueIpStore, shared: sharedChallengeIssueIpStore, key: normalizeIp(ip) },
+  ];
 }
 
 /**
@@ -119,13 +127,16 @@ function challengeIssueKey(ip: string, username: string) {
  */
 export function twoFactorChallengeIssueState(ip: string, username: string, now = Date.now()): AuthRateLimitState {
   const cutoff = now - TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS;
-  const scopes = [
-    { store: challengeIssueStore, key: challengeIssueKey(ip, username) },
-    { store: challengeIssueAccountStore, key: normalizeUsername(username) },
-    { store: challengeIssueIpStore, key: normalizeIp(ip) },
-  ];
+  const shared = sharedStateMode() === "db";
   let retryAfterSeconds = 0;
-  for (const scope of scopes) {
+  for (const scope of challengeIssueScopes(ip, username)) {
+    if (shared) {
+      const entry = scope.shared.state(scope.key, now);
+      if (entry && entry.count >= TWO_FACTOR_CHALLENGE_ISSUE_MAX) {
+        retryAfterSeconds = Math.max(retryAfterSeconds, Math.ceil((entry.firstAt + TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS - now) / 1000));
+      }
+      continue;
+    }
     const timestamps = scope.store.get(scope.key);
     if (!timestamps) continue;
     const active = timestamps.filter((timestamp) => timestamp > cutoff);
@@ -136,18 +147,18 @@ export function twoFactorChallengeIssueState(ip: string, username: string, now =
     }
   }
   return retryAfterSeconds > 0
-    ? { limited: true, retryAfterSeconds }
+    ? { limited: true, retryAfterSeconds: Math.max(1, retryAfterSeconds) }
     : { limited: false, retryAfterSeconds: 0 };
 }
 
 export function recordTwoFactorChallengeIssue(ip: string, username: string, now = Date.now()) {
   const cutoff = now - TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS;
-  const scopes = [
-    { store: challengeIssueStore, key: challengeIssueKey(ip, username) },
-    { store: challengeIssueAccountStore, key: normalizeUsername(username) },
-    { store: challengeIssueIpStore, key: normalizeIp(ip) },
-  ];
-  for (const scope of scopes) {
+  const shared = sharedStateMode() === "db";
+  for (const scope of challengeIssueScopes(ip, username)) {
+    if (shared) {
+      scope.shared.bump(scope.key, now);
+      continue;
+    }
     const active = (scope.store.get(scope.key) || []).filter((timestamp) => timestamp > cutoff);
     active.push(now);
     setBoundedMapValue(scope.store, scope.key, active, AUTH_RATE_LIMIT_MAX_KEYS);
@@ -158,16 +169,26 @@ export function recordTwoFactorChallengeIssue(ip: string, username: string, now 
   「一段时间内最多几次」的通用额度（找回密码用）。上面那套是失败计数 —— 输错才记、成功就清；
   发重置链接这种事每申请一次都要算，不管成没成，所以另开一份，但和上面共用同一个文件、同一个清理定时器。
   键由调用方拼好（IP 先过 ipRateLimitScope，账号用 user id），这里只管数数。
+  db 模式同样换成 SharedCounter（anchor = first）；窗口每个键不一样，按调用传进去。
 */
 const attemptBudgetStore = new Map<string, number[]>();
+/** 额度窗口最长一小时（找回密码按 IP 的那一档）；清理时按它算过期。 */
+const ATTEMPT_BUDGET_MAX_WINDOW_MS = 60 * 60 * 1000;
+const sharedAttemptBudgetStore = new SharedCounter({ scope: "budget", windowMs: ATTEMPT_BUDGET_MAX_WINDOW_MS, anchor: "first", maxKeys: AUTH_RATE_LIMIT_MAX_KEYS });
 
 function activeAttempts(key: string, windowMs: number, now: number) {
   const cutoff = now - windowMs;
   return (attemptBudgetStore.get(key) || []).filter((timestamp) => timestamp > cutoff);
 }
 
+function sharedBudgetState(entry: { count: number; firstAt: number } | null, max: number, windowMs: number, now: number): AuthRateLimitState {
+  if (!entry || entry.count < max) return { limited: false, retryAfterSeconds: 0 };
+  return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((entry.firstAt + windowMs - now) / 1000)) };
+}
+
 /** 只看不记：这个键现在是不是已经用完了额度。 */
 export function attemptBudgetState(key: string, max: number, windowMs: number, now = Date.now()): AuthRateLimitState {
+  if (sharedStateMode() === "db") return sharedBudgetState(sharedAttemptBudgetStore.state(key, now, windowMs), max, windowMs, now);
   const active = activeAttempts(key, windowMs, now);
   if (active.length < max) return { limited: false, retryAfterSeconds: 0 };
   return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((active[0] + windowMs - now) / 1000)) };
@@ -175,6 +196,11 @@ export function attemptBudgetState(key: string, max: number, windowMs: number, n
 
 /** 占用一次额度。额度已满返回 limited（这一次不记，一直重试也不会把窗口越推越远）。 */
 export function consumeAttemptBudget(key: string, max: number, windowMs: number, now = Date.now()): AuthRateLimitState {
+  if (sharedStateMode() === "db") {
+    const state = sharedBudgetState(sharedAttemptBudgetStore.state(key, now, windowMs), max, windowMs, now);
+    if (!state.limited) sharedAttemptBudgetStore.bump(key, now, windowMs);
+    return state;
+  }
   const active = activeAttempts(key, windowMs, now);
   if (active.length >= max) {
     setBoundedMapValue(attemptBudgetStore, key, active, AUTH_RATE_LIMIT_MAX_KEYS);
@@ -185,15 +211,15 @@ export function consumeAttemptBudget(key: string, max: number, windowMs: number,
   return { limited: false, retryAfterSeconds: 0 };
 }
 
-/** 额度窗口最长一小时（找回密码按 IP 的那一档）；清理时按它算过期。 */
-const ATTEMPT_BUDGET_MAX_WINDOW_MS = 60 * 60 * 1000;
+const sharedCounters = [
+  loginFailStore, loginAccountFailStore, loginIpFailStore,
+  sharedChallengeIssueStore, sharedChallengeIssueAccountStore, sharedChallengeIssueIpStore,
+  sharedAttemptBudgetStore,
+];
 
 export function pruneAuthRateLimitState(now = Date.now()) {
   pruneMapEntries(attemptBudgetStore, (timestamps) => !timestamps.some((timestamp) => now - timestamp < ATTEMPT_BUDGET_MAX_WINDOW_MS));
-  const failureExpired = (entry: FailureEntry) => now - entry.lastFailAt >= LOGIN_FAIL_WINDOW_MS;
-  pruneMapEntries(loginFailStore, failureExpired);
-  pruneMapEntries(loginAccountFailStore, failureExpired);
-  pruneMapEntries(loginIpFailStore, failureExpired);
+  for (const counter of sharedCounters) counter.prune(now);
   const cutoff = now - TWO_FACTOR_CHALLENGE_ISSUE_WINDOW_MS;
   for (const store of [challengeIssueStore, challengeIssueAccountStore, challengeIssueIpStore]) {
     for (const [key, timestamps] of store) {
@@ -209,25 +235,34 @@ export function pruneAuthRateLimitState(now = Date.now()) {
 export function clearTwoFactorChallengeIssueHistory(ip: string, username: string) {
   challengeIssueStore.delete(challengeIssueKey(ip, username));
   challengeIssueAccountStore.delete(normalizeUsername(username));
+  sharedChallengeIssueStore.clear(challengeIssueKey(ip, username));
+  sharedChallengeIssueAccountStore.clear(normalizeUsername(username));
 }
 
 /** Test-only reset hook; no production code calls this. */
 export function clearAuthRateLimitStateForTests() {
-  loginFailStore.clear();
-  loginAccountFailStore.clear();
-  loginIpFailStore.clear();
+  for (const counter of sharedCounters) counter.clearAll();
   challengeIssueStore.clear();
   challengeIssueAccountStore.clear();
   challengeIssueIpStore.clear();
   attemptBudgetStore.clear();
 }
 
+/** 测试用：等 db 模式下在途的写库 / 刷新都回来。 */
+export async function flushAuthRateLimitSharedState() {
+  await Promise.all(sharedCounters.map((counter) => counter.flush()));
+}
+
 export function authRateLimitStoreSizesForTests() {
   return {
     failures: loginFailStore.size + loginAccountFailStore.size + loginIpFailStore.size,
-    challengeIssues: challengeIssueStore.size + challengeIssueAccountStore.size + challengeIssueIpStore.size,
+    challengeIssues: challengeIssueStore.size + challengeIssueAccountStore.size + challengeIssueIpStore.size
+      + sharedChallengeIssueStore.size + sharedChallengeIssueAccountStore.size + sharedChallengeIssueIpStore.size,
   };
 }
 
 const authRateLimitCleanupTimer = setInterval(() => pruneAuthRateLimitState(), 5 * 60 * 1000);
 authRateLimitCleanupTimer.unref?.();
+
+// 库里的行：最长的窗口是一小时（找回密码按 IP），最近一次在一小时之前的都已经没用了。
+registerSharedStateCleanup("auth_attempt_counters", () => new SqlAttemptCounterStore().prune(ATTEMPT_BUDGET_MAX_WINDOW_MS));

@@ -120,13 +120,17 @@ import ProxySubSourcesSection from "@/components/proxy/ProxySubSourcesSection";
 import ProxyNodeReorderDialog from "@/components/proxy/ProxyNodeReorderDialog";
 import { PROXY_SUB_IP_VERSIONS, PROXY_SUB_IP_VERSION_LABELS, type ProxySubIpVersion } from "@shared/proxySubIpVersion";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 import { toast } from "sonner";
 
 /*
   「订阅内容」弹窗有五百多行、只在点开时才用：单独一个包，点开再下载。
   页面自己仍然取 preview 这份数据（概览条上的数字要它），弹窗打开后吃同一份缓存。
 */
-const ProxySubscriptionPreviewDialog = lazy(() => import("@/components/proxy/ProxySubscriptionPreviewDialog"));
+// 懒加载的弹窗：页面闲下来先把 JS 热进缓存（lib/lazyWarm.ts），点开时不用再等一次网络往返
+const loadProxySubscriptionPreviewDialog = () => import("@/components/proxy/ProxySubscriptionPreviewDialog");
+const ProxySubscriptionPreviewDialog = lazy(loadProxySubscriptionPreviewDialog);
 /*
   节点列表还没回来时的兜底。写成模块级常量而不是 `?? []`：后者每次渲染都是新数组，
   传给排序弹窗等子组件后，它们按引用比较的 effect / memo 每帧都会重跑一遍。
@@ -446,6 +450,8 @@ export default function ClientSubscriptionsPage() {
   const tokens = tokensQuery.data ?? [];
   const { user: me } = useAuth();
   const isAdmin = me?.role === "admin";
+  // 节点预览弹窗这页的人都能点开，闲时先热
+  useWarmLazyChunks([loadProxySubscriptionPreviewDialog]);
 
   /** 从节点这边发起分享。粘进来的节点只有一份凭据，所以就是一个列表。 */
   const [shareNode, setShareNode] = useState<{ id: number; name: string } | null>(null);
@@ -1342,7 +1348,7 @@ export default function ClientSubscriptionsPage() {
         要显示在按钮的角标上（previewAlertCount），否则收进弹窗就等于藏掉了。
       */}
       {previewOpen && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={previewOpen} />}>
           <ProxySubscriptionPreviewDialog
             open={previewOpen}
             onOpenChange={setPreviewOpen}

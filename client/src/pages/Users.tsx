@@ -95,6 +95,8 @@ import {
 import { openUserBackend } from "@/lib/userImpersonation";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { lazy, Suspense, useState, useEffect, useMemo } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { BILLING_DATE_TIME_FORMAT_OPTIONS, BILLING_TIME_ZONE, formatBillingDateInput, parseBillingDateInput } from "@shared/billingTime";
@@ -114,7 +116,9 @@ function formatForwardRateLimit(inMbps: unknown, outMbps: unknown): string {
 }
 
 // 「流量与权限设置」近 800 行，只有点开某个用户时才用：拆成独立模块按需加载
-const UserTrafficSettingsDialog = lazy(() => import("@/components/users/UserTrafficSettingsDialog"));
+// 懒加载的弹窗：页面闲下来先把 JS 热进缓存（lib/lazyWarm.ts），点开时不用再等一次网络往返
+const loadUserTrafficSettingsDialog = () => import("@/components/users/UserTrafficSettingsDialog");
+const UserTrafficSettingsDialog = lazy(loadUserTrafficSettingsDialog);
 
 function userLabel(user: any) {
   return user?.name || user?.username || `#${user?.id}`;
@@ -141,6 +145,8 @@ function isSubscriptionActive(sub: any) {
 
 function UsersContent() {
   const { user: currentUser } = useAuth();
+  // 「流量与权限」只有管理员能打开
+  useWarmLazyChunks(currentUser?.role === "admin" ? [loadUserTrafficSettingsDialog] : []);
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   /*
@@ -1383,7 +1389,7 @@ function UsersContent() {
 
       {/* 流量与权限设置：懒加载，第一次打开才拉这个模块；关闭动画期间 shown 还在，面板不会先塌掉 */}
       {trafficDialog.shown ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={trafficDialog.isOpen} />}>
           <UserTrafficSettingsDialog
             open={trafficDialog.isOpen}
             onOpenChange={(open) => { if (!open) trafficDialog.close(); }}

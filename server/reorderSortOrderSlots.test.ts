@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 拖拽排序以前写 sortOrder = startIndex + i，默认整张列表是 0、1、2… 连续的。
@@ -13,27 +9,15 @@ import test from "node:test";
  * 现在改成「被拖的几行在自己原有的座位里换座」，有并列值先按当前顺序整体重编。
  */
 test("拖拽排序在有空洞和老数据全 0 时顺序依然正确", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-reorder-slots-"));
-  const databasePath = path.join(directory, "reorder.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (f) => pathToFileURL(path.join(process.cwd(), f)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const rules = await import(url("server/repositories/forwardRuleRepository.ts"));
     const tunnels = await import(url("server/repositories/tunnelRepository.ts"));
     const groups = await import(url("server/repositories/forwardGroupRepository.ts"));
 
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (s, p = []) => runtime.executeRaw(s, p);
-    const listOrder = async (table, where = "1 = 1") => (await runtime.queryRaw(
+    const listOrder = async (table, where = "1 = 1") => (await query(
       "SELECT id FROM " + table + " WHERE " + where + " ORDER BY sortOrder ASC, createdAt DESC, id DESC",
     )).map((r) => Number(r.id)).join(",");
-    const values = async (table, where = "1 = 1") => (await runtime.queryRaw(
+    const values = async (table, where = "1 = 1") => (await query(
       "SELECT id, sortOrder FROM " + table + " WHERE " + where + " ORDER BY id",
     )).map((r) => r.id + ":" + r.sortOrder).join(" ");
 
@@ -91,7 +75,7 @@ test("拖拽排序在有空洞和老数据全 0 时顺序依然正确", () => {
     for (const [id, groupId, priority] of [[101, 1, 0], [102, 1, 1], [103, 1, 2], [201, 2, 0]]) {
       await exec("INSERT INTO forward_group_members (id, groupId, memberType, hostId, priority) VALUES (?, ?, 'host', 1, ?)", [id, groupId, priority]);
     }
-    const priorities = async () => (await runtime.queryRaw(
+    const priorities = async () => (await query(
       "SELECT id, priority FROM forward_group_members ORDER BY id",
     )).map((r) => r.id + ":" + r.priority).join(" ");
     const membersBefore = await priorities();
@@ -103,18 +87,5 @@ test("拖拽排序在有空洞和老数据全 0 时顺序依然正确", () => {
     assert.equal(await priorities(), "101:1 102:2 103:0 201:0");
 
     console.log("REORDER_SLOTS_OK");
-    await runtime.closeDatabase().catch(() => undefined);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /REORDER_SLOTS_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "reorder-slots", env: { NODE_ENV: "test" } });
 });

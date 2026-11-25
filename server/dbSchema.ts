@@ -965,6 +965,45 @@ const tables: TableDef[] = [
     unique: [["name"]],
     indexes: [["requestedAt"]],
   },
+  /*
+    多实例共享的限流 / 锁定 / 验证码状态（server/sharedState.ts、sharedStateStore.ts）：库是 MySQL / PostgreSQL 且
+    登记着别的实例（或 FORWARDX_SHARED_STATE=db）时才写，单实例和 SQLite 永远只用内存。时刻都是毫秒。
+    不进 MIGRATION_TABLES：只活几分钟到一小时，迁到新面板从头数就行。
+      api_rate_limit_windows  接口限流的固定窗口计数：(key, windowStart) 一行，hits 原子加一；两个窗口之前的删。
+      auth_attempt_counters   登录失败 / 要验证码 / 2FA 挑战签发 / 找回密码的计数：(scope, key) 一行，
+                              firstAt / lastAt 按库的时钟，最近一次在一小时之前的删。
+      auth_captcha_challenges 验证码挑战、令牌和它们的 IP / 用途绑定：(kind, token) 一行，用一次就删；
+                              expiresAt 是签发实例的时钟，过期一分钟后删。
+  */
+  {
+    name: "api_rate_limit_windows",
+    columns: [
+      c("key", "varchar", { length: 191, notNull: true }), c("windowStart", "bigint", { notNull: true, default: 0 }),
+      c("hits", "int", { notNull: true, default: 0 }),
+    ],
+    unique: [["key", "windowStart"]],
+    indexes: [["windowStart"]],
+  },
+  {
+    name: "auth_attempt_counters",
+    columns: [
+      c("scope", "varchar", { length: 32, notNull: true }), c("key", "varchar", { length: 191, notNull: true }),
+      c("hits", "int", { notNull: true, default: 0 }),
+      c("firstAt", "bigint", { notNull: true, default: 0 }), c("lastAt", "bigint", { notNull: true, default: 0 }),
+    ],
+    unique: [["scope", "key"]],
+    indexes: [["lastAt"]],
+  },
+  {
+    name: "auth_captcha_challenges",
+    columns: [
+      c("kind", "varchar", { length: 16, notNull: true }), c("token", "varchar", { length: 128, notNull: true }),
+      c("ip", "varchar", { length: 64 }), c("purpose", "varchar", { length: 16 }), c("data", "text"),
+      c("expiresAt", "bigint", { notNull: true, default: 0 }),
+    ],
+    unique: [["kind", "token"]],
+    indexes: [["expiresAt"]],
+  },
   { name: "system_settings", columns: [c("key", "varchar", { length: 191, notNull: true }), c("value", "longtext"), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["key"]] },
   { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("planDurationDays", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("stockReserved", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"]] },
   /*

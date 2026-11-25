@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import {
   pickAutoUnlockLanding,
@@ -106,22 +103,12 @@ test("解析：直连 / 拒绝原样；点名的落地失效就拒绝，不退�
  * 真库走一遍：入站存分流 → 心跳解析（查 SS 落地、主机、解锁检测）→ 保存校验 → 删除保护的依据。
  */
 test("分流在 SQLite 上：心跳按最新检测挑出口，保存时拦掉别人的落地", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-inbound-routing-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
     const routing = await import(url("server/inboundRoutingRuntime.ts"));
     const unlock = await import(url("server/ops/unlock.ts"));
     const repo = await import(url("server/repositories/proxyInboundRepository.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const now = new Date();
     await exec("INSERT INTO users (id, username, password, role, \"allowProxySubscription\") VALUES (1, 'admin', 'x', 'admin', 1), (2, 'bob', 'x', 'user', 1)");
     await exec('INSERT INTO hosts (id, name, ip, "userId", "isOnline", "lastHeartbeat") VALUES (1, ?, ?, 1, 1, ?), (2, ?, ?, 1, 1, ?), (3, ?, ?, 1, 1, ?)',
@@ -184,18 +171,5 @@ test("分流在 SQLite 上：心跳按最新检测挑出口，保存时拦掉别
     routing.invalidateInboundRoutingContext();
     const status = await routing.describeInboundRoutingStatus([{ id: 1, userId: 1, hostId: 1, routingJson: JSON.stringify(saved) }]);
     assert.match(status.get(1)[0].note, /日本 · 日本出口/);
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "routing.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "inbound-routing" });
 });

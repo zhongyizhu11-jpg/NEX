@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { poolMemberPlan } from "./nodePoolGroups";
 
@@ -45,18 +42,7 @@ test("成员和池里一样：什么都不改", () => {
  * 真的 sqlite 跑一遍：跟上、池改了跟着改、别人的池不能跟、池删了松开。
  */
 test("出口组跟着节点池：跟上马上同步，池改了跟着改，池删了松开", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-pool-follow-"));
-  try {
-    const script = String.raw`
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
+  const result = runInDatabase(String.raw`
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin'), (2, 'user', 'hash', 'user')");
       const now = Math.floor(Date.now() / 1000);
       for (const id of [1, 2, 3, 4]) {
@@ -90,30 +76,19 @@ test("出口组跟着节点池：跟上马上同步，池改了跟着改，池�
       await follow.releaseGroupsFollowingPool(poolId);
       out.released = await poolOf();
       console.log("RESULT " + JSON.stringify(out));
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "follow.db"), FORWARDX_LOG_DIR: directory },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
-    assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
-    const out = JSON.parse(line.slice("RESULT ".length));
-    assert.deepEqual({ added: out.follow.added, removed: out.follow.removed, kept: out.follow.kept }, { added: 1, removed: 1, kept: 1 });
-    assert.deepEqual(out.afterFollow, [[2, 300], [3, 0]], "H2 留着自己的带宽设置，H3 加在后面，H1 不在池里去掉");
-    assert.equal(out.poolId, true);
-    assert.deepEqual(out.sync, [{ added: 1, removed: 1, error: null }]);
-    assert.deepEqual(out.afterSync, [[3, 0], [4, 0]]);
-    assert.match(String(out.emptySkipped), /空/);
-    assert.deepEqual(out.afterEmpty, [[3, 0], [4, 0]], "池空了组的成员不动");
-    assert.match(String(out.foreign), /别的用户/);
-    assert.equal(out.released, null);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "pool-follow" });
+  const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
+  assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
+  const out = JSON.parse(line.slice("RESULT ".length));
+  assert.deepEqual({ added: out.follow.added, removed: out.follow.removed, kept: out.follow.kept }, { added: 1, removed: 1, kept: 1 });
+  assert.deepEqual(out.afterFollow, [[2, 300], [3, 0]], "H2 留着自己的带宽设置，H3 加在后面，H1 不在池里去掉");
+  assert.equal(out.poolId, true);
+  assert.deepEqual(out.sync, [{ added: 1, removed: 1, error: null }]);
+  assert.deepEqual(out.afterSync, [[3, 0], [4, 0]]);
+  assert.match(String(out.emptySkipped), /空/);
+  assert.deepEqual(out.afterEmpty, [[3, 0], [4, 0]], "池空了组的成员不动");
+  assert.match(String(out.foreign), /别的用户/);
+  assert.equal(out.released, null);
 });
 
 /*
@@ -121,21 +96,9 @@ test("出口组跟着节点池：跟上马上同步，池改了跟着改，池�
   不存在的成员（解析也还指着那台），要等下一次健康上报或巡检。现在同步完马上进评估队列。
 */
 test("主备组跟着节点池：池里去掉活动成员后马上重选", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-pool-follow-failover-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
       console.info = () => {};
       console.warn = () => {};
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
       const now = Math.floor(Date.now() / 1000);
@@ -164,18 +127,5 @@ test("主备组跟着节点池：池里去掉活动成员后马上重选", () =>
       const deadline = Date.now() + 5000;
       while (await active() !== 2 && Date.now() < deadline) await sleep(50);
       assert.equal(await active(), 2, "活动成员被池去掉了：马上换到池里剩下的第一台");
-      console.log("OK");
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "follow.db"), FORWARDX_LOG_DIR: directory },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "pool-follow-failover" });
 });

@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { splitCounterDelta } from "./hostRateBuckets";
 
@@ -26,35 +23,24 @@ test("两次心跳之间的流量按时间比例摊进它跨过的 5 分钟桶",
  * 账本读得到费用折算、到期（周期顺延的按账单日往后推）、已用量和 95 值。
  */
 test("主机账本接上真库：只有 95 计费的主机记桶，账本读得到费用、到期、流量和 95 值", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-ledger-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
       const rate = await import(url("server/hostRateBuckets.ts"));
       const ledger = await import(url("server/routers/hostLedger.ts"));
       const time = await import(url("shared/billingTime.ts"));
 
-      await runtime.executeRaw("INSERT INTO users (id, username, password, role, email) VALUES (1, 'admin', 'h', 'admin', 'ops@example.com')");
+      await exec("INSERT INTO users (id, username, password, role, email) VALUES (1, 'admin', 'h', 'admin', 'ops@example.com')");
       const nowMs = time.billingDateTime(2026, 11, 11, 12).getTime();
       const sec = (ms) => Math.floor(ms / 1000);
       // 1 号：季付 90 元，每月 1 号重置、额度 1000G；2 号：95 计费、5 美元底价 + 每 Mbps 1 美元；
       // 3 号：周期顺延的年付机，停机时间已经过了，账单日 3 月 15 日。新列不填，看默认值。
-      await runtime.executeRaw("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, costCents, costCurrency, billingCycleMonths, trafficLimit, trafficAutoReset, trafficResetDay, stoppedAt) VALUES (1, '港-1', '203.0.113.1', 'slave', 't1', 1, 9000, 'CNY', 3, ?, 1, 1, ?)", [1000 * 1024 ** 3, sec(time.billingDateTime(2026, 11, 20).getTime())]);
-      await runtime.executeRaw("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, costCents, costCurrency, bandwidthBilling, p95PriceCents, billingDay) VALUES (2, '日-1', '203.0.113.2', 'slave', 't2', 1, 500, 'USD', 'p95', 100, 1)");
-      await runtime.executeRaw("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, costCents, billingCycleMonths, billingMonth, billingDay, expiryHandling, stoppedAt) VALUES (3, '美-1', '203.0.113.3', 'slave', 't3', 1, 12000, 12, 3, 15, 'extend_cycle', ?)", [sec(time.billingDateTime(2026, 3, 15).getTime())]);
-      const defaults = (await runtime.queryRaw("SELECT costCents, costCurrency, bandwidthBilling, p95PriceCents FROM hosts WHERE id = 3"))[0];
+      await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, costCents, costCurrency, billingCycleMonths, trafficLimit, trafficAutoReset, trafficResetDay, stoppedAt) VALUES (1, '港-1', '203.0.113.1', 'slave', 't1', 1, 9000, 'CNY', 3, ?, 1, 1, ?)", [1000 * 1024 ** 3, sec(time.billingDateTime(2026, 11, 20).getTime())]);
+      await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, costCents, costCurrency, bandwidthBilling, p95PriceCents, billingDay) VALUES (2, '日-1', '203.0.113.2', 'slave', 't2', 1, 500, 'USD', 'p95', 100, 1)");
+      await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, costCents, billingCycleMonths, billingMonth, billingDay, expiryHandling, stoppedAt) VALUES (3, '美-1', '203.0.113.3', 'slave', 't3', 1, 12000, 12, 3, 15, 'extend_cycle', ?)", [sec(time.billingDateTime(2026, 3, 15).getTime())]);
+      const defaults = (await query("SELECT costCents, costCurrency, bandwidthBilling, p95PriceCents FROM hosts WHERE id = 3"))[0];
       assert.deepEqual([Number(defaults.p95PriceCents), defaults.costCurrency, defaults.bandwidthBilling], [0, "CNY", "fixed"]);
 
       // 港-1 的计数器：本月已用 500G（双向）
-      await runtime.executeRaw("INSERT INTO host_traffic_counters (hostId, bytesIn, bytesOut, createdAt, updatedAt) VALUES (1, ?, ?, ?, ?)", [200 * 1024 ** 3, 300 * 1024 ** 3, sec(time.billingDateTime(2026, 10, 1).getTime()), sec(nowMs)]);
+      await exec("INSERT INTO host_traffic_counters (hostId, bytesIn, bytesOut, createdAt, updatedAt) VALUES (1, ?, ?, ?, ?)", [200 * 1024 ** 3, 300 * 1024 ** 3, sec(time.billingDateTime(2026, 10, 1).getTime()), sec(nowMs)]);
 
       // 固定费用的主机心跳：一个桶都不记
       const fixedHost = { id: 1, bandwidthBilling: "fixed" };
@@ -70,18 +56,18 @@ test("主机账本接上真库：只有 95 计费的主机记桶，账本读得�
       }
       // 20 分钟 = 4 个完整的桶落库，第五个还开着留在内存里
       assert.equal(written, 4);
-      const rows = await runtime.queryRaw("SELECT hostId, bucketStart, bytesOut, coveredSeconds FROM host_rate_buckets ORDER BY bucketStart");
+      const rows = await query("SELECT hostId, bucketStart, bytesOut, coveredSeconds FROM host_rate_buckets ORDER BY bucketStart");
       assert.equal(rows.length, 4);
       assert.ok(rows.every((row) => Number(row.hostId) === 2));
       assert.ok(rows.every((row) => Number(row.coveredSeconds) === 300), JSON.stringify(rows));
       assert.ok(rows.every((row) => Math.abs(Number(row.bytesOut) - 375_000_000) <= 1), JSON.stringify(rows));
       // 同一个桶再写一次是累加（面板重启前后各记了半个桶），覆盖秒数封顶 300
       await rate.upsertHostRateBuckets(2, [{ bucketStart: Number(rows[0].bucketStart), bytesIn: 1, bytesOut: 1, coveredSeconds: 200 }]);
-      const merged = (await runtime.queryRaw("SELECT bytesOut, coveredSeconds FROM host_rate_buckets WHERE bucketStart = ?", [Number(rows[0].bucketStart)]))[0];
+      const merged = (await query("SELECT bytesOut, coveredSeconds FROM host_rate_buckets WHERE bucketStart = ?", [Number(rows[0].bucketStart)]))[0];
       assert.deepEqual([Number(merged.bytesOut), Number(merged.coveredSeconds)], [375_000_001, 300]);
       // 心跳隔了一个小时（掉线）：不摊，不造假尖峰
       assert.equal(await rate.recordHostRateSample(p95Host, { atMs: t0 + 80 * 60_000, networkIn: 9e12, networkOut: 9e12 }), 0);
-      const afterGap = await runtime.queryRaw("SELECT MAX(bytesOut) AS peak FROM host_rate_buckets");
+      const afterGap = await query("SELECT MAX(bytesOut) AS peak FROM host_rate_buckets");
       assert.ok(Number(afterGap[0].peak) < 400_000_000, String(afterGap[0].peak));
 
       const result = await ledger.loadHostLedger(nowMs);
@@ -102,7 +88,7 @@ test("主机账本接上真库：只有 95 计费的主机记桶，账本读得�
       assert.ok(us.expiry.daysLeft > 100);
       assert.equal(us.monthlyFixedCents, 1000);
       // 只读：库里的 stoppedAt 没被改
-      const stored = (await runtime.queryRaw("SELECT stoppedAt FROM hosts WHERE id = 3"))[0];
+      const stored = (await query("SELECT stoppedAt FROM hosts WHERE id = 3"))[0];
       assert.equal(Number(stored.stoppedAt), sec(time.billingDateTime(2026, 3, 15).getTime()));
       assert.deepEqual(result.summary.monthlyByCurrency.map((item) => item.currency), ["CNY", "USD"]);
       assert.equal(result.summary.monthlyByCurrency[0].cents, 4000);
@@ -111,24 +97,7 @@ test("主机账本接上真库：只有 95 计费的主机记桶，账本读得�
       // 清理只删 40 天以前的
       await rate.upsertHostRateBuckets(2, [{ bucketStart: sec(nowMs) - 50 * 86400, bytesIn: 1, bytesOut: 1, coveredSeconds: 300 }]);
       await rate.cleanOldHostRateBuckets(nowMs);
-      const left = await runtime.queryRaw("SELECT COUNT(*) AS n FROM host_rate_buckets");
+      const left = await query("SELECT COUNT(*) AS n FROM host_rate_buckets");
       assert.equal(Number(left[0].n), 4);
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "host-ledger.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-      },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "host-ledger" });
 });

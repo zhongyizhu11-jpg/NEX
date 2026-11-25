@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "../testing/runInDatabase";
 
 /**
  * 回调这一侧「钱到了却什么都没发」的几条路：
@@ -15,26 +11,13 @@ import test from "node:test";
  * 回调走真的 express 路由和真的验签，数据库是真的 SQLite。
  */
 function runWithCallbackServer(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-pay-callback-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import crypto from "node:crypto";
-      import http from "node:http";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      import express from "express";
+  runInDatabase(String.raw`
+      const crypto = (await import("node:crypto")).default;
+      const http = (await import("node:http")).default;
+      const express = (await import("express")).default;
 
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
       const settings = await import(url("server/repositories/settingsRepository.ts"));
       const payment = await import(url("server/payment/payment.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
 
       await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (1, 'bob', 'h', 'user', 0)");
       const keys = crypto.generateKeyPairSync("rsa", {
@@ -100,24 +83,7 @@ function runWithCallbackServer(body: string) {
       } finally {
         await new Promise((resolve) => server.close(() => resolve()));
       }
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "pay.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-      },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "pay-callback" });
 }
 
 test("订单关闭后才到账：实付金额转入余额，只入一次", () => {
@@ -162,7 +128,7 @@ test("发货遇到永久性错误：转入余额结单，不再永远卡在 proc
     assert.equal(row.status, "completed", "套餐停用重试也不会成功，不能一直挂在 processing");
     assert.match(row.subject, /已转入余额/);
     assert.equal(await balance(), 1000);
-    assert.equal((await query("SELECT COUNT(*) AS n FROM user_subscriptions"))[0].n, 0, "没有开出订阅");
+    assert.equal(Number((await query("SELECT COUNT(*) AS n FROM user_subscriptions"))[0].n), 0, "没有开出订阅");
 
     await payment.recoverStaleProcessingPaymentOrders();
     assert.equal(await balance(), 1000, "不会重复入账");

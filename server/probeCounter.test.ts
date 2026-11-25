@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 import { hasAgentProbeCounter, isAgentTcpingResult } from "../shared/agentDtos";
 import { probeCounterInsertSql, probeCounterSnapshot } from "./repositories/probeCounterRepository";
 import { AgentProbeCounterReportGate } from "./agentProbeCounterReportGate";
@@ -59,16 +56,9 @@ test("cumulative telemetry is optional, bounded and cannot reinterpret current h
 });
 
 test("SQLite cumulative probe statistics deduplicate retries, include suppressed probes, and respect windows/epochs/permissions", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-probe-counters-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import http from "node:http";
-    import express from "express";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
+    const express = (await import("express")).default;
     const counters = await import(url("server/repositories/probeCounterRepository.ts"));
     // 样本行攒批写（server/dbWriteBatcher.ts）：直接查表之前先刷
     const batcher = await import(url("server/dbWriteBatcher.ts"));
@@ -79,8 +69,6 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     const { tunnelsRouter } = await import(url("server/routers/tunnels.ts"));
     const { recordForwardGroupAutoHopLatency } = await import(url("server/forwardGroupAutoLatencyState.ts"));
     const reports = await import(url("server/agentReportRoutes.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
     const now = Math.floor(Date.now() / 1000);
     const since = new Date((now - 1200) * 1000);
     const row = (kind, refId, hostId, count, successes, extra = {}) => counters.probeCounterSnapshot(kind, refId, hostId, {
@@ -101,7 +89,7 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     assert.equal(stats.total, 3000);
     assert.equal(stats.successes, 2997);
     assert.equal((stats.total - stats.successes) / stats.total * 100, 0.1);
-    assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=1'))[0].n, 5);
+    assert.equal(Number((await query('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=1'))[0].n), 5);
     // Existing stream: count difference since the latest pre-window baseline.
     await save([row("rule", 2, 1, 600, 590)], now - 1300);
     await save([row("rule", 2, 1, 900, 885)], now - 1100);
@@ -133,7 +121,7 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     assert.equal(stats.successes, 62, "one failing probe, not twenty reuses of it");
     assert.equal((await counters.getProbeCounterStatistics("rule", 9999, since)).available, false);
     // Access checks on all three summary APIs, using real database entities.
-    const insert = (table, columns, values) => runtime.executeRaw('INSERT INTO "' + table + '" (' + columns.map(c => '"'+c+'"').join(',') + ') VALUES (' + values.map(() => '?').join(',') + ')', values);
+    const insert = (table, columns, values) => exec('INSERT INTO "' + table + '" (' + columns.map(c => '"'+c+'"').join(',') + ') VALUES (' + values.map(() => '?').join(',') + ')', values);
     await insert("forward_rules", ["id","hostId","name","forwardType","protocol","sourcePort","targetIp","targetPort","userId"], [1,1,"test","realm","tcp",10001,"localhost",443,7]);
     await insert("forward_groups", ["id","name","groupMode","groupType","targetIp","userId"], [10,"chain","chain","host","localhost",7]);
     await insert("tunnels", ["id","name","entryHostId","exitHostId","mode","listenPort","userId"], [20,"tunnel",1,2,"forwardx",20020,7]);
@@ -167,10 +155,10 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     try {
       await post(1,{results:[wire]});
       await post(1,{results:[{...wire,probeTotalCount:6,probeTotalSuccesses:6}]});
-      assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "tcping_stats" WHERE "ruleId"=50'))[0].n,1,"healthy rows stay throttled");
-      assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=50'))[0].n,1,"stable target snapshots do not add per-cycle database writes");
+      assert.equal(Number((await query('SELECT COUNT(*) AS n FROM "tcping_stats" WHERE "ruleId"=50'))[0].n),1,"healthy rows stay throttled");
+      assert.equal(Number((await query('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=50'))[0].n),1,"stable target snapshots do not add per-cycle database writes");
       await post(1,{results:[{...wire,probeCounterEpoch:"wire-restarted"}]});
-      assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=50'))[0].n,2,"restarted counter baseline survives unchanged health gate");
+      assert.equal(Number((await query('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=50'))[0].n),2,"restarted counter baseline survives unchanged health gate");
       const complete = {...wire,probeTotalCount:3000,probeTotalSuccesses:2997,probeSuccesses:2};
       await post(1,{results:[complete]});
       await post(1,{results:[complete]});
@@ -179,7 +167,7 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
       stats = await counters.getProbeCounterStatistics("rule",50,since);
       assert.equal(stats.total,3003);
       assert.equal(stats.successes,3000);
-      assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=50'))[0].n,3,"HTTP duplicates and unauthorized reports are not real attempts");
+      assert.equal(Number((await query('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=50'))[0].n),3,"HTTP duplicates and unauthorized reports are not real attempts");
       const tunnelWire = {...wire,ruleId:undefined,sourcePort:undefined,tunnelId:20,targetIp:"127.0.0.2",targetPort:20020,method:"tcp",probeCounterEpoch:"tunnel-wire"};
       await post(1,{tunnels:[tunnelWire]});
       await post(2,{tunnels:[{...tunnelWire,probeCounterEpoch:"wrong-source"}]});
@@ -195,17 +183,6 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     await save([row("rule", 999, 1, 3, 3)], now - 80 * 3600);
     await batcher.flushPendingWrites();
     await metrics.cleanOldTcpingStats(72);
-    assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=999'))[0].n, 0);
-    await runtime.closeDatabase();
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 60_000,
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "test.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"), NODE_ENV: "test" },
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+    assert.equal(Number((await query('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=999'))[0].n), 0);
+  `, { name: "probe-counters", env: { NODE_ENV: "test" } });
 });

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
+import { readRulesPageSource } from "./testing/rulesPageSource";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -26,7 +25,7 @@ import { applyRouteMode, newRouteGroupDraft, type RouteMode } from "@shared/rout
  * 否则用户读到一句自己看不见的提示。
  */
 
-const rulesPagePath = path.resolve(import.meta.dirname, "pages/Rules.tsx");
+// 规则页在渐进拆分（RulesContent 的片段搬进 features/rules/use*.ts(x)），读页面要连 hook 一起读
 
 function collapsedSection(source: string): string {
   const start = source.indexOf("{advancedOpen && (");
@@ -45,7 +44,7 @@ test("主备线路不折进「更多设置」—— 它是用户会专门来找�
     它原来就在折叠块里，折叠条上还不写它：用户问「主备线路怎么用」，第一步就是
     找不到入口。放在外面、一行一个勾，不勾的时候也只占一行。
   */
-  const source = fs.readFileSync(rulesPagePath, "utf8");
+  const source = readRulesPageSource();
   const section = collapsedSection(source);
   assert.equal(section.includes("<RouteGroupFields"), false, "线路组的编辑块又被折进「更多设置」了");
   // 线路组现在自己是一个折叠框（RuleFormCollapsible，testId 落到 data-testid），在「更多设置」外面、前面。
@@ -59,7 +58,7 @@ test("主备线路不折进「更多设置」—— 它是用户会专门来找�
 
 test("线路组用不了就不显示，除非这条规则已经开着线路组", () => {
   // 转发链、共享 TLS 入站、SS 出口……点不开的折叠框只是噪音；但已经开着的得留着，人才关得掉。
-  const source = fs.readFileSync(rulesPagePath, "utf8");
+  const source = readRulesPageSource();
   assert.match(source, /const routeGroupSectionVisible = !mainBackupBlock \|\| form\.failoverEnabled;/);
   const gateAt = source.indexOf("{routeGroupSectionVisible && (");
   const sectionAt = source.indexOf('testId="failover-section"');
@@ -67,7 +66,7 @@ test("线路组用不了就不显示，除非这条规则已经开着线路组",
 });
 
 test("折起来的都是可以不管的 —— 里面不许有必填项", () => {
-  const section = collapsedSection(fs.readFileSync(rulesPagePath, "utf8"));
+  const section = collapsedSection(readRulesPageSource());
   const required = section.split("\n").filter((line) =>
     /text-destructive">\*/.test(line) || /sourcePortRequired/.test(line));
   assert.deepEqual(
@@ -79,7 +78,7 @@ test("折起来的都是可以不管的 —— 里面不许有必填项", () => 
 });
 
 test("警告不许折进去 —— 折起来就等于删掉", () => {
-  const section = collapsedSection(fs.readFileSync(rulesPagePath, "utf8"));
+  const section = collapsedSection(readRulesPageSource());
   for (const marker of ["kernelForwardWarning", "border-amber"]) {
     assert.equal(
       section.includes(marker),
@@ -91,7 +90,7 @@ test("警告不许折进去 —— 折起来就等于删掉", () => {
 });
 
 test("折叠条上得说清楚里面现在是什么样", () => {
-  const source = fs.readFileSync(rulesPagePath, "utf8");
+  const source = readRulesPageSource();
   /*
     从按钮的那行文字切起，不是从「更多设置」四个字切起 —— 这四个字在上面的注释里
     也出现过，按它切会一路切到文件开头，把定义 advancedSummary 的 useMemo 也圈进来，
@@ -111,7 +110,7 @@ test("折叠条上得说清楚里面现在是什么样", () => {
 });
 
 test("缺口指向折叠里的控件时会自动展开", () => {
-  const source = fs.readFileSync(rulesPagePath, "utf8");
+  const source = readRulesPageSource();
   assert.match(
     source,
     /const advancedOpen = showAdvanced \|\| advancedBlocked;/,
@@ -146,7 +145,7 @@ test("时段表编辑器跟着定时 / 混合走，发出去的那一份也按�
   assert.doesNotMatch(render("weighted"), /添加时段|第 1 个时段/, "时段表编辑器不再只在定时 / 混合下渲染了");
   assert.doesNotMatch(render("failover"), /添加时段|第 1 个时段/);
   assert.match(
-    fs.readFileSync(rulesPagePath, "utf8"),
+    readRulesPageSource(),
     /routeGroupPayload\(form\.routeGroup\)/,
     "提交时没有走 routeGroupPayload 按模式归零 —— 换成权重负载之后保存会被服务端拒绝",
   );

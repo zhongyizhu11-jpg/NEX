@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 入口机的运行状态被清掉之后（resetAgentRuntimeStateForHost：主机地址变了、短暂掉线……），
@@ -33,20 +30,8 @@ type Outcome = {
 };
 
 function run(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-tunnel-recovery-after-reset-"));
-  const databasePath = path.join(directory, "recovery.db");
-  const logDirectory = path.join(directory, "logs");
-  fs.mkdirSync(logDirectory, { recursive: true });
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
     const now = Math.floor(Date.now() / 1000);
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     for (const [id, name, ip, token] of [[1, "出口", "203.0.113.1", "tok1"], [2, "入口", "203.0.113.2", "tok2"]]) {
@@ -133,8 +118,8 @@ function run(): Outcome {
       return { stable: !body.stateSignatures };
     };
     const snapshot = async () => ({
-      tunnels: Object.fromEntries((await runtime.queryRaw('SELECT id, "isRunning" FROM tunnels ORDER BY id')).map((row) => [String(row.id), Number(row.isRunning)])),
-      rules: Object.fromEntries((await runtime.queryRaw('SELECT id, "isRunning" FROM forward_rules ORDER BY id')).map((row) => [String(row.id), Number(row.isRunning)])),
+      tunnels: Object.fromEntries((await query('SELECT id, "isRunning" FROM tunnels ORDER BY id')).map((row) => [String(row.id), Number(row.isRunning)])),
+      rules: Object.fromEntries((await query('SELECT id, "isRunning" FROM forward_rules ORDER BY id')).map((row) => [String(row.id), Number(row.isRunning)])),
     });
 
     await send(true);
@@ -150,16 +135,7 @@ function run(): Outcome {
     const afterRestore = { stable: next.stable, rules: (await snapshot()).rules };
     server.close();
     console.log("OUTCOME " + JSON.stringify({ first, stableBeforeRestore, afterRestore }));
-    await runtime.closeDatabase();
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: logDirectory },
-    timeout: 180_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "tunnel-recovery-after-reset", timeoutMs: 180_000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
   return JSON.parse(line.slice("OUTCOME ".length));

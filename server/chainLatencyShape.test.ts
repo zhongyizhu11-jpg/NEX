@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 转发链模板的延迟记录 / 累计计数 / 卡片最新延迟都按子规则算，而且分内核链和用户态链：
@@ -12,24 +9,12 @@ import test from "node:test";
  * 原来模板一律取链各跳的 ICMP 探测汇总（丢包率是 ICMP 的，和业务无关），卡片又把内核链的几跳相加（算了两三遍）。
  */
 test("转发链模板：内核链取入口子规则的端到端，用户态链各跳相加；计数同口径", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-chain-latency-shape-"));
-  const databasePath = path.join(directory, "chain.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    const metrics = await import(moduleUrl("server/repositories/metricsRepository.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  const result = runInDatabase(String.raw`
+    const metrics = await import(url("server/repositories/metricsRepository.ts"));
 
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
-      await runtime.executeRaw(
+      await exec(
         "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
         values,
       );
@@ -105,14 +90,7 @@ test("转发链模板：内核链取入口子规则的端到端，用户态链�
       userStats: [userStats.total, userStats.successes, userStats.available],
       latest,
     }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "chain-latency-shape" });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
   const outcome = JSON.parse(line.slice("OUTCOME ".length));

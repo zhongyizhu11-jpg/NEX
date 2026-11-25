@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 主机替换（server/hostReplace/）走真库：一台旧机上挂着直连规则、转发组成员、线路组中转、
@@ -50,18 +47,7 @@ type Outcome = {
 };
 
 function runScenario(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-replace-"));
-  const databasePath = path.join(directory, "host-replace.db");
-  const script = String.raw`
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
     const q = (name) => '"' + name + '"';
     const insert = (table, columns, values) => exec(
       "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
@@ -125,21 +111,21 @@ function runScenario(): Outcome {
       const routeGroups = await import(url("server/routeGroups.ts"));
       await routeGroups.syncRouteRelayRulesForRule(400, { reason: "test" });
 
-      const one = async (sql, params) => (await runtime.queryRaw(sql, params))[0] || null;
+      const one = async (sql, params) => (await query(sql, params))[0] || null;
       const ruleState = async (id) => {
         const row = await one('SELECT "hostId", "sourcePort", "pendingDelete" FROM forward_rules WHERE id = ?', [id]);
         return row ? { hostId: Number(row.hostId), sourcePort: Number(row.sourcePort), pendingDelete: !!Number(row.pendingDelete) } : null;
       };
       const snapshot = async () => {
         const member = await one('SELECT "hostId" FROM forward_group_members WHERE id = ?', [101]);
-        const children = await runtime.queryRaw('SELECT "hostId" FROM forward_rules WHERE "forwardGroupRuleId" = ? AND "pendingDelete" = 0 ORDER BY "hostId"', [300]);
+        const children = await query('SELECT "hostId" FROM forward_rules WHERE "forwardGroupRuleId" = ? AND "pendingDelete" = 0 ORDER BY "hostId"', [300]);
         const parent = await one('SELECT "routePaths" FROM forward_rules WHERE id = ?', [400]);
-        const relays = await runtime.queryRaw('SELECT DISTINCT "hostId" FROM forward_rules WHERE "routeParentRuleId" = ? AND "pendingDelete" = 0 ORDER BY "hostId"', [400]);
+        const relays = await query('SELECT DISTINCT "hostId" FROM forward_rules WHERE "routeParentRuleId" = ? AND "pendingDelete" = 0 ORDER BY "hostId"', [400]);
         const t50 = await one('SELECT "entryHostId", "exitHostId", "listenPort" FROM tunnels WHERE id = ?', [50]);
         const t51 = await one('SELECT "entryHostId", "exitHostId" FROM tunnels WHERE id = ?', [51]);
         const primary = await one('SELECT "tunnelExitPort" FROM forward_rules WHERE id = ?', [500]);
         const permission = await one('SELECT COUNT(*) AS c FROM user_host_permissions WHERE "userId" = ? AND "hostId" = ?', [2, 2]);
-        const bridges = await runtime.queryRaw('SELECT "ruleId", "hostId", "sourcePort" FROM forward_rule_entry_bridges ORDER BY "ruleId"');
+        const bridges = await query('SELECT "ruleId", "hostId", "sourcePort" FROM forward_rule_entry_bridges ORDER BY "ruleId"');
         const pool = await one('SELECT "hostIdsJson" FROM node_pools WHERE id = ?', [7]);
         return {
           ruleA: await ruleState(201), ruleB: await ruleState(202), ruleD: await ruleState(203), tunnelRule: await ruleState(510),
@@ -198,17 +184,7 @@ function runScenario(): Outcome {
       out.error = String(error?.stack || error);
     }
     console.log("OUTCOME " + JSON.stringify(out));
-    await runtime.closeDatabase();
-    process.exit(0);
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: path.join(directory, "logs") },
-    timeout: 180_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "host-replace", timeoutMs: 180_000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
   return JSON.parse(line.slice("OUTCOME ".length));

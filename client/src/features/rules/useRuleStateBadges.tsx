@@ -1,6 +1,8 @@
 /*
   从 client/src/pages/Rules.tsx 第 5824-5893 行抽出（scripts/extract-block.mjs），行为不变。
 */
+import { type ReactElement } from "react";
+import { type RuleCardRule } from "../../pages/Rules";
 import { Badge } from "@/components/ui/badge";
 import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus } from "@/lib/forwardRuleStatus";
 import { cn } from "@/lib/utils";
@@ -17,10 +19,10 @@ export type UseRuleStateBadgesContext = {
 };
 
 export type UseRuleStateBadgesResult = {
-  renderNotRunningReason: any /* 原类型 (rule: { id?: unknown; portWarnings?: unknown; }) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderAdminManagedBadge: any /* 原类型 (rule: any) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderSniRuleBadge: any /* 原类型 (rule: any) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderEgressBadge: any /* 原类型 (rule: any) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
+  renderNotRunningReason: (rule: { id?: unknown; portWarnings?: unknown; }) => ReactElement | null;
+  renderAdminManagedBadge: (rule: RuleCardRule) => ReactElement | null;
+  renderSniRuleBadge: (rule: RuleCardRule) => ReactElement | null;
+  renderEgressBadge: (rule: RuleCardRule) => ReactElement | null;
 };
 
 export function useRuleStateBadges(ctx: UseRuleStateBadgesContext): UseRuleStateBadgesResult {

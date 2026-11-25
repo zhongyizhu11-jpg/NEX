@@ -6,7 +6,7 @@ import { crudRulesRouter } from "./rules.crud";
 import { batchRulesRouter } from "./rules.batch";
 import { portsRulesRouter } from "./rules.ports";
 import { selfTestRulesRouter } from "./rules.selfTest";
-import { trafficRulesRouter } from "./rules.traffic";
+import { computeRuleTrafficSummary, trafficRulesRouter } from "./rules.traffic";
 import { personalRuleGroupsRouter } from "./rules.groups";
 import { ruleBatchJobsRouter } from "./rules.batchJobs";
 import { getRulePersonalGroupIds } from "../ruleGroups";
@@ -319,11 +319,20 @@ export const rulesRouter = router({
       // 个人分组筛选（0 = 未分组）和「按分组排序」：都只认当前登录的人自己的组。
       personalGroupId: ruleGroupFilterSchema,
       sortBy: z.enum(["default", "personalGroup"]).optional(),
+      /*
+        顺带回这一页的当日流量汇总（规则卡片的状态、速率、延迟都看它）。规则页首屏原来是三轮串行：
+        登录态 → 列表 → 汇总；带上它就少一轮，翻页、换筛选时也少一轮。缓存键和 trafficSummary 一样。
+      */
+      withTrafficSummary24h: z.boolean().optional(),
     }))
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const page = await db.getForwardRulesPage({ ...repositoryInput, page: input.page, pageSize: input.pageSize });
-      return withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page)))), ctx.user), ctx.user), ctx.user.role === "admin");
+      const result = withRulePortWarnings(await withRuleResourceAccess(await withRulePersonalGroups(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page)))), ctx.user), ctx.user), ctx.user.role === "admin");
+      if (!input.withTrafficSummary24h) return result;
+      const ruleIds = (result.items as Array<{ id?: unknown }>).map((rule) => Number(rule.id)).filter((id) => Number.isInteger(id) && id > 0);
+      const trafficSummary24h = ruleIds.length > 0 ? await computeRuleTrafficSummary(ctx.user, { hours: 24, range: "24h", ruleIds }) : [];
+      return { ...result, trafficSummary24h };
     }),
   mapItems: protectedProcedure
     .input(z.object({

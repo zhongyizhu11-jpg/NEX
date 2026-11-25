@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 接上真库（SQLite）跑一遍这批主机 / Agent 管理功能的落库部分：
@@ -12,26 +8,15 @@ import test from "node:test";
  * - 资源告警按主机：本机「不监控」时不记事件，范围排除时也不记。
  */
 test("host agent management state against a real database", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-agent-mgmt-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
       const installation = await import(url("server/agentInstallation.ts"));
       const shutdown = await import(url("server/hostTrafficShutdown.ts"));
       const notifier = await import(url("server/resourceAlertNotifier.ts"));
       const events = await import(url("server/ops/panelEvents.ts"));
 
-      await runtime.executeRaw("INSERT INTO users (id, username, password, role, email) VALUES (1, 'admin', 'h', 'admin', 'ops@example.com')");
-      await runtime.executeRaw("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, isOnline) VALUES (1, '港-1', '203.0.113.1', 'slave', 'tok1', 1, 1)");
-      await runtime.executeRaw("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, isOnline) VALUES (2, '日-1', '203.0.113.2', 'slave', 'tok2', 1, 1)");
+      await exec("INSERT INTO users (id, username, password, role, email) VALUES (1, 'admin', 'h', 'admin', 'ops@example.com')");
+      await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, isOnline) VALUES (1, '港-1', '203.0.113.1', 'slave', 'tok1', 1, 1)");
+      await exec("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, isOnline) VALUES (2, '日-1', '203.0.113.2', 'slave', 'tok2', 1, 1)");
 
       // ---------- 同 Token 换机接管 ----------
       const A = "a".repeat(64), B = "b".repeat(64), C = "c".repeat(64);
@@ -41,7 +26,7 @@ test("host agent management state against a real database", () => {
       assert.deepEqual(await installation.applyAgentInstallation(1, B), { kind: "takeover", previous: A });
       assert.deepEqual(await installation.applyAgentInstallation(1, A), { kind: "superseded" }, "旧机器再来被拒");
       assert.deepEqual(await installation.applyAgentInstallation(1, ""), { kind: "legacy-rejected" }, "不带 ID 的旧 Agent 被拒");
-      const row = (await runtime.queryRaw("SELECT agentInstallationId, agentRetiredInstallationIds, agentInstallationChangedAt FROM hosts WHERE id = 1"))[0];
+      const row = (await query("SELECT agentInstallationId, agentRetiredInstallationIds, agentInstallationChangedAt FROM hosts WHERE id = 1"))[0];
       assert.equal(row.agentInstallationId, B);
       assert.deepEqual(JSON.parse(row.agentRetiredInstallationIds), [A]);
       assert.ok(Number(row.agentInstallationChangedAt) > 0);
@@ -86,8 +71,8 @@ test("host agent management state against a real database", () => {
       // ---------- 流量阈值关机 ----------
       const GB = 1024 ** 3;
       const now = Math.floor(Date.now() / 1000);
-      await runtime.executeRaw("UPDATE hosts SET trafficLimit = ?, trafficMeasureMode = 'both', trafficShutdownEnabled = 1, trafficShutdownThresholdPercent = 90 WHERE id = 1", [100 * GB]);
-      await runtime.executeRaw("INSERT INTO host_traffic_counters (hostId, bytesIn, bytesOut, lastReportedAt, resetAt, createdAt, updatedAt) VALUES (1, ?, ?, ?, ?, ?, ?)", [50 * GB, 45 * GB, now, 1000, now, now]);
+      await exec("UPDATE hosts SET trafficLimit = ?, trafficMeasureMode = 'both', trafficShutdownEnabled = 1, trafficShutdownThresholdPercent = 90 WHERE id = 1", [100 * GB]);
+      await exec("INSERT INTO host_traffic_counters (hostId, bytesIn, bytesOut, lastReportedAt, resetAt, createdAt, updatedAt) VALUES (1, ?, ?, ?, ?, ?, ?)", [50 * GB, 45 * GB, now, 1000, now, now]);
       shutdown.invalidateHostTrafficShutdownCache();
       assert.ok((await shutdown.getTrafficShutdownEnabledHostIds()).has(1));
       const snapshot = await shutdown.readHostTrafficShutdownSnapshot(1);
@@ -101,22 +86,22 @@ test("host agent management state against a real database", () => {
       assert.equal(shutdown.evaluateSnapshot(triggered, "2.2.255", true).reason, "already-triggered");
 
       // 流量重置换了周期，用量再到阈值才能再认领
-      await runtime.executeRaw("UPDATE host_traffic_counters SET bytesIn = 0, bytesOut = 0, resetAt = 2000 WHERE hostId = 1");
+      await exec("UPDATE host_traffic_counters SET bytesIn = 0, bytesOut = 0, resetAt = 2000 WHERE hostId = 1");
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), null, "刚重置、没到阈值");
-      await runtime.executeRaw("UPDATE host_traffic_counters SET bytesIn = ?, lastReportedAt = ? WHERE hostId = 1", [91 * GB, now]);
+      await exec("UPDATE host_traffic_counters SET bytesIn = ?, lastReportedAt = ? WHERE hostId = 1", [91 * GB, now]);
       // 计数太旧（Agent 掉线期间的数）不认
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now + shutdown.TRAFFIC_SHUTDOWN_COUNTER_FRESH_SECONDS + 5), null);
       // 开关关了不认
-      await runtime.executeRaw("UPDATE hosts SET trafficShutdownEnabled = 0 WHERE id = 1");
+      await exec("UPDATE hosts SET trafficShutdownEnabled = 0 WHERE id = 1");
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), null);
-      await runtime.executeRaw("UPDATE hosts SET trafficShutdownEnabled = 1 WHERE id = 1");
+      await exec("UPDATE hosts SET trafficShutdownEnabled = 1 WHERE id = 1");
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), 2000, "新周期认领一次");
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), null);
       // 重新布防（关掉再打开保存）后同一周期可以再认领
       await shutdown.rearmHostTrafficShutdown(1);
       assert.equal(await shutdown.claimHostTrafficShutdown(1, now), 2000);
       // 没有计数行的主机认领不到
-      await runtime.executeRaw("UPDATE hosts SET trafficLimit = ?, trafficShutdownEnabled = 1 WHERE id = 2", [GB]);
+      await exec("UPDATE hosts SET trafficLimit = ?, trafficShutdownEnabled = 1 WHERE id = 2", [GB]);
       assert.equal(await shutdown.claimHostTrafficShutdown(2, now), null);
 
       // 扩展通道整条路径：旧 Agent 不下发；Agent 没报「能关」不下发；够新且能关时只下发一次
@@ -147,7 +132,7 @@ test("host agent management state against a real database", () => {
       const saved = await notifier.readResourceAlertConfig();
       assert.equal(saved.scope, "exclude");
       assert.deepEqual(saved.scopeHostIds, [2]);
-      await runtime.executeRaw("UPDATE hosts SET resourceAlertOverride = ? WHERE id = 1", [JSON.stringify({ mode: "off" })]);
+      await exec("UPDATE hosts SET resourceAlertOverride = ? WHERE id = 1", [JSON.stringify({ mode: "off" })]);
       notifier.invalidateHostResourceAlertOverrides();
       assert.equal((await notifier.readHostResourceAlertConfig(1)).enabled, false, "本机不监控");
       assert.equal((await notifier.readHostResourceAlertConfig(2)).enabled, false, "范围排除");
@@ -159,7 +144,7 @@ test("host agent management state against a real database", () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       assert.equal((await events.listPanelEvents({ kindPrefix: "host.resource", limit: 10 })).length, 0);
       // 本机始终监控 + 自己的 CPU 阈值：排除范围里的主机 2 也报
-      await runtime.executeRaw("UPDATE hosts SET resourceAlertOverride = ? WHERE id = 2", [JSON.stringify({ mode: "on", cpuPercent: 60 })]);
+      await exec("UPDATE hosts SET resourceAlertOverride = ? WHERE id = 2", [JSON.stringify({ mode: "on", cpuPercent: 60 })]);
       notifier.invalidateHostResourceAlertOverrides();
       const effective = await notifier.readHostResourceAlertConfig(2);
       assert.equal(effective.enabled, true);
@@ -175,22 +160,5 @@ test("host agent management state against a real database", () => {
       }
       assert.equal(fired.length, 1);
       assert.match(fired[0].message, /日-1 的 CPU 使用率 66%.*超过 60%/);
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "host-agent.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-      },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "host-agent-mgmt" });
 });

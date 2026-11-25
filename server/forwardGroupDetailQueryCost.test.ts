@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 取一个转发组的详情，打多少次库，以及取回来的东西对不对。
@@ -26,12 +23,7 @@ type Probe = {
 };
 
 function runProbe(): Probe {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-detail-"));
-  const databasePath = path.join(directory, "detail.db");
-  const script = String.raw`
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
+  const result = runInDatabase(String.raw`
     const Database = (await import("better-sqlite3")).default;
     const originalPrepare = Database.prototype.prepare;
     let recording = false;
@@ -40,13 +32,6 @@ function runProbe(): Probe {
       if (recording) statements.push(String(sql));
       return originalPrepare.call(this, sql);
     };
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'h', 'admin')");
     // 甲：手填入口地址 + DDNS 域名；乙：只有 IPv4；丙：什么地址都没有
@@ -104,15 +89,7 @@ function runProbe(): Probe {
       }));
     }
     console.log("GROUPDETAIL " + JSON.stringify({ cost, members }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-    timeout: 120000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "group-detail" });
   const line = result.stdout.split("\n").find((row) => row.startsWith("GROUPDETAIL "));
   assert.ok(line, `没拿到探测结果：\n${result.stdout}`);
   return JSON.parse(line.slice("GROUPDETAIL ".length)) as Probe;

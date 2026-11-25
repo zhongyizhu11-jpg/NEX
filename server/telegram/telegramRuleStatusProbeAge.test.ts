@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "../testing/runInDatabase";
 
 /**
  * 机器人报的规则状态，要跟着探测的**年纪**走，而不是只看它成没成功。
@@ -16,22 +12,9 @@ import test from "node:test";
  * 永远为假，机器人就从此再也报不出任何一次超时，而且一声不响。
  */
 test("SQLite 机器人按探测新鲜期报状态，且时间戳一路带得到", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-tg-probe-age-"));
-  const databasePath = path.join(directory, "tg-probe-age.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const bot = await import(url("server/telegram/telegramBot.ts"));
     const { LINK_PROBE_FRESH_MS } = await import(url("shared/linkProbePolicy.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec(
@@ -91,15 +74,5 @@ test("SQLite 机器人按探测新鲜期报状态，且时间戳一路带得到"
       "面板按新鲜期判成运行中，机器人拿陈年那次超时判成「目标探测超时」—— 同一条规则两个答案",
     );
     assert.equal(stale.info.label, "运行中");
-
-    console.log("OK");
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, "..", ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /OK/);
+  `, { name: "tg-probe-age" });
 });

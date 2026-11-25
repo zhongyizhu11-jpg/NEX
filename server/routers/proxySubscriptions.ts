@@ -762,6 +762,21 @@ export const proxySubscriptionsRouter = router({
     };
   }),
 
+  /**
+   * 规则页给行上标「绑定对不上了」只要这几个规则 id。以前它拉整份 preview（100 台主机时 160 KB、服务端 150 ms：
+   * 组装订阅文档、查解锁结论都白做），还跟规则流量汇总打在同一个批量请求里，把流量数字一起拖慢。
+   * 这里只算 plan（警告就出在 plan 上），回一串 id。
+   */
+  targetMismatchRuleIds: protectedProcedure.query(async ({ ctx }) => {
+    if (!await hasProxySubscriptionPermission(ctx)) return [] as number[];
+    const { plan } = await db.buildProxySubscriptionContextForUser(ctx.user.id);
+    const ids = new Set<number>();
+    for (const item of plan.warnings) {
+      if (item.reason === "target-mismatch" && Number(item.ruleId) > 0) ids.add(Number(item.ruleId));
+    }
+    return Array.from(ids);
+  }),
+
   /** 「自动隐藏不通的节点」开关（每个用户自己的，默认开）。 */
   hideUnreachable: protectedProcedure.query(async ({ ctx }) => {
     if (!await hasProxySubscriptionPermission(ctx)) return { enabled: false };

@@ -1,5 +1,7 @@
 import { getFormatLocale } from "@/i18n";
 import { lazy, Suspense, useState } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 
 import { Button } from "@/components/ui/button";
 import { useOpenedOnce } from "@/hooks/useOpenedOnce";
@@ -9,7 +11,8 @@ import { formatMbps } from "@shared/nodeCheck";
 import { Row, Section } from "./HostDetailDialog";
 
 // 测速曲线（recharts）点「测速」才下载，不跟着主机页一起。
-const SpeedTestDialog = lazy(() => import("@/components/proxy/SpeedTestDialog").then((m) => ({ default: m.SpeedTestDialog })));
+const loadSpeedTestDialog = () => import("@/components/proxy/SpeedTestDialog").then((m) => ({ default: m.SpeedTestDialog }));
+const SpeedTestDialog = lazy(loadSpeedTestDialog);
 
 /*
   主机详情里的「网速测试」一节：最近一次的下载 / 上传 / 延迟写在这儿，点「测速」打开曲线弹窗
@@ -21,6 +24,8 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
   const [open, setOpen] = useState(false);
   const status = trpc.hosts.speedTestStatus.useQuery({ hostId }, { enabled: hostId > 0, staleTime: 15_000, refetchOnWindowFocus: false });
   const dialogMounted = useOpenedOnce(open);
+  // 详情一打开就把测速弹窗的 JS 热进缓存，点「测速」时不用再等一次下载
+  useWarmLazyChunks([loadSpeedTestDialog]);
   if (!(hostId > 0)) return null;
   const data = status.data;
   const speed = data?.latest?.speed ?? null;
@@ -44,7 +49,7 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
         <Row label="最近一次" value={status.isLoading ? "读取中…" : data?.latest?.error ? <span className="text-[var(--fx-down-text)]">上次失败</span> : "还没测过"} />
       )}
       {dialogMounted ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={open} />}>
           <SpeedTestDialog subject={open ? { hostId } : null} name={String(host?.name || "")} onOpenChange={(value) => { if (!value) setOpen(false); }} />
         </Suspense>
       ) : null}

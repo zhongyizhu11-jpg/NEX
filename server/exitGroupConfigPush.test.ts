@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   P9：出口组只改「检测与切换」参数、分配方式，或者只调后面几台出口的先后，是入口换一份配置的事 ——
@@ -14,24 +10,12 @@ import test from "node:test";
   入口掉线、唯一的出口掉线、出口全掉线才清。
 */
 test("出口组改检测参数 / 分配方式 / 后几台的顺序不把链路标成未运行；加减出口、换主出口才标", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-exit-group-config-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
-    const groups = await import(moduleUrl("server/db.ts"));
-    const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
-    const tunnelStatus = await import(moduleUrl("server/tunnelRuntimeStatus.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
+    const groups = await import(url("server/db.ts"));
+    const service = await import(url("server/services/forwardGroupService.ts"));
+    const tunnelStatus = await import(url("server/tunnelRuntimeStatus.ts"));
     const now = Math.floor(Date.now() / 1000);
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'x', 'admin')");
     for (const id of [1, 2, 3, 4, 5]) {
@@ -117,39 +101,14 @@ test("出口组改检测参数 / 分配方式 / 后几台的顺序不把链路�
     s = await state();
     assert.deepEqual(s.nodes, [2]);
     assert.deepEqual([s.tunnel, s.rule], [0, 0], "出口少了一台要重新铺");
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "config.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "exit-group-config" });
 });
 
 test("多出口链路掉线一台：别的出口还在线时不清整条链路的运行状态；入口掉线、出口全掉线才清", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-exit-offline-runtime-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
-    const db = await import(moduleUrl("server/db.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
+    const db = await import(url("server/db.ts"));
     const now = Math.floor(Date.now() / 1000);
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'x', 'admin')");
     for (const id of [1, 2, 3, 4]) {
@@ -217,18 +176,5 @@ test("多出口链路掉线一台：别的出口还在线时不清整条链路�
     await db.resetAgentRuntimeStateForHost(2);
     s = await running();
     assert.equal(s.tunnels[1], 0, "主出口重连 / 换地址：照旧清，出口要重新下发");
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "offline.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "exit-offline-runtime" });
 });

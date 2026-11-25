@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * forwardGroups.list 对租户只读看得见的组，而不是整表读完再丢。
@@ -13,28 +9,25 @@ import test from "node:test";
  * 看不见的组挂着隧道成员（决定主机在线从哪取）、转发链的入口组、看不见的普通组。
  */
 test("租户的 forwardGroups.list 只读可见组，结果和整表算的一致", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-list-scope-"));
-  const databasePath = path.join(directory, "groups.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const Database = (await import("better-sqlite3")).default;
-    const originalPrepare = Database.prototype.prepare;
+  runInDatabase(String.raw`
     let recording = false;
     let statements = [];
-    Database.prototype.prepare = function (sql) {
-      if (recording) statements.push(String(sql));
-      return originalPrepare.call(this, sql);
-    };
+    if (runtime.getDatabaseKind() === "postgresql") {
+      const pg = (await import("pg")).default;
+      const originalQuery = pg.Client.prototype.query;
+      pg.Client.prototype.query = function (config, ...rest) {
+        if (recording) statements.push(String(typeof config === "string" ? config : config?.text));
+        return originalQuery.call(this, config, ...rest);
+      };
+    } else {
+      const Database = (await import("better-sqlite3")).default;
+      const originalPrepare = Database.prototype.prepare;
+      Database.prototype.prepare = function (sql) {
+        if (recording) statements.push(String(sql));
+        return originalPrepare.call(this, sql);
+      };
+    }
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const now = Math.floor(Date.now() / 1000);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'h', 'admin')");
@@ -109,18 +102,5 @@ test("租户的 forwardGroups.list 只读可见组，结果和整表算的一致
       }
     }
     console.log("GROUP_LIST_SCOPE_OK");
-    await runtime.closeDatabase().catch(() => undefined);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /GROUP_LIST_SCOPE_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "group-list-scope", env: { NODE_ENV: "test" } });
 });

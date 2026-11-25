@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   P6：删主备组 / 入口组要把面板发过的解析记录清掉，而且只清面板自己写的。
@@ -15,25 +11,13 @@ import test from "node:test";
     4. 服务商报错：组照样删掉，面板日志里留一条「请手动删除」。
 */
 test("删除主备组 / 入口组：清掉面板发布的解析记录，别人加的不动，清不掉不拦删除", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-delete-ddns-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
-    const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-    const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
-    const repo = await import(moduleUrl("server/db.ts"));
-    const panelLogger = await import(moduleUrl("server/_core/panelLogger.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
+    const settings = await import(url("server/repositories/settingsRepository.ts"));
+    const service = await import(url("server/services/forwardGroupService.ts"));
+    const repo = await import(url("server/db.ts"));
+    const panelLogger = await import(url("server/_core/panelLogger.ts"));
     const now = Math.floor(Date.now() / 1000);
 
     // 假 Cloudflare：records 是服务商那边的全部记录。
@@ -77,7 +61,7 @@ test("删除主备组 / 入口组：清掉面板发布的解析记录，别人�
     for (const [id, ip] of [[1, "198.51.100.1"], [2, "198.51.100.2"]]) {
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, 1, 1, ?)', [id, "h" + id, ip, ip, now]);
       // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
-      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
+      (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
     const addGroup = async (id, mode, domain, autoResolve = 1) => {
       await exec(
@@ -125,18 +109,5 @@ test("删除主备组 / 入口组：清掉面板发布的解析记录，别人�
     assert.equal(await exists(13), false, "服务商报错，组照样删掉");
     const logs = (await panelLogger.getPanelLogs()).map((entry) => String(entry.message || JSON.stringify(entry)));
     assert.ok(logs.some((line) => /转发组已删除，但.*没清掉，请到 DNS 服务商手动删除.*broken\.example\.test/.test(line)), logs.slice(-5).join("\n"));
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "delete.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "group-delete-ddns" });
 });

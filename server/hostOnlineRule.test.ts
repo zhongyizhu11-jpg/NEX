@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 「这台机器算不算在线」只能有一套判定。
@@ -16,23 +12,10 @@ import test from "node:test";
  * 而这种不一致没人查得出来是哪一边错。
  */
 test("SQLite 主机在线判定：列表与状态通知走同一套", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-online-"));
-  const databasePath = path.join(directory, "host-online.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const hostRepo = await import(url("server/repositories/hostRepository.ts"));
     const notifier = await import(url("server/hostStatusNotifier.ts"));
     const { HOST_ONLINE_TTL_MS } = await import(url("shared/hostHeartbeat.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     const addHost = (id, name, isOnline, heartbeatMs) => exec(
@@ -64,7 +47,7 @@ test("SQLite 主机在线判定：列表与状态通知走同一套", () => {
      * 通知那一路拿到的往往是**原始行**（没经过 withComputedOnline 折算），
      * 所以要拿原始 isOnline 再核一遍：心跳过期的那台，原始行里 isOnline 仍是 1。
      */
-    const raw = await runtime.queryRaw('SELECT id, name, "isOnline", "lastHeartbeat" FROM hosts ORDER BY id');
+    const raw = await query('SELECT id, name, "isOnline", "lastHeartbeat" FROM hosts ORDER BY id');
     const rawStale = raw.find((row) => Number(row.id) === 2);
     assert.equal(Number(rawStale.isOnline), 1, "原始行里它还写着在线 —— 正是这一点让两套判定容易漂");
     assert.equal(
@@ -72,15 +55,5 @@ test("SQLite 主机在线判定：列表与状态通知走同一套", () => {
       false,
       "拿原始行判定时必须自己再验一次心跳，不能只信库里那一列",
     );
-
-    console.log("OK");
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /OK/);
+  `, { name: "host-online" });
 });

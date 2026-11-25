@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 「按量计费这一套配好了没有」——计费中心页那份开通清单的数。
@@ -16,21 +12,8 @@ import test from "node:test";
  * 报错了比不报更糟，人会照着它以为自己配好了。
  */
 test("计费开通清单的四个数要算准", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-setup-status-"));
-  const databasePath = path.join(directory, "setup.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const billing = await import(url("server/repositories/trafficBillingRepository.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, p = []) => runtime.executeRaw(sql, p);
 
     await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (1, 'admin', 'h', 'admin', 0)");
     await exec("INSERT INTO users (id, username, password, role, balanceCents) VALUES (2, '有钱的', 'h', 'user', 5000)");
@@ -87,18 +70,5 @@ test("计费开通清单的四个数要算准", () => {
     assert.equal(status.authorizedUsers, 1, "按人去重，不是按授权条数");
 
     console.log("SETUP_OK");
-    await runtime.closeDatabase().catch(() => undefined);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /SETUP_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "setup-status", env: { NODE_ENV: "test" } });
 });

@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 换隧道后旧入口的临时桥接，从头到尾走一遍真的 sqlite、真的规则编辑接口、真的心跳 / 状态 / 流量路由。
@@ -26,23 +23,10 @@ type Outcome = Record<string, any>;
 const BRIDGE_BASE = 2_000_000_000;
 
 function run(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-entry-bridge-"));
-  const databasePath = path.join(directory, "bridge.db");
-  const logDirectory = path.join(directory, "logs");
-  fs.mkdirSync(logDirectory, { recursive: true });
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    import express from "express";
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
+    const express = (await import("express")).default;
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
     const now = Math.floor(Date.now() / 1000);
     const target = "landing.forwardx.invalid";
     const out = {};
@@ -197,15 +181,8 @@ function run(): Outcome {
 
     server.close();
     // 等 stdout 写完再退：管道满的时候直接 exit 会把结果截断。
-    process.stdout.write("OUTCOME " + JSON.stringify(out) + "\n", () => process.exit(0));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: logDirectory },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    console.log("OUTCOME " + JSON.stringify(out));
+  `, { name: "entry-bridge" });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
   return JSON.parse(line.slice("OUTCOME ".length));

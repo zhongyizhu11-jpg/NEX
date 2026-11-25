@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 普通端口转发的单 IP 接入限制走真的心跳路由（sqlite + express）：
@@ -15,17 +12,8 @@ import test from "node:test";
 type Beat = { limitActions: any[]; ruleIds: number[]; gostLimiters: string[]; gostServiceLimiters: Record<string, string> };
 
 function run(): { disabled: Beat; modern: Beat } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-port-limit-heartbeat-"));
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
     const now = Math.floor(Date.now() / 1000);
     await exec('INSERT INTO users (id, username, password, role, "canAddRules", "maxIPs", "maxConnections") VALUES (1, ?, ?, ?, 1, 0, 0)', ["admin", "x", "admin"]);
     await exec('INSERT INTO users (id, username, password, role, "canAddRules", "maxIPs", "maxConnections") VALUES (2, ?, ?, ?, 1, 3, 0)', ["ip-limited", "x", "user"]);
@@ -97,23 +85,10 @@ function run(): { disabled: Beat; modern: Beat } {
     await exec('INSERT INTO system_settings ("key", "value") VALUES (?, ?)', ["portAccessLimitsEnabled", "true"]);
     const modern = await beat("tok-new", "2.2.251");
     server.close();
-    await runtime.closeDatabase();
     console.log(JSON.stringify({ disabled, modern }));
-    process.exit(0);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "hb.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    if (result.status !== 0) throw new Error("script failed: status=" + result.status + "\n" + result.stdout + "\n" + result.stderr);
-    const lines = result.stdout.trim().split("\n");
-    return JSON.parse(lines[lines.length - 1]);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "port-limit-heartbeat" });
+  const lines = result.stdout.trim().split("\n");
+  return JSON.parse(lines.filter((line) => line.startsWith("{")).pop() || "");
 }
 
 const outcome = run();

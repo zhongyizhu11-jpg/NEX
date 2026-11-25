@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 删掉一个资源，套餐里绑着它的那一行也要跟着走。
@@ -20,25 +16,11 @@ import test from "node:test";
  * 四种一起测，就是为了盯住「以后新增第五种资源时别再漏」。
  */
 test("SQLite 删除主机/隧道/转发组/落地节点时，套餐里的绑定一起清掉", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-plan-cascade-"));
-  const databasePath = path.join(directory, "plan-cascade.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const hostRepo = await import(url("server/repositories/hostRepository.ts"));
     const tunnelRepo = await import(url("server/repositories/tunnelRepository.ts"));
     const groupRepo = await import(url("server/repositories/forwardGroupRepository.ts"));
     const subs = await import(url("server/repositories/proxySubscriptionRepository.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec('INSERT INTO hosts (id, name, ip, "agentToken", "userId") VALUES (10, \'入口\', \'203.0.113.1\', \'t1\', 1)');
@@ -196,15 +178,5 @@ test("SQLite 删除主机/隧道/转发组/落地节点时，套餐里的绑定�
     );
     await subs.deleteProxyNode(soldNode);
     assert.equal(await subs.countPlansUsingProxyNode(soldNode), 0);
-
-    console.log("OK");
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /OK/);
+  `, { name: "plan-cascade" });
 });

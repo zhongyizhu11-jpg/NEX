@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 健康探测目标要真的走到 Agent 手里。
@@ -32,19 +29,8 @@ function dispatchFailoverSpec(): {
   pinnedIndex?: number;
   pinnedUntil?: number;
 } {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-failover-probe-"));
-  const databasePath = path.join(directory, "failover-probe.db");
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec(
@@ -98,15 +84,7 @@ function dispatchFailoverSpec(): {
     const actions = (body.desiredState && body.desiredState.actions) || [];
     const withFailover = actions.find((action) => action && action.failover && action.failover.enabled);
     console.log("FAILOVERSPEC " + JSON.stringify(withFailover ? withFailover.failover : null));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-    timeout: 180000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "failover-probe", timeoutMs: 180000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("FAILOVERSPEC "));
   assert.ok(line, `没拿到下发结果：\n${result.stdout}`);
   const spec = JSON.parse(line.slice("FAILOVERSPEC ".length));

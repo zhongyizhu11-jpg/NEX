@@ -28,7 +28,7 @@ import {
   userHostPermissions,
   users,
 } from "../../drizzle/schema";
-import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows, refreshDatabasePoolSettings, withDatabaseTransaction } from "../dbRuntime";
+import { afterDatabaseCommit, executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows, refreshDatabasePoolSettings, withDatabaseTransaction } from "../dbRuntime";
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolValue, inList, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
@@ -1326,22 +1326,55 @@ export async function getHostByAgentToken(token: string) {
   return r[0];
 }
 
-export async function getHostAgentPresenceById(id: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const rows = await db.select({
-    id: hosts.id,
-    name: hosts.name,
-    ip: hosts.ip,
-    ipv4: hosts.ipv4,
-    ipv6: hosts.ipv6,
-    isOnline: hosts.isOnline,
-    lastHeartbeat: hosts.lastHeartbeat,
-  })
-    .from(hosts)
-    .where(eq(hosts.id, id))
-    .limit(1);
-  return rows[0];
+export type HostAgentPresenceRow = {
+  id: number;
+  name: string;
+  ip: string;
+  ipv4: string | null;
+  ipv6: string | null;
+  isOnline: boolean;
+  lastHeartbeat: Date | null;
+};
+
+/**
+ * presence 每次只读这几列：isOnline / lastHeartbeat 判「这次之前在不在线」、要不要写库，
+ * name / ip 只在从离线回来时发通知用。这是面板上最频繁的一条 SQL（每台主机 5 秒一次），
+ * 用固定文本的裸语句而不是 Drizzle 拼：SQLite 下命中预编译缓存，三种库都省掉拼 SQL
+ * 和结果映射的 CPU（压测里 Drizzle 拼接占忙时 15～20%，见 docs/dev/control-plane-load-review.md）。
+ * 不能缓存结果：wasOnline 必须是这次请求之前库里的结论，一台主机两次 presence 之间就要看得到
+ * 中间 markHostOffline 写进去的变化。
+ */
+export async function getHostAgentPresenceById(id: number): Promise<HostAgentPresenceRow | undefined> {
+  const hostId = Math.floor(Number(id) || 0);
+  if (hostId <= 0) return undefined;
+  const rows = await queryRaw<Record<string, unknown>>(hostAgentPresenceSql(), [hostId]);
+  const row = rows[0];
+  if (!row) return undefined;
+  const lastHeartbeat = normalizeRawHostDate(row.lastHeartbeat);
+  return {
+    id: Number(row.id),
+    name: String(row.name ?? ""),
+    ip: String(row.ip ?? ""),
+    ipv4: row.ipv4 === null || row.ipv4 === undefined ? null : String(row.ipv4),
+    ipv6: row.ipv6 === null || row.ipv6 === undefined ? null : String(row.ipv6),
+    isOnline: dbBool(row.isOnline),
+    lastHeartbeat: lastHeartbeat instanceof Date ? lastHeartbeat : null,
+  };
+}
+
+// 语句文本按库的种类各记一份：标识符引号三种库不一样，文本一旦固定，SQLite 的预编译缓存才命中。
+const hostAgentPresenceSqlByKind = new Map<string, string>();
+
+function hostAgentPresenceSql() {
+  const kind = String(getDatabaseKind() || "");
+  let text = hostAgentPresenceSqlByKind.get(kind);
+  if (!text) {
+    const q = quoteIdentifier;
+    const columns = ["id", "name", "ip", "ipv4", "ipv6", "isOnline", "lastHeartbeat"].map((column) => q(column)).join(", ");
+    text = `SELECT ${columns} FROM ${q("hosts")} WHERE ${q("id")} = ? LIMIT 1`;
+    hostAgentPresenceSqlByKind.set(kind, text);
+  }
+  return text;
 }
 
 export async function getHostRuleDeleteBlockers(hostId: number) {

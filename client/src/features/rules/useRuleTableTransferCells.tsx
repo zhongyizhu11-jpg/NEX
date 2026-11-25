@@ -1,7 +1,8 @@
 /*
   从 client/src/pages/Rules.tsx 第 6062-6145 行抽出（scripts/extract-block.mjs），行为不变。
 */
-import { getForwardGroupRuleForwardType, normalizeRuleForwardType } from "../../pages/Rules";
+import { type ReactElement } from "react";
+import { getForwardGroupRuleForwardType, normalizeRuleForwardType, type RuleCardRule, type RuleResourceRow } from "../../pages/Rules";
 import { Badge } from "@/components/ui/badge";
 import { ArrowRightLeft, Copy, Network, Shield, Zap } from "lucide-react";
 
@@ -13,9 +14,9 @@ export type UseRuleTableTransferCellsContext = {
 };
 
 export type UseRuleTableTransferCellsResult = {
-  renderForwardToolBadge: any /* 原类型 (rule: any, group?: any | null) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
-  renderTableTransferEntry: any /* 原类型 (rule: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
-  renderTableTransferExit: any /* 原类型 (rule: any) => JSX.Element… 引用了拿不到的 JSX，手动收拾 */;
+  renderForwardToolBadge: (rule: RuleCardRule, group?: RuleResourceRow | null) => ReactElement;
+  renderTableTransferEntry: (rule: RuleCardRule) => ReactElement;
+  renderTableTransferExit: (rule: RuleCardRule) => ReactElement;
 };
 
 export function useRuleTableTransferCells(ctx: UseRuleTableTransferCellsContext): UseRuleTableTransferCellsResult {

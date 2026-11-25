@@ -129,10 +129,9 @@ for (const st of statements) {
   collect(st, 0);
 }
 // 输入若在段后才声明（原来靠闭包晚绑定），抽出去后调用处会在声明前取值（TDZ），直接报错让人缩小范围
-for (const [name, info] of inputs) {
-  const decl = info?.decl; if (!decl) continue;
-  if (decl.getStart(sf) >= rangeEnd && decl.getSourceFile() === sf) { console.error(`输入 ${name} 在段后（第 ${sf.getLineAndCharacterOfPosition(decl.getStart(sf)).line + 1} 行）才声明：段里的闭包靠晚绑定拿到它，抽出去会在声明前取值。把用到它的语句排除在段外，或先把它的声明挪到前面。`); process.exit(1); }
-}
+// 一次把段后才声明的输入全列出来，好决定把段整体挪到哪一行之后
+const lateInputs = [...inputs].filter(([, info]) => info?.decl && info.decl.getStart(sf) >= rangeEnd && info.decl.getSourceFile() === sf).map(([name, info]) => `${name}（第 ${sf.getLineAndCharacterOfPosition(info.decl.getStart(sf)).line + 1} 行）`);
+if (lateInputs.length) { console.error(`这些输入在段后才声明：${lateInputs.join("、")}。段里的闭包靠晚绑定拿到它们，抽出去会在声明前取值。把用到它们的语句排除在段外，或先把声明挪到前面。`); process.exit(1); }
 // 段外引用：段后的语句，以及段前声明的闭包里的引用（const 闭包晚于声明才被调用，运行时拿得到）
 const outsideRange = (node) => node.getStart(sf) >= rangeEnd || node.end <= rangeStart;
 function walkAfter(node) {
@@ -159,6 +158,8 @@ const typeOf = (decl) => {
   const node = ts.isVariableDeclaration(decl) || ts.isParameter(decl) || ts.isBindingElement(decl) ? decl.name : decl;
   const type = checker.getTypeAtLocation(node);
   let str = checker.typeToString(type, enclosingFn, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope | ts.TypeFormatFlags.WriteArrayAsGenericType);
+  // React 19 的 JSX 命名空间挂在 React 下，类型串里的 JSX.Element 按名字解析不到：换成 react 导出的 ReactElement
+  str = str.replace(/\bJSX\.Element\b/g, "ReactElement");
   if (/\bimport\(/.test(str) || str.length > 400) str = "any /* 类型太长或引用了别的模块，手动收拾 */";
   return str;
 };
@@ -242,6 +243,7 @@ for (const g of [...byModule.values()].sort((a, b) => a.mod.localeCompare(b.mod)
   importLines.push(`import ${g.typeOnly ? "type " : ""}${parts.join(", ")} from "${g.mod}";`);
 }
 const externalTypeImports = [];
+const REACT_TYPE_NAMES = new Set(["Dispatch", "SetStateAction", "RefObject", "MutableRefObject", "ReactNode", "ReactElement", "CSSProperties", "ChangeEvent", "FormEvent", "MouseEvent", "KeyboardEvent", "SyntheticEvent", "ComponentType", "ComponentProps", "Ref"]);
 // 类型字符串里引用到的名字：是本文件顶层声明（type / interface / enum / class / import）的也要进新模块
 {
   const topNames = new Map();
@@ -265,10 +267,16 @@ const externalTypeImports = [];
     if (moduleRefs.has(name)) continue;
     if (topNames.has(name)) { moduleRefs.set(name, topNames.get(name)); continue; }
     // 不是本文件顶层的名字：可能是别的模块导出的类型（类型字符串由检查器写出，不一定在本文件 import 过）
-    const sym = checker.resolveName(name, statements[0], ts.SymbolFlags.Type | ts.SymbolFlags.Value | ts.SymbolFlags.Alias, false);
+    // JSX 这种全局命名空间要带 Namespace 标志才找得到，否则 JSX.Element 会让整个类型串退成 any
+    const sym = checker.resolveName(name, statements[0], ts.SymbolFlags.Type | ts.SymbolFlags.Value | ts.SymbolFlags.Alias | ts.SymbolFlags.Namespace, false);
     const target = sym && (sym.flags & ts.SymbolFlags.Alias) ? checker.getAliasedSymbol(sym) : sym;
     const decl = target?.declarations?.[0];
-    if (!decl) { if (!/^(Promise|Array|Map|Set|Record|Partial|Pick|Omit|Readonly|ReadonlyArray|Date|Error|Buffer|RegExp|Function|Uint8Array|NodeJS|Awaited|Extract|Exclude|NonNullable|Required|ReturnType|Parameters|string|number|boolean|unknown|any|never|void|null|undefined|object|symbol|bigint|true|false|typeof|keyof)$/.test(name) && !/^T\d+$/.test(name)) unresolvedTypeNames.add(name); continue; }
+    if (!decl) {
+      // 检查器写类型时会直接用 react 的 Dispatch / SetStateAction / RefObject 这些名字，源文件未必 import 过：按名字从 react 补类型导入
+      if (REACT_TYPE_NAMES.has(name)) { externalTypeImports.push({ name, module: "react", isType: true }); continue; }
+      if (!/^(Promise|Array|Map|Set|Record|Partial|Pick|Omit|Readonly|ReadonlyArray|Date|Error|Buffer|RegExp|Function|Uint8Array|NodeJS|Awaited|Extract|Exclude|NonNullable|Required|ReturnType|Parameters|string|number|boolean|unknown|any|never|void|null|undefined|object|symbol|bigint|true|false|typeof|keyof)$/.test(name) && !/^T\d+$/.test(name)) unresolvedTypeNames.add(name);
+      continue;
+    }
     const declFile = decl.getSourceFile();
     if (declFile === sf || declFile.fileName.includes("node_modules") || declFile.isDeclarationFile) { if (declFile !== sf && !declFile.fileName.includes("node_modules") && !declFile.isDeclarationFile) unresolvedTypeNames.add(name); continue; }
     let top = decl; while (top.parent && !ts.isSourceFile(top.parent)) top = top.parent;
@@ -309,8 +317,8 @@ for (const [name, ref] of moduleRefs) {
   }
 }
 for (const ext of externalTypeImports) {
-  let rel = path.relative(path.dirname(newModulePath), ext.file.replace(/\.tsx?$/, "")).replace(/\\/g, "/");
-  if (!rel.startsWith(".")) rel = "./" + rel;
+  let rel = ext.module || path.relative(path.dirname(newModulePath), ext.file.replace(/\.tsx?$/, "")).replace(/\\/g, "/");
+  if (!ext.module && !rel.startsWith(".")) rel = "./" + rel;
   const key = `${rel}|src`;
   const g = byModule.get(key) || { mod: rel, typeOnly: false, default: null, ns: null, named: [] };
   g.named.push(ext.isType ? `type ${ext.name}` : ext.name);

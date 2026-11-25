@@ -17,6 +17,45 @@ import {
 
 const TRAFFIC_RETENTION_HOURS = 24 * 3;
 
+/**
+ * 规则的流量汇总（24h 带最新延迟 / 累计只有字节）。trafficSummary 接口和 listPage 顺带的那一份都走这里，
+ * 缓存键一样：列表顺带算过，前端紧接着再要同一页的汇总时直接命中。
+ */
+export async function computeRuleTrafficSummary(
+  user: { id: number; role?: string | null },
+  input: { hours?: number; range: "24h" | "total"; hostId?: number; ruleIds?: number[] },
+) {
+  const hours = input.range === "total" ? 0 : Math.min(Number(input.hours || 24), TRAFFIC_RETENTION_HOURS);
+  const since = input.range === "total" ? undefined : new Date(Date.now() - hours * 3600 * 1000);
+  const isAdmin = user.role === "admin";
+  const ruleIds = Array.from(new Set((input.ruleIds || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)))
+    .sort((a, b) => a - b);
+  const ruleKey = ruleIds.join(",");
+  // 24h 汇总带着每条规则的最新延迟，TCPing 一写入就要失效，放在延迟缓存里；
+  // 累计（total）只有字节数，留在流量缓存，不被频繁的 TCPing 上报清掉。
+  const summaryCache = input.range === "total" ? trafficQueryCache : latencyQueryCache;
+  // 失败种类在内存里、每分钟都可能变，不进缓存，取出来再补。
+  // 负载均衡链路的规则再补「各台出口连得上目标吗」（内存里的，几秒一变，同样不进缓存）。
+  return withRuleExitTargets(withRuleLiveRates(withRuleProbeFailures(await summaryCache.get(
+    `summary:${user.id}:${input.range}:${hours}:${input.hostId || 0}:${ruleKey}`,
+    { ttlMs: 5_000, staleMs: 0 },
+    () => input.range === "total"
+      ? db.getTrafficCounterSummaryByRule({
+        userId: isAdmin ? undefined : user.id,
+        hostId: input.hostId,
+        ruleIds,
+      })
+      : db.getTrafficSummaryByRule({
+        userId: isAdmin ? undefined : user.id,
+        hostId: input.hostId,
+        since,
+        ruleIds,
+      }),
+  ) as any[])));
+}
+
 function ruleResetLogItem(rule: any) {
   const id = Number(rule?.id || 0) || "-";
   const name = String(rule?.name || "").trim() || "-";
@@ -120,37 +159,7 @@ export const trafficRulesRouter = router({
         ruleIds: z.array(z.number()).max(1000).optional(),
       })
     )
-    .query(async ({ input, ctx }) => {
-      const hours = input.range === "total" ? 0 : Math.min(input.hours, TRAFFIC_RETENTION_HOURS);
-      const since = input.range === "total" ? undefined : new Date(Date.now() - hours * 3600 * 1000);
-      const isAdmin = ctx.user.role === "admin";
-      const ruleIds = Array.from(new Set((input.ruleIds || [])
-        .map((id) => Number(id))
-        .filter((id) => Number.isInteger(id) && id > 0)))
-        .sort((a, b) => a - b);
-      const ruleKey = ruleIds.join(",");
-      // 24h 汇总带着每条规则的最新延迟，TCPing 一写入就要失效，放在延迟缓存里；
-      // 累计（total）只有字节数，留在流量缓存，不被频繁的 TCPing 上报清掉。
-      const summaryCache = input.range === "total" ? trafficQueryCache : latencyQueryCache;
-      // 失败种类在内存里、每分钟都可能变，不进缓存，取出来再补。
-      // 负载均衡链路的规则再补「各台出口连得上目标吗」（内存里的，几秒一变，同样不进缓存）。
-      return withRuleExitTargets(withRuleLiveRates(withRuleProbeFailures(await summaryCache.get(
-        `summary:${ctx.user.id}:${input.range}:${hours}:${input.hostId || 0}:${ruleKey}`,
-        { ttlMs: 5_000, staleMs: 0 },
-        () => input.range === "total"
-          ? db.getTrafficCounterSummaryByRule({
-            userId: isAdmin ? undefined : ctx.user.id,
-            hostId: input.hostId,
-            ruleIds,
-          })
-          : db.getTrafficSummaryByRule({
-            userId: isAdmin ? undefined : ctx.user.id,
-            hostId: input.hostId,
-            since,
-            ruleIds,
-          }),
-      ) as any[])));
-    }),
+    .query(async ({ input, ctx }) => computeRuleTrafficSummary(ctx.user, input)),
   /* 规则卡上的小走势线：一次要一页规则的 24 小时逐时字节，不是每张卡各发一次。 */
   trafficSeriesBatch: protectedProcedure
     .input(

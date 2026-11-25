@@ -52,7 +52,8 @@ import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/tr
 import { normalizeTrafficCounterBytes, normalizeTrafficCounterConnections } from "../shared/trafficCounterBytes";
 import { mapWithConcurrency } from "./asyncPool";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
-import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
+import { withKeyedTaskLock } from "./keyedTaskLock";
+import { commitTrafficReport } from "./trafficReportBatch";
 import { isTunnelRelayFailover, tunnelRelayCandidates } from "../shared/tunnelRelay";
 import { isRuleLatencyReportMethodCompatible } from "../shared/latencyProbe";
 import { completeSupportBundleHost } from "./supportBundle";
@@ -105,19 +106,6 @@ function isForwardXTunnel(tunnel: any) {
 
 function tunnelUsesExtraExitHosts(tunnel: any) {
   return !!tunnel?.loadBalanceEnabled;
-}
-
-async function withTrafficAccountingUserLocks<T>(userIds: number[], task: () => Promise<T>): Promise<T> {
-  const ids = Array.from(new Set(userIds
-    .map((id) => Math.floor(Number(id) || 0))
-    .filter((id) => id > 0)))
-    .sort((left, right) => left - right);
-  // 用 withTrafficBillingUserLock 而不是裸的键锁：它同时把「持有这把锁」记进调用链，
-  // 里面记账触发的结算 / 停规则再为同一个用户拿这把锁时按重入处理，不会自己等自己。
-  const run = (index: number): Promise<T> => index >= ids.length
-    ? task()
-    : withTrafficBillingUserLock(ids[index], () => run(index + 1));
-  return run(0);
 }
 
 /**
@@ -1032,7 +1020,9 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
     // opening the full traffic transaction and querying billing/rule/tunnel
     // context when there are no rule deltas to account.
     if (stats.length === 0) {
-      await db.withDatabaseTransaction(async () => {
+      // 也走攒批（server/trafficReportBatch.ts）：一批里整批失败后会单独重跑，所以先把上次的结论清掉。
+      await commitTrafficReport({ hostId: Number(host.id), userIds: [], apply: async () => {
+        duplicateTrafficReport = false;
         if (trafficReportId && !await db.claimAgentTrafficReport(host.id, trafficReportId, trafficReportProducerId)) {
           duplicateTrafficReport = true;
           return;
@@ -1043,7 +1033,7 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
             bytesOut: normalizeTrafficCounterBytes(hostTraffic.bytesOut),
           });
         }
-      });
+      } });
       if (duplicateTrafficReport) {
         logTrafficReportSummary({
           hostId: logHostId,
@@ -1161,11 +1151,22 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       // 这里宁可多锁一个人：非本机的入站待会儿会被丢掉，锁了也只是白锁。
       ...Array.from(inboundOwners.values()).map((owner) => Number(owner.userId)),
     ])).filter((userId) => userId > 0);
-    await withTrafficAccountingUserLocks(accountingUserIds, () => db.withDatabaseTransaction(async () => {
-      // Lock database rows in the same deterministic order as the in-process
-      // keyed locks. This protects quota/billing counters when reports arrive
-      // concurrently on different panel instances.
-      await db.lockTrafficBillingUserRows(accountingUserIds);
+    /*
+      记账事务交给 server/trafficReportBatch.ts：短窗口内几台主机的上报并成一个事务提交（同一页
+      只写一次），它按升序拿齐这些用户的进程内锁、事务开头再按同一顺序 lockTrafficBillingUserRows
+      锁行，回执仍在提交之后。整批失败后这份会被单独重跑，所以进来先把上一次的计数清零；
+      界面用的速率样本只在第一次记一遍。
+    */
+    const ignoredStatCountBeforeAccounting = ignoredStatCount;
+    let liveSamplesRecorded = false;
+    await commitTrafficReport({ hostId: Number(host.id), userIds: accountingUserIds, apply: async () => {
+      duplicateTrafficReport = false;
+      strictTrafficAccounting = false;
+      acceptedStatCount = 0;
+      routedAwayStatCount = 0;
+      ignoredStatCount = ignoredStatCountBeforeAccounting;
+      acceptedBytesIn = 0;
+      acceptedBytesOut = 0;
       if (trafficReportId && !await db.claimAgentTrafficReport(host.id, trafficReportId, trafficReportProducerId)) {
         duplicateTrafficReport = true;
         return;
@@ -1270,7 +1271,8 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       }
       const { rule, tunnel, group } = context;
       // 此刻的速率只给界面看（线路板上每一跳的 ↓↑），不进账：记在谁名下、记不记都不影响它。
-      recordRuleTrafficSample({ ruleId: Number(stat.ruleId), hostId: Number(host.id), bytesIn, bytesOut, connections: normalizeTrafficCounterConnections(stat.connections), nowMs: requestStartedAt });
+      // 整批回滚后单独重跑时不再记第二遍，不然速率翻倍。
+      if (!liveSamplesRecorded) recordRuleTrafficSample({ ruleId: Number(stat.ruleId), hostId: Number(host.id), bytesIn, bytesOut, connections: normalizeTrafficCounterConnections(stat.connections), nowMs: requestStartedAt });
       if ((rule as any).pendingDelete || !(rule as any).isEnabled) {
         ignoredStatCount += 1;
         continue;
@@ -1332,6 +1334,8 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
         }
       }
     }
+
+    liveSamplesRecorded = true;
 
     await db.insertTrafficStatsBatch(trafficBatch);
     // 单条规则额度：同一批、同一个事务里累加（不另起一套计量），见 server/ruleLimits.ts。
@@ -1411,7 +1415,7 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
         }
       }
     });
-    }));
+    } });
 
     if (duplicateTrafficReport) {
       logTrafficReportSummary({

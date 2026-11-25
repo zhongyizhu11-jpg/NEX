@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { readRulesPageSource } from "../testing/rulesPageSource";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DiagnoseStatusLine, formatDiagnoseTime } from "./DiagnoseDialog";
@@ -45,9 +46,9 @@ const pageModules: Record<string, string[]> = {
 };
 function readPageWithModules(file: string): string {
   const pages = path.resolve(import.meta.dirname, "../pages");
-  return [path.join(pages, file), ...(pageModules[file] ?? []).map((rel) => path.resolve(import.meta.dirname, rel))]
-    .map((p) => fs.readFileSync(p, "utf8"))
-    .join("\n");
+  // 规则页在渐进拆分：RulesContent 的一段段搬进了 features/rules/use*.ts(x)，读页面要连 hook 一起读
+  const page = file === "Rules.tsx" ? readRulesPageSource() : fs.readFileSync(path.join(pages, file), "utf8");
+  return [page, ...(pageModules[file] ?? []).map((rel) => fs.readFileSync(path.resolve(import.meta.dirname, rel), "utf8"))].join("\n");
 }
 
 test("规则、隧道、转发链三处诊断都走这个外壳，界面上不再出现「延迟探测」「链路测试」", () => {

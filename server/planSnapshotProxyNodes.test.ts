@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 「不同步已有订阅者」必须把节点也算在内。
@@ -20,23 +16,9 @@ import test from "node:test";
  * 就再也收不回节点了）、老快照里没有这一列时退回改动前的行为。
  */
 test("SQLite 冻结快照的订阅者保住套餐当时带的节点，没冻的照常跟着套餐走", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-plan-snapshot-nodes-"));
-  const databasePath = path.join(directory, "plan-snapshot-nodes.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const billing = await import(url("server/repositories/billingRepository.ts"));
     const subs = await import(url("server/repositories/proxySubscriptionRepository.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role, accountEnabled, allowProxySubscription) VALUES (1, 'owner', 'h', 'admin', 1, 1)");
     for (const [id, name] of [[2, "老客户"], [3, "新客户"]]) {
@@ -119,15 +101,5 @@ test("SQLite 冻结快照的订阅者保住套餐当时带的节点，没冻的�
       [nodeB],
       "老快照没有这一列时要退回按套餐当前内容算，不能当成「一个节点都没有」",
     );
-
-    console.log("OK");
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /OK/);
+  `, { name: "plan-snapshot-nodes" });
 });

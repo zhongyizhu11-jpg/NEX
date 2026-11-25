@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 一个租户走套餐、另一个走按量计费，两种模式能不能同时跑。
@@ -24,28 +20,16 @@ import test from "node:test";
  * 以为兜底价只对计费户生效。
  */
 test("套餐户和计费户能同时跑，但走的是资源不是人", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-mixed-billing-"));
-  const databasePath = path.join(directory, "mixed.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    import express from "express";
+  runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
+    const express = (await import("express")).default;
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
     const billing = await import(url("server/repositories/trafficBillingRepository.ts"));
     const reports = await import(url("server/agentReportRoutes.ts"));
 
     const GB = 1024 ** 3;
     let server;
     try {
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, p = []) => runtime.executeRaw(sql, p);
-      const query = (sql, p = []) => runtime.queryRaw(sql, p);
 
       // 套餐户：有流量额度、有自己的转发权限（manualCanAddRules），余额 0（买的是套餐，没充过钱）
       await exec("INSERT INTO users (id, username, password, role, trafficLimit, trafficUsed, balanceCents, canAddRules, manualCanAddRules, accountEnabled) VALUES (2, '套餐户', 'h', 'user', ?, 0, 0, 1, 1, 1)", [100 * GB]);
@@ -155,19 +139,6 @@ test("套餐户和计费户能同时跑，但走的是资源不是人", () => {
       console.log("MIXED_OK");
     } finally {
       if (server) await new Promise((resolve) => server.close(() => resolve()));
-      await runtime.closeDatabase().catch(() => undefined);
     }
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /MIXED_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "mixed-billing", env: { NODE_ENV: "test" } });
 });

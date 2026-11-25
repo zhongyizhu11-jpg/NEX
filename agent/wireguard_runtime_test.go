@@ -974,7 +974,7 @@ func TestWireGuardUDPProxyQueueDropsExpiredPackets(t *testing.T) {
 
 	session.send <- wireGuardUDPProxyPacket{
 		payload:  []byte("stale"),
-		queuedAt: time.Now().Add(-wireGuardUDPProxyMaxQueueDelay),
+		queuedAt: time.Now().Add(-wireGuardUDPProxyMaxQueueDelay()),
 	}
 	if !session.enqueue([]byte("fresh")) {
 		t.Fatal("fresh packet was not queued")
@@ -995,7 +995,7 @@ func TestWireGuardUDPProxyQueueDropsExpiredPackets(t *testing.T) {
 func TestWireGuardUDPProxyQueueKeepsLastExpiredPacket(t *testing.T) {
 	packet := wireGuardUDPProxyPacket{
 		payload:  []byte("last"),
-		queuedAt: time.Now().Add(-wireGuardUDPProxyMaxQueueDelay),
+		queuedAt: time.Now().Add(-wireGuardUDPProxyMaxQueueDelay()),
 	}
 	if packet.superseded(time.Now(), 0) {
 		t.Fatal("last queued UDP packet was discarded without a replacement")
@@ -1498,9 +1498,9 @@ func TestWireGuardRuntimeTCPAndUDPProxy(t *testing.T) {
 	const burstPackets = wireGuardUDPProxyQueueSize / 2
 	// 这里只验证「一批都送到」：把新鲜度淘汰的窗口放大，否则 CI 机器一慢（排空 32 个包超过 25 ms），
 	// 正常的淘汰就会让这个用例偶发少一个包（2026-11 两次在 CI 上这样失败）。
-	previousMaxQueueDelay := wireGuardUDPProxyMaxQueueDelay
-	wireGuardUDPProxyMaxQueueDelay = 10 * time.Second
-	t.Cleanup(func() { wireGuardUDPProxyMaxQueueDelay = previousMaxQueueDelay })
+	previousMaxQueueDelay := wireGuardUDPProxyMaxQueueDelayNanos.Load()
+	wireGuardUDPProxyMaxQueueDelayNanos.Store(int64(10 * time.Second))
+	t.Cleanup(func() { wireGuardUDPProxyMaxQueueDelayNanos.Store(previousMaxQueueDelay) })
 	_ = udpClient.SetDeadline(time.Now().Add(15 * time.Second))
 	for i := 0; i < burstPackets; i++ {
 		payload := []byte("burst-" + strconv.Itoa(i))

@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 拖拽排序看起来无害，其实是个**批量写接口**：给一串 id，逐个改它们的 sortOrder。
@@ -16,22 +12,10 @@ import test from "node:test";
  * 正常排序要生效、夹带别人的 id 要整个拒绝且**一行都不许改**、重复 id 要拒绝。
  */
 test("重排序：越权和脏数据整个拒绝，且不留下半拉写入", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-reorder-"));
-  const databasePath = path.join(directory, "reorder.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (f) => pathToFileURL(path.join(process.cwd(), f)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const groups = await import(url("server/repositories/hostGroupRepository.ts"));
 
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (s, p = []) => runtime.executeRaw(s, p);
-    const order = async () => (await runtime.queryRaw(
+    const order = async () => (await query(
       'SELECT "id", "sortOrder" FROM "host_groups" ORDER BY "id"',
     )).map((r) => Number(r.id) + ":" + Number(r.sortOrder)).join(" ");
 
@@ -70,18 +54,5 @@ test("重排序：越权和脏数据整个拒绝，且不留下半拉写入", ()
     assert.equal(await order(), "10:1 11:2 20:0", "管理员那一路照旧能排");
 
     console.log("REORDER_OK");
-    await runtime.closeDatabase().catch(() => undefined);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /REORDER_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "reorder", env: { NODE_ENV: "test" } });
 });

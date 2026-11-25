@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 import { pathToFileURL } from "node:url";
 import {
   BILLING_DATE_TIME_FORMAT_OPTIONS,
@@ -116,109 +115,85 @@ test("billing display options do not expose the UTC storage offset", () => {
 });
 
 test("user and host monthly reset selection changes at the billing boundary in every process time zone", () => {
-  const moduleUrl = (file: string) => pathToFileURL(path.join(process.cwd(), file)).href;
   const script = String.raw`
-    const runtime = await import(${JSON.stringify(moduleUrl("server/dbRuntime.ts"))});
-    const schema = await import(${JSON.stringify(moduleUrl("server/dbSchema.ts"))});
-    const users = await import(${JSON.stringify(moduleUrl("server/repositories/userRepository.ts"))});
-    const hosts = await import(${JSON.stringify(moduleUrl("server/repositories/hostRepository.ts"))});
+    const users = await import(url("server/repositories/userRepository.ts"));
+    const hosts = await import(url("server/repositories/hostRepository.ts"));
     const epoch = (value) => Math.floor(new Date(value).getTime() / 1000);
-    try {
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      await runtime.executeRaw(
-        'INSERT INTO "users" ("id", "username", "password", "role", "lastTrafficReset") VALUES (?, ?, ?, ?, ?)',
-        [99, "legacy-reset-user", "hash", "user", epoch("2026-07-31T16:00:00.000Z")],
+    await exec(
+      'INSERT INTO "users" ("id", "username", "password", "role", "lastTrafficReset") VALUES (?, ?, ?, ?, ?)',
+      [99, "legacy-reset-user", "hash", "user", epoch("2026-07-31T16:00:00.000Z")],
+    );
+    await exec(
+      'DELETE FROM "system_settings" WHERE "key" = ?',
+      ["last-auto-traffic-reset-backfill-v1"],
+    );
+    await exec('ALTER TABLE "users" DROP COLUMN "lastAutoTrafficReset"');
+    await schema.ensureDatabaseSchema();
+    const [legacyUser] = await query(
+      'SELECT "lastTrafficReset", "lastAutoTrafficReset" FROM "users" WHERE "id" = ?',
+      [99],
+    );
+    for (const [id, resetDay, lastReset] of [
+      [1, 23, null],
+      [2, 24, null],
+      [3, 23, epoch("2026-07-31T16:00:00.000Z")],
+      [4, 23, epoch("2026-07-31T15:59:59.000Z")],
+    ]) {
+      await exec(
+        'INSERT INTO "users" ("id", "username", "password", "role", "trafficAutoReset", "trafficResetDay", "lastTrafficReset", "lastAutoTrafficReset") VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, "billing-user-" + id, "hash", "user", 1, resetDay, lastReset, lastReset],
       );
-      await runtime.executeRaw(
-        'DELETE FROM "system_settings" WHERE "key" = ?',
-        ["last-auto-traffic-reset-backfill-v1"],
+      await exec(
+        'INSERT INTO "hosts" ("id", "name", "ip", "userId", "portRangeStart", "portRangeEnd", "trafficAutoReset", "trafficResetDay", "lastTrafficReset") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, "billing-host-" + id, "127.0.0." + id, id, 10000 + id, 10000 + id, 1, resetDay, lastReset],
       );
-      await runtime.executeRaw('ALTER TABLE "users" DROP COLUMN "lastAutoTrafficReset"');
-      await schema.ensureDatabaseSchema();
-      const [legacyUser] = await runtime.queryRaw(
-        'SELECT "lastTrafficReset", "lastAutoTrafficReset" FROM "users" WHERE "id" = ?',
-        [99],
-      );
-      for (const [id, resetDay, lastReset] of [
-        [1, 23, null],
-        [2, 24, null],
-        [3, 23, epoch("2026-07-31T16:00:00.000Z")],
-        [4, 23, epoch("2026-07-31T15:59:59.000Z")],
-      ]) {
-        await runtime.executeRaw(
-          'INSERT INTO "users" ("id", "username", "password", "role", "trafficAutoReset", "trafficResetDay", "lastTrafficReset", "lastAutoTrafficReset") VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, "billing-user-" + id, "hash", "user", 1, resetDay, lastReset, lastReset],
-        );
-        await runtime.executeRaw(
-          'INSERT INTO "hosts" ("id", "name", "ip", "userId", "portRangeStart", "portRangeEnd", "trafficAutoReset", "trafficResetDay", "lastTrafficReset") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, "billing-host-" + id, "127.0.0." + id, id, 10000 + id, 10000 + id, 1, resetDay, lastReset],
-        );
-      }
-      await runtime.executeRaw(
-        'INSERT INTO "users" ("id", "username", "password", "role", "trafficAutoReset", "trafficResetDay", "trafficUsed") VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [5, "manual-reset-user", "hash", "user", 1, 23, 123],
-      );
-      await users.resetUserTraffic(5);
-      await schema.ensureDatabaseSchema();
-      const [manualUserAfterEnsure] = await runtime.queryRaw(
-        'SELECT "lastAutoTrafficReset" FROM "users" WHERE "id" = ?',
-        [5],
-      );
-
-      const before = new Date("2026-08-22T15:59:59.000Z");
-      const boundary = new Date("2026-08-22T16:00:00.000Z");
-      const ids = (rows) => rows.map((row) => Number(row.id)).sort((left, right) => left - right);
-      const usersBefore = ids(await users.getUsersForAutoReset(before));
-      const usersAt = ids(await users.getUsersForAutoReset(boundary));
-      await runtime.executeRaw('UPDATE "users" SET "trafficUsed" = ? WHERE "id" = ?', [456, 5]);
-      const resetAt = new Date("2026-08-22T17:00:00.000Z");
-      const firstCycleReset = await users.resetUserTrafficForCycle(5, boundary, resetAt);
-      const secondCycleReset = await users.resetUserTrafficForCycle(5, boundary, resetAt);
-      const usersAfterCycle = ids(await users.getUsersForAutoReset(boundary));
-      const [cycleUser] = await runtime.queryRaw(
-        'SELECT "trafficUsed", "lastTrafficReset", "lastAutoTrafficReset" FROM "users" WHERE "id" = ?',
-        [5],
-      );
-      process.stdout.write("\n__BILLING_RESULT__" + JSON.stringify({
-        usersBefore,
-        usersAt,
-        hostsBefore: ids(await hosts.getHostsForTrafficAutoReset(before)),
-        hostsAt: ids(await hosts.getHostsForTrafficAutoReset(boundary)),
-        legacyReset: Number(legacyUser.lastAutoTrafficReset),
-        legacySourceReset: Number(legacyUser.lastTrafficReset),
-        manualMarkerAfterEnsure: manualUserAfterEnsure.lastAutoTrafficReset,
-        firstCycleReset,
-        secondCycleReset,
-        usersAfterCycle,
-        cycleTrafficUsed: Number(cycleUser.trafficUsed),
-        cycleLastReset: Number(cycleUser.lastTrafficReset),
-        cycleLastAutoReset: Number(cycleUser.lastAutoTrafficReset),
-      }));
-    } finally {
-      await runtime.closeDatabase().catch(() => undefined);
     }
+    await exec(
+      'INSERT INTO "users" ("id", "username", "password", "role", "trafficAutoReset", "trafficResetDay", "trafficUsed") VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [5, "manual-reset-user", "hash", "user", 1, 23, 123],
+    );
+    await users.resetUserTraffic(5);
+    await schema.ensureDatabaseSchema();
+    const [manualUserAfterEnsure] = await query(
+      'SELECT "lastAutoTrafficReset" FROM "users" WHERE "id" = ?',
+      [5],
+    );
+
+    const before = new Date("2026-08-22T15:59:59.000Z");
+    const boundary = new Date("2026-08-22T16:00:00.000Z");
+    const ids = (rows) => rows.map((row) => Number(row.id)).sort((left, right) => left - right);
+    const usersBefore = ids(await users.getUsersForAutoReset(before));
+    const usersAt = ids(await users.getUsersForAutoReset(boundary));
+    await exec('UPDATE "users" SET "trafficUsed" = ? WHERE "id" = ?', [456, 5]);
+    const resetAt = new Date("2026-08-22T17:00:00.000Z");
+    const firstCycleReset = await users.resetUserTrafficForCycle(5, boundary, resetAt);
+    const secondCycleReset = await users.resetUserTrafficForCycle(5, boundary, resetAt);
+    const usersAfterCycle = ids(await users.getUsersForAutoReset(boundary));
+    const [cycleUser] = await query(
+      'SELECT "trafficUsed", "lastTrafficReset", "lastAutoTrafficReset" FROM "users" WHERE "id" = ?',
+      [5],
+    );
+    process.stdout.write("\n__BILLING_RESULT__" + JSON.stringify({
+      usersBefore,
+      usersAt,
+      hostsBefore: ids(await hosts.getHostsForTrafficAutoReset(before)),
+      hostsAt: ids(await hosts.getHostsForTrafficAutoReset(boundary)),
+      legacyReset: Number(legacyUser.lastAutoTrafficReset),
+      legacySourceReset: Number(legacyUser.lastTrafficReset),
+      manualMarkerAfterEnsure: manualUserAfterEnsure.lastAutoTrafficReset,
+      firstCycleReset,
+      secondCycleReset,
+      usersAfterCycle,
+      cycleTrafficUsed: Number(cycleUser.trafficUsed),
+      cycleLastReset: Number(cycleUser.lastTrafficReset),
+      cycleLastAutoReset: Number(cycleUser.lastAutoTrafficReset),
+    }));
   `;
 
   const results = ["UTC", "Asia/Shanghai"].map((timeZone) => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-billing-boundary-"));
-    try {
-      const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          TZ: timeZone,
-          DATABASE_TYPE: "sqlite",
-          FORWARDX_TEST_DB: path.join(directory, "billing-boundary.db"),
-        },
-        encoding: "utf8",
-        timeout: 30_000,
-      });
-      assert.equal(result.status, 0, `${timeZone}: ${result.stdout}\n${result.stderr}`);
-      return JSON.parse(result.stdout.split("__BILLING_RESULT__").pop() || "");
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+    const result = runInDatabase(script, { name: "billing-boundary", env: { TZ: timeZone } });
+    const tail = result.stdout.split("__BILLING_RESULT__").pop() || "";
+    return JSON.parse(tail.slice(0, tail.lastIndexOf("}") + 1));
   });
 
   assert.deepEqual(results, [

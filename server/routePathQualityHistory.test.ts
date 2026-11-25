@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 import { parseRoutePaths } from "../shared/routeGroup";
 import { getRouteStatus, recordRouteAgentStats, resetRouteStatsForTest } from "./routeGroupStats";
 import {
@@ -111,17 +108,7 @@ test("按桶合并：平均延迟、丢包；全超时的桶延迟为空", () =>
 });
 
 test("七天保留：真的 SQLite 上只删 7 天前的，读回来换算正确", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-route-quality-"));
-  const databasePath = path.join(directory, "panel.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     const repo = await import(url("server/repositories/routePathQualityRepository.ts"));
     const now = Date.now();
     const day = 24 * 3600 * 1000;
@@ -144,16 +131,7 @@ test("七天保留：真的 SQLite 上只删 7 天前的，读回来换算正确
     await repo.deleteRoutePathQualityStats(9);
     assert.equal((await repo.getRoutePathQualityHistory(9, { sinceMs: 0 })).length, 0);
     console.log("ROUTE_QUALITY_OK");
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_TYPE: "sqlite", SQLITE_PATH: databasePath, FORWARDX_TEST_DB: databasePath },
-    encoding: "utf8",
-    timeout: 90_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /ROUTE_QUALITY_OK/);
+  `, { name: "route-quality" });
 });
 
 test("Agent 2.2.237 报的真实拨号计数进快照；老 Agent 没报就是全 0", () => {

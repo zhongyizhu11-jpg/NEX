@@ -1,6 +1,8 @@
 /*
   从 client/src/pages/Rules.tsx 第 6219-6314 行抽出（scripts/extract-block.mjs），行为不变。
 */
+import { type ReactElement } from "react";
+import { type RuleCardRule } from "../../pages/Rules";
 import { Badge } from "@/components/ui/badge";
 import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { cn } from "@/lib/utils";
@@ -15,9 +17,9 @@ export type UseRuleSourceBadgesContext = {
 };
 
 export type UseRuleSourceBadgesResult = {
-  renderSubscriptionBadge: any /* 原类型 (rule: any, placement?: "table" | "card") => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderFailoverLineBadge: any /* 原类型 (rule: any) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderSubscriptionMark: any /* 原类型 (rule: any) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
+  renderSubscriptionBadge: (rule: RuleCardRule, placement?: "table" | "card") => ReactElement | null;
+  renderFailoverLineBadge: (rule: RuleCardRule) => ReactElement | null;
+  renderSubscriptionMark: (rule: RuleCardRule) => ReactElement | null;
 };
 
 export function useRuleSourceBadges(ctx: UseRuleSourceBadgesContext): UseRuleSourceBadgesResult {

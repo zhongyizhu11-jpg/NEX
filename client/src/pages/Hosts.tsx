@@ -134,16 +134,22 @@ import {
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 import { useStableRows } from "@/lib/stableRows";
 import { toast } from "sonner";
 import { useSearchIdParam } from "@/features/links/lineLinks";
 const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-globe.gl").default;
 const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
 // 探测延迟曲线（recharts）点开才下载，不跟着主机页一起。
-const HostProbeServiceLatencyDialog = lazy(() => import("@/components/hosts/HostProbeServiceLatencyDialog"));
-// 「换机器」弹窗很少用到，点了再下
-const HostReplaceDialog = lazy(() => import("@/components/hosts/HostReplaceDialog"));
-const HostEditDialog = lazy(() => import("@/components/hosts/HostEditDialog"));
+// 懒加载的弹窗：页面闲下来先把 JS 热进缓存（lib/lazyWarm.ts），点开时不用再等一次网络往返
+const loadHostProbeServiceLatencyDialog = () => import("@/components/hosts/HostProbeServiceLatencyDialog");
+const HostProbeServiceLatencyDialog = lazy(loadHostProbeServiceLatencyDialog);
+// 「换机器」弹窗只有管理员用得到
+const loadHostReplaceDialog = () => import("@/components/hosts/HostReplaceDialog");
+const HostReplaceDialog = lazy(loadHostReplaceDialog);
+const loadHostEditDialog = () => import("@/components/hosts/HostEditDialog");
+const HostEditDialog = lazy(loadHostEditDialog);
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
 const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.webp";
 const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.webp";
@@ -1743,6 +1749,10 @@ const HostTableRow = memo(function HostTableRow({
 
 function HostsContent() {
   const { user } = useAuth();
+  // 编辑 / 探测延迟弹窗谁都可能点开；「换机器」只有管理员有入口，普通用户不白下
+  useWarmLazyChunks(user?.role === "admin"
+    ? [loadHostEditDialog, loadHostProbeServiceLatencyDialog, loadHostReplaceDialog]
+    : [loadHostEditDialog, loadHostProbeServiceLatencyDialog]);
   const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const pageVisible = usePageVisible();
@@ -3447,7 +3457,7 @@ function HostsContent() {
       />
 
       {probeLatencyDialogMounted ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={!!probeLatencyHost} />}>
           <HostProbeServiceLatencyDialog
             open={!!probeLatencyHost}
             onOpenChange={(open) => !open && setProbeLatencyHost(null)}
@@ -3472,7 +3482,7 @@ function HostsContent() {
       />
 
       {replaceHost ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback />}>
           <HostReplaceDialog
             open={!!replaceHost}
             onOpenChange={(open) => !open && setReplaceHost(null)}
@@ -3604,7 +3614,7 @@ function HostsContent() {
       {/* 编辑主机对话框 */}
       {/* 编辑主机的弹窗按需加载：第一次打开后一直挂着（表单 state 在页面上；也留得住关闭动画） */}
       {hostDialogLoaded ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={showDialog} />}>
           <HostEditDialog
             open={showDialog}
             onOpenChange={setShowDialog}

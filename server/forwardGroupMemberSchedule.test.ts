@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 线路按时间段启用：出口组的第二台机器只在北京时间 20:00-02:00 用。
@@ -13,23 +9,11 @@ import test from "node:test";
  * - 编辑表单把「时段停用」回显成开着，存一次不会变成手动停用。
  */
 test("成员可用时段：进出时段自动停用 / 恢复，手动停用不受影响", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-member-schedule-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
-    const repo = await import(moduleUrl("server/db.ts"));
-    const sweep = await import(moduleUrl("server/forwardGroupMemberSchedule.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
+    const repo = await import(url("server/db.ts"));
+    const sweep = await import(url("server/forwardGroupMemberSchedule.ts"));
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'x', 'admin')");
     await exec("INSERT INTO hosts (id, name, ip, userId) VALUES (1, 'a', '10.0.0.1', 1), (2, 'b', '10.0.0.2', 1)");
@@ -82,55 +66,19 @@ test("成员可用时段：进出时段自动停用 / 恢复，手动停用不�
     b = await memberB();
     assert.equal(b.activeSchedule, null);
     assert.equal(Number(b.isEnabled), 1);
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "schedule.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "member-schedule" });
 });
 
 function runScheduleScript(name: string, script: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `forwardx-member-schedule-${name}-`));
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "schedule.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runInDatabase(script, { name: `member-schedule-${name}` });
 }
 
 const scheduleScriptHead = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
     console.info = () => {};
     console.warn = () => {};
-    const repo = await import(moduleUrl("server/db.ts"));
-    const sweep = await import(moduleUrl("server/forwardGroupMemberSchedule.ts"));
-    const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
+    const repo = await import(url("server/db.ts"));
+    const sweep = await import(url("server/forwardGroupMemberSchedule.ts"));
+    const locks = await import(url("server/keyedTaskLock.ts"));
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const peak = { timezone: "Asia/Shanghai", windows: [{ days: [], from: "20:00", to: "02:00" }] };
     const noon = new Date("2026-10-18T04:00:00Z");
@@ -140,7 +88,7 @@ const scheduleScriptHead = String.raw`
     for (const [id, ip] of [[1, "10.0.0.1"], [2, "10.0.0.2"], [3, "10.0.0.3"]]) {
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, 1, 1, ?)', [id, "h" + id, ip, ip, nowSeconds]);
       // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
-      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
+      (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
 `;
 
@@ -196,7 +144,7 @@ test("换成员是一个事务：中途失败整份回滚，不留半份成员",
       { memberType: "host", hostId: 1, priority: 0, isEnabled: true },
       { memberType: "host", hostId: 2, priority: 1, isEnabled: true },
     ], { skipSync: true });
-    await exec('CREATE TRIGGER fail_member_insert BEFORE INSERT ON forward_group_members WHEN NEW."hostId" = 3 BEGIN SELECT RAISE(ABORT, \'boom\'); END');
+    await failWrite("fail_member_insert", { table: "forward_group_members", event: "INSERT", when: 'NEW."hostId" = 3', message: "boom" });
     await assert.rejects(repo.replaceForwardGroupMembers(22, [
       { memberType: "host", hostId: 2, priority: 0, isEnabled: true },
       { memberType: "host", hostId: 3, priority: 1, isEnabled: true },

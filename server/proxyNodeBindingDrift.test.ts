@@ -130,6 +130,10 @@ test("SQLite 绑定过期时：能判定的改绑或解绑，判不定的照发�
       !plan.warnings.some((item) => Number(item.ruleId) === 71),
       "目标指向自己另一条转发的入口，是正常的串联，不该报警",
     );
+    // 规则页用的轻量接口只回规则 id，结论必须和完整 plan 的告警一致（不组装订阅文档）。
+    const { plan: contextPlan } = await subs.buildProxySubscriptionContextForUser(2);
+    const lightIds = contextPlan.warnings.filter((item) => item.reason === "target-mismatch").map((item) => Number(item.ruleId));
+    assert.deepEqual(lightIds, [70], "targetMismatchRuleIds 的来源要和 preview 的告警一致");
 
     /**
      * 6. 谁都没用的节点：没开直连、也没有任何转发绑到它 —— 客户端里根本没有它，

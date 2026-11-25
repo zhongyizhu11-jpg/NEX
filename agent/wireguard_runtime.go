@@ -40,7 +40,15 @@ const (
 // UDP 代理队列里的包等了这么久、后面又有更新的包时，老的那个直接丢（实时流量要新不要全）。
 // 放成 var 只为测试：验证「一批都送到」的用例把它调大，否则 CI 机器一慢，正常的新鲜度淘汰就会
 // 把测试当成丢包；新鲜度淘汰本身有单独的用例。
-var wireGuardUDPProxyMaxQueueDelay = 25 * time.Millisecond
+// 用原子值而不是普通变量：测试里把它调大时，上一个测试的 UDP 代理协程可能还在收尾、还在读它，
+// 普通变量的并发读写会被 -race 抓到（CI 第 726 次运行）。生产环境只读不写。
+var wireGuardUDPProxyMaxQueueDelayNanos atomic.Int64
+
+func init() { wireGuardUDPProxyMaxQueueDelayNanos.Store(int64(25 * time.Millisecond)) }
+
+func wireGuardUDPProxyMaxQueueDelay() time.Duration {
+	return time.Duration(wireGuardUDPProxyMaxQueueDelayNanos.Load())
+}
 
 type wireGuardPeerSpec struct {
 	ID                  string `json:"id"`
@@ -1257,7 +1265,7 @@ func (session *wireGuardUDPProxySession) markDequeued(packet wireGuardUDPProxyPa
 }
 
 func (packet wireGuardUDPProxyPacket) expired(now time.Time) bool {
-	return !packet.queuedAt.IsZero() && now.Sub(packet.queuedAt) >= wireGuardUDPProxyMaxQueueDelay
+	return !packet.queuedAt.IsZero() && now.Sub(packet.queuedAt) >= wireGuardUDPProxyMaxQueueDelay()
 }
 
 func (packet wireGuardUDPProxyPacket) superseded(now time.Time, pendingNewer int) bool {
@@ -1278,7 +1286,7 @@ func (session *wireGuardUDPProxySession) writeLoop() {
 			}
 			writeDeadline := now.Add(wireGuardProxyDialTimeout)
 			if pendingNewer > 0 && !packet.queuedAt.IsZero() {
-				freshnessDeadline := packet.queuedAt.Add(wireGuardUDPProxyMaxQueueDelay)
+				freshnessDeadline := packet.queuedAt.Add(wireGuardUDPProxyMaxQueueDelay())
 				if freshnessDeadline.Before(writeDeadline) {
 					writeDeadline = freshnessDeadline
 				}

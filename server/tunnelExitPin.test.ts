@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { tunnelExitPinUnsupportedReason } from "../shared/tunnelExitPin";
 
@@ -23,21 +20,9 @@ test("指定不了的链路：Nginx 隧道、带中转的 NEX 链路；GOST（�
 });
 
 test("手动指定出口：掉线 / 回来催入口，出口没了清指定，指定不了的链路拒绝，拿链路锁", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-exit-pin-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const now = Math.floor(Date.now() / 1000);
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'x', 'admin')");
@@ -62,7 +47,7 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     }
     await addTunnel(4, "tls");
 
-    const { tunnelsRouter } = await import(moduleUrl("server/routers/tunnels.ts"));
+    const { tunnelsRouter } = await import(url("server/routers/tunnels.ts"));
     const caller = tunnelsRouter.createCaller({ user: { id: 1, role: "admin", username: "admin", accountEnabled: true }, req: { headers: {}, socket: {} }, res: { setHeader: () => {} }, authSession: null, authFailureReason: null });
     const message = (promise) => promise.then(() => "ok", (error) => String(error.message));
     const pinOf = async (id) => Number((await query('SELECT "balancePinHostId" FROM tunnels WHERE id = ?', [id]))[0].balancePinHostId || 0);
@@ -82,7 +67,7 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     assert.equal(await message(caller.setExitPin({ tunnelId: 2, hostId: null })), "ok");
 
     // --- 拿 tunnel:<id> 锁：锁被占着时等着
-    const locks = await import(moduleUrl("server/keyedTaskLock.ts"));
+    const locks = await import(url("server/keyedTaskLock.ts"));
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     const holding = locks.withKeyedTaskLock("tunnel:1", () => gate);
@@ -95,9 +80,9 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     assert.equal(await pinOf(1), 4);
 
     // --- 指定的那台掉线 / 回来：催入口
-    const status = await import(moduleUrl("server/tunnelRuntimeStatus.ts"));
-    const pins = await import(moduleUrl("server/tunnelExitPin.ts"));
-    const notifier = await import(moduleUrl("server/hostStatusNotifier.ts"));
+    const status = await import(url("server/tunnelRuntimeStatus.ts"));
+    const pins = await import(url("server/tunnelExitPin.ts"));
+    const notifier = await import(url("server/hostStatusNotifier.ts"));
     status.recordTunnelRuntimeHostStatus(1, 1, true);
     status.recordTunnelRuntimeHostStatus(1, 2, true);
     assert.deepEqual(await pins.refreshTunnelsPinnedToHost(3, "test"), [], "没有链路指定着 3（链路 1 已经改指定 4）");
@@ -113,7 +98,7 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     assert.equal(await pinOf(1), 4, "掉线不清指定：回来接着用");
 
     // --- 出口没了 / 停用了 / 负载均衡关了：清指定
-    const repo = await import(moduleUrl("server/repositories/tunnelRepository.ts"));
+    const repo = await import(url("server/repositories/tunnelRepository.ts"));
     assert.equal(await repo.clearStaleTunnelExitPin(1), false, "指定的那台还是出口：不清");
     await exec('UPDATE tunnel_exit_nodes SET "isEnabled" = 0 WHERE "tunnelId" = 1 AND "hostId" = 4');
     assert.equal(await repo.clearStaleTunnelExitPin(1), true);
@@ -127,7 +112,7 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     assert.equal(await pinOf(1), 0, "负载均衡关了：清");
 
     // --- 出口组去掉成员：链路上的指定跟着清
-    const service = await import(moduleUrl("server/services/forwardGroupService.ts"));
+    const service = await import(url("server/services/forwardGroupService.ts"));
     const member = (hostId, priority, isEnabled = true) => ({ memberType: "host", hostId, connectHost: "198.51.100." + hostId, priority, isEnabled });
     const input = (members) => ({
       name: "exits", remark: null, groupMode: "exit", groupType: "host", protocol: "tcp", forwardType: "iptables",
@@ -143,19 +128,5 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     await exec('INSERT INTO tunnel_exit_nodes ("tunnelId", seq, "hostId", "listenPort", "isEnabled") VALUES (9, 1, 3, 9901, 1), (9, 2, 4, 9902, 1)');
     await service.updateForwardGroupFromInput(groupId, input([member(2, 0), member(3, 1), member(4, 2, false)]));
     assert.equal(await pinOf(9), 0, "出口组里停用了指定的那台：链路上的指定清掉");
-    console.log("OK");
-    process.exit(0);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "pin.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 180_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "exit-pin", timeoutMs: 180_000 });
 });

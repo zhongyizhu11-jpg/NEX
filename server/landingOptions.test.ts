@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 落地选择器的清单（server/landingOptions.ts）：规则出口和节点分流共用的那一份。
@@ -13,22 +9,12 @@ import test from "node:test";
  *   - 旧接口 listEgressLandingOptions 照旧（hostName / online，不带解锁）。
  */
 test("落地选择器清单：按主机分组、按权限过滤、带最新解锁结论", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-landing-options-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
     console.info = () => {};
     console.warn = () => {};
     const landing = await import(url("server/landingOptions.ts"));
     const egress = await import(url("server/ssEgress.ts"));
     const unlock = await import(url("server/ops/unlock.ts"));
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const now = new Date();
     // bob 没有订阅权限：清单不要求它。
     await exec("INSERT INTO users (id, username, password, role, \"allowProxySubscription\") VALUES (1, 'admin', 'x', 'admin', 1), (2, 'bob', 'x', 'user', 0)");
@@ -97,18 +83,5 @@ test("落地选择器清单：按主机分组、按权限过滤、带最新解�
     const legacy = await egress.listEgressLandingOptions({ id: 2, role: "user" });
     assert.deepEqual(legacy.map((host) => [host.hostId, host.hostName, host.online]).sort(), [[3, "bob 的机器", true], [4, "日本", false]]);
     assert.deepEqual(Object.keys(legacy.find((host) => host.hostId === 4).inbounds[0]).sort(), ["id", "isEnabled", "landingEgress", "method", "methodError", "name", "port"]);
-    console.log("OK");
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "landing.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "landing-options" });
 });

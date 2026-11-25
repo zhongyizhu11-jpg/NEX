@@ -55,3 +55,42 @@ perf 采样里 `eventLoopUtilization` 读数 0.66～0.68，但 CPU 只有 15～2
 3. 千台规模再压一次，看内存和心跳 p99 的拐点。
 
 量法：`node --import tsx scripts/bench/heartbeat-load.mjs provision --hosts N --rules 20 ...`，面板带 `FORWARDX_PERF_SAMPLE_FILE` 和 `node --cpu-prof` 起，`run --duration 300 --warmup 60`，`profile-top` 看剖析。
+
+## 六、流量上报攒批 + presence 裸语句（2026-11-25）
+
+做了第五节的前两条。同一台 4 核机器，100 台 / 2000 规则，各跑一次 4 分钟（统计后 3 分钟），
+面板和模拟器同机；两份服务端包从**只差这次改动**的两份源码树各打一份（其余并行改动两边一样），同一个库快照起。
+
+### 改动
+
+1. **流量上报跨主机攒批**（`server/trafficReportBatch.ts`，`/api/agent/traffic` 两条路径都走它）。
+   - 窗口：`FORWARDX_TRAFFIC_BATCH_MS`，默认 500 毫秒，`0` 关掉；窗口从一批里第一份到达算起，攒到 64 份不等窗口立刻提交。
+     批与批串行。
+   - 一批一个事务：先按 id **升序**并集拿齐所有用户的进程内计费锁（`withTrafficBillingUserLock`，重入照旧），
+     事务开头再按同一顺序 `lockTrafficBillingUserRows` 锁行，然后按到达顺序逐份应用。每份原来就是这么拿锁的，
+     并集仍是升序，和别处单把锁的路径之间没有新的顺序。
+   - 回执仍在提交之后：路由 `await commitTrafficReport()` 回来时这份已提交（afterCommit 回调也跑完），
+     Agent 看到的只是回包慢了至多一个窗口（Agent 的流量上报在自己的协程里，超时 60 秒）。
+   - 失败隔离：事务助手没有保存点，整批失败就回滚，再把每份**单独**应用一次（自己的锁、自己的事务），各自成功 / 失败各自回执；
+     只有一份的批不重试。路由那边的 apply 因此可重跑：进来先清零本次的计数，界面用的速率样本只记第一遍。
+     可见的语义变化：同一份上报的两次并发重试落在同一窗口、第一次写失败时，原来是一个 200 一个 500，现在两个都 200（一个 duplicate）——
+     `agentTrafficRoute.test.ts` 已照此改。
+   - 调用方已经在事务里、或关掉攒批时，当场按原来的方式应用。退出前把攒着的那批提交掉（挂在 dbWriteBatcher 的退出任务上）。
+2. **presence 热 SQL**（`hostRepository.getHostAgentPresenceById`）换成固定文本的裸语句（`queryRaw`，按库种类各记一份文本，
+   SQLite 命中预编译缓存），布尔 / 时间列自己转成 boolean / Date。看过调用方：`isOnline` / `lastHeartbeat` 决定「这次之前在不在线」和
+   要不要写库，必须是这次请求之前库里的结论（两次 presence 之间要看得到 markHostOffline 写进去的变化），所以**不能缓存结果**；
+   `name` / `ip` 只在从离线回来时发通知用，顺手一起查了，不多一条语句。
+
+### 结果（2026-11-25，同一个库快照，A/B 交替各两遍，每遍 4 分钟、统计后 3 分钟）
+
+| | 不攒批 | 攒批（窗口 500 ms） |
+|---|---|---|
+| 进程磁盘写入 | 2428 / 2191 MB/小时 | **1784 / 1433 MB/小时**（平均 −30%） |
+| 面板 CPU（一个核） | 8.0 / 9.2 % | 8.1 / 8.3 % |
+| 流量上报回包 p50 / p95 | 5 / 9 ms | 400～418 / 513 ms |
+| presence p50 / p95 | 2.7～3.0 / 4.4～4.7 ms | 2.6 / 4.0 ms |
+| 错误 | 0 | 0 |
+
+流量上报回包多出来的约 400 ms 就是攒批窗口：Agent 的流量上报在自己的协程里、超时 60 秒，不影响转发，也不影响心跳和 presence。
+磁盘写入省掉的是同一批里重复写的页；CPU 没变（应用逻辑一样多，只是少了提交次数）。
+

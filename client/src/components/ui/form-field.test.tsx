@@ -7,6 +7,7 @@ import { Input } from "./input";
 import { Textarea } from "./textarea";
 import { Select, SelectTrigger, SelectValue } from "./select";
 import { Switch } from "./switch";
+import DatePickerInput from "@/components/DatePickerInput";
 
 test("repeated fields each connect their label to their own control", () => {
   const html = renderToStaticMarkup(<>
@@ -51,4 +52,28 @@ test("a switch outside a field keeps its own name", () => {
   const html = renderToStaticMarkup(<Switch aria-label="站点维护模式" checked={false} />);
   assert.equal([...html.matchAll(/<button[^>]* id="/g)].length, 0);
   assert.match(html, /aria-label="站点维护模式"/);
+});
+
+/*
+  日期选择器也是 <button> 触发的，和开关一样靠 <label for> 命名。
+  以前它不接 FormField 的 id，Billing / Hosts 的「生效日期」「机器购买时间」这些 Label 一直悬空。
+*/
+test("date pickers in a field connect to their label", () => {
+  const html = renderToStaticMarkup(<>
+    <FormField><Label>生效日期</Label><DatePickerInput value="" onChange={() => {}} placeholder="立即生效" /></FormField>
+    <FormField><Label>失效日期</Label><DatePickerInput value="2026-01-02" onChange={() => {}} /></FormField>
+  </>);
+  const labels = [...html.matchAll(/<label[^>]* for="([^"]+)"/g)].map(match => match[1]);
+  const triggers = [...html.matchAll(/<button[^>]* id="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(labels.length, 2);
+  assert.equal(new Set(labels).size, 2);
+  assert.deepEqual(triggers, labels);
+});
+
+test("a date picker outside a field keeps an explicit id and no stray one", () => {
+  const loose = renderToStaticMarkup(<DatePickerInput value="" onChange={() => {}} />);
+  assert.equal([...loose.matchAll(/<button[^>]* id="/g)].length, 0);
+  const explicit = renderToStaticMarkup(<FormField><Label htmlFor="expires">到期</Label><DatePickerInput id="expires" value="" onChange={() => {}} /></FormField>);
+  assert.match(explicit, /for="expires"/);
+  assert.match(explicit, /<button[^>]* id="expires"/);
 });

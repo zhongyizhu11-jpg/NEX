@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 「从中转里选一条」这个清单，得给对人、给对料。
@@ -29,19 +26,7 @@ type Candidate = {
 };
 
 function listCandidates(role: "admin" | "user", userId: number, protocol?: "tcp" | "udp" | "both"): Candidate[] {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-relay-candidates-"));
-  const databasePath = path.join(directory, "relay.db");
-  const script = String.raw`
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-
+  const result = runInDatabase(String.raw`
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'h', 'admin')");
     await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'tenant', 'h', 'user')");
 
@@ -77,7 +62,7 @@ function listCandidates(role: "admin" | "user", userId: number, protocol?: "tcp"
       );
     }
 
-    const { rulesRouter } = await import(moduleUrl("server/routers/rules.ts"));
+    const { rulesRouter } = await import(url("server/routers/rules.ts"));
     const caller = rulesRouter.createCaller({
       req: { headers: {} },
       res: { clearCookie() {} },
@@ -87,22 +72,7 @@ function listCandidates(role: "admin" | "user", userId: number, protocol?: "tcp"
     });
     const protocol = process.env.CANDIDATE_PROTOCOL || undefined;
     console.log("CANDIDATES " + JSON.stringify(await caller.relayCandidates(protocol ? { excludeRuleId: 1, protocol } : { excludeRuleId: 1 })));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_TYPE: "sqlite",
-      FORWARDX_TEST_DB: databasePath,
-      CALLER_ROLE: role,
-      CALLER_ID: String(userId),
-      CANDIDATE_PROTOCOL: protocol || "",
-    },
-    timeout: 180000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "relay-candidates", env: { CALLER_ROLE: role, CALLER_ID: String(userId), CANDIDATE_PROTOCOL: protocol || "" }, timeoutMs: 180000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("CANDIDATES "));
   assert.ok(line, `没拿到候选清单：\n${result.stdout}`);
   return JSON.parse(line.slice("CANDIDATES ".length)) as Candidate[];

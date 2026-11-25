@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 端口段规则（shared/portRange.ts、server/rulePortRange.ts）在真库上的端口冲突、端口策略、
@@ -11,56 +7,27 @@ import test from "node:test";
  * 搭法同 lifecycleAuditFixes.test.ts。
  */
 function runScenario(name: string, body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `forwardx-port-range-${name}-`));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const q = (name) => '"' + name + '"';
-    const insert = (table, columns, values) => runtime.executeRaw(
+    const insert = (table, columns, values) => exec(
       "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
       values,
     );
-    const one = async (sqlText, params = []) => (await runtime.queryRaw(sqlText, params))[0];
+    const one = async (sqlText, params = []) => (await query(sqlText, params))[0];
     const context = (user) => ({ req: { headers: {} }, res: { clearCookie() {} }, user, authSession: null, authFailureReason: null });
     const admin = { id: 1, username: "admin", role: "admin", accountEnabled: true };
     const ruleCols = ["id", "hostId", "name", "forwardType", "protocol", "sourcePort", "sourcePortEnd", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "pendingDelete", "isForwardGroupTemplate"];
     const hostCols = ["id", "name", "ip", "hostType", "userId", "isOnline", "agentVersion", "portRangeStart", "portRangeEnd"];
-    try {
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      await insert("users", ["id", "username", "password", "role", "canAddRules"], [1, "admin", "x", "admin", 1]);
-      await insert("hosts", hostCols, [1, "edge", "198.51.100.1", "slave", 1, 1, "2.2.254", 20000, 29999]);
-      await insert("hosts", hostCols, [2, "old-agent", "198.51.100.2", "slave", 1, 1, "2.2.253", null, null]);
-      // 先加载 rules.ts 再加载 rules.crud（和 lifecycleAuditFixes.test.ts 同一个顺序：反过来会撞上路由模块的循环引用）。
-      const { rulesRouter } = await import(moduleUrl("server/routers/rules.ts"));
-      const crud = await import(moduleUrl("server/routers/rules.crud.ts"));
-      const caller = rulesRouter.createCaller(context(admin));
-      const base = { hostId: 1, forwardType: "nftables", protocol: "both", targetIp: "203.0.113.10" };
-      ${body}
-    } finally {
-      await runtime.closeDatabase().catch(() => undefined);
-    }
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "port-range.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-      },
-      encoding: "utf8",
-      timeout: 90_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+    await insert("users", ["id", "username", "password", "role", "canAddRules"], [1, "admin", "x", "admin", 1]);
+    await insert("hosts", hostCols, [1, "edge", "198.51.100.1", "slave", 1, 1, "2.2.254", 20000, 29999]);
+    await insert("hosts", hostCols, [2, "old-agent", "198.51.100.2", "slave", 1, 1, "2.2.253", null, null]);
+    // 先加载 rules.ts 再加载 rules.crud（和 lifecycleAuditFixes.test.ts 同一个顺序：反过来会撞上路由模块的循环引用）。
+    const { rulesRouter } = await import(url("server/routers/rules.ts"));
+    const crud = await import(url("server/routers/rules.crud.ts"));
+    const caller = rulesRouter.createCaller(context(admin));
+    const base = { hostId: 1, forwardType: "nftables", protocol: "both", targetIp: "203.0.113.10" };
+    ${body}
+  `, { name: `port-range-${name}` });
 }
 
 test("端口段规则：段与段、段与单端口、单端口与段的冲突都拦住，不挨着的段能建", () => {
@@ -73,7 +40,7 @@ test("端口段规则：段与段、段与单端口、单端口与段的冲突�
     await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, name: "overlap", sourcePort: 20100, sourcePortEnd: 20150, targetPort: 30100 }), /端口 20100 已被占用/);
     // 单端口落在段中间：isPortUsedOnHost 必须按整段算（别的功能查冲突也走它）。
     await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, forwardType: "gost", name: "inside", sourcePort: 20050, targetPort: 443 }), /20050/);
-    assert.equal(await (await import(moduleUrl("server/db.ts"))).isPortUsedOnHost(1, 20050), true);
+    assert.equal(await (await import(url("server/db.ts"))).isPortUsedOnHost(1, 20050), true);
     assert.equal((await caller.checkPort({ hostId: 1, sourcePort: 20050, protocol: "tcp" })).used, true);
     // 段把已有的单端口包进去。
     await crud.createDirectForwardRuleForActor(admin, { ...base, name: "single", sourcePort: 21005, targetPort: 443 });
@@ -85,7 +52,7 @@ test("端口段规则：段与段、段与单端口、单端口与段的冲突�
     const next = await crud.createDirectForwardRuleForActor(admin, { ...base, name: "next", sourcePort: 20101, sourcePortEnd: 20200, targetPort: 30101, targetPortEnd: 30200 });
     assert.equal(Number((await one('SELECT "targetPort" FROM "forward_rules" WHERE "id" = ?', [next.id])).targetPort), 30101);
     // 随机分配不会挑到段里的端口。
-    const db = await import(moduleUrl("server/db.ts"));
+    const db = await import(url("server/db.ts"));
     const used = await db.getUsedPortsOnHost(1);
     for (const port of [20000, 20077, 20100, 20150, 20200]) assert.ok(used.has(port), "段里每个端口都算占用：" + port);
   `);
@@ -145,9 +112,9 @@ test("端口段规则：改段长要整段重查（排除自己），停用期�
 
 test("端口段规则：套餐端口段要整段在里面；端口额度按段长算", () => {
   runScenario("plan", String.raw`
-    const { reserveRulePortRange } = await import(moduleUrl("server/rulePortRange.ts"));
-    const { portPolicyFrom } = await import(moduleUrl("shared/portPolicy.ts"));
-    const db = await import(moduleUrl("server/db.ts"));
+    const { reserveRulePortRange } = await import(url("server/rulePortRange.ts"));
+    const { portPolicyFrom } = await import(url("shared/portPolicy.ts"));
+    const db = await import(url("server/db.ts"));
     const host = await db.getHostById(1);
     const planRange = { start: 26000, end: 26050, ranges: [{ start: 26000, end: 26050 }] };
     const rule = { forwardType: "nftables", sourcePort: 26040, sourcePortEnd: 26060, targetPort: 26040, protocol: "tcp" };

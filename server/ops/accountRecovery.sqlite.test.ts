@@ -1,42 +1,12 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "../testing/runInDatabase";
 
 /*
   在真的 SQLite 上走一遍登录页「忘记密码」和管理员「进入用户后台」（server/ops/passwordReset.ts、
   server/ops/impersonation.ts）。每个用例一个子进程、一个新库：两边都有模块级的限流计数和缓存，不互相串。
 */
 function runScript(name: string, body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `nex-${name}-`));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    try {
-      ${body}
-      console.log("OK");
-      process.exit(0);
-    } catch (error) {
-      console.error(error);
-      process.exit(1);
-    }
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "panel.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-    encoding: "utf8",
-    timeout: 180_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  runInDatabase(body, { name: `nex-${name}`, timeoutMs: 180_000 });
 }
 
 test("找回密码：不暴露账号、链接只发到已验证的渠道、一次性、新的作废旧的、重置后踢掉所有登录但不动 2FA", () => {

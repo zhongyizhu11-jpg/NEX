@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 一轮巡检扫出一大批主机同时掉线（机房断电、上游抖动），原来是每台主机给每个管理员
@@ -11,13 +8,7 @@ import test from "node:test";
  * 超过阈值就合成一条汇总；少量掉线还是一台一条，信息更完整。
  */
 function runSweep(staleHosts: number) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-summary-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
+  const result = runInDatabase(String.raw`
       const messages = [];
       globalThis.fetch = async (_target, init) => {
         const body = JSON.parse(String(init?.body || "{}"));
@@ -27,12 +18,6 @@ function runSweep(staleHosts: number) {
       console.info = () => {};
       console.warn = () => {};
 
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
       const settings = await import(url("server/repositories/settingsRepository.ts"));
       for (const [key, value] of Object.entries({ telegramBotEnabled: "true", telegramBotToken: "1:token", telegramHostStatusNotify: "true" })) {
         await settings.setSetting(key, value);
@@ -55,28 +40,10 @@ function runSweep(staleHosts: number) {
       const transitioned = await notifier.sweepOfflineHostsAndNotify();
       assert.equal(transitioned, stale);
       console.log("SWEEP " + JSON.stringify({ messages, threshold: notifier.HOST_STATUS_SUMMARY_THRESHOLD }));
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "hosts.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-        TELEGRAM_BOT_TOKEN: "",
-        STALE_HOSTS: String(staleHosts),
-      },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const line = result.stdout.split("\n").find((row) => row.startsWith("SWEEP "));
-    assert.ok(line, result.stdout);
-    return JSON.parse(line.slice("SWEEP ".length)) as { messages: Array<{ chatId: string; text: string }>; threshold: number };
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "host-summary", env: { TELEGRAM_BOT_TOKEN: "", STALE_HOSTS: String(staleHosts) } });
+  const line = result.stdout.split("\n").find((row) => row.startsWith("SWEEP "));
+  assert.ok(line, result.stdout);
+  return JSON.parse(line.slice("SWEEP ".length)) as { messages: Array<{ chatId: string; text: string }>; threshold: number };
 }
 
 test("大批主机同时掉线：每个管理员只收一条汇总，列出主机名并报总数", () => {

@@ -202,11 +202,15 @@ test("SQLite Agent traffic route is atomic, idempotent, and follows the current 
       await runtime.executeRaw(
         'CREATE TRIGGER "agent_traffic_concurrent_fail_once_trigger" BEFORE INSERT ON "traffic_stats" BEGIN SELECT agent_traffic_concurrent_fail_once(); END',
       );
+      // 同一份上报的两次并发重试落在同一个攒批窗口里（server/trafficReportBatch.ts）：第一次写
+      // 失败让整批回滚，随后两份各自单独重跑 —— 一份记上、另一份被认成重复，谁都不该收到 500，
+      // 库里也只能有一行。
       const concurrent = await Promise.all([
         postTraffic(baseUrl, 1, "concurrent-rollback", 100, 2, 3),
         postTraffic(baseUrl, 1, "concurrent-rollback", 100, 2, 3),
       ]);
-      assert.deepEqual(concurrent.map((result) => result.status).sort(), [200, 500]);
+      assert.deepEqual(concurrent.map((result) => result.status), [200, 200]);
+      assert.deepEqual(concurrent.map((result) => result.body.duplicate === true).sort(), [false, true]);
       await runtime.executeRaw('DROP TRIGGER "agent_traffic_concurrent_fail_once_trigger"');
       assert.equal(
         (await runtime.queryRaw('SELECT COUNT(*) AS "count" FROM "traffic_stats" WHERE "ruleId" = ? AND "bytesIn" = ? AND "bytesOut" = ?', [100, 2, 3]))[0].count,

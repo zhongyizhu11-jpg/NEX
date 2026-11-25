@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 「现在走哪条」：Agent 报上来的，面板要收得到、存得对、以快照为准。
@@ -24,28 +21,16 @@ type Line = { target: string | null; at: number | null };
 type Outcome = {
   now: number;
   paths: string[];
-  repaired: number[];
+  repaired: number[] | null;
   after: Record<string, Record<string, Line>>;
   logs: string[];
   seconds: Record<string, number>;
 };
 
 function run(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-failover-lines-"));
-  const databasePath = path.join(directory, "lines.db");
-  const logDirectory = path.join(directory, "logs");
-  fs.mkdirSync(logDirectory, { recursive: true });
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const nowMs = Date.now();
     const now = Math.floor(nowMs / 1000);
 
@@ -104,7 +89,7 @@ function run(): Outcome {
         : body.desiredState === undefined && Array.isArray(body.actions) && body.actions.length === 0 ? "fast" : "full");
     };
     const lines = async () => {
-      const rows = await runtime.queryRaw('SELECT id, "failoverActiveTarget" AS target, "failoverActiveAt" AS at FROM forward_rules ORDER BY id');
+      const rows = await query('SELECT id, "failoverActiveTarget" AS target, "failoverActiveAt" AS at FROM forward_rules ORDER BY id');
       return Object.fromEntries(rows.map((row) => [row.id, { target: row.target ?? null, at: row.at === null ? null : Number(row.at) }]));
     };
     const after = {};
@@ -150,13 +135,16 @@ function run(): Outcome {
     after.coalesced = await lines();
     server.close();
 
-    // 上一版存下来的毫秒当秒：一次性除回来，只做一次。
-    await exec('UPDATE forward_rules SET "failoverActiveTarget" = ?, "failoverActiveAt" = ? WHERE id = 2', ["198.51.100.8:443", nowMs - 90_000]);
-    const database = await import(url("server/db.ts"));
-    const repaired = [await database.repairFailoverActiveTimeUnitOnce()];
-    after.repaired = await lines();
-    await exec('UPDATE forward_rules SET "failoverActiveAt" = ? WHERE id = 2', [nowMs]);
-    repaired.push(await database.repairFailoverActiveTimeUnitOnce());
+    // 上一版存下来的毫秒当秒：一次性除回来，只做一次。PostgreSQL 的 int4 列放不下毫秒值，这段老数据只在 SQLite 上造得出来。
+    let repaired = null;
+    if (runtime.getDatabaseKind() === "sqlite") {
+      await exec('UPDATE forward_rules SET "failoverActiveTarget" = ?, "failoverActiveAt" = ? WHERE id = 2', ["198.51.100.8:443", nowMs - 90_000]);
+      const database = await import(url("server/db.ts"));
+      repaired = [await database.repairFailoverActiveTimeUnitOnce()];
+      after.repaired = await lines();
+      await exec('UPDATE forward_rules SET "failoverActiveAt" = ? WHERE id = 2', [nowMs]);
+      repaired.push(await database.repairFailoverActiveTimeUnitOnce());
+    }
 
     const logger = await import(url("server/_core/panelLogger.ts"));
     const entries = await logger.getPanelLogs();
@@ -173,21 +161,7 @@ function run(): Outcome {
         future: reports.agentReportedSeconds(nowMs + 3 * 86_400_000, nowMs),
       },
     }));
-    await runtime.closeDatabase();
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_TYPE: "sqlite",
-      FORWARDX_TEST_DB: databasePath,
-      FORWARDX_LOG_DIR: logDirectory,
-    },
-    timeout: 180000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "failover-lines", timeoutMs: 180000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}`);
   return JSON.parse(line.slice("OUTCOME ".length));
@@ -246,10 +220,11 @@ test("时刻的几种写法：毫秒、秒都认；认不出来的、远在将�
   assert.equal(outcome.seconds.future, outcome.now);
 });
 
-test("上一版存成毫秒的时刻，升级时除回秒；修正只做一次", () => {
-  assert.equal(outcome.repaired[0], 1, "库里只有 2 号那一行是毫秒");
+test("上一版存成毫秒的时刻，升级时除回秒；修正只做一次", { skip: outcome.repaired === null ? "PostgreSQL 的 int4 列放不下毫秒值，老数据修正只在 SQLite 上验" : false }, () => {
+  const repaired = outcome.repaired!;
+  assert.equal(repaired[0], 1, "库里只有 2 号那一行是毫秒");
   // 1 号在这之前已经按秒重新写过（最后那次合并心跳），不能被再除一次。
   assert.equal(outcome.after.repaired[1].at, outcome.after.coalesced[1].at);
   assert.equal(outcome.after.repaired[2].at, outcome.now - 90);
-  assert.equal(outcome.repaired[1], 0, "修正做过之后不再碰");
+  assert.equal(repaired[1], 0, "修正做过之后不再碰");
 });

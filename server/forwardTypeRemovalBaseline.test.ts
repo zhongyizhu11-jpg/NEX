@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 「这条转发别跑了」下发的清理命令，钉成基线。
@@ -79,21 +76,11 @@ const TYPES = ["iptables", "nftables", "realm", "socat", "nginx", "gost"] as con
 const PROTOCOLS = ["tcp", "udp", "both"] as const;
 
 function collect(protocolsEnabled: boolean): Record<string, Fingerprint> {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-remove-baseline-"));
-  const databasePath = path.join(directory, "remove.db");
-  const script = String.raw`
-    import crypto from "node:crypto";
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
+  const result = runInDatabase(String.raw`
+    const crypto = (await import("node:crypto")).default;
+    const http = (await import("node:http")).default;
 
     const SEP = String.fromCharCode(1);
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     const TYPES = ["iptables", "nftables", "realm", "socat", "nginx", "gost"];
     const PROTOCOLS = ["tcp", "udp", "both"];
@@ -164,19 +151,7 @@ function collect(protocolsEnabled: boolean): Record<string, Fingerprint> {
       };
     }
     console.log("REMOVAL " + JSON.stringify(out));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_TYPE: "sqlite",
-      FORWARDX_TEST_DB: databasePath,
-      PROTOCOLS_ENABLED: protocolsEnabled ? "1" : "0",
-    },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "remove-baseline", env: { PROTOCOLS_ENABLED: protocolsEnabled ? "1" : "0" } });
   const line = result.stdout.split("\n").find((row) => row.startsWith("REMOVAL "));
   assert.ok(line, `没拿到基线输出：\n${result.stdout}`);
   return JSON.parse(line.slice("REMOVAL ".length)) as Record<string, Fingerprint>;

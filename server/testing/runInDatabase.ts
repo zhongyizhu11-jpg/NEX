@@ -15,7 +15,8 @@ import path from "node:path";
     runtime（server/dbRuntime.ts）、schema（server/dbSchema.ts）、
     exec(sql, params)、query(sql, params)、
     failWrite(name, { table, event, when, message })（让一种写入失败的触发器，两种库语法都对）、dropFailWrite(name, table)、
-    skipUnless(kind)（只在某种库上跑的部分）、syncSequences()（PostgreSQL 上插过带 id 的行之后把自增序列拨齐；setup 之后自动调一次）。
+    skipUnless(kind)（只在某种库上跑的部分）、syncSequences()（PostgreSQL 上把自增序列拨到当前最大 id；setup 之后自动调一次，
+    并装上 AFTER INSERT 触发器，之后脚本里再插带 id 的行序列会自动跟上）。
   测试自己再起的子进程用 process.env.FORWARDX_TEST_DB_CONFIG（JSON）连同一个库。
   setup 在建表之后、body 之前执行，适合放导入模块、建用户 / 主机这类公共准备。
   body 正常跑完会打印 OK 并退出（模块里的定时器不会把子进程挂住）。
@@ -119,7 +120,9 @@ function buildDatabaseTestScript(body: string, options: RunInDatabaseOptions = {
       if (runtime.getDatabaseKind() === "postgresql") await exec("DROP FUNCTION " + name + "_fn()");
     };
     // 测试数据常带着写死的 id 插进去；PostgreSQL 的自增序列不会跟着走，之后的自增插入会撞主键。
-    // setup 之后（以及测试自己插完带 id 的行后）调一下，把每张表的序列拨到当前最大值。
+    // setup 之后调一下，把每张表的序列拨到当前最大值；同时给每张带序列的表装一个 AFTER INSERT 触发器：
+    // 之后（body 里）再插带 id 的行，插进来的 id 比序列大就顺手把序列拨上去，测试不用再自己调 syncSequences()。
+    let sequenceTriggersInstalled = false;
     const syncSequences = async () => {
       if (!testPostgres) return;
       const rows = await runtime.queryRaw(
@@ -127,6 +130,20 @@ function buildDatabaseTestScript(body: string, options: RunInDatabaseOptions = {
       );
       for (const row of rows) {
         await runtime.executeRaw('SELECT setval(\'"' + row.seq + '"\', COALESCE((SELECT MAX("' + row.col + '") FROM "' + row.tbl + '"), 0) + 1, false)');
+      }
+      if (sequenceTriggersInstalled) return;
+      sequenceTriggersInstalled = true;
+      await runtime.executeRaw(
+        "CREATE OR REPLACE FUNCTION nex_test_bump_sequence() RETURNS trigger LANGUAGE plpgsql AS $$ "
+        + "DECLARE v bigint; last bigint; called boolean; BEGIN "
+        + "EXECUTE format('SELECT ($1).%I', TG_ARGV[1]) INTO v USING NEW; "
+        + "IF v IS NOT NULL THEN "
+        + "EXECUTE format('SELECT last_value, is_called FROM %I', TG_ARGV[0]) INTO last, called; "
+        + "IF NOT called OR v > last THEN PERFORM setval(format('%I', TG_ARGV[0])::regclass, GREATEST(v, CASE WHEN called THEN last ELSE 0 END), true); END IF; "
+        + "END IF; RETURN NEW; END $$",
+      );
+      for (const row of rows) {
+        await runtime.executeRaw('CREATE TRIGGER "nex_test_seq_' + row.tbl + '" AFTER INSERT ON "' + row.tbl + '" FOR EACH ROW EXECUTE FUNCTION nex_test_bump_sequence(\'' + row.seq + '\', \'' + row.col + '\')');
       }
     };
     try {

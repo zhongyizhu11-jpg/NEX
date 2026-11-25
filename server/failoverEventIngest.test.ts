@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * Agent 报上来的主备切换，面板要收得下、也要拦得住。
@@ -24,21 +21,8 @@ import test from "node:test";
 type Ingested = { logs: string[] };
 
 function ingestFailoverEvents(): Ingested {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-failover-ingest-"));
-  const databasePath = path.join(directory, "ingest.db");
-  const logDirectory = path.join(directory, "logs");
-  fs.mkdirSync(logDirectory, { recursive: true });
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     for (const [id, token] of [[1, "tok1"], [2, "tok2"]]) {
@@ -95,20 +79,7 @@ function ingestFailoverEvents(): Ingested {
     console.log("INGEST " + JSON.stringify({
       logs: entries.map((entry) => String(entry.message)).filter((message) => message.startsWith("[Failover]")),
     }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      DATABASE_TYPE: "sqlite",
-      FORWARDX_TEST_DB: databasePath,
-      FORWARDX_LOG_DIR: logDirectory,
-    },
-    timeout: 180000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "failover-ingest", timeoutMs: 180000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("INGEST "));
   assert.ok(line, `没拿到收取结果：\n${result.stdout}`);
   return JSON.parse(line.slice("INGEST ".length)) as Ingested;

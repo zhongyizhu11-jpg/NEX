@@ -1,42 +1,17 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 function runScript(prefix: string, script: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  try {
-    const scriptPath = path.join(directory, "probe.mjs");
-    fs.writeFileSync(scriptPath, script, "utf8");
-    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
-      cwd: process.cwd(),
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "t.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runInDatabase(script, { name: prefix.replace(/^forwardx-/, "").replace(/-$/, "") });
 }
 
 const prelude = String.raw`
-  import assert from "node:assert/strict";
-  import path from "node:path";
-  import { pathToFileURL } from "node:url";
-  const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-  const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-  const schema = await import(moduleUrl("server/dbSchema.ts"));
   const q = (name) => '"' + name + '"';
-  const insert = (table, columns, values) => runtime.executeRaw(
+  const insert = (table, columns, values) => exec(
     "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
     values,
   );
   const context = (user) => ({ req: { headers: {} }, res: { clearCookie() {} }, user, authSession: null, authFailureReason: null });
-  await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-  await schema.ensureDatabaseSchema();
 `;
 
 /**
@@ -45,8 +20,8 @@ const prelude = String.raw`
  */
 test("paused or expired users cannot re-enable rules through update, nor create tunnels", () => {
   runScript("forwardx-update-access-", prelude + String.raw`
-    const { rulesRouter } = await import(moduleUrl("server/routers/rules.ts"));
-    const { tunnelsRouter } = await import(moduleUrl("server/routers/tunnels.ts"));
+    const { rulesRouter } = await import(url("server/routers/rules.ts"));
+    const { tunnelsRouter } = await import(url("server/routers/tunnels.ts"));
     const state = async (id) => (await runtime.queryRaw('SELECT "isEnabled", "forwardGroupId" FROM "forward_rules" WHERE "id" = ?', [id]))[0];
     try {
       const now = Math.floor(Date.now() / 1000);
@@ -84,7 +59,7 @@ test("paused or expired users cannot re-enable rules through update, nor create 
         () => memberTunnels.create({ name: "new-tunnel", entryHostId: 1, exitHostId: 2, mode: "tls" }),
         /暂停/,
       );
-      assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS "count" FROM "tunnels"'))[0].count, 0);
+      assert.equal(Number((await runtime.queryRaw('SELECT COUNT(*) AS "count" FROM "tunnels"'))[0].count), 0);
 
       // 不启用的编辑照常可以做
       await memberRules.update({ id: 100, name: "renamed-while-paused" });
@@ -111,7 +86,7 @@ test("paused or expired users cannot re-enable rules through update, nor create 
  */
 test("editing a TCP+UDP tunnel rule keeps its route group", () => {
   runScript("forwardx-route-group-keep-", prelude + String.raw`
-    const { rulesRouter } = await import(moduleUrl("server/routers/rules.ts"));
+    const { rulesRouter } = await import(url("server/routers/rules.ts"));
     const rowOf = async (id) => (await runtime.queryRaw('SELECT "failoverEnabled", "routeMode", "routePaths", "protocol", "name" FROM "forward_rules" WHERE "id" = ?', [id]))[0];
     try {
       const now = Math.floor(Date.now() / 1000);
@@ -168,9 +143,9 @@ test("editing a TCP+UDP tunnel rule keeps its route group", () => {
  */
 test("route relay listeners count toward maxPorts and stay inside the owner's plan port range", () => {
   runScript("forwardx-route-relay-quota-", prelude + String.raw`
-    const permissions = await import(moduleUrl("server/repositories/permissionRepository.ts"));
-    const routeGroups = await import(moduleUrl("server/routeGroups.ts"));
-    const { assertRouteRelayPortQuota } = await import(moduleUrl("server/routers/rules.crud.ts"));
+    const permissions = await import(url("server/repositories/permissionRepository.ts"));
+    const routeGroups = await import(url("server/routeGroups.ts"));
+    const { assertRouteRelayPortQuota } = await import(url("server/routers/rules.crud.ts"));
     try {
       const now = Math.floor(Date.now() / 1000);
       await insert("users", ["id", "username", "password", "role", "canAddRules", "manualCanAddRules", "accountEnabled", "maxPorts"], [1, "admin", "x", "admin", 1, 1, 1, 0]);

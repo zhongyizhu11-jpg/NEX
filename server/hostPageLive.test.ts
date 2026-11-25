@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 主机列表一页的实时数据合成了一个请求（hosts.pageLive）：状态、累计流量、最新指标一次拿齐，
@@ -11,16 +7,7 @@ import test from "node:test";
  * 不会整个报错，也不会把别人机器的数据带回来。
  */
 test("hosts.pageLive 一次返回状态 / 流量 / 指标，只含看得见的机器", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-host-page-live-"));
-  const databasePath = path.join(directory, "page-live.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
+  runInDatabase(String.raw`
     const { hostsRouter } = await import(url("server/routers/hosts.ts"));
     const agentEvents = await import(url("server/agentEvents.ts"));
 
@@ -33,10 +20,6 @@ test("hosts.pageLive 一次返回状态 / 流量 / 指标，只含看得见的�
     });
     const admin = { id: 1, username: "admin", role: "admin", accountEnabled: true };
     const tenant = { id: 2, username: "tenant", role: "user", accountEnabled: true };
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, p = []) => runtime.executeRaw(sql, p);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'tenant', 'hash', 'user')");
@@ -64,18 +47,5 @@ test("hosts.pageLive 一次返回状态 / 流量 / 指标，只含看得见的�
     assert.equal(agentEvents.isHostMetricsWatching(20), false);
 
     console.log("PAGE_LIVE_OK");
-    process.exit(0);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, NODE_ENV: "test" },
-      timeout: 120000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /PAGE_LIVE_OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "host-page-live", env: { NODE_ENV: "test" } });
 });

@@ -1,4 +1,4 @@
-import { copyTextToClipboard } from "@/lib/clipboard";
+
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
@@ -20,7 +20,7 @@ import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseSubjectActions } from "@/components/DiagnoseDialog";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
-import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
+import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +37,6 @@ import {
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useDialogCloseGuard, useFormDirty } from "@/components/ui/form-dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { segmentedOptionClassName } from "@/components/ui/segmented";
 import {
@@ -59,9 +58,8 @@ import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-ta
 import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { TableColumnResizeHandle, TableColumnSettingsMenu, useTableColumnSettings, type TableColumnMeta } from "@/components/TableColumnSettings";
-import type { ResolvedTableColumn, TableColumnPreference } from "@shared/uiPreferences";
+import type { TableColumnPreference } from "@shared/uiPreferences";
 import { useUiTheme } from "@/hooks/useUiTheme";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -94,13 +92,13 @@ import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities
 import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
 import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
 import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
-import { RuleGroupManagerDialog, RulePersonalGroupBadges } from "@/components/rules/PersonalRuleGroups";
+import { RuleGroupManagerDialog } from "@/components/rules/PersonalRuleGroups";
 import { personalRuleGroupRank, type PersonalRuleGroup } from "@shared/ruleGroups";
 import { hasRuleLimits } from "@shared/ruleLimits";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
-import { normalizeRuleEgressType, ruleEgressShapeError, ssEgressTunnelModeSupported, ruleEgressSwitchesForwardType, RULE_EGRESS_TYPE_LABELS, ruleEgressProtocolOf, ruleEgressUsesInbound, ruleEgressUsesLink, SS_EGRESS_UDP_SUPPORTED } from "@shared/ssEgress";
+import { ruleEgressShapeError, ssEgressTunnelModeSupported, ruleEgressSwitchesForwardType, RULE_EGRESS_TYPE_LABELS, ruleEgressProtocolOf, ruleEgressUsesInbound, ruleEgressUsesLink, SS_EGRESS_UDP_SUPPORTED } from "@shared/ssEgress";
 import { VLESS_EGRESS_UDP_SUPPORTED } from "@shared/vlessEgress";
-import { parseSniNameJson, sniInboundChoiceKey, sniInboundChoices, sniRuleFormBlocker, TLS_INBOUND_MAX_SNI_PER_RULE, type SniRuleRouteKind } from "@shared/tlsInbound";
+import { sniRuleFormBlocker } from "@shared/tlsInbound";
 import {
   BILLING_TIME_ZONE,
 } from "@shared/billingTime";
@@ -109,26 +107,16 @@ import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
 import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
-import { EntityActions } from "@/components/entity/EntityActions";
-import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
 import { expandForPreview, type RouteLinePool, type RouteLineTunnel } from "@/features/rules/RouteLinesEditor";
-import { newRouteLine, routeLinesForEditor } from "@shared/routeLines";
+import { newRouteLine } from "@shared/routeLines";
 import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf, routeNodeOptionLabel, routeNodeOptionsOf } from "@/features/rules/routeLineOptions";
 import { RuleLineGroupField } from "@/features/rules/RuleLineGroupField";
 import { docsUrl } from "@/lib/docsLinks";
 import { ROUTE_MODE_HINTS, type RuleRouteTab } from "@/features/rules/routeModeHints";
-import { isAggregateLinkTunnel } from "@shared/aggregateLink";
 import { describeRoutePolicy, pinUntilSeconds } from "@shared/routePolicy";
-import {
-  routeStrategyLabel,
-  newRouteGroupDraft,
-  routeGroupForwardTypeSupported,
-  routeGroupOf,
-  routeGroupTunnelModeSupported,
-  validateRouteGroup,
-} from "@shared/routeGroup";
-import { forwardRuleFormBlocker, isAdvancedSectionBlocker, isForwardRuleSourcePortRequired, isValidForwardPort, type ForwardRuleFormContext } from "@shared/forwardRuleForm";
+import { newRouteGroupDraft, routeGroupTunnelModeSupported, validateRouteGroup } from "@shared/routeGroup";
+import { forwardRuleFormBlocker, isAdvancedSectionBlocker, isForwardRuleSourcePortRequired, type ForwardRuleFormContext } from "@shared/forwardRuleForm";
 /*
   端口策略以前在这个文件里另抄了一份，而且和服务端漂了：服务端的策略支持
   多段 ranges（套餐发的端口段就是这么下来的），这边完全不认；「不限制」时
@@ -136,28 +124,11 @@ import { forwardRuleFormBlocker, isAdvancedSectionBlocker, isForwardRuleSourcePo
   逐个端口试 1..65535，实测 2.042ms，服务端的区间求交是 0.007ms。
 */
 import { describePortPolicy, portPolicyFrom } from "@shared/portPolicy";
-import {
-  PORT_RANGE_FORWARD_TYPES,
-  forwardTypeSupportsPortRange,
-  formatPortSpan,
-  formatRuleTargetPort,
-  isPortRangeRule,
-  parsePortSpec,
-  portRangeUnsupportedReason,
-  ruleSourcePortEnd,
-} from "@shared/portRange";
+import { PORT_RANGE_FORWARD_TYPES, forwardTypeSupportsPortRange, formatRuleTargetPort, isPortRangeRule, parsePortSpec, portRangeUnsupportedReason, ruleSourcePortEnd } from "@shared/portRange";
 import { RuleBatchAddDialog } from "@/components/rules/RuleBatchAddDialog";
-import { Plus, Trash2, Pencil, ArrowRightLeft, ArrowRight, Zap, Shield, Filter, Stethoscope, CheckCircle2, ChevronDown, ChevronRight, XCircle, Loader2, Shuffle, AlertCircle, Copy, Search, Network, ClipboardCopy, ListPlus, Layers3, Combine, LayoutGrid, List, Rows3, GitBranch, Globe, RotateCcw, X, Check, Folder, FolderCog } from "lucide-react";
+import { Plus, ArrowRightLeft, ArrowRight, Filter, CheckCircle2, ChevronDown, ChevronRight, XCircle, Loader2, Shuffle, AlertCircle, Copy, Search, Network, ClipboardCopy, ListPlus, Layers3, LayoutGrid, List, Rows3, GitBranch, Globe, RotateCcw, X, Check, Folder, FolderCog } from "lucide-react";
 
-import {
-  FORWARD_TYPES,
-  FORWARD_TYPE_LABELS,
-  FORWARD_PROTOCOL_LABELS,
-  TUNNEL_PROTOCOLS,
-  formatForwardRuleProtocol,
-  type ForwardType,
-  type ForwardProtocolKey,
-} from "@shared/forwardTypes";
+import { FORWARD_TYPES, FORWARD_TYPE_LABELS, formatForwardRuleProtocol, type ForwardType, type ForwardProtocolKey } from "@shared/forwardTypes";
 import { ruleLatencyProbeMethodForRule } from "@shared/latencyProbe";
 import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
 import {
@@ -170,7 +141,9 @@ import {
   pushUniqueHostEntryAddress,
   type HostEntryAddress,
 } from "@shared/hostEntryAddress";
-import { Fragment, lazy, memo, Suspense, useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, type CSSProperties, type ReactNode } from "react";
+import { Fragment, lazy, memo, Suspense, useState, useMemo, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
@@ -206,19 +179,39 @@ import { useRuleSelectOptionHelpers } from "../features/rules/useRuleSelectOptio
 import { useRuleTransferResourceLists } from "../features/rules/useRuleTransferResourceLists";
 import { useRuleBatchManageState } from "../features/rules/useRuleBatchManageState";
 import { useRuleBatchManage } from "../features/rules/useRuleBatchManage";
-const SelfTestDialog = lazy(() => import("@/features/rules/SelfTestDialog"));
+import { useRuleTableColumns } from "../features/rules/useRuleTableColumns";
+import { useRuleGridRendering } from "../features/rules/useRuleGridRendering";
+import { useRuleViewHandlers } from "../features/rules/useRuleViewHandlers";
+import { useRuleActionsRenderer } from "../features/rules/useRuleActionsRenderer";
+import { useRuleRouteBadge } from "../features/rules/useRuleRouteBadge";
+import { useRuleEntryModeFields } from "../features/rules/useRuleEntryModeFields";
+import { useRuleEntryExpansion } from "../features/rules/useRuleEntryExpansion";
+import { useRuleSorting } from "../features/rules/useRuleSorting";
+import { useRuleFilterCounts } from "../features/rules/useRuleFilterCounts";
+import { useRulePortCheck } from "../features/rules/useRulePortCheck";
+import { useRuleMainBackup } from "../features/rules/useRuleMainBackup";
+import { useRuleRouteModeTabs } from "../features/rules/useRuleRouteModeTabs";
+import { useRuleFormOpeners } from "../features/rules/useRuleFormOpeners";
+import { useRuleProtocolSupport } from "../features/rules/useRuleProtocolSupport";
+import { useRuleCreateCapabilities } from "../features/rules/useRuleCreateCapabilities";
+// 懒加载的弹窗：页面闲下来先把 JS 热进缓存（lib/lazyWarm.ts），点开时不用再等一次网络往返
+const loadSelfTestDialog = () => import("@/features/rules/SelfTestDialog");
+const SelfTestDialog = lazy(loadSelfTestDialog);
 const RuleTrafficGlobe = lazy(() => import("@/features/rules/RuleTrafficGlobe"));
-const RuleBatchManageDialog = lazy(() => import("@/features/rules/RuleBatchManageDialog"));
+const loadRuleBatchManageDialog = () => import("@/features/rules/RuleBatchManageDialog");
+const RuleBatchManageDialog = lazy(loadRuleBatchManageDialog);
 
 /** 探测是多久以前的：「18 分钟前」。 */
 export const formatProbeAge = (at: unknown) => formatAgo(Date.now() - timestampMillis(at));
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 // 精简布局：延迟记录并进诊断框当一页
-const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
-const RuleConnectionsBody = lazy(() => import("@/components/rules/RuleConnectionsBody").then((module) => ({ default: module.RuleConnectionsBody })));
+const loadTcpingDetailBody = () => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody }));
+const TcpingDetailBody = lazy(loadTcpingDetailBody);
+const loadRuleConnectionsBody = () => import("@/components/rules/RuleConnectionsBody").then((module) => ({ default: module.RuleConnectionsBody }));
+const RuleConnectionsBody = lazy(loadRuleConnectionsBody);
 
 /** 换隧道后旧入口还在替这条规则转发（服务端带的 entryBridges）：卡片上说一句，到点自己消失。 */
-function entryBridgeNotes(rule: any): string[] {
+export function entryBridgeNotes(rule: any): string[] {
   const bridges = Array.isArray(rule?.entryBridges) ? rule.entryBridges : [];
   return bridges.map((bridge: any) => formatEntryBridgeNote(bridge));
 }
@@ -256,11 +249,11 @@ function clearRuleTrafficStatCaches() {
 export type RuleProtocol = "tcp" | "udp" | "both";
 export type RuleRouteMode = "local" | "tunnel" | "chain" | "group";
 
-function isForwardGroupBackedRouteModeValue(mode: RuleRouteMode, forwardGroupId?: number | null) {
+export function isForwardGroupBackedRouteModeValue(mode: RuleRouteMode, forwardGroupId?: number | null) {
   return mode === "chain" || mode === "group" || (mode === "local" && Number(forwardGroupId || 0) > 0);
 }
 
-type RuleFormData = {
+export type RuleFormData = {
   hostId: number | null;
   name: string;
   routeMode: RuleRouteMode;
@@ -339,15 +332,15 @@ export const defaultForm: RuleFormData = {
 
 const gostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const nginxTunnelModes = new Set(["nginx_stream"]);
-const unsupportedProtocolTitle = "当前转发方式已停用，请编辑并切换到可用资源";
-const revokedResourceTitle = "资源授权已失效，请编辑规则并选择当前有权限的端口转发或隧道";
+export const unsupportedProtocolTitle = "当前转发方式已停用，请编辑并切换到可用资源";
+export const revokedResourceTitle = "资源授权已失效，请编辑规则并选择当前有权限的端口转发或隧道";
 export const desktopRuleTypeLabels = {
   local: "端口转发",
   tunnel: "隧道转发",
   chain: "转发链",
   group: "转发组",
 } as const;
-const ruleTypeDescriptions = {
+export const ruleTypeDescriptions = {
   local: "使用已保存端口转发",
   tunnel: "通过隧道出口转发",
   chain: "按转发链顺序转发",
@@ -355,13 +348,13 @@ const ruleTypeDescriptions = {
 } as const;
 
 export type RuleViewMode = "card" | "table" | "globe";
-type RuleCardSize = "standard" | "compact";
-type RuleDisplayMode = RuleCardSize | "table" | "globe";
-type RulePageSize = 12 | 24 | 36 | 48;
+export type RuleCardSize = "standard" | "compact";
+export type RuleDisplayMode = RuleCardSize | "table" | "globe";
+export type RulePageSize = 12 | 24 | 36 | 48;
 export type RuleGroupType = keyof typeof desktopRuleTypeLabels;
 type RuleGroupCollapsedState = Partial<Record<RuleGroupType, boolean>>;
 export type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
-type RuleCategoryCounts = Record<RuleCategory, number>;
+export type RuleCategoryCounts = Record<RuleCategory, number>;
 export type RuleTransferScopeType = Exclude<RuleCategory, "all">;
 export type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
 // state：批量启用 / 暂停 / 重启（上游 2.3.292），和删除、复制一样交给服务端任务（RuleBatchJobWidget 看进度）
@@ -398,7 +391,7 @@ export function parseRuleResourceFilter(value: unknown): { type: RuleTransferSco
   };
 }
 
-function normalizeRuleResourceFilter(value: unknown): RuleResourceFilter {
+export function normalizeRuleResourceFilter(value: unknown): RuleResourceFilter {
   const parsed = parseRuleResourceFilter(value);
   if (!parsed.type) return "all";
   return parsed.id ? `${parsed.type}:${parsed.id}` : parsed.type;
@@ -447,7 +440,7 @@ const RULE_TABLE_COLUMNS_COMPACT = ruleTableColumnMeta(["rule", "personalGroups"
 /** 账号上还没存过列设置、本机原来记着「不显示分组列」时，照它来。 */
 const LEGACY_HIDDEN_GROUP_COLUMN_PREFERENCE: TableColumnPreference = { order: [], hidden: ["personalGroups"], widths: {} };
 /** 默认八、九列加起来约 1016px，表格最小宽度原来写死 1000：拖宽、藏列以后按这个比例跟着变。 */
-const RULE_TABLE_MIN_WIDTH_RATIO = 1000 / 1016;
+export const RULE_TABLE_MIN_WIDTH_RATIO = 1000 / 1016;
 const EMPTY_PERSONAL_RULE_GROUPS: PersonalRuleGroup[] = [];
 /** 卡片上的分组名拼成一个字符串传给 memo 的卡片（数组每轮都是新的，会让卡片白重画）；分组名里打不出这个字符。 */
 const PERSONAL_GROUP_NAME_SEPARATOR = "\u001f";
@@ -481,11 +474,11 @@ const RULE_SORT_CATEGORY_ORDER: RuleTransferScopeType[] = ["local", "tunnel", "c
 const RULE_SORT_CATEGORY_RANK = new Map<RuleTransferScopeType, number>(
   RULE_SORT_CATEGORY_ORDER.map((category, index) => [category, index]),
 );
-const RULE_PAGE_SIZE_OPTIONS: RulePageSize[] = [12, 24, 36, 48];
-const EMPTY_RULE_CATEGORY_COUNTS: RuleCategoryCounts = { all: 0, local: 0, tunnel: 0, chain: 0, group: 0 };
+export const RULE_PAGE_SIZE_OPTIONS: RulePageSize[] = [12, 24, 36, 48];
+export const EMPTY_RULE_CATEGORY_COUNTS: RuleCategoryCounts = { all: 0, local: 0, tunnel: 0, chain: 0, group: 0 };
 const RULE_CATEGORY_COUNTS_CACHE_PREFIX = "forwardx.rules.categoryCounts.";
 
-function normalizeRuleCategoryCounts(value: unknown): RuleCategoryCounts {
+export function normalizeRuleCategoryCounts(value: unknown): RuleCategoryCounts {
   const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const count = (key: RuleCategory) => Math.max(0, Math.floor(Number(source[key]) || 0));
   const local = count("local");
@@ -501,7 +494,7 @@ function normalizeRuleCategoryCounts(value: unknown): RuleCategoryCounts {
   };
 }
 
-function readCachedRuleCategoryCounts(cacheKey: string): RuleCategoryCounts | null {
+export function readCachedRuleCategoryCounts(cacheKey: string): RuleCategoryCounts | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(`${RULE_CATEGORY_COUNTS_CACHE_PREFIX}${cacheKey}`);
@@ -511,7 +504,7 @@ function readCachedRuleCategoryCounts(cacheKey: string): RuleCategoryCounts | nu
   }
 }
 
-function writeCachedRuleCategoryCounts(cacheKey: string, counts: RuleCategoryCounts) {
+export function writeCachedRuleCategoryCounts(cacheKey: string, counts: RuleCategoryCounts) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(`${RULE_CATEGORY_COUNTS_CACHE_PREFIX}${cacheKey}`, JSON.stringify(counts));
@@ -520,7 +513,7 @@ function writeCachedRuleCategoryCounts(cacheKey: string, counts: RuleCategoryCou
   }
 }
 
-function ruleCategoryCountsEqual(a: RuleCategoryCounts, b: RuleCategoryCounts) {
+export function ruleCategoryCountsEqual(a: RuleCategoryCounts, b: RuleCategoryCounts) {
   return RULE_CATEGORIES.every((category) => a[category] === b[category]);
 }
 
@@ -528,7 +521,7 @@ function getStoredRuleViewMode(): RuleViewMode {
   return readStoredViewMode<RuleViewMode>(RULE_VIEW_MODE_STORAGE_KEY, ["table", "globe", "card"], "card");
 }
 
-function storeRuleViewMode(viewMode: RuleViewMode) {
+export function storeRuleViewMode(viewMode: RuleViewMode) {
   writeStoredViewMode(RULE_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
@@ -547,7 +540,7 @@ function getStoredRuleCardSize(): RuleCardSize {
   }
 }
 
-function storeRuleCardSize(cardSize: RuleCardSize) {
+export function storeRuleCardSize(cardSize: RuleCardSize) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(RULE_CARD_SIZE_STORAGE_KEY, cardSize);
@@ -566,7 +559,7 @@ function getStoredRulePageSize(fallback: RulePageSize = 12): RulePageSize {
   }
 }
 
-function storeRulePageSize(pageSize: RulePageSize) {
+export function storeRulePageSize(pageSize: RulePageSize) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(RULE_PAGE_SIZE_STORAGE_KEY, String(pageSize));
@@ -592,7 +585,7 @@ function getStoredRuleGroupCollapsed(): RuleGroupCollapsedState {
   }
 }
 
-function storeRuleGroupCollapsed(state: RuleGroupCollapsedState) {
+export function storeRuleGroupCollapsed(state: RuleGroupCollapsedState) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(RULE_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(state));
@@ -640,7 +633,7 @@ export function getRuleCategory(rule: any, forwardGroupById: Map<number, any>): 
   return rule.forwardType === "gost" && rule.tunnelId ? "tunnel" : "local";
 }
 
-function getRuleDisplayType(rule: any, forwardGroupById: Map<number, any>): RuleGroupType {
+export function getRuleDisplayType(rule: any, forwardGroupById: Map<number, any>): RuleGroupType {
   return getRuleCategory(rule, forwardGroupById);
 }
 
@@ -689,7 +682,7 @@ function RuleGroupItems({
 }
 
 /** 换进来的第一帧先画这么多张卡，其余随后补（见 ruleCardsHydrated）。手机一屏 4 张紧凑卡。 */
-const INITIAL_RULE_CARD_BUDGET = 6;
+export const INITIAL_RULE_CARD_BUDGET = 6;
 
 /** 还没轮到画的卡先占着位：和紧凑卡差不多高，补上时列表不跳。 */
 function RuleCardPlaceholder() {
@@ -719,6 +712,8 @@ function RuleCardPlaceholder() {
 export type RuleCardRule = any;
 /** 主机 / 隧道 / 转发组这些资源行在页面里还是宽类型（仓储层带 any）；抽出去的批量管理 hook / 弹窗用这个名字指它们，别再散落 any。 */
 export type RuleResourceRow = any;
+/** 当前登录用户（auth.me 的返回行）；抽出去的 hook 用这个名字，不再各写一个 any。 */
+export type RulePageUser = ReturnType<typeof useAuth>["user"];
 type RuleCardTone = "ok" | "warn" | "down" | "off";
 
 type RuleTransferDisplay = {
@@ -727,7 +722,7 @@ type RuleTransferDisplay = {
   entryTitle: string;
 };
 
-type RuleCardUi = {
+export type RuleCardUi = {
   isRuleSupported: (rule: RuleCardRule) => boolean;
   getRuleProtocolKey: (rule: RuleCardRule) => ForwardProtocolKey | null;
   protocolUnsupportedLabel: (protocolKey: ForwardProtocolKey | null | undefined) => string;
@@ -1599,11 +1594,11 @@ export function getForwardGroupRouteLabel(group: any | null | undefined) {
 }
 
 // GOST、Nginx、NEX 隧道都能挂线路组：调度器在隧道出口机上。
-function isGostTunnelForMainBackup(tunnel: any | null | undefined) {
+export function isGostTunnelForMainBackup(tunnel: any | null | undefined) {
   return routeGroupTunnelModeSupported(tunnel?.mode);
 }
 
-function isForwardGroupMainBackupTunnelSupported(group: any | null | undefined, tunnelById: Map<number, any>) {
+export function isForwardGroupMainBackupTunnelSupported(group: any | null | undefined, tunnelById: Map<number, any>) {
   if (!group || isForwardChainGroup(group) || String(group?.groupType || "") !== "tunnel") return false;
   const tunnelMembers = (Array.isArray(group.members) ? group.members : [])
     .filter((member: any) => member?.isEnabled !== false && Number(member?.tunnelId || 0) > 0);
@@ -1775,7 +1770,7 @@ function buildKernelChainForwardWarning(input: Required<Pick<KernelForwardWarnin
   );
 }
 
-function buildKernelForwardWarning({ rule, host, group, hosts = [], hostById, forwardGroupById }: KernelForwardWarningInput) {
+export function buildKernelForwardWarning({ rule, host, group, hosts = [], hostById, forwardGroupById }: KernelForwardWarningInput) {
   const forwardType = String(rule?.forwardType || "").trim().toLowerCase();
   if (!isKernelForwardType(forwardType)) return null;
   const toolLabel = FORWARD_TYPE_LABELS[forwardType as ForwardType] || forwardType;
@@ -1962,6 +1957,8 @@ export function downloadRuleTransferFiles(
 function RulesContent() {
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
+  // 自测、批量管理、延迟详情、连接监控这几个弹窗谁都能点开；3D 地球太大，不预热
+  useWarmLazyChunks([loadSelfTestDialog, loadRuleBatchManageDialog, loadTcpingDetailBody, loadRuleConnectionsBody]);
   // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
   const compactLayout = useCompactLayout();
   const uiTheme = useUiTheme();
@@ -2126,7 +2123,7 @@ function RulesContent() {
   };
   const [editingId, setEditingId] = useState<number | null>(null);
   // 编辑时规则原来的限额：提交只带改过的那几项（见 ruleLimitsChanges）。
-  const [editingLimitBaseline, setEditingLimitBaseline] = useState<any>(null);
+  const [editingLimitBaseline, setEditingLimitBaseline] = useState<RuleCardRule | null>(null);
   const [editingOriginalProtocol, setEditingOriginalProtocol] = useState<RuleProtocol | null>(null);
   const [legacyLocalRuleEditId, setLegacyLocalRuleEditId] = useState<number | null>(null);
   // 主备策略面板开着的是哪条规则。存 id 不存整行：强制走之后列表会刷新，面板要跟着新数据走。
@@ -2309,6 +2306,8 @@ function RulesContent() {
     search: ruleSearchQuery,
     personalGroupId: personalGroupFilter,
     sortBy: personalGroupSortActive ? "personalGroup" : undefined,
+    // 顺带带回这一页的当日流量汇总：卡片要等它才画，单独再要一次就多一轮往返（见下面 dailyTrafficSummary 的 initialData）
+    withTrafficSummary24h: true,
   }, {
     refetchInterval: pollingInterval("normal"),
     staleTime: 10_000,
@@ -2440,6 +2439,7 @@ function RulesContent() {
        */
       if ((data as any).autoBoundProxyNodeName) {
         utils.proxySubscriptions.preview.invalidate();
+        void utils.proxySubscriptions.targetMismatchRuleIds.invalidate();
         utils.proxySubscriptions.listNodes.invalidate();
         toast.info(`已顺手加进订阅：${(data as any).autoBoundProxyNodeName}`, {
           description: "目标正好是你的落地节点。不想要的话，去订阅管理的「预览订阅」里关掉。",
@@ -2487,6 +2487,7 @@ function RulesContent() {
       const binding = (data as any)?.proxyNodeBinding;
       if (binding) {
         utils.proxySubscriptions.preview.invalidate();
+        void utils.proxySubscriptions.targetMismatchRuleIds.invalidate();
         utils.proxySubscriptions.listNodes.invalidate();
         if (binding.kind === "released") {
           toast.info(`已从订阅里摘掉「${binding.previousName}」这条线路`, {
@@ -2528,85 +2529,6 @@ function RulesContent() {
   // tab：打开时先停在哪一页（表格里点「详细」直接看延迟记录）
   const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; chainKernel?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
 
-  const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
-    if (mode === form.routeMode) return;
-    /*
-      换了走法，展开着的建线路表单就不再对应了（隧道的表单在「转发链」下
-      毫无意义）。直接收起来，而不是让它留在那儿显示上一种线路的字段。
-    */
-    setInlineLinkOpen(false);
-    if (mode === "local" && !canUseLocalForward) return;
-    if (mode === "tunnel" && !canUseGost) return;
-    const localUsesSavedForward = mode === "local" && canUseSavedLocalForward;
-    const nextGroups = localUsesSavedForward
-      ? availablePortForwardGroups
-      : mode === "chain"
-      ? availableForwardChainGroups
-      : mode === "group"
-      ? availableFailoverForwardGroups
-      : [];
-    // 「隧道转发」「叠加」各从自己那一类隧道里挑。
-    const tunnelPool = aggregate ? aggregateTunnels : plainTunnels;
-    const nextTunnel = mode === "tunnel"
-      ? ((selectedTunnel && tunnelPool.includes(selectedTunnel) ? selectedTunnel : tunnelPool[0]) || null)
-      : null;
-    const usesForwardGroup = mode === "chain" || mode === "group" || localUsesSavedForward;
-    const nextBillingHost = mode === "local" && !localUsesSavedForward
-      ? (availableTrafficBillingHosts.find((host: any) => Number(host.id) === Number(form.hostId)) || availableTrafficBillingHosts[0] || null)
-      : null;
-    if (mode === "tunnel" && !nextTunnel) return;
-    if (usesForwardGroup && nextGroups.length === 0) return;
-    if (mode === "local" && !usesForwardGroup && !nextBillingHost) return;
-    const expectedGroupMode = mode === "local" ? "port" : mode === "chain" ? "chain" : "failover";
-    const nextGroup = usesForwardGroup
-      ? (selectedForwardGroup && forwardGroupModeOf(selectedForwardGroup) === expectedGroupMode ? selectedForwardGroup : nextGroups[0])
-      : null;
-    const nextDirectForwardType = usableForwardTypes.includes(form.forwardType) ? form.forwardType : usableForwardTypes[0];
-    const nextForwardType = mode === "tunnel"
-      ? "gost"
-      : usesForwardGroup
-      ? getForwardGroupRuleForwardType(nextGroup, usableForwardTypes.includes(form.forwardType) ? form.forwardType : usableForwardTypes[0])
-      : nextDirectForwardType;
-    if (!nextForwardType) return;
-    latestPortCheckRef.current += 1;
-    setPortStatus("idle");
-    setPortRangeError(null);
-    setForm((prev) => ({
-      ...prev,
-      routeMode: mode,
-      // 换页签回到独立端口：上一个页签选的入站多半不在新页签的资源上。
-      entryMode: "port",
-      tlsInboundId: null,
-      forwardType: nextForwardType,
-      tunnelId: mode === "tunnel" && nextTunnel ? Number(nextTunnel.id) : null,
-      forwardGroupId: usesForwardGroup && nextGroup ? Number(nextGroup.id) : null,
-      hostId: mode === "tunnel" && nextTunnel
-        ? nextTunnel.entryHostId
-        : usesForwardGroup
-        ? null
-        : availableTrafficBillingHosts.some((host: any) => Number(host.id) === Number(prev.hostId))
-        ? prev.hostId
-        : (Number(nextBillingHost?.id || 0) || null),
-      failoverEnabled: false,
-    }));
-  };
-  /** 顶上的标签：「隧道转发」「叠加」都落到隧道转发，在两类隧道之间换只换选中的隧道。 */
-  const selectRouteTab = (tab: RuleRouteTab) => {
-    if (tab !== "tunnel" && tab !== "aggregate") {
-      setRouteMode(tab);
-      return;
-    }
-    const wantAggregate = tab === "aggregate";
-    if (form.routeMode !== "tunnel") {
-      setRouteMode("tunnel", wantAggregate);
-      return;
-    }
-    if (selectedTunnelIsAggregate === wantAggregate && form.tunnelId) return;
-    const next = (wantAggregate ? aggregateTunnels : plainTunnels)[0];
-    if (!next) return;
-    setInlineLinkOpen(false);
-    setForm((prev) => ({ ...prev, tunnelId: Number(next.id), hostId: next.entryHostId }));
-  };
   const toggleMutation = trpc.rules.toggle.useMutation({
     onSuccess: async (_data, variables) => {
       invalidateRuleProbeStatuses([Number(variables.id)]);
@@ -2680,226 +2602,11 @@ function RulesContent() {
     return supported && resourceAccessAllowed ? content : renderUnsupportedHint(content, resourceAccessAllowed ? unsupportedProtocolTitle : revokedResourceTitle);
   };
 
-  const resetForm = () => {
-    setForm({ ...defaultForm });
-    setEditingId(null);
-    setEditingLimitBaseline(null);
-    setEditingOriginalProtocol(null);
-    setLegacyLocalRuleEditId(null);
-    setPortStatus("idle");
-    setInlineLinkOpen(false);
-  };
-
-  const openCreate = (preferredRouteMode?: RuleRouteMode) => {
-    resetForm();
-    const firstPortGroup = canUseSavedLocalForward ? availablePortForwardGroups[0] : null;
-    const firstLocalForwardType = firstPortGroup ? getForwardGroupRuleForwardType(firstPortGroup, defaultForm.forwardType) : null;
-    const firstBillingHost = canUseBillingHostLocalForward ? availableTrafficBillingHosts[0] : null;
-    const firstDirectForwardType = usableForwardTypes.includes(defaultForm.forwardType) ? defaultForm.forwardType : usableForwardTypes[0];
-    // 新建默认落在「隧道转发」：先挑普通隧道，只有叠加时才用叠加。
-    const firstTunnel = canUseGost
-      ? (plainTunnels[0] || supportedTunnels[0])
-      : null;
-    const firstChain = canUseForwardChain ? availableForwardChainGroups[0] : null;
-    const firstGroup = canUseFailoverGroup ? availableFailoverForwardGroups[0] : null;
-    const hasSavedLocalForward = !!firstPortGroup && !!firstLocalForwardType;
-    const hasBillingHostLocalForward = !!firstBillingHost && !!firstDirectForwardType;
-    if (preferredRouteMode === "local") {
-      if (hasSavedLocalForward) {
-        setForm({
-          ...defaultForm,
-          routeMode: "local",
-          hostId: null,
-          forwardType: firstLocalForwardType,
-          tunnelId: null,
-          forwardGroupId: Number(firstPortGroup.id),
-        });
-        setShowDialog(true);
-        return;
-      }
-      if (hasBillingHostLocalForward) {
-        setForm({
-          ...defaultForm,
-          routeMode: "local",
-          hostId: Number(firstBillingHost.id),
-          forwardType: firstDirectForwardType,
-          tunnelId: null,
-          forwardGroupId: null,
-        });
-        setShowDialog(true);
-        return;
-      }
-      if (canUseSniInbound) {
-        const inbound = usableTlsInbounds[0];
-        setForm({
-          ...defaultForm,
-          routeMode: "local",
-          entryMode: "sni",
-          tlsInboundId: Number(inbound.id),
-          hostId: Number(inbound.hostId),
-          forwardType: firstDirectForwardType,
-          protocol: "tcp",
-        });
-        setShowDialog(true);
-        return;
-      }
-      toast.error("暂无可用端口转发，请检查链路配置、授权或计费余额");
-      return;
-    }
-    if (!hasSavedLocalForward && !hasBillingHostLocalForward && canUseSniInbound && !firstTunnel && !firstChain && !firstGroup) {
-      openCreate("local");
-      return;
-    }
-    if (hasSavedLocalForward || hasBillingHostLocalForward || firstTunnel || firstChain || firstGroup) {
-      const routeMode: RuleRouteMode = hasSavedLocalForward || hasBillingHostLocalForward ? "local" : firstTunnel ? "tunnel" : firstChain ? "chain" : "group";
-      const localUsesSavedForward = routeMode === "local" && hasSavedLocalForward;
-      setForm({
-        ...defaultForm,
-        routeMode,
-        hostId: routeMode === "tunnel" && firstTunnel
-          ? firstTunnel.entryHostId
-          : routeMode === "local" && !localUsesSavedForward && firstBillingHost
-          ? Number(firstBillingHost.id)
-          : null,
-        forwardType: routeMode === "tunnel"
-          ? "gost"
-          : routeMode === "group" && firstGroup
-          ? getForwardGroupRuleForwardType(firstGroup, "iptables")
-          : routeMode === "local" && localUsesSavedForward
-          ? firstLocalForwardType
-          : routeMode === "local"
-          ? firstDirectForwardType
-          : "iptables",
-        tunnelId: routeMode === "tunnel" && firstTunnel ? firstTunnel.id : null,
-        forwardGroupId: routeMode === "local" && localUsesSavedForward && firstPortGroup ? Number(firstPortGroup.id) : routeMode === "chain" && firstChain ? Number(firstChain.id) : routeMode === "group" && firstGroup ? Number(firstGroup.id) : null,
-      });
-    } else {
-      toast.error("暂无可用转发资源，请检查链路配置、授权或计费余额");
-      return;
-    }
-    setShowDialog(true);
-  };
-
-  const openEdit = (rule: any) => {
-    const editForwardGroup = rule.forwardGroupId
-      ? (forwardGroups || []).find((group: any) => Number(group.id) === Number(rule.forwardGroupId))
-      : null;
-    const isSniRule = Number(rule.tlsInboundId || 0) > 0;
-    const isLegacyLocalRule = !isSniRule
-      && !Number(rule.forwardGroupId || 0)
-      && !(rule.forwardType === "gost" && Number(rule.tunnelId || 0) > 0);
-    setForm({
-      hostId: rule.hostId,
-      name: rule.name,
-      routeMode: rule.forwardGroupId ? (forwardGroupModeOf(editForwardGroup) === "port" ? "local" : isForwardChainGroup(editForwardGroup) ? "chain" : "group") : rule.forwardType === "gost" && rule.tunnelId ? "tunnel" : "local",
-      forwardType: rule.forwardType,
-      protocol: rule.protocol,
-      tunnelId: rule.tunnelId || null,
-      forwardGroupId: rule.forwardGroupId || null,
-      sourcePort: rule.sourcePort,
-      targetIp: rule.targetIp,
-      targetPort: rule.targetPort,
-      // 段规则把整段写回端口框，段尾从原文解析。目标框写起点就够了（段长跟着入口）。
-      sourcePortText: isPortRangeRule(rule) ? formatPortSpan(rule.sourcePort, ruleSourcePortEnd(rule)) : null,
-      targetPortText: null,
-      targetNodeId: Number(rule.proxyNodeId || 0) > 0 ? Number(rule.proxyNodeId) : null,
-      telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
-      entryDomainEnabled: rule.entryDomainEnabled !== false,
-      failoverEnabled: !!rule.failoverEnabled,
-      // 老主备（2.3.376 之前配的）在这里被读成路径清单：备用各是一条直连的路径。
-      // 线路定义（2.3.496）：存了就用，老数据由路径推成「每条路径一条线路」，编辑框统一按线路编辑。
-      routeGroup: (() => {
-        const group = routeGroupOf(rule);
-        return group ? { ...group, lines: routeLinesForEditor(rule, group.paths) } : null;
-      })(),
-      entryMode: isSniRule ? "sni" : "port",
-      tlsInboundId: isSniRule ? Number(rule.tlsInboundId) : null,
-      sniNamesText: isSniRule ? parseSniNameJson(rule.sniNames).join("\n") : "",
-      egress: normalizeRuleEgressType(rule.egressType) === "none"
-        ? DEFAULT_RULE_EGRESS_FORM
-        : {
-          egressType: normalizeRuleEgressType(rule.egressType),
-          egressHostId: Number(rule.egress?.landingHostId || 0) || null,
-          egressInboundId: Number(rule.egressInboundId || 0) || null,
-          egressLink: "",
-          egressLinkMasked: String(rule.egress?.masked || ""),
-          egressUdp: !!rule.egressUdp,
-        },
-      limits: newRuleLimitsForm(rule),
-    });
-    setEditingId(rule.id);
-    setEditingLimitBaseline(rule);
-    setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
-    setLegacyLocalRuleEditId(isLegacyLocalRule ? Number(rule.id) : null);
-    setPortStatus("idle");
-    setShowAdvanced(false);
-    setShowEgress(false);
-    setShowRouteGroup(false);
-    setShowDialog(true);
-  };
-
   const isLegacyLocalRuleEdit = editingId !== null && legacyLocalRuleEditId === editingId;
 
   // 获取当前选中主机的端口区间
-  const selectedHost = useMemo(() => {
-    if (isForwardGroupBackedRouteModeValue(form.routeMode, form.forwardGroupId) || (isLegacyLocalRuleEdit && form.routeMode === "local")) return null;
-    if (!form.hostId || !hosts) return null;
-    return hosts.find((h: any) => h.id === form.hostId) || null;
-  }, [form.forwardGroupId, form.hostId, form.routeMode, hosts, isLegacyLocalRuleEdit]);
-  const forwardProtocolSettings = panelFlags.forwardProtocols;
-  const nginxTunnelEnabled = forwardProtocolSettings.nginx_stream !== false;
-  const protocolUnsupportedLabel = useCallback((protocolKey: ForwardProtocolKey | null | undefined) => {
-    const genericLabel = "\u8be5\u534f\u8bae";
-    if (!protocolKey) return genericLabel;
-    if (protocolKey === "nginx" && forwardProtocolSettings.nginx === false) return genericLabel;
-    if (protocolKey === "nginx_stream" && !nginxTunnelEnabled) return genericLabel;
-    return FORWARD_PROTOCOL_LABELS[protocolKey] || genericLabel;
-  }, [forwardProtocolSettings.nginx, nginxTunnelEnabled]);
-  const forwardTypeDisplayLabel = useCallback((forwardType: unknown) => {
-    const type = String(forwardType || "");
-    if (type === "nginx" && forwardProtocolSettings.nginx === false) return "\u8f6c\u53d1\u5de5\u5177";
-    return FORWARD_TYPE_LABELS[type as ForwardType] || type || "-";
-  }, [forwardProtocolSettings.nginx]);
-
-  const isProtocolEnabled = useCallback((key: ForwardProtocolKey | null | undefined) => {
-    if (!key) return false;
-    return forwardProtocolSettings[key] !== false;
-  }, [forwardProtocolSettings]);
-  const getTunnelProtocolKey = useCallback((tunnel: any | null | undefined): ForwardProtocolKey | null => {
-    const mode = String(tunnel?.mode || "").toLowerCase();
-    return (TUNNEL_PROTOCOLS as readonly string[]).includes(mode)
-      ? mode as ForwardProtocolKey
-      : null;
-  }, []);
-  const getRuleProtocolKey = useCallback((rule: any): ForwardProtocolKey | null => {
-    if (rule.forwardType === "gost" && rule.tunnelId) {
-      const tunnel = tunnels?.find((t: any) => Number(t.id) === Number(rule.tunnelId));
-      return getTunnelProtocolKey(tunnel);
-    }
-    return rule.forwardType as ForwardProtocolKey;
-  }, [getTunnelProtocolKey, tunnels]);
-  const isRuleSupported = useCallback((rule: any) => isProtocolEnabled(getRuleProtocolKey(rule)), [getRuleProtocolKey, isProtocolEnabled]);
-  const supportedTunnels = useMemo(
-    () => (tunnels || []).filter((t: any) => isProtocolEnabled(getTunnelProtocolKey(t))),
-    [getTunnelProtocolKey, isProtocolEnabled, tunnels]
-  );
-  /*
-    「隧道转发」和「叠加」两个标签底下都是隧道转发（routeMode 都是 tunnel），只是各列各的隧道：
-    叠加列单连接叠加的 NEX 隧道（shared/aggregateLink.ts），隧道转发列其余的。选中的是哪种就在哪个标签。
-  */
-  const plainTunnels = useMemo(() => supportedTunnels.filter((t: any) => !isAggregateLinkTunnel(t)), [supportedTunnels]);
-  const aggregateTunnels = useMemo(() => supportedTunnels.filter((t: any) => isAggregateLinkTunnel(t)), [supportedTunnels]);
-  const selectedTunnel = useMemo(() => {
-    if (!form.tunnelId || !tunnels) return null;
-    return tunnels.find((t: any) => t.id === form.tunnelId) || null;
-  }, [form.tunnelId, tunnels]);
-  const selectedTunnelIsAggregate = isAggregateLinkTunnel(selectedTunnel);
-  const routeTab: RuleRouteTab = form.routeMode === "tunnel" && selectedTunnelIsAggregate ? "aggregate" : form.routeMode;
-  const availableTunnels = useMemo(() => {
-    if (form.routeMode === "tunnel") return selectedTunnelIsAggregate ? aggregateTunnels : plainTunnels;
-    if (!form.hostId) return [];
-    return supportedTunnels.filter((t: any) => t.entryHostId === form.hostId);
-  }, [aggregateTunnels, form.hostId, form.routeMode, plainTunnels, selectedTunnelIsAggregate, supportedTunnels]);
+  const useRuleProtocolSupportResult = useRuleProtocolSupport({ form, isLegacyLocalRuleEdit, hosts, panelFlags, tunnels });
+  const { isRuleSupported, isProtocolEnabled, getTunnelProtocolKey, supportedTunnels, availableTunnels, aggregateTunnels, plainTunnels, selectedTunnel, selectedTunnelIsAggregate, routeTab, selectedHost, nginxTunnelEnabled, forwardTypeDisplayLabel, getRuleProtocolKey, protocolUnsupportedLabel } = useRuleProtocolSupportResult;
   // 允许哪些端口由服务端说了算，界面只负责显示。
   //
   // 这里原来自己照着算了一份：主机策略直接和隧道范围求交。服务端用的是
@@ -2990,18 +2697,14 @@ function RulesContent() {
    * 判断放在服务端（它才有全部规则和主机地址，能认出「串两跳」这种正常拓扑不误报），
    * 这里只把结论标到行上 —— 要改目标或者换节点的人在这一页，提示也该在这一页。
    */
-  const subscriptionPreviewQuery = trpc.proxySubscriptions.preview.useQuery(undefined, {
+  // 只要规则 id（targetMismatchRuleIds），不拉整份订阅预览；它单独发请求（main.tsx 的 isolatedQueryPaths），不拖同批的流量汇总。
+  // 订阅页改了节点也会让这个结论变：每次进规则页都后台刷一次（不挡首屏，staleTime 0），不用到处去失效它。
+  const targetMismatchQuery = trpc.proxySubscriptions.targetMismatchRuleIds.useQuery(undefined, {
     enabled: subscriptionAllowed,
-    staleTime: 60_000,
+    staleTime: 0,
     refetchOnWindowFocus: false,
   });
-  const driftedRuleIds = useMemo(() => {
-    const ids = new Set<number>();
-    for (const item of (subscriptionPreviewQuery.data?.warnings || []) as any[]) {
-      if (item?.reason === "target-mismatch") ids.add(Number(item.ruleId));
-    }
-    return ids;
-  }, [subscriptionPreviewQuery.data]);
+  const driftedRuleIds = useMemo(() => new Set<number>((targetMismatchQuery.data || []).map(Number)), [targetMismatchQuery.data]);
   const hostById = useMemo(() => {
     const map = new Map<number, any>();
     (hosts || []).forEach((host: any) => map.set(Number(host.id), host));
@@ -3095,85 +2798,17 @@ function RulesContent() {
   const routeModeLocked = false;
   const isForwardGroupRouteMode = isForwardGroupBackedRouteModeValue(form.routeMode, form.forwardGroupId)
     || (isLegacyLocalRuleEdit && form.routeMode === "local");
-  const effectiveRouteForwardType = useMemo<ForwardType>(() => {
-    if (form.routeMode === "tunnel") return "gost";
-    if (isForwardGroupRouteMode) {
-      return getForwardGroupRuleForwardType(selectedForwardGroup, form.forwardType);
-    }
-    return form.forwardType;
-  }, [form.forwardGroupId, form.forwardType, form.routeMode, isForwardGroupRouteMode, selectedForwardGroup]);
-  /**
-   * 当前用户被允许使用的转发方式。
-   * - 管理员：不受限制（返回全部）
-   * - 普通用户：读 (user as any).allowedForwardTypes，空表示全部
-   */
-  const allowedForwardTypes: ForwardType[] = useMemo(() => {
-    const all = [...FORWARD_TYPES];
-    if (!user || user.role === "admin") return all;
-    const raw = (user as any).allowedForwardTypes as string | null | undefined;
-    if (!raw || !raw.trim()) return all;
-    const set = new Set(raw.split(",").map((s: string) => s.trim()));
-    const filtered = all.filter(t => set.has(t));
-    return filtered.length > 0 ? filtered : all;
-  }, [user]);
-  const usableForwardTypes = useMemo(
-    () => allowedForwardTypes.filter((t) => isProtocolEnabled(t)),
-    [allowedForwardTypes, isProtocolEnabled]
-  );
-  const trafficBillingHostIds = useMemo(() => {
-    const ids = (trafficBilling?.usableResourceIds?.hostIds || []) as Array<number | string>;
-    return new Set(ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0));
-  }, [trafficBilling?.usableResourceIds]);
-  const trafficBillingTunnelIds = useMemo(() => {
-    const ids = (trafficBilling?.usableResourceIds?.tunnelIds || []) as Array<number | string>;
-    return new Set(ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0));
-  }, [trafficBilling?.usableResourceIds]);
-  const trafficBillingForwardGroupIds = useMemo(() => {
-    const ids = (trafficBilling?.usableResourceIds?.forwardGroupIds || []) as Array<number | string>;
-    return new Set(ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0));
-  }, [trafficBilling?.usableResourceIds]);
-  const availableTrafficBillingHosts = useMemo(
-    () => (hosts || []).filter((host: any) => trafficBillingHostIds.has(Number(host.id))),
-    [hosts, trafficBillingHostIds]
-  );
-  const canUseSavedLocalForward = availablePortForwardGroups.length > 0;
-  const canUseBillingHostLocalForward = user?.role !== "admin" && hasTrafficBillingBalance && availableTrafficBillingHosts.length > 0 && usableForwardTypes.length > 0;
-  const usableTlsInbounds = useMemo(
-    () => (tlsInboundOptions as any[]).filter((inbound: any) => inbound.usable && inbound.isEnabled),
-    [tlsInboundOptions],
-  );
-  const canUseSniInbound = usableTlsInbounds.length > 0 && usableForwardTypes.length > 0;
-  const isSniEntryMode = form.entryMode === "sni";
-  /** SNI 规则怎么走：端口转发页签是直连（选了端口转发资源就是经资源），其余页签经隧道 / 转发资源。 */
-  const sniRouteKind: SniRuleRouteKind = form.routeMode === "tunnel"
-    ? "tunnel"
-    : form.routeMode === "chain" || form.routeMode === "group" || Number(form.forwardGroupId || 0) > 0
-    ? "group"
-    : "direct";
-  const sniChoices = useMemo(() => {
-    const keep = { inboundId: form.tlsInboundId, forwardGroupId: form.routeMode === "local" ? form.forwardGroupId : null };
-    if (form.routeMode === "tunnel") return sniInboundChoices(tlsInboundOptions, { kind: "tunnel", tunnelId: form.tunnelId }, keep);
-    if (form.routeMode === "chain" || form.routeMode === "group") {
-      return sniInboundChoices(tlsInboundOptions, { kind: "group", forwardGroupId: form.forwardGroupId }, { ...keep, forwardGroupId: form.forwardGroupId });
-    }
-    return sniInboundChoices(tlsInboundOptions, { kind: "direct", portGroupIds: availablePortForwardGroups.map((group) => Number(group.id)) }, keep);
-  }, [tlsInboundOptions, form.routeMode, form.tunnelId, form.forwardGroupId, form.tlsInboundId, availablePortForwardGroups]);
-  /** 某个页签有没有能经它用的共享 TLS 入站（决定要不要显示「入口方式」那一行）。 */
-  const sniAvailableForTab = (mode: RuleRouteMode) => {
-    const options = tlsInboundOptions;
-    const viaTunnel = (tunnelId: number) => options.some((inbound) => inbound.isEnabled && (inbound.tunnelIds || []).includes(tunnelId));
-    const viaGroup = (groupId: number) => options.some((inbound) => inbound.isEnabled && (inbound.forwardGroupIds || []).includes(groupId));
-    if (mode === "tunnel") return availableTunnels.some((tunnel) => viaTunnel(Number(tunnel.id)));
-    if (mode === "chain") return availableForwardChainGroups.some((group) => viaGroup(Number(group.id)));
-    if (mode === "group") return availableFailoverForwardGroups.some((group) => viaGroup(Number(group.id)));
-    return canUseSniInbound || availablePortForwardGroups.some((group) => viaGroup(Number(group.id)));
-  };
-  const selectedTlsInbound = isSniEntryMode && form.tlsInboundId ? tlsInboundById.get(Number(form.tlsInboundId)) || null : null;
-  const canUseLocalForward = canUseSavedLocalForward || canUseBillingHostLocalForward || canUseSniInbound;
-  const canUseGost = allowedForwardTypes.includes("gost") && supportedTunnels.length > 0;
-  const canUseForwardChain = availableForwardChainGroups.length > 0;
-  const canUseFailoverGroup = availableFailoverForwardGroups.length > 0;
-  const canCreateRule = canUseLocalForward || canUseGost || canUseForwardChain || canUseFailoverGroup;
+  const useRuleCreateCapabilitiesResult = useRuleCreateCapabilities({ form, isForwardGroupRouteMode, selectedForwardGroup, user, isProtocolEnabled, trafficBilling, hosts, availablePortForwardGroups, hasTrafficBillingBalance, tlsInboundOptions, availableTunnels, availableForwardChainGroups, availableFailoverForwardGroups, tlsInboundById, supportedTunnels });
+  const { canUseLocalForward, canUseGost, canUseSavedLocalForward, availableTrafficBillingHosts, usableForwardTypes, canUseBillingHostLocalForward, canUseForwardChain, canUseFailoverGroup, canUseSniInbound, usableTlsInbounds, effectiveRouteForwardType, isSniEntryMode, sniChoices, selectedTlsInbound, sniRouteKind, trafficBillingHostIds, trafficBillingTunnelIds, trafficBillingForwardGroupIds, sniAvailableForTab, canCreateRule } = useRuleCreateCapabilitiesResult;
+
+  /*
+    表单的打开 / 切页签这几个函数原来写在上面（创建 / 更新 mutation 之后），但它们读的 canUseLocalForward、
+    availablePortForwardGroups、selectedTunnel 这些值都要到这里才算出来，以前靠闭包晚绑定才能用。
+    挪到依赖之后，抽成 hook 时才不会在声明前取值。
+  */
+  const useRuleFormOpenersResult = useRuleFormOpeners({ form, setInlineLinkOpen, canUseLocalForward, canUseGost, canUseSavedLocalForward, availablePortForwardGroups, availableForwardChainGroups, availableFailoverForwardGroups, aggregateTunnels, plainTunnels, selectedTunnel, availableTrafficBillingHosts, selectedForwardGroup, usableForwardTypes, latestPortCheckRef, setPortStatus, setPortRangeError, setForm, selectedTunnelIsAggregate, setEditingId, setEditingLimitBaseline, setEditingOriginalProtocol, setLegacyLocalRuleEditId, canUseBillingHostLocalForward, supportedTunnels, canUseForwardChain, canUseFailoverGroup, setShowDialog, canUseSniInbound, usableTlsInbounds, forwardGroups, setShowAdvanced, setShowEgress, setShowRouteGroup });
+  const { resetForm, openCreate, openEdit, setRouteMode, selectRouteTab } = useRuleFormOpenersResult;
+
 
   /*
     创建按钮为什么点不了 —— 一处算，到处用（判断在 shared/forwardRuleForm）。
@@ -3381,39 +3016,8 @@ function RulesContent() {
     ? `${RULE_EGRESS_TYPE_LABELS[form.egress.egressType]}${form.egress.egressUdp ? " · TCP+UDP" : ""}`
     : RULE_EGRESS_TYPE_LABELS.none;
 
-  const routeModeTabItems: SlidingTabItem<RuleRouteTab>[] = [
-    {
-      value: "local",
-      label: "端口转发",
-      icon: ArrowRightLeft,
-      disabled: !canUseLocalForward || (routeModeLocked && form.routeMode !== "local"),
-    },
-    {
-      value: "tunnel",
-      label: "隧道转发",
-      icon: Network,
-      disabled: !canUseGost || plainTunnels.length === 0 || (routeModeLocked && form.routeMode !== "tunnel"),
-    },
-    // 有叠加才出这个标签，没用到的人界面不变。
-    ...(aggregateTunnels.length > 0 || routeTab === "aggregate" ? [{
-      value: "aggregate" as const,
-      label: "叠加",
-      icon: Combine,
-      disabled: !canUseGost || aggregateTunnels.length === 0 || (routeModeLocked && form.routeMode !== "tunnel"),
-    }] : []),
-    {
-      value: "chain",
-      label: "转发链",
-      icon: GitBranch,
-      disabled: !canUseForwardChain || (routeModeLocked && form.routeMode !== "chain"),
-    },
-    {
-      value: "group",
-      label: "转发组",
-      icon: Layers3,
-      disabled: !canUseFailoverGroup || (routeModeLocked && form.routeMode !== "group"),
-    },
-  ];
+  const useRuleRouteModeTabsResult = useRuleRouteModeTabs({ canUseLocalForward, routeModeLocked, form, canUseGost, plainTunnels, aggregateTunnels, routeTab, canUseForwardChain, canUseFailoverGroup });
+  const { routeModeTabItems } = useRuleRouteModeTabsResult;
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("create") !== "local") return;
@@ -3473,205 +3077,10 @@ function RulesContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
 
-  const telegramBotReady = panelFlags.telegramBotReady;
-  const selectedForwardGroupIsChain = form.routeMode === "chain" || isForwardChainGroup(selectedForwardGroup);
-  const selectedForwardGroupIsPort = forwardGroupModeOf(selectedForwardGroup) === "port";
-  const mainBackupForwardType = effectiveRouteForwardType;
-  const mainBackupUsesTunnelRoute = form.routeMode === "tunnel" || (!selectedForwardGroupIsChain && selectedForwardGroup?.groupType === "tunnel");
-  const mainBackupIsTunnelRoute =
-    (form.routeMode === "tunnel" && isGostTunnelForMainBackup(selectedTunnel))
-    || isForwardGroupMainBackupTunnelSupported(selectedForwardGroup, tunnelById);
-  // 线路组挂在用户态转发上（gost / realm / socat / nginx）：调度器插在它和路径之间。
-  const mainBackupPortForwardSupported = !mainBackupUsesTunnelRoute
-    && routeGroupForwardTypeSupported(mainBackupForwardType)
-    && (user?.role === "admin" || selectedForwardGroupIsPort);
-  const canAutoSwitchMainBackupToGost = !selectedForwardGroupIsChain
-    && !mainBackupUsesTunnelRoute
-    && !routeGroupForwardTypeSupported(mainBackupForwardType)
-    && usableForwardTypes.includes("gost")
-    && !routeModeLocked
-    && user?.role === "admin"
-    && form.routeMode === "local"
-    && !selectedForwardGroupIsPort;
-  const canUseMainBackup = !selectedForwardGroupIsChain
-    && !isSniEntryMode
-    && !egressActive
-    && (
-      (mainBackupUsesTunnelRoute && mainBackupForwardType === "gost" && mainBackupIsTunnelRoute)
-      || mainBackupPortForwardSupported
-      || canAutoSwitchMainBackupToGost
-    );
-  /*
-    主备用不了的时候：说人话的原因，能一键改好的给一个按钮。
-
-    用不了的规则类型（转发链、共享 TLS 入站、用了 SS 出口的……）不显示线路组这一块：
-    一个点不开的折叠框只是噪音（用户反馈「用不了就不显示」）。默认的 iptables 端口转发
-    不算用不了 —— 勾上会自动换成 GOST，照样显示。只有一种例外：这条规则已经开着线路组、
-    但改了别的设置后用不了了，这时还显示，原因和出路写在里面，让人能把它关掉或改回去。
-    原因只说他听得懂的，出路直接做成按钮。
-
-    普通用户的判断放在「转发工具不是 GOST」前面：同一条规则两句都成立时，前一句
-    才给得出他自己能走的路（改用隧道转发），后一句只会让他去找一个改不了的选项。
-  */
-  const mainBackupBlock: { reason: string; fix?: { label: string; run: () => void } } | null = canUseMainBackup
-    ? null
-    : isSniEntryMode
-    ? { reason: "共享 TLS 入站上的规则暂不支持线路组。" }
-    : egressActive
-    ? { reason: "使用 Shadowsocks 出口的规则暂不支持线路组：出口本身就是固定的落地。" }
-    : selectedForwardGroupIsChain
-    ? {
-      reason: "转发链用不了线路组。想要入口坏了自动换，用「转发组」（入口主备）；想要中间的线路坏了自动换，改成隧道转发再开线路组。",
-      fix: canUseFailoverGroup && !routeModeLocked ? { label: "改用转发组", run: () => setRouteMode("group") } : undefined,
-    }
-    : mainBackupUsesTunnelRoute && !mainBackupIsTunnelRoute
-    ? { reason: "这种隧道用不了线路组。换一条 GOST、Nginx 或 NEX 隧道就可以。" }
-    : user?.role !== "admin" && !mainBackupUsesTunnelRoute && !selectedForwardGroupIsPort
-    ? {
-      reason: "普通用户的端口转发用不了线路组。改用隧道转发就可以。",
-      fix: canUseGost && !routeModeLocked ? { label: "改用隧道转发", run: () => setRouteMode("tunnel") } : undefined,
-    }
-    : { reason: "线路组要用 gost、realm、socat 或 nginx 转发：iptables / nftables 在内核里改写目的地，调度器插不进去。" };
-  const mainBackupDisabledText = mainBackupBlock?.reason || "";
-  const routeGroupSectionVisible = !mainBackupBlock || form.failoverEnabled;
-  const routeGroupSummary = form.failoverEnabled && form.routeGroup
-    // 和框里的摘要、线路详情一个说法：几条线路（不是展开出来的几条路径）、按什么切
-    ? `已开启 · ${form.routeGroup.lines?.length || form.routeGroup.paths.length} 条线路 · ${routeStrategyLabel(form.routeGroup.policy)}`
-    : mainBackupBlock ? "用不了" : "未开启";
-  const kernelForwardWarning = useMemo(() => buildKernelForwardWarning({
-    rule: form,
-    host: selectedHost,
-    group: selectedForwardGroup,
-    hosts: hosts || [],
-    hostById,
-    forwardGroupById,
-  }), [form, selectedHost, selectedForwardGroup, hosts, hostById, forwardGroupById]);
-  const checkPort = useCallback(async () => {
-    const checkId = latestPortCheckRef.current + 1;
-    latestPortCheckRef.current = checkId;
-    const routeMode = form.routeMode;
-    const hostId = form.hostId;
-    const forwardGroupId = form.forwardGroupId;
-    const tunnelId = form.tunnelId;
-    const sourcePort = form.sourcePort;
-    // 共享 TLS 入站上的规则没有自己的对外端口，不查。
-    if (form.entryMode === "sni") return;
-    if (!sourcePort || sourcePort < 1) return;
-    if (isForwardGroupRouteMode ? !forwardGroupId : !hostId) return;
-    if (!isValidForwardPort(sourcePort)) {
-      setPortRangeError("端口必须在 1-65535 之间");
-      setPortStatus("used");
-      return;
-    }
-    // 超不超范围交给 checkPort 判 —— 它返回的 reason 就是服务端的原话。
-    // 以前这里会先用界面自己算的那份策略拦一道，拦下了就**直接返回**，
-    // 连请求都不发；而那份策略和服务端并不一致。
-    setPortRangeError(null);
-    setPortStatus("checking");
-    try {
-      const result = await utils.rules.checkPort.fetch({
-        userId: editingId ? undefined : createOwnerUserId,
-        ...(isForwardGroupRouteMode
-          ? { forwardGroupId: Number(forwardGroupId) }
-          : { hostId: Number(hostId), tunnelId: routeMode === "tunnel" ? tunnelId : null }),
-        sourcePort,
-        // 端口段整段查（隧道 / 转发组上服务端直接回「不支持」的原因）。
-        ...(formSourcePortEnd > sourcePort ? { sourcePortEnd: formSourcePortEnd } : {}),
-        excludeRuleId: editingId || undefined,
-        protocol: form.protocol,
-      });
-      if (latestPortCheckRef.current !== checkId) return;
-      setPortRangeError(result.used ? result.reason ?? null : null);
-      setPortStatus(result.used ? "used" : "available");
-    } catch {
-      if (latestPortCheckRef.current !== checkId) return;
-      setPortStatus("idle");
-    }
-  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, formSourcePortEnd, form.tunnelId, form.entryMode, editingId, createOwnerUserId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
-
-  // A response started for the previous route must not mark the new route occupied.
-  useEffect(() => {
-    latestPortCheckRef.current += 1;
-    setPortStatus("idle");
-  }, [editingId, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, formSourcePortEnd, form.tunnelId, isForwardGroupRouteMode]);
-
-  // 源端口变化时自动检测
-  useEffect(() => {
-    const hasTarget = isForwardGroupRouteMode ? !!form.forwardGroupId : !!form.hostId;
-    if (form.sourcePort > 0 && hasTarget) {
-      const timer = setTimeout(checkPort, 500);
-      return () => clearTimeout(timer);
-    } else {
-      setPortStatus("idle");
-    }
-  }, [form.sourcePort, formSourcePortEnd, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.tunnelId, checkPort, isForwardGroupRouteMode]);
-
-  useEffect(() => {
-    if (form.routeMode !== "local") return;
-    if (editingId) return;
-    if (usableForwardTypes.length === 0) return;
-    if (!usableForwardTypes.includes(form.forwardType)) {
-      setForm((prev) => ({ ...prev, forwardType: usableForwardTypes[0], tunnelId: null }));
-    }
-  }, [editingId, form.forwardType, form.routeMode, usableForwardTypes]);
-
-  useEffect(() => {
-    if (!isForwardGroupRouteMode) return;
-    const candidates = form.routeMode === "local" ? availablePortForwardGroups : form.routeMode === "chain" ? availableForwardChainGroups : availableFailoverForwardGroups;
-    if (!selectedForwardGroup && candidates.length > 0) {
-      if (isLegacyLocalRuleEdit && form.routeMode === "local" && !form.forwardGroupId) return;
-      setForm((prev) => ({ ...prev, forwardGroupId: Number(candidates[0].id) }));
-      return;
-    }
-    const expectedGroupMode = form.routeMode === "local" ? "port" : form.routeMode === "chain" ? "chain" : "failover";
-    if (selectedForwardGroup && forwardGroupModeOf(selectedForwardGroup) !== expectedGroupMode) {
-      setForm((prev) => ({
-        ...prev,
-        forwardGroupId: candidates[0] ? Number(candidates[0].id) : null,
-        failoverEnabled: form.routeMode === "chain" ? false : prev.failoverEnabled,
-      }));
-      return;
-    }
-    const groupForwardType = getForwardGroupRuleForwardType(selectedForwardGroup, form.forwardType);
-    if (selectedForwardGroup && form.forwardType !== groupForwardType) {
-      setForm((prev) => ({ ...prev, forwardType: groupForwardType }));
-    }
-  }, [availablePortForwardGroups, availableFailoverForwardGroups, availableForwardChainGroups, form.forwardGroupId, form.forwardType, form.routeMode, isForwardGroupRouteMode, isLegacyLocalRuleEdit, selectedForwardGroup]);
-
-  useEffect(() => {
-    if (!form.failoverEnabled || canUseMainBackup) return;
-    setForm((prev) => ({ ...prev, failoverEnabled: false }));
-  }, [canUseMainBackup, form.failoverEnabled]);
-
-  useEffect(() => {
-    if (!systemSettingsFetched) return;
-    if (telegramBotReady || !form.telegramErrorNotifyEnabled) return;
-    setForm((prev) => prev.telegramErrorNotifyEnabled ? { ...prev, telegramErrorNotifyEnabled: false } : prev);
-  }, [form.telegramErrorNotifyEnabled, systemSettingsFetched, telegramBotReady]);
-
-  // 随机分配端口
-  const handleRandomPort = async () => {
-    if (isForwardGroupRouteMode) {
-      if (!form.forwardGroupId) {
-        toast.error(form.routeMode === "local" ? "请先选择端口转发" : form.routeMode === "chain" ? "请先选择转发链" : "请先选择转发组");
-        return;
-      }
-    } else if (!form.hostId) {
-      toast.error("请先选择主机");
-      return;
-    }
-    try {
-      const randomPortInput = isForwardGroupRouteMode
-        ? { forwardGroupId: Number(form.forwardGroupId), excludeRuleId: editingId || undefined, protocol: form.protocol }
-        : { hostId: Number(form.hostId), tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null, excludeRuleId: editingId || undefined, protocol: form.protocol };
-      const result = await utils.rules.randomPort.fetch({ ...randomPortInput, userId: editingId ? undefined : createOwnerUserId });
-      setForm({ ...form, sourcePort: result.port, sourcePortText: null });
-      setPortStatus("available");
-      toast.success(`已分配随机端口: ${result.port}`);
-    } catch (err: any) {
-      toast.error(err.message || "无法获取随机端口");
-    }
-  };
+  const useRuleMainBackupResult = useRuleMainBackup({ panelFlags, form, selectedForwardGroup, effectiveRouteForwardType, selectedTunnel, tunnelById, user, usableForwardTypes, routeModeLocked, isSniEntryMode, egressActive, canUseFailoverGroup, setRouteMode, canUseGost, selectedHost, hosts, hostById, forwardGroupById });
+  const { canUseMainBackup, telegramBotReady, selectedForwardGroupIsChain, mainBackupDisabledText, kernelForwardWarning, routeGroupSectionVisible, routeGroupSummary, canAutoSwitchMainBackupToGost, mainBackupBlock } = useRuleMainBackupResult;
+  const useRulePortCheckResult = useRulePortCheck({ latestPortCheckRef, form, isForwardGroupRouteMode, setPortRangeError, setPortStatus, utils, editingId, createOwnerUserId, formSourcePortEnd, selectedEntryPortPolicy, usableForwardTypes, setForm, availablePortForwardGroups, availableForwardChainGroups, availableFailoverForwardGroups, selectedForwardGroup, isLegacyLocalRuleEdit, canUseMainBackup, systemSettingsFetched, telegramBotReady });
+  const { handleRandomPort } = useRulePortCheckResult;
 
   /*
     「重置统计」和「删除规则」都走共享的确认框：请求在路上时弹窗留着、按钮写「重置中...」，
@@ -3923,89 +3332,8 @@ function RulesContent() {
     },
   });
 
-  const ruleFilters = useMemo<RuleFilterState>(() => ({
-    filterUser,
-    filterResource,
-    ruleCategory,
-    searchQuery: ruleSearchQuery,
-    isAdmin: user?.role === "admin",
-    userId: user?.id,
-    hostById,
-    tunnelById,
-    userById,
-    forwardGroupById,
-    getRuleEntryHostId: getRuleEntryHostIdForSort,
-  }), [filterResource, forwardGroupById, getRuleEntryHostIdForSort, hostById, ruleCategory, ruleSearchQuery, filterUser, tunnelById, user?.id, user?.role, userById]);
-  const baseScopedRules = useMemo(() => rules || [], [rules]);
-  const selectedScopedRules = selectedScopeQueryEnabled ? selectedScopeRules : undefined;
-  const scopedRulesReady = selectedScopeQueryEnabled ? selectedScopedRules !== undefined : ruleListDataReady;
-  /*
-    列表同步算出来，不再经一个 effect「下一轮」才填：以前第一次渲染是空的（数据明明在缓存里），
-    等 effect 填上才有卡 —— 中间先画了一帧「没有规则」，分区切换动画又要先把那一帧退场（200ms）
-    再把列表进场，换到这一页要空着 300ms 才见到卡（用户 2026-11-03 录屏）。
-    数据还没就绪（第一次打开、缓存里没有）时沿用上一次算出的列表，不闪空。
-  */
-  const lastFilteredRulesRef = useRef<any[]>([]);
-  const filteredRules = useMemo(() => {
-    if (!scopedRulesReady) return lastFilteredRulesRef.current;
-    const sourceRules = selectedScopeQueryEnabled ? selectedScopedRules || [] : baseScopedRules;
-    const next = sourceRules.filter((rule: any) => isForwardRuleVisibleByFilters(rule, ruleFilters));
-    lastFilteredRulesRef.current = next;
-    return next;
-  }, [baseScopedRules, ruleFilters, scopedRulesReady, selectedScopedRules, selectedScopeQueryEnabled]);
-  const filteredRulesPrimed = scopedRulesReady || lastFilteredRulesRef.current.length > 0;
-  const ruleFilterCacheScope = user?.role === "admin"
-    ? `admin-${user?.id || "self"}-${filterUser}`
-    : `user-${user?.id || "self"}`;
-  // 分类条的数字只按「谁的规则」数（服务端同样不看搜索 / 筛选），缓存键也只跟这个走
-  const ruleCategoryCountsCacheKey = useMemo(
-    () => encodeURIComponent(ruleFilterCacheScope),
-    [ruleFilterCacheScope],
-  );
-  const [stableRuleCategoryCounts, setStableRuleCategoryCounts] = useState(() => {
-    const cached = readCachedRuleCategoryCounts(ruleCategoryCountsCacheKey);
-    return { counts: cached || EMPTY_RULE_CATEGORY_COUNTS, ready: !!cached };
-  });
-  const previousRuleCategoryCountsCacheKey = useRef(ruleCategoryCountsCacheKey);
-  useEffect(() => {
-    if (previousRuleCategoryCountsCacheKey.current === ruleCategoryCountsCacheKey) return;
-    previousRuleCategoryCountsCacheKey.current = ruleCategoryCountsCacheKey;
-    const cached = readCachedRuleCategoryCounts(ruleCategoryCountsCacheKey);
-    setStableRuleCategoryCounts({ counts: cached || EMPTY_RULE_CATEGORY_COUNTS, ready: !!cached });
-  }, [ruleCategoryCountsCacheKey]);
-  const liveRuleCategoryCounts = useMemo<RuleCategoryCounts>(() => {
-    if (rulePageQuery.data?.categoryCounts) {
-      return normalizeRuleCategoryCounts(rulePageQuery.data.categoryCounts);
-    }
-    const sourceRules = selectedScopeQueryEnabled ? selectedScopedRules || [] : baseScopedRules;
-    const baseFilters = {
-      ...ruleFilters,
-      ruleCategory: "all" as RuleCategory,
-      filterResource: "all" as RuleResourceFilter,
-      searchQuery: "",
-    };
-    const counts: RuleCategoryCounts = { ...EMPTY_RULE_CATEGORY_COUNTS };
-    sourceRules
-      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, baseFilters))
-      .forEach((rule: any) => {
-        const category = getRuleCategory(rule, forwardGroupById);
-        counts.all += 1;
-        counts[category] += 1;
-      });
-    return counts;
-  }, [baseScopedRules, forwardGroupById, ruleFilters, rulePageQuery.data?.categoryCounts, selectedScopeQueryEnabled, selectedScopedRules]);
-  const hasFreshRuleCategoryCounts = rulePageQuery.data !== undefined && !rulePageQuery.isPlaceholderData;
-  useEffect(() => {
-    if (!hasFreshRuleCategoryCounts) return;
-    setStableRuleCategoryCounts((previous) => (
-      previous.ready && ruleCategoryCountsEqual(previous.counts, liveRuleCategoryCounts)
-        ? previous
-        : { counts: liveRuleCategoryCounts, ready: true }
-    ));
-    writeCachedRuleCategoryCounts(ruleCategoryCountsCacheKey, liveRuleCategoryCounts);
-  }, [hasFreshRuleCategoryCounts, liveRuleCategoryCounts, ruleCategoryCountsCacheKey]);
-  const ruleCategoryCountsReady = hasFreshRuleCategoryCounts || stableRuleCategoryCounts.ready;
-  const ruleCategoryCounts = hasFreshRuleCategoryCounts ? liveRuleCategoryCounts : stableRuleCategoryCounts.counts;
+  const useRuleFilterCountsResult = useRuleFilterCounts({ filterUser, filterResource, ruleCategory, ruleSearchQuery, user, hostById, tunnelById, userById, forwardGroupById, getRuleEntryHostIdForSort, rules, selectedScopeQueryEnabled, selectedScopeRules, ruleListDataReady, rulePageQuery });
+  const { ruleCategoryCountsReady, ruleCategoryCounts, filteredRules, selectedScopedRules, ruleFilterCacheScope, scopedRulesReady, filteredRulesPrimed, baseScopedRules, ruleFilters } = useRuleFilterCountsResult;
   const ruleCategoryItems = useMemo<FilterChipItem<RuleCategory>[]>(() => [
     { value: "all", label: "全部", count: ruleCategoryCountsReady ? ruleCategoryCounts.all : null },
     { value: "local", label: desktopRuleTypeLabels.local, count: ruleCategoryCountsReady ? ruleCategoryCounts.local : null },
@@ -4076,16 +3404,34 @@ function RulesContent() {
       placeholderData: (previousData) => previousData,
     }
   );
-  const { data: dailyTrafficSummary, isFetched: dailyTrafficSummaryFetched } = trpc.rules.trafficSummary.useQuery(
+  /*
+    列表接口已经把这一页的当日汇总带回来了（withTrafficSummary24h）：规则 id 对得上就直接当这条查询的初始数据，
+    卡片不用再等一轮往返；之后照常按 pollingInterval 刷新。对不上（客户端又筛掉了几条、翻页中的旧数据）就照旧去取。
+  */
+  const listPageTrafficSummary = useMemo(() => {
+    const data = rulePageQuery.data as { items?: Array<{ id?: unknown }>; trafficSummary24h?: unknown[] } | undefined;
+    if (!data?.trafficSummary24h || rulePageQuery.isPlaceholderData) return undefined;
+    const pageIds = Array.from(new Set((data.items || []).map((rule) => Number(rule.id)).filter((id) => Number.isInteger(id) && id > 0))).sort((a, b) => a - b);
+    return pageIds.join(",") === visibleRuleIdsForMetrics.join(",") ? data.trafficSummary24h : undefined;
+  }, [rulePageQuery.data, rulePageQuery.isPlaceholderData, visibleRuleIdsForMetrics]);
+  const {
+    data: dailyTrafficSummary,
+    isFetched: dailyTrafficSummaryNetworkFetched,
+    isPlaceholderData: dailyTrafficSummaryIsPlaceholder,
+  } = trpc.rules.trafficSummary.useQuery(
     { hours: 24, range: "24h", ruleIds: visibleRuleIdsForMetrics },
     {
       enabled: visibleRuleIdsForMetrics.length > 0,
       refetchInterval: pollingInterval("normal"),
       staleTime: 5000,
       refetchOnWindowFocus: false,
+      initialData: listPageTrafficSummary as any,
+      initialDataUpdatedAt: listPageTrafficSummary ? rulePageQuery.dataUpdatedAt : undefined,
       placeholderData: (previousData) => previousData,
     }
   );
+  // 「这一页的汇总到了」：网络取到过，或者用的是列表顺带的那份（不是翻页时沿用的上一页占位）
+  const dailyTrafficSummaryFetched = dailyTrafficSummaryNetworkFetched || (dailyTrafficSummary !== undefined && !dailyTrafficSummaryIsPlaceholder);
   const [stableTotalTrafficSummaryRows, setStableTotalTrafficSummaryRows] = useState<any[]>([]);
   const [stableDailyTrafficSummaryRows, setStableDailyTrafficSummaryRows] = useState<any[]>([]);
   const resetTrafficMutation = trpc.rules.resetTraffic.useMutation({
@@ -4250,124 +3596,8 @@ function RulesContent() {
    * 也能拖（单人自用的面板就是这样）；混着几个人的不给拖，免得把别人的顺序一起挪了。
    */
   // 按个人分组筛 / 排的时候也不给拖：这一页不是那个分类的连续一段，拖完存回去的顺序会把别的规则挤乱。
-  const ruleSortingBase = effectiveViewMode !== "globe"
-    && filterResource === "all"
-    && ruleSearchQuery.trim().length === 0
-    && personalGroupFilter === null
-    && !personalGroupSortActive;
-  const ruleSortOwnersOk = (rules: ReadonlyArray<{ userId?: unknown }>) => user?.role !== "admin"
-    || filterUser !== "all"
-    || new Set(rules.map((rule) => Number(rule.userId || 0))).size <= 1;
-  const ruleSortingEnabled = ruleCategory !== "all"
-    && ruleSortingBase
-    && ruleSortOwnersOk(pagedRules);
-  const ruleSortingReady = ruleSortingEnabled && !rulePageQuery.isPlaceholderData;
-  const ruleSortableItems = useMemo(() => {
-    if (!ruleSortingEnabled) return [];
-    return pagedRules.filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId);
-  }, [pagedRules, ruleSortingEnabled]);
-  const ruleSortable = useSortableReorder({
-    items: ruleSortableItems,
-    getId: (rule: any) => Number(rule.id),
-    disabled: !ruleSortingReady || ruleReorderPending || ruleSortableItems.length < 2,
-    onReorder: (nextRules) => {
-      if (ruleCategory === "all") return;
-      const requestId = ruleOrder.begin(nextRules);
-      reorderRulesMutation.mutate({
-        category: ruleCategory,
-        ids: nextRules.map((rule: any) => Number(rule.id)),
-        startIndex: (rulePagination.currentPage - 1) * rulePagination.pageSize,
-      }, {
-        onError: () => ruleOrder.release(requestId),
-        onSettled: () => ruleOrder.resync(requestId, () => Promise.all([
-          utils.rules.list.invalidate(),
-          utils.rules.listPage.invalidate(),
-          utils.rules.mapItems.invalidate(),
-          utils.rules.listSummary.invalidate(),
-        ])),
-      });
-    },
-  });
-  const desktopRuleGroups = useMemo(() => {
-    const groups = [
-      { type: "local" as const, label: desktopRuleTypeLabels.local, rules: [] as any[] },
-      { type: "tunnel" as const, label: desktopRuleTypeLabels.tunnel, rules: [] as any[] },
-      { type: "chain" as const, label: desktopRuleTypeLabels.chain, rules: [] as any[] },
-      { type: "group" as const, label: desktopRuleTypeLabels.group, rules: [] as any[] },
-    ];
-    const groupByType = new Map(groups.map((group) => [group.type, group]));
-    pagedRules.forEach((rule: any) => {
-      groupByType.get(getRuleDisplayType(rule, forwardGroupById))?.rules.push(rule);
-    });
-    return groups.filter((group) => group.rules.length > 0);
-  }, [forwardGroupById, pagedRules]);
-  // 「深空」主题：「全部」也不分组，一张表到底；类型写在每一行名字前面的小标签上（RuleRow）
-  // 按个人分组排序时也不按类型分段：分段会把排好的分组顺序拆开
-  const shouldGroupRuleCards = ruleCategory === "all" && uiTheme !== "deepspace" && !personalGroupSortActive;
-  /*
-    换进这一页时先只画前几张卡（手机上刚好一屏），剩下的交给 React 的低优先级渲染随后补上：
-    第一帧要画十几张卡的整棵树在手机上要几百毫秒，期间点什么都没反应（用户 2026-11-03 录屏
-    「切到转发规则还是有点卡顿」）。useDeferredValue 的首次渲染拿到 false，紧接着的过渡渲染
-    拿到 true —— 过渡是可打断的，不挡滚动和点击。占位块和卡同高，列表不会跳。
-  */
-  const ruleCardsHydrated = useDeferredValue(true, false);
-  const initialRuleCardIds = useMemo(() => {
-    const ordered = shouldGroupRuleCards ? desktopRuleGroups.flatMap((group) => group.rules) : pagedRules;
-    return new Set(ordered.slice(0, INITIAL_RULE_CARD_BUDGET).map((rule: { id?: unknown }) => Number(rule.id)));
-  }, [desktopRuleGroups, pagedRules, shouldGroupRuleCards]);
-  const ruleCardVisible = (rule: { id?: unknown }) => ruleCardsHydrated || initialRuleCardIds.has(Number(rule.id));
-
-  /**
-   * 「全部」按类型分组显示时，每一组里也能拖。一组就是一个分类（端口转发 / 隧道转发 / 转发链 / 转发组），
-   * 存的是那个分类自己的顺序 —— 和点进那个分类的页签去拖是同一份，两边看到的一样。
-   */
-  const ruleGroupSortItems = useMemo(() => {
-    const byType: Record<RuleGroupType, typeof pagedRules> = { local: [], tunnel: [], chain: [], group: [] };
-    if (!shouldGroupRuleCards || !ruleSortingBase) return byType;
-    for (const group of desktopRuleGroups) {
-      byType[group.type] = group.rules.filter((rule) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId);
-    }
-    return byType;
-  }, [desktopRuleGroups, ruleSortingBase, shouldGroupRuleCards]);
-  const ruleGroupSortingEnabled = (type: RuleGroupType) => shouldGroupRuleCards
-    && ruleSortingBase
-    && ruleGroupSortItems[type].length >= 2
-    && ruleSortOwnersOk(ruleGroupSortItems[type]);
-  const saveRuleGroupOrder = (type: RuleGroupType, nextGroupRules: typeof pagedRules) => {
-    // 这一页上同组的位置按新顺序换人，别的组原地不动，拖完马上就是新顺序，不用等刷新。
-    const sortableIds = new Set(ruleGroupSortItems[type].map((rule) => Number(rule.id)));
-    const queue = [...nextGroupRules];
-    const nextPage = pagedRules.map((rule) => (sortableIds.has(Number(rule.id)) ? queue.shift() : rule));
-    const requestId = ruleOrder.begin(nextPage);
-    reorderRulesMutation.mutate({
-      category: type,
-      ids: nextGroupRules.map((rule) => Number(rule.id)),
-    }, {
-      onError: () => ruleOrder.release(requestId),
-      onSettled: () => ruleOrder.resync(requestId, () => Promise.all([
-        utils.rules.list.invalidate(),
-        utils.rules.listPage.invalidate(),
-        utils.rules.mapItems.invalidate(),
-        utils.rules.listSummary.invalidate(),
-      ])),
-    });
-  };
-  const ruleGroupSortableOptions = (type: RuleGroupType) => ({
-    items: ruleGroupSortItems[type],
-    getId: (rule: (typeof pagedRules)[number]) => Number(rule.id),
-    disabled: !ruleGroupSortingEnabled(type) || rulePageQuery.isPlaceholderData || ruleReorderPending,
-    onReorder: (nextRules: typeof pagedRules) => saveRuleGroupOrder(type, nextRules),
-  });
-  const localRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("local"));
-  const tunnelRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("tunnel"));
-  const chainRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("chain"));
-  const groupRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("group"));
-  const ruleGroupSortables: Record<RuleGroupType, typeof localRuleGroupSortable> = {
-    local: localRuleGroupSortable,
-    tunnel: tunnelRuleGroupSortable,
-    chain: chainRuleGroupSortable,
-    group: groupRuleGroupSortable,
-  };
+  const useRuleSortingResult = useRuleSorting({ effectiveViewMode, filterResource, ruleSearchQuery, personalGroupFilter, personalGroupSortActive, user, filterUser, ruleCategory, pagedRules, rulePageQuery, ruleReorderPending, ruleOrder, reorderRulesMutation, rulePagination, utils, forwardGroupById, uiTheme });
+  const { ruleSortingEnabled, desktopRuleGroups, ruleGroupSortables, ruleGroupSortingEnabled, ruleCardVisible, shouldGroupRuleCards, ruleSortable } = useRuleSortingResult;
 
   const useRuleSelectOptionHelpersResult = useRuleSelectOptionHelpers({ hosts, trafficBillingHostIds, trafficBillingTunnelIds, tunnelAvailabilityById, trafficBilling, trafficBillingForwardGroupIds });
   const { isTrafficBillingForwardGroup, getForwardGroupSelectName, renderTrafficMultiplierBadge, renderTrafficBillingResourceBadge, getHostName, getTunnelSelectName, getTunnelSelectText, renderTunnelSelectLabel, getHostOptionText, renderHostStatusLabel } = useRuleSelectOptionHelpersResult;
@@ -4578,79 +3808,8 @@ function RulesContent() {
     规则卡上线路组的 A / B 线路行平时收着（和别的卡一样高），点「择优 · 2 条」「主备 · 主线路」那枚才展开；
     展开后点哪一行进线路组编辑（用户 2026-11-03）。
   */
-  const [expandedLineRuleIds, setExpandedLineRuleIds] = useState<Set<number>>(() => new Set());
-  const toggleRuleLines = (ruleId: number) => {
-    setExpandedLineRuleIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(ruleId)) next.delete(ruleId);
-      else next.add(ruleId);
-      return next;
-    });
-  };
-  const [expandedEntryRuleIds, setExpandedEntryRuleIds] = useState<Set<number>>(() => new Set());
-  const toggleEntryAddresses = (ruleId: number) => {
-    setExpandedEntryRuleIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(ruleId)) next.delete(ruleId); else next.add(ruleId);
-      return next;
-    });
-  };
-
-  /** 复制入口 IP:端口 到剪贴板 */
-  const copyTargetAddress = async (text: string) => {
-    if (await copyTextToClipboard(text)) toast.success(`已复制目标地址: ${text}`);
-    else toast.error("复制失败，请手动复制");
-  };
-
-  const copyEntryAddress = async (rule: any, entryValue?: string) => {
-    if (Number(rule?.tlsInboundId || 0) > 0) {
-      const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
-      const name = String(entryValue || parseSniNameJson(rule.sniNames)[0] || "").trim();
-      if (!name || !inbound?.port) {
-        toast.error("未获取到共享 TLS 入站的地址");
-        return;
-      }
-      const text = formatAddressWithPort(name, Number(inbound.port));
-      if (await copyTextToClipboard(text)) toast.success(`已复制入口地址: ${text}`);
-      else toast.error("复制失败，请手动复制");
-      return;
-    }
-    if (rule.forwardGroupId) {
-      const group = forwardGroupById.get(Number(rule.forwardGroupId));
-      if (isForwardChainGroup(group)) {
-        const entry = String(entryValue || getForwardChainEntryAddresses(group)[0]?.value || "").trim();
-        if (!entry) {
-          toast.error("该转发链未配置可用入口地址");
-          return;
-        }
-        const text = formatAddressWithPort(entry, rule.sourcePort);
-        if (await copyTextToClipboard(text)) toast.success(`已复制入口地址: ${text}`);
-        else toast.error("复制失败，请手动复制");
-        return;
-      }
-      const entry = String(entryValue || getForwardGroupEntryAddresses(group)[0]?.value || "").trim();
-      if (!entry) {
-        toast.error(`该${getForwardGroupRouteLabel(group)}未配置可用入口地址`);
-        return;
-      }
-      const text = formatAddressWithPort(entry, rule.sourcePort);
-      if (await copyTextToClipboard(text)) toast.success(`已复制入口地址: ${text}`);
-      else toast.error("复制失败，请手动复制");
-      return;
-    }
-    const entry = String(entryValue || getRuleEntry(rule)).trim();
-    if (!entry) {
-      toast.error("未获取到主机入口地址");
-      return;
-    }
-    const text = formatRuleEntryAddress(entry, rule);
-    /*
-      原来这里的回退路径**不看 execCommand 的返回值**，所以无论复制成没成，
-      都照样弹「已复制入口地址」—— 提示比没有提示更坏。共享实现会如实回 false。
-    */
-    if (await copyTextToClipboard(text)) toast.success(`已复制入口地址: ${text}`);
-    else toast.error("复制失败，请手动复制");
-  };
+  const useRuleEntryExpansionResult = useRuleEntryExpansion({ tlsInboundById, forwardGroupById, getForwardChainEntryAddresses, getForwardGroupEntryAddresses, getRuleEntry });
+  const { copyEntryAddress, copyTargetAddress, toggleEntryAddresses, toggleRuleLines, expandedEntryRuleIds, expandedLineRuleIds } = useRuleEntryExpansionResult;
 
   /*
     规则的状态点和主机、隧道、首页「需要关注」用同一枚 StatusDot：运行中是绿，不再是
@@ -4674,161 +3833,8 @@ function RulesContent() {
   const { renderNotRunningReason, renderAdminManagedBadge, renderSniRuleBadge, renderEgressBadge } = useRuleStateBadgesResult;
 
   /** 两种入口方式。编辑时定死（要换就新建规则）。 */
-  const renderEntryModeSwitch = () => {
-    const pick = (mode: "port" | "sni") => {
-      if (editingId || mode === form.entryMode) return;
-      latestPortCheckRef.current += 1;
-      setPortStatus("idle");
-      setPortRangeError(null);
-      if (form.routeMode !== "local") {
-        // 隧道 / 转发链 / 转发组页签：资源照旧在上面选，这里只换入口方式；入站在下面按所选资源列。
-        if (mode === "port") {
-          setForm({ ...form, entryMode: "port", tlsInboundId: null, sourcePort: 0 });
-          return;
-        }
-        const first = sniChoices[0];
-        setForm({
-          ...form,
-          entryMode: "sni",
-          tlsInboundId: first ? Number(first.inbound.id) : null,
-          sourcePort: 0,
-          protocol: "tcp",
-          failoverEnabled: false,
-        });
-        return;
-      }
-      if (mode === "sni") {
-        const first = sniChoices[0];
-        if (!first) return;
-        const inbound = first.inbound;
-        setForm({
-          ...form,
-          entryMode: "sni",
-          tlsInboundId: Number(inbound.id),
-          hostId: first.forwardGroupId ? null : Number(inbound.hostId),
-          forwardGroupId: first.forwardGroupId,
-          tunnelId: null,
-          sourcePort: 0,
-          protocol: "tcp",
-          failoverEnabled: false,
-          forwardType: usableForwardTypes.includes(form.forwardType) ? form.forwardType : usableForwardTypes[0],
-        });
-        return;
-      }
-      const firstPortGroup = canUseSavedLocalForward ? availablePortForwardGroups[0] : null;
-      const firstBillingHost = !firstPortGroup && canUseBillingHostLocalForward ? availableTrafficBillingHosts[0] : null;
-      setForm({
-        ...form,
-        entryMode: "port",
-        tlsInboundId: null,
-        hostId: firstBillingHost ? Number(firstBillingHost.id) : null,
-        forwardGroupId: firstPortGroup ? Number(firstPortGroup.id) : null,
-        forwardType: firstPortGroup ? getForwardGroupRuleForwardType(firstPortGroup, form.forwardType) : form.forwardType,
-        sourcePort: 0,
-      });
-    };
-    const portAvailable = form.routeMode !== "local" || canUseSavedLocalForward || canUseBillingHostLocalForward;
-    return (
-      <div className="flex min-w-0 flex-wrap items-center gap-2" role="group" aria-label="入口方式">
-        <span className="text-meta text-muted-foreground">入口方式</span>
-        <Button
-          type="button"
-          size="sm"
-          variant={form.entryMode === "port" ? "default" : "outline"}
-          disabled={!!editingId || !portAvailable}
-          aria-pressed={form.entryMode === "port"}
-          onClick={() => pick("port")}
-        >
-          独立端口
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={form.entryMode === "sni" ? "default" : "outline"}
-          disabled={!!editingId || !sniAvailableForTab(form.routeMode)}
-          aria-pressed={form.entryMode === "sni"}
-          onClick={() => pick("sni")}
-        >
-          共享 TLS 入站
-        </Button>
-        {editingId ? <span className="text-meta text-muted-foreground">入口方式保存后不能更改，需要的话请新建规则</span> : null}
-      </div>
-    );
-  };
-
-  /** 共享 TLS 入站：选入站 + 填 SNI。和服务端用同一份规整 / 校验（shared/tlsInbound.ts）。 */
-  const renderSniEntryFields = () => {
-    // 编辑时只能换同一台主机（转发资源上：同端口）的入站。
-    const editingInbound = editingId && form.tlsInboundId ? tlsInboundById.get(Number(form.tlsInboundId)) : null;
-    const options = sniChoices.filter((choice) => !editingInbound || (sniRouteKind === "group"
-      ? Number(choice.inbound.port) === Number(editingInbound.port) && Number(choice.forwardGroupId || 0) === Number(form.forwardGroupId || 0)
-      : Number(choice.inbound.hostId) === Number(editingInbound.hostId)));
-    const groupNameOf = (groupId: number | null) => (groupId ? String(forwardGroupById.get(Number(groupId))?.name || `#${groupId}`) : "");
-    const blocker = submitBlocker;
-    const sniError = blocker && blocker !== "还缺目标地址" && blocker !== "还缺目标端口" && blocker !== "目标端口必须在 1-65535 之间" ? blocker : null;
-    return (
-      <div className="space-y-2">
-        <FormField className="space-y-1.5">
-          <Label>共享 TLS 入站</Label>
-          <Select
-            value={form.tlsInboundId ? sniInboundChoiceKey(form.tlsInboundId, form.routeMode === "local" ? form.forwardGroupId : sniRouteKind === "group" ? form.forwardGroupId : null) : undefined}
-            onValueChange={(value) => {
-              const choice = sniChoices.find((item) => item.key === value);
-              if (!choice) return;
-              const inbound = choice.inbound;
-              if (form.routeMode === "local") {
-                // 端口转发页签：选的是「直连」还是「经某个端口转发资源」，跟着入站一起定。
-                setForm({ ...form, tlsInboundId: Number(inbound.id), hostId: choice.forwardGroupId ? null : Number(inbound.hostId), forwardGroupId: choice.forwardGroupId });
-                return;
-              }
-              setForm({ ...form, tlsInboundId: Number(inbound.id), ...(form.routeMode === "tunnel" ? { hostId: Number(inbound.hostId) } : {}) });
-            }}
-          >
-            <SelectTrigger><SelectValue placeholder={sniRouteKind === "direct" ? "选择主机上的共享 TLS 入站" : "选择入口主机上的共享 TLS 入站"} /></SelectTrigger>
-            <SelectContent>
-              {options.map((choice) => {
-                const inbound = choice.inbound;
-                const routed = sniRouteKind !== "direct" || !!choice.forwardGroupId;
-                return (
-                  <SelectItem key={choice.key} value={choice.key} textValue={`${groupNameOf(choice.forwardGroupId)} ${inbound.hostName} ${inbound.name} ${inbound.port}`}>
-                    {form.routeMode === "local" && choice.forwardGroupId ? `端口转发「${groupNameOf(choice.forwardGroupId)}」· ` : ""}
-                    {inbound.hostName || "主机"} · {inbound.name} :{inbound.port}
-                    {!inbound.agentSupported || (routed && inbound.routedAgentSupported === false) ? "（需要升级 Agent）" : !inbound.isEnabled ? "（已停用）" : ""}
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
-        </FormField>
-        {selectedTlsInbound && (
-          <p className="text-meta text-muted-foreground">
-            允许的域名：{(selectedTlsInbound.allowedSni || []).length > 0 ? selectedTlsInbound.allowedSni.join("、") : "不限"}
-          </p>
-        )}
-        <FormField className="space-y-1.5">
-          <Label className="flex items-baseline gap-1.5">
-            SNI 域名 <span className="text-destructive">*</span>
-            <span data-fx-help="" className="text-xs font-normal text-muted-foreground">一行一个，最多 {TLS_INBOUND_MAX_SNI_PER_RULE} 个，精确匹配</span>
-          </Label>
-          <Textarea
-            rows={3}
-            placeholder={"www.example.com\nexample.com"}
-            value={form.sniNamesText}
-            onChange={(e) => setForm({ ...form, sniNamesText: e.target.value })}
-            className={sniError && form.sniNamesText.trim() ? "border-destructive" : undefined}
-          />
-        </FormField>
-        {sniError && form.sniNamesText.trim() ? <p className="text-xs text-destructive">{sniError}</p> : null}
-        <p data-fx-help="" className="text-meta leading-5 text-muted-foreground">
-          {sniRouteKind === "group"
-            ? `客户端用这些域名连接入口主机的 ${selectedTlsInbound ? selectedTlsInbound.port : "入站"} 端口，按 SNI 分到这条规则，再经所选转发资源转到目标，原样透传、节点不解密。每台入口主机都要有同端口的共享 TLS 入站（没有的那台不下发，DDNS 也不会切过去）；域名的 DNS 解析到入口（转发组的入口域名或入口主机）。协议固定 TCP。`
-            : sniRouteKind === "tunnel"
-            ? `客户端用这些域名连接 ${selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "隧道入口机的入站端口"}，按 SNI 分到这条规则，再经隧道到出口、由出口连目标，原样透传、节点不解密。每个域名的 DNS 都要解析到隧道的入口主机。协议固定 TCP，不带 PROXY 头。`
-            : `客户端用这些域名连接 ${selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "入站端口"}，按 TLS 握手里的 SNI 分到这条规则，原样透传、节点不解密。每个域名的 DNS 都要解析到这台主机。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务；协议固定 TCP。`}
-        </p>
-      </div>
-    );
-  };
+  const useRuleEntryModeFieldsResult = useRuleEntryModeFields({ editingId, form, latestPortCheckRef, setPortStatus, setPortRangeError, setForm, sniChoices, usableForwardTypes, canUseSavedLocalForward, availablePortForwardGroups, canUseBillingHostLocalForward, availableTrafficBillingHosts, sniAvailableForTab, tlsInboundById, sniRouteKind, forwardGroupById, submitBlocker, selectedTlsInbound });
+  const { renderEntryModeSwitch, renderSniEntryFields } = useRuleEntryModeFieldsResult;
 
   const useRuleTransferDisplayResult = useRuleTransferDisplay({ tlsInboundById, forwardGroupById, entryDomainForForwardGroup, getForwardChainEntryAddresses, getForwardGroupEntryAddresses, getRuleEntries, tunnelById, hosts, trafficByRule, hostById });
   const { getRuleTransferDisplay, getRuleHopNames } = useRuleTransferDisplayResult;
@@ -4873,111 +3879,8 @@ function RulesContent() {
    *
    * 徽标本身要留：它说的是「用什么转发」，不是「经过哪儿」，Flow 回答不了。
    */
-  const renderRouteBadge = (rule: any, compactRow = false, hideRoute = false) => {
-    const tunnel = rule.forwardType === "gost" && rule.tunnelId ? tunnelById.get(Number(rule.tunnelId)) : null;
-    const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    const groupMode = forwardGroupModeOf(group);
-    const groupRouteLabel = getForwardGroupRouteLabel(group);
-    const GroupRouteIcon = groupMode === "port" ? ArrowRightLeft : Layers3;
-    const kernelWarning = getRuleKernelForwardWarning(rule);
-    const kernelWarningBadge = renderKernelForwardWarningBadge(kernelWarning);
-    const fxpIssueBadge = renderTunnelFxpIssueBadge(tunnel);
-    const portWarningBadge = renderPortWarningBadge(rule);
-    const warningBadge = kernelWarningBadge || fxpIssueBadge || portWarningBadge ? <>{kernelWarningBadge}{fxpIssueBadge}{portWarningBadge}</> : null;
-    const badge = (
-      <Badge
-        variant="outline"
-        className={`w-fit whitespace-nowrap text-[11px] ${
-          rule.forwardGroupId
-            ? "border-[color-mix(in_srgb,var(--fx-healthy)_30%,transparent)] text-[var(--fx-healthy-text)]"
-            : rule.forwardType === "iptables" || rule.forwardType === "nftables"
-            ? "border-[color-mix(in_srgb,var(--fx-accent)_30%,transparent)] text-[var(--fx-accent)]"
-            : rule.forwardType === "socat"
-            ? "border-[color-mix(in_srgb,var(--fx-cat-orange)_30%,transparent)] text-[var(--fx-cat-orange)]"
-            : rule.forwardType === "gost"
-            ? "border-[color-mix(in_srgb,var(--fx-cat-teal)_30%,transparent)] text-[var(--fx-cat-teal)]"
-            : "border-[color-mix(in_srgb,var(--fx-cat-indigo)_30%,transparent)] text-[var(--fx-cat-indigo)]"
-        }`}
-      >
-        {rule.forwardGroupId ? (
-          <><GroupRouteIcon className="h-3 w-3 mr-1" />{groupRouteLabel}</>
-        ) : tunnel ? (
-          <><Network className="h-3 w-3 mr-1" />{getTunnelDisplay(tunnel, nginxTunnelEnabled).badgeLabel}</>
-        ) : rule.forwardType === "iptables" ? (
-          <><Shield className="h-3 w-3 mr-1" />iptables</>
-        ) : rule.forwardType === "nftables" ? (
-          <><Shield className="h-3 w-3 mr-1" />nftables</>
-        ) : rule.forwardType === "nginx" ? (
-          <><Zap className="h-3 w-3 mr-1" />{forwardTypeDisplayLabel(rule.forwardType)}</>
-        ) : rule.forwardType === "socat" ? (
-          <><ArrowRightLeft className="h-3 w-3 mr-1" />socat</>
-        ) : rule.forwardType === "gost" ? (
-          <><Network className="h-3 w-3 mr-1" />gost</>
-        ) : (
-          <><Zap className="h-3 w-3 mr-1" />realm</>
-        )}
-      </Badge>
-    );
-    const subscriptionBadge = renderSubscriptionBadge(rule);
-    if (rule.forwardGroupId) {
-      return (
-        <div className={`flex min-w-0 items-center gap-1 ${compactRow ? "overflow-hidden" : "flex-wrap"}`}>
-          {badge}
-          {renderForwardToolBadge(rule, group)}
-          {warningBadge}
-          {subscriptionBadge}
-        </div>
-      );
-    }
-    if (!tunnel) {
-      return warningBadge || subscriptionBadge ? (
-        <div className={`flex min-w-0 items-center gap-1 ${compactRow ? "overflow-hidden" : "flex-wrap"}`}>
-          {badge}
-          {warningBadge}
-          {subscriptionBadge}
-        </div>
-      ) : badge;
-    }
-    if (hideRoute) {
-      return warningBadge || subscriptionBadge ? (
-        <div className={`flex min-w-0 items-center gap-1 ${compactRow ? "overflow-hidden" : "flex-wrap"}`}>
-          {badge}
-          {warningBadge}
-          {subscriptionBadge}
-        </div>
-      ) : badge;
-    }
-    if (compactRow) {
-      /*
-        表格这一格只有 110～150px：路径排在徽标后面只露得出一个箭头，后面的主机名被裁掉、连省略号都没有
-        （2026-11 桌面走查）。这里只放徽标，整条路径挂在悬停提示上；规则名下面那行和卡片视图照旧画路径。
-      */
-      return (
-        <div className="flex min-w-0 items-center gap-1 overflow-hidden" title={getTunnelRouteText(tunnel, hosts)}>
-          {badge}
-          {warningBadge}
-        </div>
-      );
-    }
-    return (
-      <div className="flex min-w-0 flex-col gap-1">
-        {badge}
-        <div className="min-w-0 text-muted-foreground">
-          {renderTunnelRoute(tunnel, true)}
-        </div>
-        {fxpIssueBadge}
-      </div>
-    );
-  };
-
-  const renderUnsupportedHint = (children: ReactNode, title = unsupportedProtocolTitle) => (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>{children}</TooltipTrigger>
-        <TooltipContent>{title}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
+  const useRuleRouteBadgeResult = useRuleRouteBadge({ tunnelById, forwardGroupById, getRuleKernelForwardWarning, renderKernelForwardWarningBadge, renderTunnelFxpIssueBadge, renderPortWarningBadge, nginxTunnelEnabled, forwardTypeDisplayLabel, renderSubscriptionBadge, renderForwardToolBadge, hosts, renderTunnelRoute });
+  const { renderUnsupportedHint, renderRouteBadge } = useRuleRouteBadgeResult;
 
   const useRuleTrafficCellsResult = useRuleTrafficCells({ dailyTrafficByRule, totalTrafficByRule, stableProbeByRule });
   const { renderTableRuleDailyTraffic, renderTableRuleTotalTraffic, renderTableRuleLatency } = useRuleTrafficCellsResult;
@@ -4994,205 +3897,18 @@ function RulesContent() {
   */
   // 延迟记录、导出故障包、查看拓扑都在「诊断」框里（页签和底部按钮），菜单里不再单列。
   // tableCompact：精简的表里操作列只放「开关 · 编辑 · ···」（和老版本表格样稿一致），诊断进 ··· 第一项
-  const renderRuleActions = (rule: any, menuOnly = false, tableCompact = false) => {
-    const ruleCategory = getRuleCategory(rule, forwardGroupById);
-    const isForwardChainRule = ruleCategory === "chain";
-    const probeMethod = ruleLatencyProbeMethodForRule(rule);
-    // 哪条规则正在重置看 mutation 自己记的 variables，不另存一份目标
-    const resettingVariables = resetTrafficMutation.variables;
-    const resetting = resetTrafficMutation.isPending && resettingVariables?.scope === "rule" && Number(resettingVariables.ruleId) === Number(rule.id);
-    const readOnly = user?.role !== "admin" && isAdminManagedRule(rule);
-    const testAction = {
-      key: "test",
-      label: "诊断",
-      ariaLabel: `诊断 ${rule.name}：转发链路自测`,
-      icon: <Stethoscope className="h-3.5 w-3.5" />,
-      onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod }),
-    };
-    const editAction = { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => ruleCardUi.openEdit(rule) };
-    return (
-      <EntityActions
-        primary={tableCompact
-          ? (readOnly ? [] : [editAction])
-          : readOnly ? [testAction] : [testAction, editAction]}
-        menu={[
-          ...(tableCompact ? [testAction] : []),
-          {
-            key: "reset",
-            label: resetting ? "正在重置统计" : "重置统计",
-            ariaLabel: `重置 ${rule.name} 的统计数据`,
-            icon: resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />,
-            disabled: resetTrafficMutation.isPending,
-            onSelect: () => confirmResetTraffic({ scope: "rule", rule }),
-          },
-          { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => confirmDeleteRule(rule) },
-        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
-        menuLabel={`${rule.name} 的更多操作`}
-        menuOnly={menuOnly}
-      />
-    );
-  };
+  const useRuleActionsRendererResult = useRuleActionsRenderer({ forwardGroupById, resetTrafficMutation, user, setSelfTestRule, ruleCardUi, confirmResetTraffic, confirmDeleteRule });
+  const { renderRuleActions } = useRuleActionsRendererResult;
 
-  const handleViewModeChange = (nextViewMode: RuleViewMode) => {
-    setViewMode(nextViewMode);
-    storeRuleViewMode(nextViewMode);
-  };
-
-  const handleDisplayModeChange = (nextMode: RuleDisplayMode) => {
-    if (nextMode === "globe") {
-      handleViewModeChange("globe");
-      return;
-    }
-    if (nextMode === "table") {
-      handleViewModeChange("table");
-      return;
-    }
-    setViewMode("card");
-    storeRuleViewMode("card");
-    setRuleCardSize(nextMode);
-    storeRuleCardSize(nextMode);
-  };
-
-  const displayMode: RuleDisplayMode = effectiveViewMode === "table" || effectiveViewMode === "globe" ? effectiveViewMode : effectiveRuleCardSize;
-
-  const handleRuleCategoryChange = (value: string) => {
-    const next = (value === "local" || value === "tunnel" || value === "chain" || value === "group" ? value : "all") as RuleCategory;
-    setRuleCategory(next);
-    const selected = parseRuleResourceFilter(filterResource);
-    if (next === "all" && selected.type) {
-      setFilterResource("all");
-      storeString(filterResourceStorageKey, "all");
-    } else if (next !== "all" && selected.type !== next) {
-      setFilterResource(next);
-      storeString(filterResourceStorageKey, next);
-      setRuleResourceMenuType(next);
-    }
-  };
-
-  const handleFilterUserChange = (value: string) => {
-    setFilterUser(value);
-    storeString(filterUserStorageKey, value);
-  };
-
-  const handleFilterResourceChange = (value: string) => {
-    const next = normalizeRuleResourceFilter(value);
-    const parsed = parseRuleResourceFilter(next);
-    setFilterResource(next);
-    storeString(filterResourceStorageKey, next);
-    if (parsed.type) {
-      setRuleResourceMenuType(parsed.type);
-      setRuleCategory(parsed.type);
-    } else {
-      setRuleCategory("all");
-    }
-    setRuleResourceMenuOpen(false);
-  };
-
-  const clearRuleFilters = () => {
-    setRuleSearchQuery("");
-    setRuleCategory("all");
-    handleFilterResourceChange("all");
-    handlePersonalGroupFilterChange(null);
-    if (user?.role === "admin") {
-      setFilterUser("self");
-      storeString(filterUserStorageKey, "self");
-    }
-  };
-
-  const handleRulePageSizeChange = (value: string) => {
-    const nextPageSize = Number(value) as RulePageSize;
-    if (!RULE_PAGE_SIZE_OPTIONS.includes(nextPageSize)) return;
-    setRulePageSize(nextPageSize);
-    storeRulePageSize(nextPageSize);
-  };
-
-  const toggleRuleGroupCollapsed = (type: RuleGroupType) => {
-    setRuleGroupCollapsed((prev) => {
-      const next = { ...prev, [type]: !prev[type] };
-      storeRuleGroupCollapsed(next);
-      return next;
-    });
-  };
+  const useRuleViewHandlersResult = useRuleViewHandlers({ setViewMode, setRuleCardSize, effectiveViewMode, effectiveRuleCardSize, setRuleCategory, filterResource, setFilterResource, filterResourceStorageKey, setRuleResourceMenuType, setFilterUser, filterUserStorageKey, setRuleResourceMenuOpen, setRuleSearchQuery, handlePersonalGroupFilterChange, user, setRulePageSize, setRuleGroupCollapsed });
+  const { displayMode, toggleRuleGroupCollapsed, handleDisplayModeChange, handleRuleCategoryChange, handleFilterUserChange, handleFilterResourceChange, handleRulePageSizeChange, clearRuleFilters } = useRuleViewHandlersResult;
 
   /*
     「深空」主题：规则不画成一张张卡，画成一整块面板里的一行行（RuleRow）；四种网格换成同一个列表容器。
     手机「全部」分组外面那层（一组一组的 section）照旧是普通的竖排，列表容器只套在每组的行外面。
   */
-  const denseRuleRows = uiTheme === "deepspace";
-  const groupedRuleCardGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
-    ? "standard-card-grid-compact rule-card-grid-static rule-card-grid-static-compact gap-3"
-    : "standard-card-grid rule-card-grid-static rule-card-grid-static-standard gap-4";
-  const sortableRuleCardGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
-    ? "standard-card-grid-compact gap-3"
-    : "standard-card-grid gap-4";
-  /*
-    手机上卡片已经没有边框和底色了，「这几行是一条规则」全靠间距说话。
-    实测过一版反的：两条规则之间 12px，而一条规则内部 22～30px —— 内紧外松
-    做反了，眼睛按接近性分组，于是十二条规则糊成一片。
-    这里把组间距放到 gap-0（由卡片自己的上下内边距 14px 撑开，等于组间 28px），
-    组内间距在 CSS 里收到 5px。
-  */
-  const groupedRuleMobileGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
-    ? "grid rule-card-grid-static rule-card-grid-static-compact gap-0"
-    : "grid rule-card-grid-static rule-card-grid-static-standard gap-3";
-  const groupedRuleMobileSectionsClass = denseRuleRows ? "grid gap-4" : groupedRuleMobileGridClass;
-  const sortableRuleMobileGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
-    ? "grid gap-0"
-    : "grid gap-3";
-  const ruleContentModeKey = effectiveViewMode === "card" ? "card" : displayMode;
-  // 只按分类 / 视图切换做进出场；加载中 → 列表 → 空这种状态变化就地换内容，不再先退场再进场（那是 200ms 的空白）
-  const ruleContentTransitionKey = `${ruleCategory}-${ruleContentModeKey}`;
-
-  /*
-    分组图标一律中性。
-
-    以前四类各刷一个颜色：转发链琥珀、转发组绿、隧道红、端口转发品牌色 ——
-    而这四个颜色在面板里分别是「降级」「正常」「故障」和「主操作」。于是一个
-    转发链分组的标题看着像在报警，一个转发组的标题看着像在说「一切正常」。
-
-    类型该由图标形状和旁边的文字说，颜色只留给状态。
-  */
-  /*
-    卡头和分组标题上的小图标格：四类各一个颜色 —— 端口转发天蓝（主色）、隧道紫、转发链青、
-    转发组橙。这是身份不是状态：卡片出了事由状态点说，格子不变色。
-  */
-  const RULE_TILE: Record<RuleGroupType, { icon: typeof ArrowRightLeft; tone: IconTileTone }> = {
-    local: { icon: ArrowRightLeft, tone: "sky" },
-    tunnel: { icon: Network, tone: "violet" },
-    chain: { icon: GitBranch, tone: "teal" },
-    group: { icon: Layers3, tone: "orange" },
-  };
-  const renderRuleTile = (type: RuleGroupType, size: "xs" | "sm" | "md" = "md") => {
-    const spec = RULE_TILE[type] || RULE_TILE.local;
-    return <IconTile icon={spec.icon} tone={spec.tone} size={size} />;
-  };
-
-  function renderRuleGroupIcon(type: RuleGroupType, className = "h-4 w-4") {
-    const tone = `${className} text-muted-foreground`;
-    if (type === "chain") return <GitBranch className={tone} />;
-    if (type === "group") return <Layers3 className={tone} />;
-    if (type === "tunnel") return <Network className={tone} />;
-    return <ArrowRightLeft className={tone} />;
-  }
-
-  const renderRuleGroupHeader = (group: { type: RuleGroupType; label: string; rules: any[] }, compact = false) => {
-    const collapsed = !!ruleGroupCollapsed[group.type];
-    return (
-      <button
-        type="button"
-        aria-expanded={!collapsed}
-        className="fx-rule-group-header flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-        onClick={() => toggleRuleGroupCollapsed(group.type)}
-      >
-        {/* 一枚这类规则的小图标格、名字、个数、一句说明；折叠箭头在最右边（iOS 的展开样式） */}
-        {renderRuleTile(group.type, "xs")}
-        <span className="truncate text-[15px] font-medium">{group.label}</span>
-        <Badge variant="outline" className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] font-normal text-muted-foreground">{group.rules.length}</Badge>
-        {!compact && <span data-fx-help="" className="min-w-0 truncate text-xs text-muted-foreground">{ruleTypeDescriptions[group.type]}</span>}
-        <ChevronRight className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 ${collapsed ? "" : "rotate-90"}`} />
-      </button>
-    );
-  };
+  const useRuleGridRenderingResult = useRuleGridRendering({ uiTheme, effectiveRuleCardSize, effectiveViewMode, displayMode, ruleCategory, ruleGroupCollapsed, toggleRuleGroupCollapsed });
+  const { groupedRuleMobileGridClass, groupedRuleCardGridClass, sortableRuleMobileGridClass, sortableRuleCardGridClass, denseRuleRows, ruleContentTransitionKey, renderRuleGroupHeader, groupedRuleMobileSectionsClass, renderRuleGroupIcon } = useRuleGridRenderingResult;
 
   /*
     表格的列定义只写一遍（标准布局重构工作包一）：colgroup、表头、单元格三处都从这一个数组出。
@@ -5203,195 +3919,8 @@ function RulesContent() {
     八列 + 可选的排序手柄，列宽合计 1016px（table-fixed 下列宽之和就是表格的实际宽度），1366 宽、侧栏展开时内容区约 1100px，不横滚；table-fixed 下 col 的宽度是比例，窗口够宽时按比例放大。
     这套并列只在精简布局下用；标准布局照旧原来那 13～14 列（数组的另一支），一列一件事。
   */
-  type RuleTableColumn = {
-    key: string;
-    width: number;
-    head: ReactNode;
-    headClassName?: string;
-    cellClassName?: string;
-    cell: (rule: any) => ReactNode;
-  };
-  const ruleTableColumns: RuleTableColumn[] = [
-    {
-      key: "rule",
-      width: compactLayout ? 170 : 200,
-      head: "规则",
-      cell: (rule) => {
-        const supported = isRuleSupported(rule);
-        const protocolKey = getRuleProtocolKey(rule);
-        const owner = user?.role === "admin" ? getRuleOwnerName(rule) : "";
-        const subtitle = [formatForwardRuleProtocol(rule.protocol), owner].filter(Boolean).join(" · ");
-        return (
-          <div className="flex min-w-0 items-start gap-2">
-            <span className="mt-[3px] shrink-0">
-              {supported ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <span className="block truncate font-medium" title={rule.name} data-no-translate="">{rule.name}</span>
-              {compactLayout ? (
-                /* 精简的表：协议自己一列，名字下面挂类型标签（端口转发 / 隧道转发 / 转发链 / 转发组）和所属人 */
-                <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px] font-normal">{desktopRuleTypeLabels[getRuleDisplayType(rule, forwardGroupById)]}</Badge>
-                  {owner ? <span className="truncate text-[11px] leading-4 text-muted-foreground" title={owner}>{owner}</span> : null}
-                </span>
-              ) : (
-                <span className="block truncate text-[11px] leading-4 text-muted-foreground" title={subtitle}>{subtitle}</span>
-              )}
-              {supported ? renderNotRunningReason(rule) : null}
-              {!supported && (
-                <span className="mt-1 block text-[11px] text-destructive">
-                  {protocolUnsupportedLabel(protocolKey)} 当前不支持
-                </span>
-              )}
-              {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
-                <span className="mt-1 block text-[11px] leading-4 text-destructive">
-                  {rule.protocolBlockReason || revokedResourceTitle}
-                </span>
-              )}
-              {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
-              <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
-              {(() => {
-                const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
-                return stop?.autoResume ? (
-                  <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{stop.detail}</span>
-                ) : null;
-              })()}
-              {entryBridgeNotes(rule).map((note) => (
-                <span key={note} className="mt-1 block text-[11px] leading-4 text-muted-foreground">{note}</span>
-              ))}
-            </div>
-          </div>
-        );
-      },
-    },
-    /*
-      分组列（上游 2.3.287）：最多画两个，多的写「+N」；表头点一下按分组排序（未分组排最后），再点一下回到原来的顺序。
-      ··· 菜单、「列设置」里都能把这一列关掉（显不显示由 ruleColumnSettings 定，这里总是定义着）。
-    */
-    {
-      key: "personalGroups",
-      width: compactLayout ? 120 : 140,
-      head: (
-        <button
-          type="button"
-          className={cn("inline-flex items-center gap-1 hover:text-foreground", personalGroupSortActive && "text-foreground")}
-          onClick={toggleRuleSortByGroup}
-          title={personalGroupSortActive ? "按分组排序中（未分组在最后），点一下恢复默认顺序" : "按分组排序（未分组在最后）"}
-          aria-pressed={personalGroupSortActive}
-        >
-          分组{personalGroupSortActive ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : null}
-        </button>
-      ),
-      cellClassName: "overflow-hidden",
-      cell: (rule) => <RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} emptyPlaceholder />,
-    },
-    {
-      key: "resource",
-      width: compactLayout ? 110 : 150,
-      head: "所属资源",
-      cell: (rule) => (
-        <div className="min-w-0">
-          <span className="block truncate text-sm text-muted-foreground" title={getRuleResourceName(rule)}>
-            {getRuleResourceName(rule)}
-          </span>
-          {/* 主备那一小块跟着线路走：它说的是「现在走哪条」，点进去是策略。 */}
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-            {renderRouteBadge(rule, true)}
-            {renderFailoverLineBadge(rule)}
-          </div>
-        </div>
-      ),
-    },
-    { key: "entry", width: compactLayout ? 200 : 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
-    { key: "exit", width: compactLayout ? 160 : 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
-    /*
-      精简的表（用户 2026-10-21 照着老版本表格样稿定的「条状」）：协议一列、累计一列（24H 做小字），
-      开关并进「操作」列和「编辑 / ···」排一起。标准照旧：累计 / 24H 合成「流量」，开关自己一列。
-    */
-    ...(compactLayout ? [
-      {
-        key: "protocol",
-        width: 70,
-        head: "协议",
-        headClassName: "text-center",
-        cellClassName: "text-center",
-        cell: (rule: any) => <Badge variant="secondary" className="whitespace-nowrap text-[11px] font-normal">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
-      },
-      {
-        key: "total",
-        width: 100,
-        head: "累计",
-        cellClassName: "overflow-hidden",
-        cell: (rule: any) => {
-          const t = totalTrafficByRule.get(rule.id);
-          const total = t ? Number(t.bytesIn || 0) + Number(t.bytesOut || 0) : null;
-          const isForwardChainRule = getRuleCategory(rule, forwardGroupById) === "chain";
-          const daily = dailyTrafficByRule.get(rule.id);
-          // 24H 两个方向都是零就不画那一行小字（两个「—」只是噪音）
-          const hasDaily = !!daily && (Number(daily.bytesIn || 0) > 0 || Number(daily.bytesOut || 0) > 0);
-          return (
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <span className="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums">
-                <span className="font-medium text-foreground" title={t ? `累计入向 ${formatBytes(t.bytesIn)} / 出向 ${formatBytes(t.bytesOut)}` : "还没有流量"}>
-                  {total === null ? "—" : formatBytes(total)}
-                </span>
-                <button
-                  type="button"
-                  className="text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  onClick={() => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod: ruleLatencyProbeMethodForRule(rule), tab: "history" })}
-                >
-                  详细
-                </button>
-              </span>
-              {hasDaily ? <div className="fx-table-daily">{renderTableRuleDailyTraffic(rule)}</div> : null}
-            </div>
-          );
-        },
-      },
-    ] satisfies RuleTableColumn[] : [
-      {
-        key: "traffic",
-        width: 110,
-        head: "流量",
-        cellClassName: "overflow-hidden",
-        cell: (rule: any) => (
-          <div className="flex min-w-0 flex-col gap-0.5">
-            {renderTableRuleTotalTraffic(rule)}
-            {renderTableRuleDailyTraffic(rule)}
-          </div>
-        ),
-      },
-    ] satisfies RuleTableColumn[]),
-    { key: "latency", width: compactLayout ? 80 : 84, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
-    ...(compactLayout ? [] : [{
-      key: "enabled",
-      width: 52,
-      head: "开关",
-      headClassName: "text-center",
-      cell: (rule: any) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
-    } satisfies RuleTableColumn]),
-    {
-      key: "actions",
-      width: compactLayout ? 150 : 140,
-      head: "操作",
-      headClassName: "text-right",
-      cellClassName: "text-right",
-      cell: (rule) => compactLayout ? (
-        <div className="flex items-center justify-end gap-2">
-          {renderRuleEnabledSwitch(rule)}
-          {renderRuleActions(rule, false, true)}
-        </div>
-      ) : renderRuleActions(rule),
-    },
-  ];
-  /* 真正画出来的列：按列设置的顺序、只要显示的那些，拖过的列宽盖掉默认宽度 */
-  const ruleTableColumnByKey = new Map(ruleTableColumns.map((column) => [column.key, column]));
-  const shownRuleTableColumns: (RuleTableColumn & { resolved: ResolvedTableColumn })[] = ruleColumnSettings.visibleColumns.flatMap((resolved) => {
-    const column = ruleTableColumnByKey.get(resolved.key);
-    return column ? [{ ...column, width: resolved.width ?? column.width, resolved }] : [];
-  });
-  const ruleTableColumnCount = shownRuleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
-  const ruleTableMinWidth = Math.round(shownRuleTableColumns.reduce((sum, column) => sum + column.width, ruleSortingEnabled ? 44 : 0) * RULE_TABLE_MIN_WIDTH_RATIO);
+  const useRuleTableColumnsResult = useRuleTableColumns({ compactLayout, isRuleSupported, getRuleProtocolKey, user, getRuleOwnerName, renderStatusDot, forwardGroupById, renderNotRunningReason, protocolUnsupportedLabel, renderAdminManagedBadge, personalGroupSortActive, toggleRuleSortByGroup, personalGroups, getRuleResourceName, renderRouteBadge, renderFailoverLineBadge, renderTableTransferEntry, renderTableTransferExit, totalTrafficByRule, dailyTrafficByRule, setSelfTestRule, renderTableRuleDailyTraffic, renderTableRuleTotalTraffic, renderTableRuleLatency, renderRuleEnabledSwitch, renderRuleActions, ruleColumnSettings, ruleSortingEnabled });
+  const { shownRuleTableColumns, ruleTableMinWidth, ruleTableColumnCount } = useRuleTableColumnsResult;
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
     const supported = isRuleSupported(rule);
     return (
@@ -6052,7 +4581,7 @@ function RulesContent() {
       </>} />
 
       {selfTestRule && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback />}>
         <SelfTestDialog
           ruleId={selfTestRule.id}
           ruleName={selfTestRule.name}
@@ -6760,7 +5289,7 @@ function RulesContent() {
 
       {/* 批量管理弹窗按需加载：第一次打开后一直挂着（state 在页面上，关掉再开不丢，也留得住关闭动画） */}
       {batchDialogLoaded ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={showCopyDialog} />}>
           <RuleBatchManageDialog
             state={batchState}
             handle={batchManage}

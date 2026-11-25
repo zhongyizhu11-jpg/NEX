@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   入口组分线路解析走完整的组评估（forwardGroupRepository → forwardGroupDdnsLines → ddnsLineRecords）：
@@ -15,32 +11,8 @@ import test from "node:test";
   3. 线路不再有成员：只按记下的 ID 删，同一线路上别人加的记录不动。
 */
 
-function runIsolatedScript(directory: string, databasePath: string, name: string, script: string) {
-  const scriptPath = path.join(directory, `${name}.mjs`);
-  fs.writeFileSync(scriptPath, script, "utf8");
-  const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      DATABASE_TYPE: "sqlite",
-      FORWARDX_TEST_DB: databasePath,
-      FORWARDX_LOG_DIR: path.join(directory, "logs"),
-    },
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.error?.stack || result.stderr || result.stdout);
-}
-
 test("入口组分线路解析：没分线路时请求不变；分了线路按线路发布、回落、按记录 ID 清理", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-ddns-lines-"));
-  const databasePath = path.join(directory, "lines.db");
   const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-
     // ===== 假的 DNSPod：按名字 / 类型 / 线路过滤，记下每一个请求 =====
     const dnspod = { records: [], calls: [], nextId: 7000 };
     const addRecord = (record) => {
@@ -85,13 +57,9 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     const takeCalls = () => dnspod.calls.splice(0, dnspod.calls.length);
     const on = (name, line) => dnspod.records.filter((record) => record.Name === name && record.Type === "A" && record.LineId === line).map((record) => record.Value).sort();
 
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-    const ddns = await import(moduleUrl("server/ddns.ts"));
-    const forwardGroups = await import(moduleUrl("server/db.ts"));
+    const settings = await import(url("server/repositories/settingsRepository.ts"));
+    const ddns = await import(url("server/ddns.ts"));
+    const forwardGroups = await import(url("server/db.ts"));
     await settings.setSettings({
       ddnsEnabled: "true",
       ddnsProvider: "tencentcloud",
@@ -103,7 +71,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
 
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
-      await runtime.executeRaw(
+      await exec(
         "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
         values,
       );
@@ -112,11 +80,11 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     for (const [id, ip] of [[1, "198.51.100.10"], [2, "198.51.100.20"], [3, "198.51.100.30"]]) {
       await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "host-" + id, ip, ip, 1, 1, now]);
       // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
-      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
+      (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
     const memberColumns = ["id", "groupId", "memberType", "hostId", "priority", "isEnabled", "healthStatus", "lastCheckedAt", "healthySince", "ddnsLines"];
     const groupColumns = ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "failoverSeconds"];
-    const groupState = async (id) => (await runtime.queryRaw('SELECT "lastDdnsValue", "ddnsLineState", "lastStatus" FROM "forward_groups" WHERE "id" = ?', [id]))[0];
+    const groupState = async (id) => (await query('SELECT "lastDdnsValue", "ddnsLineState", "lastStatus" FROM "forward_groups" WHERE "id" = ?', [id]))[0];
     const strip = (calls) => calls.map((call) => ({ action: call.action, payload: call.payload }));
 
     // ===== 1. 没分线路的组：和原来的 DDNS 发布一模一样 =====
@@ -160,7 +128,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     assert.deepEqual(takeCalls(), [], "线路记录已是最新时也不再发请求");
 
     // ===== 电信线路的成员故障超过观察时间：电信回落到默认线路的健康成员 =====
-    await runtime.executeRaw('UPDATE "forward_group_members" SET "healthStatus" = \'unhealthy\', "lastCheckedAt" = ?, "failureSince" = ?, "healthySince" = NULL WHERE "id" = 301', [now, now - 120]);
+    await exec('UPDATE "forward_group_members" SET "healthStatus" = \'unhealthy\', "lastCheckedAt" = ?, "failureSince" = ?, "healthySince" = NULL WHERE "id" = 301', [now, now - 120]);
     await forwardGroups.runForwardGroupFailover(30);
     takeCalls();
     assert.deepEqual(on("lines", "10=0"), ["198.51.100.30"], "电信全挂时改用默认线路的健康成员，不留空");
@@ -170,7 +138,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
 
     // ===== 3. 联通不再有成员：只删面板写的那条，别人加在联通线路上的留着 =====
     const thirdParty = addRecord({ Name: "lines", Type: "A", Line: "联通", LineId: "10=1", Value: "192.0.2.99" });
-    await runtime.executeRaw('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 302');
+    await exec('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 302');
     await forwardGroups.runForwardGroupFailover(30, { forceSync: true });
     const deletes = takeCalls().filter((call) => call.action === "DeleteRecord");
     assert.deepEqual(deletes.map((call) => String(call.payload.RecordId)), unicomIds);
@@ -181,7 +149,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     assert.deepEqual(Object.keys(lineState.lines), ["10=0"]);
 
     // 最后一个分了线路的成员也去掉：线路状态清空，之后这个组就和没分线路的组一样。
-    await runtime.executeRaw('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 301');
+    await exec('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 301');
     await forwardGroups.runForwardGroupFailover(30);
     takeCalls();
     assert.deepEqual(on("lines", "10=0"), []);
@@ -198,9 +166,8 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
     takeCalls();
     assert.deepEqual(on("fo", "0"), ["198.51.100.20"], "默认线路在默认线路成员里按顺序挑第一个");
     assert.deepEqual(on("fo", "10=0"), ["198.51.100.10"], "电信线路在电信成员里按顺序挑第一个");
-    process.exit(0);
   `;
-  runIsolatedScript(directory, databasePath, "group-ddns-lines", script);
+  runInDatabase(script, { name: "group-ddns-lines" });
 });
 
 /*
@@ -209,15 +176,7 @@ test("入口组分线路解析：没分线路时请求不变；分了线路按�
   记录 ID 绝不拿去新服务商那边删（包括老版本没写 provider 的 DNSPod 线路状态）。
 */
 test("阿里云 / 华为云分线路：多值线路、回落、删除模式、按记录 ID 清理；换服务商不拿旧 ID 去删", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-ddns-lines-providers-"));
-  const databasePath = path.join(directory, "lines.db");
   const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const moduleUrl = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-
     // ===== 假的阿里云 DNS =====
     const ali = { records: [], calls: [], nextId: 880001 };
     const aliAdd = (record) => {
@@ -314,12 +273,8 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     const aliOn = (rr, line) => ali.records.filter((record) => record.RR === rr && record.Type === "A" && record.Line === line).map((record) => record.Value).sort();
     const hwOn = (name, line) => hw.recordsets.filter((set) => set.name === name + ".example.test." && set.type === "A" && set.line === line).map((set) => [...set.records].sort());
 
-    const runtime = await import(moduleUrl("server/dbRuntime.ts"));
-    const schema = await import(moduleUrl("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const settings = await import(moduleUrl("server/repositories/settingsRepository.ts"));
-    const forwardGroups = await import(moduleUrl("server/db.ts"));
+    const settings = await import(url("server/repositories/settingsRepository.ts"));
+    const forwardGroups = await import(url("server/db.ts"));
     const base = {
       ddnsEnabled: "true",
       ddnsTtl: "600",
@@ -334,7 +289,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
 
     const q = (name) => '"' + name + '"';
     const insert = async (table, columns, values) => {
-      await runtime.executeRaw(
+      await exec(
         "INSERT INTO " + q(table) + " (" + columns.map(q).join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")",
         values,
       );
@@ -343,7 +298,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     for (const [id, ip] of [[1, "198.51.100.10"], [2, "198.51.100.20"], [3, "198.51.100.30"]]) {
       await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat"], [id, "host-" + id, ip, ip, 1, 1, now]);
       // 在线 = 连着面板、有快速存活状态（没有的算离线，见 server/forwardGroups/liveness.ts）
-      (await import(moduleUrl("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
+      (await import(url("server/agentFastLiveness.ts"))).registerPresenceCapableHost(id);
     }
     const memberColumns = ["id", "groupId", "memberType", "hostId", "priority", "isEnabled", "healthStatus", "lastCheckedAt", "healthySince", "ddnsLines"];
     const groupColumns = ["id", "name", "groupType", "groupMode", "domain", "recordType", "targetIp", "userId", "isEnabled", "failoverSeconds"];
@@ -352,8 +307,8 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     const events = async (id, type) => (await runtime.queryRaw('SELECT "message" FROM "forward_group_events" WHERE "groupId" = ? AND "type" = ?', [id, type])).map((row) => row.message);
     const setHealth = async (ids, healthy) => {
       for (const id of ids) {
-        if (healthy) await runtime.executeRaw('UPDATE "forward_group_members" SET "healthStatus" = \'healthy\', "lastCheckedAt" = ?, "failureSince" = NULL, "healthySince" = ? WHERE "id" = ?', [now, now - 300, id]);
-        else await runtime.executeRaw('UPDATE "forward_group_members" SET "healthStatus" = \'unhealthy\', "lastCheckedAt" = ?, "failureSince" = ?, "healthySince" = NULL WHERE "id" = ?', [now, now - 120, id]);
+        if (healthy) await exec('UPDATE "forward_group_members" SET "healthStatus" = \'healthy\', "lastCheckedAt" = ?, "failureSince" = NULL, "healthySince" = ? WHERE "id" = ?', [now, now - 300, id]);
+        else await exec('UPDATE "forward_group_members" SET "healthStatus" = \'unhealthy\', "lastCheckedAt" = ?, "failureSince" = ?, "healthySince" = NULL WHERE "id" = ?', [now, now - 120, id]);
       }
     };
 
@@ -385,7 +340,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
 
     // 删除模式：电信的记录按记下的 ID 删掉，别人手加在电信线路上的留着。
     const manual = aliAdd({ RR: "ali", Type: "A", Line: "telecom", Value: "192.0.2.99" });
-    await runtime.executeRaw('UPDATE "forward_groups" SET "ddnsLineFallback" = \'remove\' WHERE "id" = 50');
+    await exec('UPDATE "forward_groups" SET "ddnsLineFallback" = \'remove\' WHERE "id" = 50');
     await forwardGroups.runForwardGroupFailover(50, { forceSync: true });
     const deletes = takeAli().filter((call) => call.action === "DeleteDomainRecord").map((call) => call.params.RecordId);
     assert.deepEqual(deletes, lineState.lines.telecom.recordIds);
@@ -394,7 +349,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     assert.equal((await groupState(50)).ddnsLineState, null);
 
     // 恢复：电信重新发布（新建记录），手加的那条按值对账收掉（这个名字归面板管）。
-    await runtime.executeRaw('UPDATE "forward_groups" SET "ddnsLineFallback" = \'default\' WHERE "id" = 50');
+    await exec('UPDATE "forward_groups" SET "ddnsLineFallback" = \'default\' WHERE "id" = 50');
     await setHealth([501, 502], true);
     await forwardGroups.runForwardGroupFailover(50, { forceSync: true });
     takeAli();
@@ -417,8 +372,8 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     assert.equal(aliIdsBeforeSwitch.length, 2);
 
     // 华为云：电信（Dianxin）→ host1，一个记录集；默认线路是剩下的。
-    await runtime.executeRaw('UPDATE "forward_group_members" SET "ddnsLines" = ? WHERE "id" = 501', [JSON.stringify([{ id: "Dianxin", name: "电信", provider: "huaweicloud" }])]);
-    await runtime.executeRaw('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 502');
+    await exec('UPDATE "forward_group_members" SET "ddnsLines" = ? WHERE "id" = 501', [JSON.stringify([{ id: "Dianxin", name: "电信", provider: "huaweicloud" }])]);
+    await exec('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 502');
     await forwardGroups.runForwardGroupFailover(50, { forceSync: true });
     takeHw();
     assert.deepEqual(hwOn("ali", "Dianxin"), [["198.51.100.10"]]);
@@ -438,7 +393,7 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     // 不再分线路：只删记下的记录集，别人在电信线路上建的同名记录集不动。
     const hwManual = hwAdd({ name: "ali.example.test.", type: "A", line: "Dianxin", records: ["192.0.2.88"], weight: 1 });
     await setHealth([501], true);
-    await runtime.executeRaw('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 501');
+    await exec('UPDATE "forward_group_members" SET "ddnsLines" = NULL WHERE "id" = 501');
     await forwardGroups.runForwardGroupFailover(50, { forceSync: true });
     const hwDeletes = takeHw().filter((call) => call.method === "DELETE").map((call) => call.path.split("/").pop());
     assert.deepEqual(hwDeletes, lineState.lines.Dianxin.recordIds);
@@ -468,7 +423,6 @@ test("阿里云 / 华为云分线路：多值线路、回落、删除模式、�
     assert.equal((await groupState(60)).ddnsLineState, null);
     assert.deepEqual(aliOn("legacy", "default"), ["198.51.100.10", "198.51.100.20"]);
     assert.equal(dnspodCalls, 0);
-    process.exit(0);
   `;
-  runIsolatedScript(directory, databasePath, "group-ddns-lines-providers", script);
+  runInDatabase(script, { name: "group-ddns-lines-providers" });
 });

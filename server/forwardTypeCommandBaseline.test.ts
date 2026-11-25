@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 六种转发方式下发给 Agent 的东西，钉成基线。
@@ -125,20 +122,9 @@ const BASELINE: Record<string, Fingerprint> = {
 const COMMAND_FIELDS = ["commands", "preCommands", "postCommands", "managedConfigs"] as const;
 
 test("六种转发方式下发的命令保持基线（重构安全网）", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-cmd-baseline-"));
-  const databasePath = path.join(directory, "cmd-baseline.db");
-  const script = String.raw`
-    import crypto from "node:crypto";
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const crypto = (await import("node:crypto")).default;
+    const http = (await import("node:http")).default;
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec(
@@ -220,14 +206,7 @@ test("六种转发方式下发的命令保持基线（重构安全网）", () =>
       out[forwardType + ":" + String(action.protocol || "")] = fingerprint(action);
     }
     console.log("BASELINE " + JSON.stringify(out));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "cmd-baseline" });
 
   const line = result.stdout.split("\n").find((row) => row.startsWith("BASELINE "));
   assert.ok(line, `没拿到基线输出：\n${result.stdout}`);

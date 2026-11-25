@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /*
   转发规则个人分组在真的 SQLite 上走一遍（server/ruleGroups.ts、server/ruleGroupRelations.ts、
@@ -17,29 +13,11 @@ import test from "node:test";
     · 删组不删规则，也不动规则在别的组里的关系；删过的组不会被迟到的归组请求「复活」。
 */
 function runSqliteScript(script: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-rule-groups-"));
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "panel.db") },
-    encoding: "utf8",
-    timeout: 120_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  runInDatabase(script, { name: "rule-groups" });
 }
 
 /** 每段脚本共用的开头：连库、建表、三个账号（1 管理员、2 和 3 普通用户）、两台主机、几条规则。 */
 const PRELUDE = String.raw`
-  import assert from "node:assert/strict";
-  import path from "node:path";
-  import { pathToFileURL } from "node:url";
-  const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-  const runtime = await import(url("server/dbRuntime.ts"));
-  const schema = await import(url("server/dbSchema.ts"));
-  await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-  await schema.ensureDatabaseSchema();
-  const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-  const query = (sql, params = []) => runtime.queryRaw(sql, params);
   const groups = await import(url("server/ruleGroups.ts"));
   const rules = await import(url("server/repositories/forwardRuleRepository.ts"));
 
@@ -161,7 +139,7 @@ test("一条规则可以在多个组里：加入 / 移出 / 替换、筛选不�
       assert.deepEqual(await groupIdsOf(2, 12), [work, play]);
       // 重复加入不出重复行。
       await groups.moveRulesToPersonalGroups(alice, [12, 13], [play, play], "add");
-      assert.equal((await query("SELECT COUNT(*) AS n FROM rule_group_members"))[0].n, 3);
+      assert.equal(Number((await query("SELECT COUNT(*) AS n FROM rule_group_members"))[0].n), 3);
 
       const overview = await groups.getPersonalRuleGroupOverview(2, { ownerUserId: 2, category: "all" });
       assert.deepEqual(overview.groups.map((group) => [group.name, group.count]), [["工作", 1], ["游戏", 2], ["备用", 0]]);

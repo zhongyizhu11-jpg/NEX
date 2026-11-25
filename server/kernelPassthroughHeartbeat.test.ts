@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * V2 隧道「内核直通」的下发（server/agentHeartbeatRoute.ts 的 tunnelKernelPassthroughPlan）。
@@ -30,21 +27,9 @@ type Outcome = {
 };
 
 function run(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-passthrough-"));
-  const databasePath = path.join(directory, "pt.db");
-  const logDirectory = path.join(directory, "logs");
-  fs.mkdirSync(logDirectory, { recursive: true });
   const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
+    const http = (await import("node:http")).default;
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const now = Math.floor(Date.now() / 1000);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
@@ -126,17 +111,9 @@ function run(): Outcome {
     server.close();
     console.log(JSON.stringify({ entryBefore, entryAfter, exitAfter, entryNetstack }));
   `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: logDirectory },
-    timeout: 120_000,
-  });
-  if (result.status !== 0) {
-    throw new Error("脚本失败: status=" + result.status + "\n" + result.stdout + "\n" + result.stderr);
-  }
+  const result = runInDatabase(script, { name: "passthrough" });
   const lines = result.stdout.trim().split("\n");
-  return JSON.parse(lines[lines.length - 1]) as Outcome;
+  return JSON.parse(lines.filter((line) => line.startsWith("{")).pop() || "") as Outcome;
 }
 
 const outcome = run();

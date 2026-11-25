@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { MIGRATION_TABLES } from "./dbSchema";
 import { OPS_MIGRATION_TABLES, OPS_TABLE_DEFS } from "./ops/opsTables";
@@ -22,18 +21,7 @@ test("拓扑手动标注的表：建表、跟着迁移走、节点在连线前�
 });
 
 test("拓扑手动标注：每个账号各画各的、主机要有权限、删节点连线跟着删、并进拓扑图、迁移导入重映射 ID", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-topology-manual-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  runInDatabase(String.raw`
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
       await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'alice', 'hash', 'user')");
       await exec('INSERT INTO hosts (id, name, ip, "hostType", "agentToken", "userId") VALUES (1, ?, ?, ?, ?, 1)', ["管理员的机器", "8.8.8.8", "slave", "tok1"]);
@@ -59,7 +47,7 @@ test("拓扑手动标注：每个账号各画各的、主机要有权限、删�
       assert.equal(graph.edges.filter((e) => e.kind === "manual").length, 1);
 
       // 只动这两张表：没有规则、主机被改
-      const rules = await runtime.queryRaw("SELECT COUNT(*) AS c FROM forward_rules");
+      const rules = await query("SELECT COUNT(*) AS c FROM forward_rules");
       assert.equal(Number(rules[0].c), 0);
 
       // 迁移：导出 → 换个已经有数据的库导入，用户、主机、标注节点的 ID 都换了
@@ -67,8 +55,10 @@ test("拓扑手动标注：每个账号各画各的、主机要有权限、删�
       const snapshot = await migration.exportMigrationSnapshot();
       assert.equal(snapshot.tables.topology_manual_nodes.length, 1);
       assert.equal(snapshot.tables.topology_manual_links.length, 1);
+      // 第二个面板用一个 SQLite 文件库；跑在 PostgreSQL 上时产品不允许进程内换库种（DatabaseDialectMismatchError），这段只在 SQLite 上跑
+      if (runtime.getDatabaseKind() === "sqlite") {
       await runtime.closeDatabase();
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB2 } });
+      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: path.join(path.dirname(process.env.FORWARDX_TEST_DB), "panel2.db") } });
       await schema.ensureDatabaseSchema();
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'root', 'hash', 'admin')");
       await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'bob', 'hash', 'user')");
@@ -77,43 +67,28 @@ test("拓扑手动标注：每个账号各画各的、主机要有权限、删�
       await exec('INSERT INTO topology_manual_nodes (id, "userId", label) VALUES (1, 2, ?)', ["bob 的节点"]);
       const result = await migration.importMigrationSnapshot(snapshot);
       assert.equal(result.success, true, JSON.stringify(result));
-      const newAlice = (await runtime.queryRaw("SELECT id FROM users WHERE username = 'alice'"))[0].id;
-      const newHost = (await runtime.queryRaw('SELECT id FROM hosts WHERE "agentToken" = ?', ["tok2"]))[0].id;
-      const nodes = await runtime.queryRaw('SELECT * FROM topology_manual_nodes WHERE "userId" = ?', [newAlice]);
+      const newAlice = (await query("SELECT id FROM users WHERE username = 'alice'"))[0].id;
+      const newHost = (await query('SELECT id FROM hosts WHERE "agentToken" = ?', ["tok2"]))[0].id;
+      const nodes = await query('SELECT * FROM topology_manual_nodes WHERE "userId" = ?', [newAlice]);
       assert.equal(nodes.length, 1);
       assert.notEqual(Number(nodes[0].id), nodeId, "节点 ID 撞上已有的那一行，换了新的");
-      const links = await runtime.queryRaw('SELECT * FROM topology_manual_links WHERE "userId" = ?', [newAlice]);
+      const links = await query('SELECT * FROM topology_manual_links WHERE "userId" = ?', [newAlice]);
       assert.equal(links.length, 1);
       assert.equal(links[0].fromRef, "host:" + newHost);
       assert.equal(links[0].toRef, "manual:" + nodes[0].id);
-      await runtime.closeDatabase();
 
-      // 回到第一个库：删节点连线跟着删；删用户标注跟着删
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+      // 回到第一个库
+      await runtime.closeDatabase();
+      await runtime.connectDatabase(JSON.parse(process.env.FORWARDX_TEST_DB_CONFIG));
+      }
+
+      // 删节点连线跟着删；删用户标注跟着删
       const second = await alice.createManualNode({ label: "上游机房" });
       await alice.createManualLink({ fromRef: "manual:" + second.id, toRef: "manual:" + nodeId });
       await alice.deleteManualNode({ id: nodeId });
       assert.equal((await alice.manual()).links.length, 0);
       const db = await import(url("server/db.ts"));
       await db.deleteUser(2);
-      assert.equal((await runtime.queryRaw("SELECT COUNT(*) AS c FROM topology_manual_nodes"))[0].c, 0);
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DATABASE_TYPE: "sqlite",
-        FORWARDX_TEST_DB: path.join(directory, "panel.db"),
-        FORWARDX_TEST_DB2: path.join(directory, "panel2.db"),
-        FORWARDX_LOG_DIR: path.join(directory, "logs"),
-      },
-      timeout: 180_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+      assert.equal(Number((await query("SELECT COUNT(*) AS c FROM topology_manual_nodes"))[0].c), 0);
+  `, { name: "topology-manual", timeoutMs: 180_000 });
 });

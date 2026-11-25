@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 import { hostTrafficExcluded, hostTrafficFailoverThresholdBytes, normalizeHostTrafficFailoverPercent, shouldExcludeHostForTraffic } from "../shared/hostTrafficPolicy";
 import { groupRuleTrafficBlocked, planTunnelTrafficParticipation } from "./hostTrafficRuntimePlan";
 import { planHostTrafficPolicyRefresh } from "./hostTrafficPolicyRuntime";
@@ -105,26 +102,17 @@ test("a policy transition refreshes exactly the groups, tunnels and Agents that 
 });
 
 test("SQLite quota state survives restart; resets/configuration/rollback retain membership", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-host-quota-"));
-  const databasePath = path.join(directory, "quota.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const mod = (file) => import(pathToFileURL(path.join(process.cwd(), file)).href);
-    const runtime = await mod("server/dbRuntime.ts");
-    const schema = await mod("server/dbSchema.ts");
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
+  runInDatabase(String.raw`
+    const mod = (file) => import(url(file));
     const metrics = await mod("server/repositories/metricsRepository.ts");
     const hosts = await mod("server/repositories/hostRepository.ts");
     const policy = await mod("server/hostTrafficPolicy.ts");
     const groups = await mod("server/db.ts");
     const excluded = async () => { policy.invalidateHostTrafficPolicyCache(); return [...await policy.getTrafficExcludedHostIds()]; };
     const now = Math.floor(Date.now()/1000);
-    await runtime.executeRaw("INSERT INTO users (id, username, password, role) VALUES (1, 'quota-admin', 'not-used', 'admin')");
-    await runtime.executeRaw('INSERT INTO hosts (id,name,ip,ipv4,"hostType","userId","isOnline","lastHeartbeat","trafficLimit","trafficMeasureMode","trafficFailoverEnabled","trafficFailoverThresholdPercent") VALUES (1,?,?,?,?,?,?,?,?,?,?,?)', ["primary", "192.0.2.1", "192.0.2.1", "slave", 1, 1, now, 1000, "outbound", 1, 90]);
-    await runtime.executeRaw('INSERT INTO hosts (id,name,ip,ipv4,"hostType","userId","isOnline","lastHeartbeat") VALUES (2,?,?,?,?,?,?,?)', ["backup", "192.0.2.2", "192.0.2.2", "slave", 1, 1, now]);
+    await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'quota-admin', 'not-used', 'admin')");
+    await exec('INSERT INTO hosts (id,name,ip,ipv4,"hostType","userId","isOnline","lastHeartbeat","trafficLimit","trafficMeasureMode","trafficFailoverEnabled","trafficFailoverThresholdPercent") VALUES (1,?,?,?,?,?,?,?,?,?,?,?)', ["primary", "192.0.2.1", "192.0.2.1", "slave", 1, 1, now, 1000, "outbound", 1, 90]);
+    await exec('INSERT INTO hosts (id,name,ip,ipv4,"hostType","userId","isOnline","lastHeartbeat") VALUES (2,?,?,?,?,?,?,?)', ["backup", "192.0.2.2", "192.0.2.2", "slave", 1, 1, now]);
     // 两台都连着面板（有快速存活状态，见 server/forwardGroups/liveness.ts）
     const fast = await mod("server/agentFastLiveness.ts");
     fast.registerPresenceCapableHost(1);
@@ -138,12 +126,11 @@ test("SQLite quota state survives restart; resets/configuration/rollback retain 
     assert.deepEqual(await excluded(), [1]);
     // 只暂停组调度，主机本身照样在线。
     assert.equal(!!(await hosts.getHostById(1)).isOnline, true);
-    await runtime.closeDatabase();
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+    await runtime.connectDatabase(JSON.parse(process.env.FORWARDX_TEST_DB_CONFIG));
     assert.deepEqual(await excluded(), [1], "survives a panel restart");
-    await runtime.executeRaw('INSERT INTO forward_groups (id,name,"groupType","groupMode",domain,"targetIp","userId","isEnabled","activeMemberId","lastDdnsValue") VALUES (10,?,?,?,?,?,?,?,?,?)', ["failover","host","failover","group.example.test","0.0.0.0",1,1,101,"192.0.2.1"]);
-    await runtime.executeRaw('INSERT INTO forward_group_members (id,"groupId","memberType","hostId",priority,"isEnabled","healthStatus","lastCheckedAt") VALUES (101,10,?,1,0,1,?,?)', ["host","healthy",now]);
-    await runtime.executeRaw('INSERT INTO forward_group_members (id,"groupId","memberType","hostId",priority,"isEnabled","healthStatus","lastCheckedAt") VALUES (102,10,?,2,1,1,?,?)', ["host","healthy",now]);
+    await exec('INSERT INTO forward_groups (id,name,"groupType","groupMode",domain,"targetIp","userId","isEnabled","activeMemberId","lastDdnsValue") VALUES (10,?,?,?,?,?,?,?,?,?)', ["failover","host","failover","group.example.test","0.0.0.0",1,1,101,"192.0.2.1"]);
+    await exec('INSERT INTO forward_group_members (id,"groupId","memberType","hostId",priority,"isEnabled","healthStatus","lastCheckedAt") VALUES (101,10,?,1,0,1,?,?)', ["host","healthy",now]);
+    await exec('INSERT INTO forward_group_members (id,"groupId","memberType","hostId",priority,"isEnabled","healthStatus","lastCheckedAt") VALUES (102,10,?,2,1,1,?,?)', ["host","healthy",now]);
     await groups.runForwardGroupFailover(10);
     assert.equal(Number((await groups.getForwardGroupById(10)).activeMemberId), 102, "quota overrides a healthy, online primary without the offline grace delay");
     await metrics.resetHostTraffic(1);
@@ -171,35 +158,19 @@ test("SQLite quota state survives restart; resets/configuration/rollback retain 
     assert.deepEqual([...await policy.getTrafficExcludedHostIds()], [], "the cache never keeps a rolled-back state");
     assert.deepEqual(await excluded(), [], "a rolled-back correction leaves the state untouched");
     assert.equal((await metrics.getHostTraffic(1)).bytesOut, 1000);
-    const members = await runtime.queryRaw('SELECT "isEnabled" FROM forward_group_members WHERE "groupId"=10 ORDER BY id');
+    const members = await query('SELECT "isEnabled" FROM forward_group_members WHERE "groupId"=10 ORDER BY id');
     assert.deepEqual(members.map((m) => Number(m.isEnabled)), [1,1], "membership is never edited");
-    process.exit(0);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(), env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: path.join(directory, "logs") }, encoding: "utf8", timeout: 90_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "host-quota" });
 });
 
 test("real Agent heartbeat routes grouped exits away from exhausted hosts", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-quota-heartbeat-"));
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import express from "express";
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const mod = (file) => import(pathToFileURL(path.join(process.cwd(), file)).href);
-    const runtime = await mod("server/dbRuntime.ts");
-    await runtime.connectDatabase({type:"sqlite",sqlite:{path:process.env.FORWARDX_TEST_DB}});
-    await (await mod("server/dbSchema.ts")).ensureDatabaseSchema();
+  runInDatabase(String.raw`
+    const express = (await import("express")).default;
+    const http = (await import("node:http")).default;
+    const mod = (file) => import(url(file));
     const policy = await mod("server/hostTrafficPolicy.ts");
-    const insert = (table, data) => runtime.executeRaw('INSERT INTO "'+table+'" ('+Object.keys(data).map(k=>'"'+k+'"').join(',')+') VALUES ('+Object.values(data).map(()=>'?').join(',')+')',Object.values(data));
-    const setExcluded = async (sql, params = []) => { await runtime.executeRaw(sql, params); policy.invalidateHostTrafficPolicyCache(); };
+    const insert = (table, data) => exec('INSERT INTO "'+table+'" ('+Object.keys(data).map(k=>'"'+k+'"').join(',')+') VALUES ('+Object.values(data).map(()=>'?').join(',')+')',Object.values(data));
+    const setExcluded = async (sql, params = []) => { await exec(sql, params); policy.invalidateHostTrafficPolicyCache(); };
     const now = Math.floor(Date.now()/1000);
     await insert("users",{id:1,username:"quota-admin",password:"not-used",role:"admin"});
     for(let id=1;id<=5;id++) await insert("hosts",{id,name:"host-"+id,ip:"192.0.2."+id,ipv4:"192.0.2."+id,hostType:"slave",userId:1,agentToken:"quota-token-"+id,agentVersion:"2.2.199",isOnline:1,lastHeartbeat:now,
@@ -238,29 +209,21 @@ test("real Agent heartbeat routes grouped exits away from exhausted hosts", () =
     // 被暂停的入口自己不再装这条隧道规则。
     const oldEntry=await beat(1);
     assert.ok(!oldEntry.actions.some(a=>a.ruleId===50&&a.op==="apply"),summary(oldEntry));
-    const saved=(await runtime.queryRaw('SELECT "entryHostId","exitHostId","listenPort","isEnabled" FROM tunnels WHERE id=40'))[0];
-    assert.deepEqual({...saved},{entryHostId:1,exitHostId:3,listenPort:21001,isEnabled:1},"stored tunnel is untouched");
+    const saved=(await query('SELECT "entryHostId","exitHostId","listenPort","isEnabled" FROM tunnels WHERE id=40'))[0];
+    assert.deepEqual({...saved,isEnabled:Number(saved.isEnabled)},{entryHostId:1,exitHostId:3,listenPort:21001,isEnabled:1},"stored tunnel is untouched");
     // 出口全被暂停：不退回到被暂停的主出口。
     await setExcluded('UPDATE hosts SET "trafficFailoverExcluded"=1 WHERE id=4');
     const allFull=await beat(2);
     assert.ok(!allFull.actions.some(a=>a.ruleId===50&&a.op==="apply"),"no fallback to an exhausted primary: "+summary(allFull));
     // 全部恢复：回到保存着的主出口和端口。
     await setExcluded('UPDATE hosts SET "trafficFailoverExcluded"=0');
-    await runtime.executeRaw('UPDATE tunnels SET "isRunning"=0 WHERE id=40');
-    await runtime.executeRaw('UPDATE forward_rules SET "isRunning"=0 WHERE id=50');
+    await exec('UPDATE tunnels SET "isRunning"=0 WHERE id=40');
+    await exec('UPDATE forward_rules SET "isRunning"=0 WHERE id=50');
     const restored=await beat(1);
     const restoredEntry=restored.actions.find(a=>a.ruleId===50&&a.op==="apply");
     assert.ok(restoredEntry,summary(restored));
     assert.equal(restoredEntry.fxp.exitHost,"192.0.2.3");
     assert.equal(restoredEntry.fxp.exitPort,21001);
-    await new Promise((resolve)=>server.close(resolve));process.exit(0);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(), env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "heartbeat.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") }, encoding: "utf8", timeout: 90_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+    await new Promise((resolve)=>server.close(resolve));
+  `, { name: "quota-heartbeat" });
 });

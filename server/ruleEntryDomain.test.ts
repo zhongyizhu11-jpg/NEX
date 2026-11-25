@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 import { normalizeRuleEntryDomainSuffixInput, ruleEntryDomainWebhookGroupId } from "./ruleEntryDomain";
 
@@ -23,23 +20,10 @@ type DnsCall = { action: string; domain: string; recordType: string; values: str
 type Outcome = Record<string, any>;
 
 function run(): Outcome {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-rule-entry-domain-"));
-  const databasePath = path.join(directory, "domain.db");
-  const logDirectory = path.join(directory, "logs");
-  fs.mkdirSync(logDirectory, { recursive: true });
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    import express from "express";
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
+    const express = (await import("express")).default;
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-    const query = (sql, params = []) => runtime.queryRaw(sql, params);
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const now = Math.floor(Date.now() / 1000);
     const target = "landing.forwardx.invalid";
@@ -213,16 +197,7 @@ function run(): Outcome {
     server.close();
     dns.close();
     console.log("OUTCOME " + JSON.stringify(out));
-    process.exit(0);
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: logDirectory },
-    timeout: 180_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "rule-entry-domain", timeoutMs: 180_000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
   return JSON.parse(line.slice("OUTCOME ".length));
@@ -396,46 +371,31 @@ test("后缀格式不对：设置接口直接报错", () => {
 });
 
 test("升级旧库：forward_rules 补上开关和四列、待删表建出来，已有规则不受影响、开关缺省开着", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-rule-entry-domain-upgrade-"));
-  try {
-    const script = String.raw`
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
+  const result = runInDatabase(String.raw`
       // 退回到加这个功能之前的样子。
       for (const column of ["entryDomainEnabled", "entryDomain", "entryDomainValue", "entryDomainAt", "entryDomainError"]) {
-        await runtime.executeRaw('ALTER TABLE "forward_rules" DROP COLUMN "' + column + '"');
+        await exec('ALTER TABLE "forward_rules" DROP COLUMN "' + column + '"');
       }
-      await runtime.executeRaw('DROP TABLE "rule_entry_domain_cleanups"');
-      await runtime.executeRaw('INSERT INTO forward_rules (id, "hostId", name, "sourcePort", "targetIp", "targetPort", "userId") VALUES (1, 1, ?, 1000, ?, 80, 1)', ["legacy", "198.51.100.1"]);
+      await exec('DROP TABLE "rule_entry_domain_cleanups"');
+      await exec('INSERT INTO forward_rules (id, "hostId", name, "sourcePort", "targetIp", "targetPort", "userId") VALUES (1, 1, ?, 1000, ?, 80, 1)', ["legacy", "198.51.100.1"]);
       await schema.ensureDatabaseSchema();
-      const columns = (await runtime.queryRaw('PRAGMA table_info("forward_rules")')).map((row) => row.name);
-      const tables = (await runtime.queryRaw("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'rule_entry_domain_cleanups'")).map((row) => row.name);
-      const [rule] = await runtime.queryRaw('SELECT name, "entryDomainEnabled", "entryDomain", "entryDomainValue" FROM forward_rules WHERE id = 1');
+      const postgres = runtime.getDatabaseKind() === "postgresql";
+      const columns = postgres
+        ? (await query("SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'forward_rules'")).map((row) => row.name)
+        : (await query('PRAGMA table_info("forward_rules")')).map((row) => row.name);
+      const tables = postgres
+        ? (await query("SELECT table_name AS name FROM information_schema.tables WHERE table_name = 'rule_entry_domain_cleanups'")).map((row) => row.name)
+        : (await query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'rule_entry_domain_cleanups'")).map((row) => row.name);
+      const [rule] = await query('SELECT name, "entryDomainEnabled", "entryDomain", "entryDomainValue" FROM forward_rules WHERE id = 1');
       console.log("OUTCOME " + JSON.stringify({ columns, tables, rule }));
-      process.exit(0);
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: path.resolve(import.meta.dirname, ".."),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "upgrade.db"), FORWARDX_LOG_DIR: directory },
-      timeout: 60_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
-    assert.ok(line, result.stdout + result.stderr);
-    const upgraded = JSON.parse(line!.slice("OUTCOME ".length));
-    for (const column of ["entryDomainEnabled", "entryDomain", "entryDomainValue", "entryDomainAt", "entryDomainError"]) {
-      assert.ok(upgraded.columns.includes(column), "forward_rules 缺列: " + column);
-    }
-    assert.deepEqual(upgraded.tables, ["rule_entry_domain_cleanups"]);
-    // 老规则的开关补出来就是开着的：升级前后行为不变。
-    assert.deepEqual({ ...upgraded.rule, entryDomainEnabled: Number(upgraded.rule.entryDomainEnabled) }, { name: "legacy", entryDomainEnabled: 1, entryDomain: null, entryDomainValue: null });
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+  `, { name: "rule-entry-domain-upgrade" });
+  const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
+  assert.ok(line, result.stdout + result.stderr);
+  const upgraded = JSON.parse(line!.slice("OUTCOME ".length));
+  for (const column of ["entryDomainEnabled", "entryDomain", "entryDomainValue", "entryDomainAt", "entryDomainError"]) {
+    assert.ok(upgraded.columns.includes(column), "forward_rules 缺列: " + column);
   }
+  assert.deepEqual(upgraded.tables, ["rule_entry_domain_cleanups"]);
+  // 老规则的开关补出来就是开着的：升级前后行为不变。
+  assert.deepEqual({ ...upgraded.rule, entryDomainEnabled: Number(upgraded.rule.entryDomainEnabled) }, { name: "legacy", entryDomainEnabled: 1, entryDomain: null, entryDomainValue: null });
 });

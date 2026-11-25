@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
+import { readRulesPageSource } from "./testing/rulesPageSource";
 
 /**
  * 「创建转发」这张表单里不许有只写不读的字段。
@@ -28,7 +27,7 @@ import test from "node:test";
  * 开关留在表单里没人删。下次再发生时这里会红。
  */
 
-const rulesPagePath = path.resolve(import.meta.dirname, "pages/Rules.tsx");
+// 规则页在渐进拆分（RulesContent 的片段搬进 features/rules/use*.ts(x)），读页面要连 hook 一起读
 
 /*
   确实需要留在表单里、但不会以 form.X 形式被读的字段写在这里，一个都没有。
@@ -45,7 +44,7 @@ function ruleFormFields(source: string): string[] {
 }
 
 test("创建转发的表单字段，每一个都得有人读", () => {
-  const source = fs.readFileSync(rulesPagePath, "utf8");
+  const source = readRulesPageSource();
   const fields = ruleFormFields(source);
 
   // 锚点校验：解析不出字段就说明正则失配了，那下面的断言会全部空转。
@@ -84,7 +83,7 @@ test("必填标记必须来自判断本身，不许手写", () => {
     这条盯两件事：源端口的星号还跟着判断走；以及没有人又往别的标签上写死一个星号
     而不说明理由。
   */
-  const source = fs.readFileSync(rulesPagePath, "utf8");
+  const source = readRulesPageSource();
   const dialog = /<DialogTitle>\{editingId \? "编辑规则"[\s\S]*?<\/DialogFooter>/.exec(source);
   assert.ok(dialog, "找不到新建/编辑转发的对话框 —— 这条测试锚错了地方");
 
@@ -130,7 +129,7 @@ test("表单字段数守住上限，别再长回去", () => {
     时候顺便想想能不能不加 —— 这正是这条想制造的那一下停顿。上面这段就是那次
     停顿的结果。
   */
-  const fields = ruleFormFields(fs.readFileSync(rulesPagePath, "utf8"));
+  const fields = ruleFormFields(readRulesPageSource());
   assert.ok(
     fields.length <= 22,
     `创建转发的表单涨到了 ${fields.length} 个字段（上限 22）。`

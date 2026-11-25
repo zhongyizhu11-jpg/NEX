@@ -817,7 +817,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
 
               <Separator />
 
-              <div className="space-y-2">
+              <FormField className="space-y-2">
                 <Label className="flex items-center gap-1.5 text-sm">
                   <CalendarClock className="h-3.5 w-3.5" />
                   到期日期
@@ -830,7 +830,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                 <p data-fx-help="" className="text-xs text-muted-foreground">
                   留空表示永久有效。
                 </p>
-              </div>
+              </FormField>
 
               <Separator />
 
@@ -940,6 +940,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${group.name}`}
                           onClick={() => setAllowedForwardGroupIds(prev => prev.filter(id => id !== Number(group.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -988,6 +989,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${group.name}`}
                           onClick={() => setAllowedForwardGroupIds(prev => prev.filter(id => id !== Number(group.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1040,6 +1042,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${t.name}`}
                           onClick={() => setAllowedTunnelIds(prev => prev.filter(id => id !== Number(t.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1148,6 +1151,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${String(host.name || host.ip || `主机 #${host.id}`)}`}
                           onClick={() => setAllowedHostIds(prev => prev.filter(id => id !== Number(host.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1200,6 +1204,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${group.name || `转发资源 #${group.id}`}`}
                           onClick={() => setTrafficBillingForwardGroupIds(prev => prev.filter(id => id !== Number(group.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1247,6 +1252,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${h.name}`}
                           onClick={() => setTrafficBillingHostIds(prev => prev.filter(id => id !== Number(h.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1299,6 +1305,7 @@ export default function UserTrafficSettingsDialog({ open, onOpenChange, user, us
                           size="icon"
                           className="h-8 w-8 shrink-0"
                           title="移除授权"
+                          aria-label={`移除授权 ${t.name}`}
                           onClick={() => setTrafficBillingTunnelIds(prev => prev.filter(id => id !== Number(t.id)))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

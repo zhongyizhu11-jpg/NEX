@@ -111,6 +111,8 @@ import { cn } from "@/lib/utils";
 import { Copy, ArrowRightLeft, ChevronRight, Globe, Layers, LayoutGrid, List, LogIn, LogOut, Waypoints, Network, Server, Pencil, Plus, Route, Search, ShieldCheck, Stethoscope, Trash2, Upload, XCircle, Wand2 } from "lucide-react";
 
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { useWarmLazyChunks } from "@/lib/lazyWarm";
+import { DialogLoadingFallback } from "@/components/ui/dialog-loading";
 import { toast } from "sonner";
 import {
   FORWARD_PROTOCOL_LABELS,
@@ -149,10 +151,14 @@ import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
-const TunnelSelfTestDialog = lazy(() => import("@/features/tunnels/TunnelSelfTestDialog"));
-// 新建向导、出口均衡两个弹窗都很少打开，和自测框一样点了再下
-const LinkWizardDialog = lazy(() => import("@/features/links/LinkWizardDialog").then((m) => ({ default: m.LinkWizardDialog })));
-const ExitBalanceDialog = lazy(() => import("@/features/links/ExitBalanceDialog").then((m) => ({ default: m.ExitBalanceDialog })));
+// 懒加载的弹窗：页面闲下来先把 JS 热进缓存（lib/lazyWarm.ts），点开时不用再等一次网络往返
+const loadTunnelSelfTestDialog = () => import("@/features/tunnels/TunnelSelfTestDialog");
+const TunnelSelfTestDialog = lazy(loadTunnelSelfTestDialog);
+// 新建向导、出口均衡两个弹窗按需加载，但页面闲时先热好
+const loadLinkWizardDialog = () => import("@/features/links/LinkWizardDialog").then((m) => ({ default: m.LinkWizardDialog }));
+const LinkWizardDialog = lazy(loadLinkWizardDialog);
+const loadExitBalanceDialog = () => import("@/features/links/ExitBalanceDialog").then((m) => ({ default: m.ExitBalanceDialog }));
+const ExitBalanceDialog = lazy(loadExitBalanceDialog);
 const TunnelWorldGlobe = lazy(() => import("@/features/tunnels/TunnelWorldGlobe"));
 
 export function hasLatestTunnelLatency(tunnel: any) {
@@ -2957,6 +2963,10 @@ function TunnelsContent() {
   const activeSectionCreatesGroup = activeSection === "ports" || activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
   // 「按目标新建」向导默认关（系统设置里开），懂行的人不需要它。
   const linkWizardEnabled = panelFlags.linkWizardEnabled;
+  // 自测、出口均衡弹窗谁都可能点开；新建向导只在面板开了这个功能时才有入口
+  useWarmLazyChunks(linkWizardEnabled
+    ? [loadTunnelSelfTestDialog, loadExitBalanceDialog, loadLinkWizardDialog]
+    : [loadTunnelSelfTestDialog, loadExitBalanceDialog]);
   const canCreateActive = activeSection === "routes"
     ? linkWizardEnabled && canCreateGroup
     : activeSection === "tunnels"
@@ -3855,7 +3865,7 @@ function TunnelsContent() {
       </Tabs>
 
       {testTunnel && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback />}>
         <TunnelSelfTestDialog
           tunnelId={testTunnel.id}
           tunnelName={testTunnel.name}
@@ -3883,7 +3893,7 @@ function TunnelsContent() {
       />
       <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
       {linkWizardOpen && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DialogLoadingFallback open={linkWizardOpen} />}>
           <LinkWizardDialog
             open={linkWizardOpen}
             onOpenChange={setLinkWizardOpen}
@@ -4232,7 +4242,7 @@ function TunnelsContent() {
         // 用列表里最新的那份，切换 / 排序后马上反映出来
         const tunnel = (rawTunnelItems.find((item) => Number(item.id) === Number(exitGroupDialogTunnel.id)) || exitGroupDialogTunnel) as TunnelListItem;
         return (
-          <Suspense fallback={null}>
+          <Suspense fallback={<DialogLoadingFallback />}>
             <ExitBalanceDialog
               tunnel={tunnel}
               exitGroup={Number(tunnel.exitGroupId || 0) > 0 ? exitGroupById.get(Number(tunnel.exitGroupId)) ?? null : null}

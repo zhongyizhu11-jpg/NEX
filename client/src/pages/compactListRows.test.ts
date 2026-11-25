@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { readRulesPageSource } from "../testing/rulesPageSource";
 
 /**
  * 精简布局的「条状」（用户 2026-10-21 照着老版本表格样稿定的）：
@@ -9,7 +10,8 @@ import test from "node:test";
  * 视图切换按钮里卡片那几档不出现。手机上没有表，页面根带 data-fx-compact-page，compact.css 把卡片栅格画成两行的列表行。
  * 守在源码上。
  */
-const read = (name: string) => fs.readFileSync(path.resolve(import.meta.dirname, name), "utf8");
+// 规则页在渐进拆分（RulesContent 的片段搬进 features/rules/use*.ts(x)），读 Rules.tsx 要连 hook 一起读
+const read = (name: string) => name === "Rules.tsx" ? readRulesPageSource() : fs.readFileSync(path.resolve(import.meta.dirname, name), "utf8");
 
 test("转发页：精简 + 桌面强制表格（3D 图除外），视图按钮只剩表和 3D 图", () => {
   const source = read("Rules.tsx");

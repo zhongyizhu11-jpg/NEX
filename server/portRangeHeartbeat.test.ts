@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 端口段规则（shared/portRange.ts）随心跳下发成什么样：新 Agent 收到整段的内核规则和段结尾，
@@ -11,17 +8,8 @@ import test from "node:test";
  * 会一直当成没装上反复重下）。搭法同 disabledRuleGuardCleanup.test.ts：真心跳路由 + SQLite。
  */
 function heartbeatFor(token: string, agentVersion: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-port-range-hb-"));
-  const script = String.raw`
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "agentVersion") VALUES (1, ?, ?, ?, ?, ?, 1, 1, ?)',
       ["入口机", "203.0.113.1", "203.0.113.1", "slave", process.env.AGENT_TOKEN, process.env.AGENT_VERSION]);
@@ -54,15 +42,7 @@ function heartbeatFor(token: string, agentVersion: string) {
     if (response.status !== 200) throw new Error("心跳没通: " + response.status + " " + JSON.stringify(body).slice(0, 300));
     const actions = ((body.desiredState && body.desiredState.actions) || []).filter((action) => [11, 12].includes(Number(action.ruleId)));
     console.log("RESULT " + JSON.stringify({ actions, runningRules: body.runningRules || [] }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "hb.db"), AGENT_TOKEN: token, AGENT_VERSION: agentVersion },
-    timeout: 90_000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "port-range-hb", env: { AGENT_TOKEN: token, AGENT_VERSION: agentVersion } });
   const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
   assert.ok(line, result.stdout);
   return JSON.parse(line.slice("RESULT ".length)) as {

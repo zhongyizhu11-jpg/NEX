@@ -1,15 +1,17 @@
 /*
   从 client/src/pages/Rules.tsx 第 6157-6214 行抽出（scripts/extract-block.mjs），行为不变。
 */
+import { type ReactElement } from "react";
+import { type RuleResourceRow } from "../../pages/Rules";
 import { Badge } from "@/components/ui/badge";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { cn } from "@/lib/utils";
 import { AlertCircle, AlertTriangle } from "lucide-react";
 
 export type UseRuleWarningBadgesResult = {
-  renderKernelForwardWarningBadge: any /* 原类型 (warning: string | null) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderTunnelFxpIssueBadge: any /* 原类型 (tunnel: any) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
-  renderPortWarningBadge: any /* 原类型 (rule: { portWarnings?: unknown; }) => JSX.Element | null… 引用了拿不到的 JSX，手动收拾 */;
+  renderKernelForwardWarningBadge: (warning: string | null) => ReactElement | null;
+  renderTunnelFxpIssueBadge: (tunnel: RuleResourceRow) => ReactElement | null;
+  renderPortWarningBadge: (rule: { portWarnings?: unknown; }) => ReactElement | null;
 };
 
 export function useRuleWarningBadges(): UseRuleWarningBadgesResult {

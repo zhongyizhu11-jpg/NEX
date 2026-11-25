@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 评估一个转发组 / 入口组打多少次库（P7）。
@@ -21,12 +18,7 @@ import test from "node:test";
 type Probe = { cost: Record<string, number>; values: Record<string, string> };
 
 function runProbe(): Probe {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-group-eval-cost-"));
-  const databasePath = path.join(directory, "eval.db");
-  const script = String.raw`
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-
+  const result = runInDatabase(String.raw`
     const Database = (await import("better-sqlite3")).default;
     const originalPrepare = Database.prototype.prepare;
     let recording = false;
@@ -36,12 +28,6 @@ function runProbe(): Probe {
       return originalPrepare.call(this, sql);
     };
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const now = Math.floor(Date.now() / 1000);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'h', 'admin')");
@@ -92,7 +78,7 @@ function runProbe(): Probe {
       await groups.runForwardGroupFailover(gid, { skipRuleSync: true });
       recording = false;
       cost[label] = statements.length;
-      const [row] = await runtime.queryRaw('SELECT "lastDdnsValue", "lastStatus" FROM forward_groups WHERE id = ?', [gid]);
+      const [row] = await query('SELECT "lastDdnsValue", "lastStatus" FROM forward_groups WHERE id = ?', [gid]);
       values[label] = row.lastStatus + ":" + String(row.lastDdnsValue || "").split(",").length;
     }
     // 探测拓扑：建好之后每台主机取自己那份不再查库
@@ -102,15 +88,7 @@ function runProbe(): Probe {
     recording = false;
     cost["拓扑60台"] = statements.length;
     console.log("EVALCOST " + JSON.stringify({ cost, values }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: path.join(directory, "logs") },
-    timeout: 180000,
-  });
-  fs.rmSync(directory, { recursive: true, force: true });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  `, { name: "group-eval-cost", timeoutMs: 180000 });
   const line = result.stdout.split("\n").find((row) => row.startsWith("EVALCOST "));
   assert.ok(line, `没拿到探测结果：\n${result.stdout}`);
   return JSON.parse(line.slice("EVALCOST ".length)) as Probe;

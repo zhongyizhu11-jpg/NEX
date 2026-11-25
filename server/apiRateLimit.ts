@@ -10,14 +10,23 @@
 
   查询和修改分两份额度：页面轮询全是查询，量大但便宜；修改少而贵。
 
-  算法：滑动窗口计数（当前一分钟的计数 + 上一分钟按剩余比例折算），每个键只存三个数，
+  算法：滑动窗口计数（当前一分钟的计数 + 上一分钟按剩余比例折算），每个键只存几个数，
   O(1)；键数有上限（setBoundedMapValue），被刷爆也只会挤掉最久没用的键。
   默认额度按忙碌页面实测的 5 倍以上定（见 DEFAULT_API_RATE_LIMIT 的注释），正常用面板碰不到。
 
-  这个文件不碰数据库、不读设置：配置由 apiRateLimitConfig.ts 读好传进来，测试直接给数。
+  多实例（server/sharedState.ts 判断为 db 模式）时计数在库里共享：每次放行的请求往 api_rate_limit_windows 的
+  (key, 当前分钟) 那一行原子加一（一条 upsert，PostgreSQL 顺带带回上一分钟的数），回来的总数覆盖本进程
+  缓存里的数 —— 判断仍然是同步的、看缓存，所以每个实例对同一个键最多比额度多放一次（在途那一次）。
+  缓存里已经超额的键不再碰库（「明显超额的客户端不该每个请求都打一次库」），估算值随上一分钟折算
+  下降到额度以下时才再去库里加一、拿回真实的数。写库失败按本进程计数继续，不影响接口。
+  SQLite 部署永远是内存模式，和以前一样。
+
+  配置由 apiRateLimitConfig.ts 读好传进来，测试直接给数。
 */
 import { setBoundedMapValue } from "./boundedCache";
 import { ipRateLimitScope } from "./ipRateLimitScope";
+import { noteSharedStateError, registerSharedStateCleanup, sharedStateKey, sharedStateMode } from "./sharedState";
+import { SqlWindowCounterStore, type WindowHit } from "./sharedStateStore";
 
 export type ApiRateLimitConfig = {
   enabled: boolean;
@@ -77,9 +86,71 @@ export function normalizeApiRateLimitConfig(value: unknown): ApiRateLimitConfig 
   };
 }
 
-type WindowEntry = { windowStart: number; current: number; previous: number };
+type WindowEntry = {
+  windowStart: number;
+  /** 这个窗口的数：内存模式是本进程数的；db 模式是库里最近回来的总数（写库失败那几次本地加上）。 */
+  current: number;
+  previous: number;
+  /** db 模式：发出去还没回来的加一（先算进估算，免得一瞬间的并发全放过去）。 */
+  inflight: number;
+  /** db 模式：previous 是不是已经从库里拿到过（没拿到过的在下一次加一时顺带要）。 */
+  previousKnown: boolean;
+};
 
 const buckets = new Map<string, WindowEntry>();
+
+let windowStore: SqlWindowCounterStore | null = null;
+const pendingHits = new Set<Promise<unknown>>();
+
+function sharedWindowStore() {
+  if (!windowStore) windowStore = new SqlWindowCounterStore();
+  return windowStore;
+}
+
+/** 测试用：换掉写库的那一层（传 null 恢复）。 */
+export function setApiRateLimitSharedStoreForTests(store: SqlWindowCounterStore | null) {
+  windowStore = store;
+}
+
+/** 测试用：等在途的写库都回来。 */
+export async function waitForApiRateLimitSharedWrites() {
+  while (pendingHits.size > 0) await Promise.allSettled([...pendingHits]);
+}
+
+/** 库回来的总数覆盖缓存：键的窗口没变就更新当前窗口；已经翻到下一个窗口就只能补上一个窗口的数。 */
+function applySharedHit(key: string, windowStart: number, hit: WindowHit) {
+  const entry = buckets.get(key);
+  if (!entry) return;
+  if (entry.windowStart === windowStart) {
+    entry.inflight = Math.max(0, entry.inflight - 1);
+    entry.current = Math.max(entry.current, hit.current);
+    if (hit.previous !== null && !entry.previousKnown) {
+      entry.previous = Math.max(entry.previous, hit.previous);
+      entry.previousKnown = true;
+    }
+  } else if (entry.windowStart - windowStart === WINDOW_MS) {
+    entry.previous = Math.max(entry.previous, hit.current);
+    entry.previousKnown = true;
+  }
+}
+
+function sharedHit(key: string, windowStart: number, wantPrevious: boolean) {
+  const task = sharedWindowStore().hit(sharedStateKey(key), windowStart, WINDOW_MS, wantPrevious)
+    .then((hit) => applySharedHit(key, windowStart, hit))
+    .catch((error) => {
+      // 写不进库：这一次按本进程的计数算（别让库的故障放过超额的客户端，也别挡住正常请求）。
+      const entry = buckets.get(key);
+      if (entry && entry.windowStart === windowStart) {
+        entry.inflight = Math.max(0, entry.inflight - 1);
+        entry.current += 1;
+      }
+      noteSharedStateError("api rate limit", error);
+    });
+  pendingHits.add(task);
+  void task.finally(() => { pendingHits.delete(task); });
+}
+
+registerSharedStateCleanup("api_rate_limit_windows", () => sharedWindowStore().prune(WINDOW_MS));
 
 export type ApiRateLimitCaller = {
   apiTokenId?: number | null;
@@ -126,25 +197,29 @@ export function checkApiRateLimit(
   const { subject, key, limit } = apiRateLimitSubject(caller, kind, config);
   if (!config.enabled || limit <= 0) return { limited: false, retryAfterSeconds: 0, subject, key, limit };
 
+  const shared = sharedStateMode() === "db";
   const windowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
   let entry = buckets.get(key);
   if (!entry) {
-    entry = { windowStart, current: 0, previous: 0 };
+    entry = { windowStart, current: 0, previous: 0, inflight: 0, previousKnown: !shared };
   } else if (entry.windowStart !== windowStart) {
-    // 跨过一个窗口：当前变成上一个；跨过两个以上：上一个也清零。
+    // 跨过一个窗口：当前变成上一个（在途的也算，回来时按上一个窗口补）；跨过两个以上：上一个也清零。
     entry = {
       windowStart,
       current: 0,
-      previous: windowStart - entry.windowStart === WINDOW_MS ? entry.current : 0,
+      previous: windowStart - entry.windowStart === WINDOW_MS ? entry.current + entry.inflight : 0,
+      inflight: 0,
+      previousKnown: !shared,
     };
   }
   const elapsedRatio = (now - windowStart) / WINDOW_MS;
-  const estimate = entry.previous * (1 - elapsedRatio) + entry.current;
+  const counted = entry.current + entry.inflight;
+  const estimate = entry.previous * (1 - elapsedRatio) + counted;
   if (estimate + 1 > limit) {
     setBoundedMapValue(buckets, key, entry, MAX_KEYS);
     // 估算值每过一段时间下降 previous/WINDOW_MS；算出要等多久才降回 limit 以下，至少 1 秒。
     let waitMs: number;
-    if (entry.current + 1 > limit) {
+    if (counted + 1 > limit) {
       waitMs = windowStart + WINDOW_MS - now;
     } else {
       const excess = estimate + 1 - limit;
@@ -152,8 +227,14 @@ export function checkApiRateLimit(
     }
     return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)), subject, key, limit };
   }
-  entry.current += 1;
-  setBoundedMapValue(buckets, key, entry, MAX_KEYS);
+  if (shared) {
+    entry.inflight += 1;
+    setBoundedMapValue(buckets, key, entry, MAX_KEYS);
+    sharedHit(key, windowStart, !entry.previousKnown);
+  } else {
+    entry.current += 1;
+    setBoundedMapValue(buckets, key, entry, MAX_KEYS);
+  }
   return { limited: false, retryAfterSeconds: 0, subject, key, limit };
 }
 

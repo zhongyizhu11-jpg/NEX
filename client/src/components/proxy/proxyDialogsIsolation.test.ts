@@ -45,8 +45,10 @@ test("传给 ProxyInboundsSection 的回调都是稳定引用，订阅内容弹�
     assert.match(page, new RegExp(`const ${name} = useCallback\\(`), `${name} 要 useCallback`);
   }
   assert.match(page, /const pastedRowSpecs = useMemo</);
-  assert.match(page, /lazy\(\(\) => import\("@\/components\/proxy\/ProxySubscriptionPreviewDialog"\)\)/);
-  assert.match(page, /\{previewOpen && \(\s*<Suspense fallback=\{null\}>/);
+  // loader 写成模块级常量，lazy() 和页面闲时预热（lib/lazyWarm）用的是同一个函数
+  assert.match(page, /const loadProxySubscriptionPreviewDialog = \(\) => import\("@\/components\/proxy\/ProxySubscriptionPreviewDialog"\)/);
+  assert.match(page, /lazy\(loadProxySubscriptionPreviewDialog\)/);
+  assert.match(page, /\{previewOpen && \(\s*<Suspense fallback=\{<DialogLoadingFallback open=\{previewOpen\} \/>\}>/);
 });
 
 test("行上的开关是乐观的，失效只动自己影响到的查询", () => {

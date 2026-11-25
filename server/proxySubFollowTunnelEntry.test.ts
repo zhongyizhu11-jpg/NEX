@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase } from "./testing/runInDatabase";
 
 /**
  * 链路换入口机器后，订阅要跟着走。
@@ -15,26 +12,14 @@ import test from "node:test";
  * 成员是入口。
  */
 test("隧道换入口机器后订阅节点跟着换，转发组按第一个成员出入口", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-proxy-sub-entry-"));
-  const databasePath = path.join(directory, "sub-entry.db");
-  const script = String.raw`
-    import assert from "node:assert/strict";
-    import http from "node:http";
-    import path from "node:path";
-    import { pathToFileURL } from "node:url";
-    import express from "express";
+  const result = runInDatabase(String.raw`
+    const http = (await import("node:http")).default;
+    const express = (await import("express")).default;
 
-    const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-    const runtime = await import(url("server/dbRuntime.ts"));
-    const schema = await import(url("server/dbSchema.ts"));
     const route = await import(url("server/proxySubscriptionRoute.ts"));
     const proxyNode = await import(url("shared/proxyNode.ts"));
     const tunnelRepo = await import(url("server/repositories/tunnelRepository.ts"));
     const groupRepo = await import(url("server/repositories/forwardGroupRepository.ts"));
-
-    await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-    await schema.ensureDatabaseSchema();
-    const exec = (sql, params = []) => runtime.executeRaw(sql, params);
 
     await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (1, 'owner', 'hash', 'user', 1)");
     await exec("INSERT INTO hosts (id, name, ip, ipv4, userId) VALUES (1, 'Po0(500M)', '1.1.1.1', '1.1.1.1', 1)");
@@ -91,19 +76,6 @@ test("隧道换入口机器后订阅节点跟着换，转发组按第一个成�
     assert.ok(reordered[1].includes("@2.2.2.2:44761"), "组成员重排后入口要跟着换：" + reordered[1]);
 
     server.close();
-    console.log("OK");
-    process.exit(0);
-  `;
-  try {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath },
-      timeout: 180_000,
-    });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.ok(result.stdout.includes("OK"), result.stdout);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  `, { name: "proxy-sub-entry", timeoutMs: 180_000 });
+  assert.ok(result.stdout.includes("OK"), result.stdout);
 });
