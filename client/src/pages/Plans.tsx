@@ -36,6 +36,7 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
+import { configQuery, optionsQuery } from "@/lib/queryPresets";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import TrafficBillingSection from "@/components/TrafficBillingSection";
 import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
@@ -509,6 +510,7 @@ function PlanResourcePicker({
                     size="icon"
                     className="h-7 w-7 shrink-0 text-destructive"
                     title="删除"
+                    aria-label={`删除 ${String(item?.name || `#${getId(item)}`)}`}
                     onClick={() => onRemove(getId(item))}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -577,6 +579,7 @@ function PlanSelectedResourceList({
                 size="icon"
                 className="h-7 w-7 shrink-0 text-destructive"
                 title="删除"
+                aria-label={`删除 ${String(item?.name || `#${getId(item)}`)}`}
                 onClick={() => onRemove(getId(item))}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -754,28 +757,28 @@ export default function Plans() {
   const needsPlanResourceOptions = editing && planDialogTab === "resources";
   const { data: hosts = [] } = trpc.hosts.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: tunnels = [], isLoading: tunnelsLoading } = trpc.tunnels.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: forwardGroups = [], isLoading: forwardGroupsLoading } = trpc.forwardGroups.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: users = [] } = trpc.users.options.useQuery(undefined, {
     enabled: assignOpen,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   const { data: planOptions = [] } = trpc.plans.options.useQuery(undefined, {
     enabled: assignOpen,
-    staleTime: 30_000,
+    ...optionsQuery,
   });
   // 无条件发：这张卡片要说的是「按量计费现在开没开」，不能因为你没点开某个 tab
   // 就一律显示「已关闭」—— 那是在关于钱的事情上说假话。
   const { data: trafficBillingData, isLoading: trafficBillingLoading } = trpc.trafficBilling.configs.useQuery(undefined, {
-    staleTime: 30_000,
+    ...configQuery,
   });
 
   const createPlan = trpc.plans.create.useMutation({
