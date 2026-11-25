@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { memo, useRef, useState, type ReactNode } from "react";
 import { MoreHorizontal, type LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -92,7 +92,11 @@ const ACCENT_BORDERS: Record<ProxyNodeRowAccent, string> = {
  * 最要看的部分（地址的端口、归属的账号、名字的后半截），所以点一下文字那块就把这一张
  * 展开成换行显示，再点收起。桌面上悬停也能看到全文（title）。
  */
-export function ProxyNodeRow({
+/*
+  memo：一张列表几十行，父组件（ProxyInboundsSection，也 memo 过）因为别的原因重画时，
+  props 没变的行不再逐个重跑。各行的 spec 由 owner 用 useMemo 组装，引用是稳的。
+*/
+export const ProxyNodeRow = memo(function ProxyNodeRow({
   leading,
   name,
   tag,
@@ -225,7 +229,7 @@ export function ProxyNodeRow({
       ) : null}
     </div>
   );
-}
+});
 
 /** 第二行那句话：把非空段落用 · 串起来，省掉一堆三元表达式。 */
 export function proxyNodeMetaText(parts: Array<string | false | null | undefined>): string {

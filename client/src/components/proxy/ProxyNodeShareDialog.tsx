@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { optionsQuery } from "@/lib/queryPresets";
 import { trpc } from "@/lib/trpc";
 
 /** 要分享的那一份凭据。多用户入站会派生出好几行，各自分给谁是分开的。 */
@@ -48,8 +49,8 @@ export function ProxyNodeShareDialog({
     [nodeIdsKey],
   );
 
-  // 用户名单一分钟内不重拉，和入站卡那边取同一份时的口径一致（两处 staleTime 不同会各拉各的）。
-  const usersQuery = trpc.users.options.useQuery(undefined, { enabled: open, staleTime: 60_000 });
+  // 用户名单的新鲜期和入站卡那边同一份预设（lib/queryPresets）：两处 staleTime 不同会各拉各的。
+  const usersQuery = trpc.users.options.useQuery(undefined, { ...optionsQuery, enabled: open });
   const sharesQuery = trpc.proxySubscriptions.nodeShares.useQuery(
     { nodeIds },
     { enabled: open && nodeIds.length > 0 },

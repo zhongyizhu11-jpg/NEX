@@ -694,9 +694,13 @@ const RESULT_LABELS: Record<string, string> = {
   ...PROXY_SUB_TOKEN_FAILURE_LABELS,
 };
 
+/** 拉取记录弹窗一次取多少条。 */
+const LOGS_DIALOG_LIMIT = 200;
+
 export function ProxySubTokenLogsDialog({ open, onOpenChange, tokenId, tokenName, admin }: { open: boolean; onOpenChange: (open: boolean) => void; tokenId: number | null; tokenName: string; admin?: boolean }) {
-  const userQuery = trpc.proxySubscriptions.tokenAccessLogs.useQuery({ id: tokenId || 0, limit: 100 }, { enabled: open && !!tokenId && !admin });
-  const adminQuery = trpc.proxySubscriptions.adminAccessLogs.useQuery({ tokenId: tokenId || undefined, limit: 200 }, { enabled: open && !!tokenId && !!admin });
+  // 用户和管理员看同一条令牌的记录，条数一样：两个接口都收 200（tokenAccessLogs 的上限就是 200），原来 100 / 200 只是各写各的。
+  const userQuery = trpc.proxySubscriptions.tokenAccessLogs.useQuery({ id: tokenId || 0, limit: LOGS_DIALOG_LIMIT }, { enabled: open && !!tokenId && !admin });
+  const adminQuery = trpc.proxySubscriptions.adminAccessLogs.useQuery({ tokenId: tokenId || undefined, limit: LOGS_DIALOG_LIMIT }, { enabled: open && !!tokenId && !!admin });
   const query = admin ? adminQuery : userQuery;
   const rows = query.data || [];
   return (

@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { balanceTypeLabel, subscriptionSourceLabel } from "../../shared/ledgerLabels";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, ne, or, sql } from "drizzle-orm";
 import {
   balanceTransactions, InsertBalanceTransaction,
   discountCodePlans,
@@ -4349,6 +4349,50 @@ export async function listPaymentOrders(limit = 100, userId?: number, selectedId
     ...(selectedIds ? [inArray(paymentOrders.id, selectedIds)] : []),
   ];
   return base.where(conditions.length > 0 ? and(...conditions) : undefined).orderBy(desc(paymentOrders.createdAt), desc(paymentOrders.id)).limit(limit);
+}
+
+export type PaymentOrdersPageFilter = {
+  /** 只看某个状态（pending / paid / completed / expired / cancelled / failed）。 */
+  status?: string;
+  /** 订单号 / 网关流水号 / 用户名里含这个词。 */
+  keyword?: string;
+  userId?: number;
+};
+
+/**
+ * 支付订单分页（管理员的「订单记录」）。
+ *
+ * 原来只拿最近 100 条，更早的订单在面板上翻不到。和余额流水分页同一套路：先按条件数总数、
+ * 只取这一页的 id，再用 listPaymentOrders 按 id 把带用户名的详情读出来 —— 列的定义只有一份，
+ * 分页和不分页的两个接口回的是同一种行。同一时刻的多笔按 id 定序，翻页不重不漏。
+ */
+export async function listPaymentOrdersPage(input: PageRequest & PaymentOrdersPageFilter) {
+  const db = await getDb();
+  if (!db) return pageResult([], 0, input, 20);
+  const keyword = String(input.keyword || "").trim();
+  const status = String(input.status || "").trim();
+  const conditions = [
+    ...(input.userId !== undefined ? [eq(paymentOrders.userId, input.userId)] : []),
+    ...(status ? [eq(paymentOrders.status, status)] : []),
+    ...(keyword
+      ? [or(
+        like(paymentOrders.outTradeNo, `%${keyword}%`),
+        like(paymentOrders.tradeNo, `%${keyword}%`),
+        like(users.username, `%${keyword}%`),
+      )!]
+      : []),
+  ];
+  const condition = conditions.length > 0 ? and(...conditions) : undefined;
+  // 关键字要搜用户名，计数和取 id 都得连上 users；不搜时这个 left join 对行数没有影响。
+  const [count] = await db.select({ count: sql<number>`COUNT(*)` }).from(paymentOrders)
+    .leftJoin(users, eq(paymentOrders.userId, users.id)).where(condition);
+  const total = Number(count?.count || 0);
+  const window = pageWindowForTotal(input, total, 20);
+  const selected = await db.select({ id: paymentOrders.id }).from(paymentOrders)
+    .leftJoin(users, eq(paymentOrders.userId, users.id)).where(condition)
+    .orderBy(desc(paymentOrders.createdAt), desc(paymentOrders.id)).limit(window.pageSize).offset(window.offset);
+  const items = await listPaymentOrders(window.pageSize, undefined, selected.map((row: { id: number }) => Number(row.id)));
+  return pageResult(items, total, window, 20);
 }
 
 const CLOSED_PAYMENT_ORDER_STATUSES = ["expired", "failed", "cancelled"];

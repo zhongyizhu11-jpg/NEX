@@ -8,6 +8,7 @@
 import DashboardLayout from "@/components/DashboardLayout";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import QueryErrorState, { QueryErrorRow, failedQueryState } from "@/components/QueryErrorState";
+import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { ProxySubTokenDevicesDialog, ProxySubTokenEditDialog, ProxySubTokenLogsDialog, type ProxySubTokenLike } from "@/components/proxy/ProxySubTokenDialogs";
 import { Badge } from "@/components/ui/badge";
@@ -61,12 +62,13 @@ function TokensTab() {
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  // 页码记在 localStorage、翻页控件和账单页同一个（PersistentPagination），不再手写「上一页 / 下一页」。
+  const pageRequest = usePersistentPageRequest("forwardx.adminSubscriptions.tokens.page");
   const pageSize = 20;
   // 搜索停手 300 ms 再查，期间留着上一页的结果 —— 不然每敲一个键整张表闪一次「加载中」。
   const keyword = useDebouncedValue(search.trim(), 300);
   const query = trpc.proxySubscriptions.adminListTokens.useQuery(
-    { search: keyword || undefined, page, pageSize },
+    { search: keyword || undefined, page: pageRequest.page, pageSize },
     { placeholderData: (previous) => previous },
   );
   const settingsQuery = trpc.proxySubscriptions.adminGetSettings.useQuery();
@@ -79,16 +81,19 @@ function TokensTab() {
   const deleteToken = trpc.proxySubscriptions.deleteToken.useMutation({ onSuccess: () => { toast.success("已删除"); refresh(); }, onError: (error) => toast.error(error.message) });
   const items = (query.data?.items || []) as any[];
   const total = query.data?.total || 0;
-  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const pagination = useServerPagination(items, total, pageRequest, { pageSize, isReady: !query.isLoading && !!query.data });
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="按用途、用户名、别名、备注搜" className="max-w-xs" />
+        <Input value={search} onChange={(event) => { setSearch(event.target.value); pageRequest.setPage(1); }} placeholder="按用途、用户名、别名、备注搜" className="max-w-xs" />
         <span className="text-xs text-muted-foreground">共 {total} 条</span>
       </div>
-      <Card>
-        <CardContent className="overflow-x-auto p-0">
+      {/*
+        表格直接坐在一块白底上，不再套一张大卡（CardContent p-0）：那层卡在手机上是内容离屏幕边 48px 的来源，
+        和 Token / 服务列表（mobileDensity.test）同一种写法。
+      */}
+      <div className="overflow-x-auto rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
           <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
@@ -142,15 +147,8 @@ function TokensTab() {
               })}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-      {pages > 1 ? (
-        <div className="flex items-center justify-end gap-2 text-xs">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</Button>
-          <span>{page} / {pages}</span>
-          <Button size="sm" variant="outline" disabled={page >= pages} onClick={() => setPage((value) => value + 1)}>下一页</Button>
-        </div>
-      ) : null}
+      </div>
+      <PersistentPagination pagination={pagination} itemName="条令牌" />
       <ProxySubTokenEditDialog
         open={!!editing}
         onOpenChange={(open) => !open && setEditing(null)}
@@ -214,9 +212,9 @@ function StatsTab() {
           </CardContent>
         </Card>
       </div>
-      <Card>
-        <CardHeader><CardTitle className="text-sm">最近 100 次拉取</CardTitle></CardHeader>
-        <CardContent className="overflow-x-auto p-0">
+      <div className="space-y-2">
+        <p className="text-sm font-medium">最近 100 次拉取</p>
+        <div className="overflow-x-auto rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
           <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
@@ -242,8 +240,8 @@ function StatsTab() {
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

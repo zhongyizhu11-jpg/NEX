@@ -23,6 +23,7 @@ import { RealityDestChecker } from "@/components/proxy/RealityDestChecker";
 import { MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { bytesFromGb, gbFromBytes, positiveIntFromInput } from "@shared/trafficGb";
 import { clipboardNeedsManualCopy, copyTextFromElement, copyTextToClipboard } from "@/lib/clipboard";
+import { optionsQuery as optionsQueryPreset } from "@/lib/queryPresets";
 import { trpc } from "@/lib/trpc";
 import {
   PROXY_INBOUND_PROTOCOLS,
@@ -64,7 +65,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 
@@ -195,7 +196,7 @@ function emptyForm(): InboundForm {
  * 之后传进来**（粘贴/分享那两类走 extraRows），这里只负责分组和排版。这样不存在
  * 「在列表里按类型分支、结果接错线」的可能。
  */
-export default function ProxyInboundsSection({
+function ProxyInboundsSection({
   extraRows = [],
   extraLoading = false,
   groupMode,
@@ -289,13 +290,10 @@ export default function ProxyInboundsSection({
     这里只要主机名和「有没有主机」，用 options 这份瘦的：hosts.list 服务端会顺带排
     升级清理任务、算整形状态，为取个名字跑一遍不值。
   */
-  const hostsQuery = trpc.hosts.options.useQuery(undefined, { staleTime: 60_000 });
+  const hostsQuery = trpc.hosts.options.useQuery(undefined, optionsQueryPreset);
   // 分租要用：管理员建入站时要能指定归属用户。普通用户只能开给自己，不必拉这份名单。
-  const usersQuery = trpc.users.options.useQuery(undefined, {
-    enabled: isAdmin,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
+  // 名单类查询的新鲜期统一在 lib/queryPresets：和分享弹窗取的是同一份缓存，口径一样才不会各拉各的。
+  const usersQuery = trpc.users.options.useQuery(undefined, { ...optionsQueryPreset, enabled: isAdmin });
 
   const refresh = () => {
     void utils.proxyInbounds.list.invalidate();
@@ -1594,3 +1592,10 @@ export default function ProxyInboundsSection({
     </>
   );
 }
+
+/*
+  memo：这一段挂在「订阅管理」页面上，页面因为开关弹窗、二维码之类的状态重画时，这里的
+  props（行规格、几个 id 集合、回调）都是页面 useMemo / useCallback 过的，引用不变就整段跳过。
+  里面每行再由 ProxyNodeRow 自己 memo。
+*/
+export default memo(ProxyInboundsSection);
