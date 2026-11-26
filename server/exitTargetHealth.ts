@@ -1,4 +1,4 @@
-import { ruleChainLatency, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
+import { ruleChainLatency, ruleRecordedProbe, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
 import { appendPanelLog } from "./_core/panelLogger";
 import { dbBool } from "./repositories/repositoryUtils";
 import { ExitTargetPushDebouncer } from "./exitTargetPush";
@@ -1354,6 +1354,9 @@ export function ruleHasReachableExit(ruleId: number, nowMs = Date.now()): boolea
   const states = exitTargetStatesForRule(Number(ruleId), nowMs);
   const downHosts = new Set(states.filter((state) => state.down && !exitTargetDownStale(state, nowMs)).map((state) => state.hostId));
   const live = liveBalanceForRule(Number(ruleId), nowMs);
+  // 规则自己那条定时探测从在用的那台发、超时了（2.3.557）：它也不算连得上
+  const recorded = ruleRecordedProbe(Number(ruleId), nowMs);
+  if (recorded?.isTimeout) downHosts.add(recorded.hostId);
   if (live) return live.exits.some((exit) => exit.state === "active" && exit.hostId > 0 && !downHosts.has(exit.hostId));
   if (states.length === 0) return null;
   return states.some((state) => !downHosts.has(state.hostId));
@@ -1365,14 +1368,28 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
     if (live) {
       const carrying = liveCarryingExit(live);
       const chain = ruleChainFields(row, carrying ? { tunnelId: live.tunnelId, hostId: carrying.hostId, name: carrying.hostName, share: carrying.share } : null, nowMs);
+      const probeTimeout = (row as { latestLatencyIsTimeout?: unknown }).latestLatencyIsTimeout === true;
       /*
-        两段没测全、规则自己的定时探测是主出口那条的超时，可入口报着流量在别的出口上走：别写「超时」（那等于说转发断了），
-        空着等面板测到；入口报的握手延迟不拿来顶。
+        规则自己那条定时探测（数据库最新一条）是哪台出口测的（2.3.557）：从此刻在用的那台发，它超时就是流量真的过不去。
+        用户面板 2026-11-27：指定 jinx(39.9y)、只看出口组，高防拦着 jinx，客户端超时、诊断不通，卡片却是绿的 ——
+        下面那条「空着等测到」以前不看是哪台测的，把在用这台自己的超时也盖掉了。
       */
-      const neutral = !("latestLatencyMs" in chain) && carrying && (row as { latestLatencyIsTimeout?: unknown }).latestLatencyIsTimeout === true
+      const recorded = ruleRecordedProbe(row.ruleId, nowMs);
+      const carryingTimedOut = !!carrying && probeTimeout && recorded?.isTimeout === true && recorded.hostId === carrying.hostId;
+      /*
+        两段没测全、规则自己的定时探测超时、可那条是切换前别的出口测的（入口已经把流量换到这台，它还没测到）：别写「超时」
+        （那等于说转发断了），空着等面板测到；入口报的握手延迟不拿来顶。
+      */
+      const neutral = !("latestLatencyMs" in chain) && carrying && probeTimeout && !carryingTimedOut
         ? { latestLatencyMs: null, latestLatencyIsTimeout: false, latestProbeFailure: null, latestLatencySource: "live" }
         : {};
-      return { ...row, ...ruleExitTargetFieldsFromLive(live, nowMs), ...neutral, ...chain } as T & RuleExitTargetFields;
+      /*
+        在用这台自己超时：快速探测也判它坏（附加检查开着）时入口几秒内就切走 —— 照旧橙色（chain 里已经写成超时、
+        ruleExitTargetFieldsFromLive 没把它算进连得上的）；没有快速探测说它坏（只看出口组、或者快速探测还没发现），入口不会
+        因为目标换走，流量就是过不去：没有一台能接住，红色。
+      */
+      const stuck = carryingTimedOut && !("latestLatencyMs" in chain) ? { exitTargetOk: 0 } : {};
+      return { ...row, ...ruleExitTargetFieldsFromLive(live, nowMs), ...neutral, ...chain, ...stuck } as T & RuleExitTargetFields;
     }
     const fresh = exitTargetStatesForRule(Number(row.ruleId), nowMs);
     if (fresh.length === 0) {

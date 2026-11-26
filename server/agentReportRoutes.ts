@@ -1,4 +1,4 @@
-import { recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
+import { noteRuleProbeRecorded, recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { reconcileRuleLimits, recordRuleQuotaTraffic, ruleLimitRootId } from "./ruleLimits";
@@ -2104,6 +2104,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         tunnelRecordedAt: latestTunnelLatency?.recordedAt,
       });
       if (!combined) return null;
+      // 记下这一条是哪台出口测的：卡片据此分清「在用的这台自己超时」和「切换前那台的超时」（server/exitTargetHealth.ts）
+      noteRuleProbeRecorded({ ruleId, hostId: host.id, isTimeout: combined.isTimeout });
       const tunnelIntroducedTimeout = combined.isTimeout && !report.isTimeout;
       // 隧道那一段不通时没有种类可说（隧道探测另有一路），只在出口到目标不通时记种类。
       recordRuleProbeFailure(ruleId, combined.isTimeout ? (report.isTimeout ? report.failure || "timeout" : "unreachable") : null);

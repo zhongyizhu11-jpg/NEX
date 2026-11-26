@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { resetBalanceLiveForTest, setBalanceLiveReportForTest, type LiveExit } from "./balanceLive";
 import { resetExitTargetStates, ruleHasReachableExit, setExitTargetStateForTest, withRuleExitTargets, type ExitTargetState } from "./exitTargetHealth";
-import { recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
+import { noteRuleProbeRecorded, recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
 import { preferLastKnownForwardRuleVisualStatus, resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
 import { isRuleProbeUnreachable } from "../shared/linkProbePolicy";
 
@@ -26,8 +26,10 @@ type Scenario = {
   fastDown?: Partial<Record<number, boolean>>;
   /** 面板测到的两段：入口 → 出口、出口 → 目标（毫秒） */
   legs?: Partial<Record<number, [number, number]>>;
-  /** 规则自己的定时端到端探测（数据库最新一条，从主出口测） */
+  /** 规则自己的定时端到端探测（数据库最新一条） */
   probe: { ms: number | null; timeout: boolean };
+  /** 数据库最新那一条是哪台出口测的（2.3.555 起记此刻在用的那台）；不写 = 不知道 */
+  recordedFrom?: number;
 };
 
 function liveExit(hostId: number, state: LiveExit["state"]): LiveExit {
@@ -63,6 +65,7 @@ function card(scenario: Scenario) {
     recordTunnelExitLeg(TUNNEL, Number(hostId), exitMs, now);
     recordRuleTargetLeg({ ruleId: RULE, tunnelId: TUNNEL, exitHostId: Number(hostId), primaryHostId: 7, ms: targetMs, at: now });
   }
+  if (scenario.recordedFrom) noteRuleProbeRecorded({ ruleId: RULE, hostId: scenario.recordedFrom, isTimeout: scenario.probe.timeout, at: now - 5_000 });
   const [row] = withRuleExitTargets([{
     ruleId: RULE,
     latestLatencyMs: scenario.probe.ms,
@@ -135,6 +138,23 @@ test("场景 7：不是负载均衡的规则 —— 只看自己的定时探测"
   const bad = card({ live: null, probe: { ms: null, timeout: true } });
   assert.equal(COLOR[bad.status.state], "红");
   assert.equal(bad.reachable, null, "订阅照旧按探测判断");
+});
+
+/*
+  用户面板 2026-11-27 00:58：华南-香港指定 jinx(39.9y)、出口组设成「只看隧道」，高防拦着 jinx。没有快速探测（只看隧道不派），
+  入口一直把 hkt/2 的流量送给 jinx；规则每分钟那次探测就是从 jinx 发的，超时。客户端超时、诊断不通，卡片却是绿的。
+*/
+test("场景 8：在用的出口自己的探测超时、没有快速探测（只看出口组）—— 红，订阅里算不通", () => {
+  const { row, status, reachable } = card({ live: { 7: "active", 12: "standby", 2: "standby" }, recordedFrom: 7, probe: { ms: null, timeout: true } });
+  assert.equal(COLOR[status.state], "红", status.title);
+  assert.equal(row.latestLatencyIsTimeout, true, "不拿「还没测到」盖掉在用出口自己的超时");
+  assert.equal(reachable, false, "入口只往超时的那台送：订阅里算不通");
+});
+
+test("场景 9：刚切到 hep ix，数据库最新那条还是 jinx 测的超时 —— 不写超时，等 hep ix 测到", () => {
+  const { row, status } = card({ live: { 7: "down", 12: "active", 2: "standby" }, recordedFrom: 7, probe: { ms: null, timeout: true } });
+  assert.equal(row.latestLatencyIsTimeout, false);
+  assert.notEqual(COLOR[status.state], "红", status.title);
 });
 
 test("上次状态：只在「还在等上报」时顶一下；有数据的橙色照实显示", () => {
