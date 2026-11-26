@@ -1360,7 +1360,7 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
         空着等面板测到；入口报的握手延迟不拿来顶。
       */
       const neutral = !("latestLatencyMs" in chain) && carrying && (row as { latestLatencyIsTimeout?: unknown }).latestLatencyIsTimeout === true
-        ? { latestLatencyMs: null, latestLatencyIsTimeout: false, latestProbeFailure: null, latestLatencySource: null }
+        ? { latestLatencyMs: null, latestLatencyIsTimeout: false, latestProbeFailure: null, latestLatencySource: "live" }
         : {};
       return { ...row, ...ruleExitTargetFieldsFromLive(live, nowMs), ...neutral, ...chain } as T & RuleExitTargetFields;
     }
