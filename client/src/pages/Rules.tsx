@@ -3422,8 +3422,13 @@ function RulesContent() {
     { hours: 24, range: "24h", ruleIds: visibleRuleIdsForMetrics },
     {
       enabled: visibleRuleIdsForMetrics.length > 0,
-      refetchInterval: pollingInterval("normal"),
-      staleTime: 5000,
+      /*
+        卡片上「经哪台出口」、整链延迟、红绿状态要跟得上（用户 2026-11-26：高防时通时断，卡片还写着经一台已经被拦的
+        出口）：3 秒一刷。服务端只缓存字节和定时探测那份（5 秒，rules.traffic.ts），在用出口、两段延迟是每次请求
+        从内存现算的，所以这里刷得勤不会多打数据库。页面在后台时 react-query 自己停。
+      */
+      refetchInterval: pollingInterval("active"),
+      staleTime: 2000,
       refetchOnWindowFocus: false,
       initialData: listPageTrafficSummary as any,
       initialDataUpdatedAt: listPageTrafficSummary ? rulePageQuery.dataUpdatedAt : undefined,
