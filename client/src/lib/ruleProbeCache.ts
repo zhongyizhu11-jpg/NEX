@@ -60,6 +60,24 @@ function isValidProbe(probe: RuleProbeSummary | null | undefined) {
     && latency >= 0;
 }
 
+/*
+  服务端按实时数据算出来的结论（2.3.555）：负载均衡的规则，卡上的数是服务端从入口实时上报、面板两段探测、出口快速探测里
+  现拼的 —— panel 两段相加、exit-target 在用出口到目标、live 在用出口已知但延迟还没测到（不是超时）。这几样的时间戳来自
+  不同的探测，不保证往前走：一条更早算出来的「超时」时间戳可能比后来的「通」还新。按时间戳挑会让旧的红色顶掉服务端
+  刚给的结论（用户面板：hkt/3 诊断通、卡片一直红）。所以这几样一律以服务端这一次给的为准；规则自己的定时探测照旧按
+  时间戳防乱序。
+*/
+const LIVE_DERIVED_SOURCES = new Set(["panel", "exit-target", "live"]);
+
+function isLiveDerived(probe: RuleProbeSummary | null | undefined) {
+  return !!probe && LIVE_DERIVED_SOURCES.has(String(probe.latestLatencySource || ""));
+}
+
+/** 「在用出口已知、延迟还没测到」：不是超时、也没有数，但它是服务端此刻的结论，不能退回缓存里的旧红色。 */
+function isLivePendingProbe(probe: RuleProbeSummary | null | undefined) {
+  return !!probe && probe.latestLatencySource === "live" && probe.latestLatencyIsTimeout === false;
+}
+
 function isFreshProbe(probe: RuleProbeSummary, now: number) {
   return isLinkProbeFresh(probeTimestamp(probe), now);
 }
@@ -86,13 +104,18 @@ export function updateRuleProbeCache(
 
   for (const [rawRuleId, probe] of probes) {
     const ruleId = validRuleId(rawRuleId);
+    // 服务端说「在用出口已知、延迟还没测到」：缓存里旧的那份（可能是红的）作废，别在这一行暂时缺席时又被拿出来顶
+    if (ruleId && isLivePendingProbe(probe)) {
+      cache?.delete(ruleId);
+      continue;
+    }
     if (!ruleId || !isAfterInvalidation(invalidations?.get(ruleId), probe)) continue;
     if (!cache) {
       cache = new Map<number, RuleProbeSummary>();
       probesByUser.set(userKey, cache);
     }
     const cached = cache.get(ruleId);
-    if (!cached || probeTimestamp(probe) >= probeTimestamp(cached)) {
+    if (!cached || isLiveDerived(probe) || probeTimestamp(probe) >= probeTimestamp(cached)) {
       cache.set(ruleId, probe);
     }
   }
@@ -154,7 +177,11 @@ export function buildStableRuleProbeMap(
     if (!ruleId || invalidatedRuleIds.has(ruleId)) continue;
     const current = currentProbes.get(ruleId);
     const cached = cache?.get(ruleId);
-    if (isValidProbe(current) && (!cached || probeTimestamp(current) >= probeTimestamp(cached))) {
+    if (isLivePendingProbe(current)) {
+      stable.set(ruleId, current!);
+      continue;
+    }
+    if (isValidProbe(current) && (!cached || isLiveDerived(current) || probeTimestamp(current) >= probeTimestamp(cached))) {
       stable.set(ruleId, current!);
       continue;
     }

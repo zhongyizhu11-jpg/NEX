@@ -10,6 +10,12 @@ export type ForwardGroupConfigStatus = "available" | "pending" | "unavailable" |
 export type ForwardRuleVisualStatus = {
   state: ForwardRuleVisualState;
   title: string;
+  /**
+   * 这个状态是实际数据下的结论，不是「还在等上报」（2.3.555）：负载均衡里「有出口连不上目标、已切走」也是橙色（pending），
+   * 以前被当成「等新的上报」，拿上一次的颜色顶着、也不写进本地缓存 —— 用户面板上 hkt/3 一直红着
+   * 「最近一次端到端探测超时（上次状态，等待新的上报）」，刷新也不变，诊断却是通的。
+   */
+  confirmed?: boolean;
 };
 
 /**
@@ -22,7 +28,7 @@ export function preferLastKnownForwardRuleVisualStatus(
   current: ForwardRuleVisualStatus,
   lastKnown?: { state?: ForwardRuleVisualState; title?: string | null } | null,
 ): ForwardRuleVisualStatus {
-  if (current.state !== "pending" || !lastKnown || lastKnown.state === "pending") return current;
+  if (current.state !== "pending" || current.confirmed || !lastKnown || lastKnown.state === "pending") return current;
   if (lastKnown.state !== "running" && lastKnown.state !== "error" && lastKnown.state !== "disabled") return current;
   const title = String(lastKnown.title || "").trim();
   return {
@@ -78,14 +84,14 @@ export function resolveForwardRuleVisualStatus(input: {
   const exitTargetNote = String(input.exitTargetNote || "").trim();
   if (probeIsRecent && input.latestLatencyIsTimeout) {
     if (Number(input.exitTargetOk || 0) > 0) {
-      return { state: "pending", title: exitTargetNote || `主出口连不上目标，另外 ${Number(input.exitTargetOk)} 台出口正常，已自动切走` };
+      return { state: "pending", title: exitTargetNote || `主出口连不上目标，另外 ${Number(input.exitTargetOk)} 台出口正常，已自动切走`, confirmed: true };
     }
     const kind = normalizeProbeFailure(input.latestProbeFailure);
     return { state: "error", title: kind && kind !== "timeout" ? `最近一次端到端探测失败：${PROBE_FAILURE_LABELS[kind]}` : "最近一次端到端探测超时" };
   }
   if (exitTargetNote && input.exitTargetOk != null) {
     // 主出口通，但别的出口有问题（连不上 / 抖 / 丢包）：橙色，写清楚是哪台
-    return { state: "pending", title: exitTargetNote };
+    return { state: "pending", title: exitTargetNote, confirmed: true };
   }
   if (input.groupConfigStatus === "error" || input.groupConfigStatus === "unavailable") {
     return { state: "error", title: "转发资源配置不可用" };

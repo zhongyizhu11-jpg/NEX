@@ -90,3 +90,31 @@ test("invalidation blocks the old probe until a result recorded after the change
     afterInvalidation,
   );
 });
+
+/*
+  负载均衡的规则：卡上的数是服务端现拼的（panel / exit-target / live），时间戳来自不同的探测，不保证往前走。
+  用户面板（2026-11-26）：hkt/3 先收到一份「超时」（主出口的定时探测，时间戳 12:06:48），之后服务端算出走 hep ix 通、
+  两段探测的时间戳是 12:06:40 —— 按时间戳挑，卡片一直红。
+*/
+test("服务端按实时数据给的结论以这一次为准，不被时间戳更新的旧超时顶掉", () => {
+  const user = "live-derived";
+  const staleTimeout = { latestLatencyMs: null, latestLatencyIsTimeout: true, latestLatencyAt: now - 10_000, latestLatencySource: "probe" };
+  updateRuleProbeCache(user, new Map([[21, staleTimeout]]));
+  const panel = { latestLatencyMs: 9, latestLatencyIsTimeout: false, latestLatencyAt: now - 20_000, latestLatencySource: "panel" };
+  assert.equal(buildStableRuleProbeMap(user, [21], new Map([[21, panel]]), now).get(21), panel, "当前这份两段相加的结论直接用");
+  updateRuleProbeCache(user, new Map([[21, panel]]));
+  assert.equal(buildStableRuleProbeMap(user, [21], new Map(), now).get(21), panel, "缓存里也换成它，这一行暂时缺席时不退回旧超时");
+
+  // 在用出口已知、延迟还没测到（live）：不是超时，也不能退回缓存里的旧红色
+  updateRuleProbeCache(user, new Map([[22, staleTimeout]]));
+  const livePending = { latestLatencyMs: null, latestLatencyIsTimeout: false, latestLatencyAt: now - 30_000, latestLatencySource: "live" };
+  assert.equal(buildStableRuleProbeMap(user, [22], new Map([[22, livePending]]), now).get(22), livePending);
+  updateRuleProbeCache(user, new Map([[22, livePending]]));
+  assert.equal(buildStableRuleProbeMap(user, [22], new Map(), now).has(22), false, "旧的超时已经作废");
+
+  // 规则自己的定时探测（probe）照旧防乱序
+  const newest = { latestLatencyMs: 25, latestLatencyIsTimeout: false, latestLatencyAt: now - 10_000, latestLatencySource: "probe" };
+  const older = { latestLatencyMs: 90, latestLatencyIsTimeout: false, latestLatencyAt: now - 20_000, latestLatencySource: "probe" };
+  updateRuleProbeCache(user, new Map([[23, newest]]));
+  assert.equal(buildStableRuleProbeMap(user, [23], new Map([[23, older]]), now).get(23), newest);
+});
