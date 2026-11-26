@@ -13,7 +13,6 @@ import {
   BALANCE_INTERVAL_CHOICES,
   BALANCE_JITTER_ACTION_LABELS,
   BALANCE_JITTER_ACTIONS,
-  BALANCE_SCOPES,
   BALANCE_SCOPE_LABELS,
   BALANCE_SENSITIVITIES,
   BALANCE_SENSITIVITY_PRESETS,
@@ -29,7 +28,6 @@ import {
   normalizeBalanceStrategy,
   type BalanceDetect,
   type BalanceJitterAction,
-  type BalanceScope,
   type BalanceStrategy,
 } from "@shared/loadBalance";
 
@@ -209,16 +207,7 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
           <RotateCcw className="h-3 w-3" />恢复默认
         </button>
       </div>
-      {/* 看哪一段（2.3.556）：整链 / 只看隧道。目标是高防、会拉黑连得勤的出口 IP 时可以选只看隧道 */}
-      <SettingRow title="负载均衡看哪一段" hint={BALANCE_SCOPE_LABELS[value.scope].hint} stacked>
-        <SegmentedControl<BalanceScope>
-          ariaLabel="负载均衡看哪一段"
-          value={value.scope}
-          options={BALANCE_SCOPES.map((scope) => ({ value: scope, label: BALANCE_SCOPE_LABELS[scope].label }))}
-          onChange={(scope) => patch({ scope })}
-          listClassName="grid grid-cols-2 gap-1"
-        />
-      </SettingRow>
+      {/* 出口组是主角（2.3.557）：上面这几项都只关于入口到各台出口；「出口到目标」放在最后，是附加的开关 */}
       <SettingRow title="多久探一次出口机" hint="探自己的出口机，越短切得越快；每次只是连一下" stacked>
         <SecondsPicker
           label="多久探一次出口机"
@@ -228,21 +217,6 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
           onChange={(intervalSeconds) => patch({ intervalSeconds })}
         />
       </SettingRow>
-      {value.scope === "chain" ? (
-        <SettingRow
-          title="多久探一次目标"
-          hint="出口机连一下规则目标就断。高防目标会把连得太勤的出口 IP 拉黑，别低于 5 秒；有真实流量时直接读内核的往返时间，不另外连"
-          stacked
-        >
-          <SecondsPicker
-            label="多久探一次目标"
-            value={value.targetProbeSeconds}
-            choices={BALANCE_TARGET_PROBE_CHOICES}
-            {...limits.targetProbeSeconds}
-            onChange={(targetProbeSeconds) => patch({ targetProbeSeconds })}
-          />
-        </SettingRow>
-      ) : null}
       <SettingRow title="几次不通算坏" hint={`默认 ${DEFAULT_BALANCE_DETECT.failThreshold} 次`}>
         <Stepper label="几次不通算坏" value={value.failThreshold} onChange={(failThreshold) => patch({ failThreshold })} {...limits.failThreshold} unit="次" />
       </SettingRow>
@@ -254,7 +228,7 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
           <SettingRow title="差多少算一样快" hint={value.fastestOnly ? "另一台要快出这么多（并且快两成）才换过去" : "比最快的慢不到这么多的一起分"}>
             <Stepper label="一样快的门槛" value={value.latencyMarginMs} onChange={(latencyMarginMs) => patch({ latencyMarginMs })} {...limits.latencyMarginMs} unit="ms" />
           </SettingRow>
-          <SettingRow title="只走最快的一台" hint={value.scope === "tunnel" ? "只走入口到出口最快的一台；快出门槛且稳 60 秒才换" : "只走整链最快的一台；快出门槛且稳 60 秒才换"}>
+          <SettingRow title="只走最快的一台" hint={value.scope === "chain" ? "只走整链（到出口 + 到目标）最快的一台；快出门槛且稳 60 秒才换" : "只走入口到出口最快的一台；快出门槛且稳 60 秒才换"}>
             <Switch aria-label="只走最快的一台" checked={value.fastestOnly} onCheckedChange={(fastestOnly) => patch({ fastestOnly })} />
           </SettingRow>
         </>
@@ -277,6 +251,23 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
       <SettingRow title="刚恢复的慢慢加量" hint="1 分钟内从一小份加到满份">
         <Switch aria-label="刚恢复的慢慢加量" checked={value.slowStart} onCheckedChange={(slowStart) => patch({ slowStart })} />
       </SettingRow>
+      {/* 附加：检查出口到目标（2.3.557 起默认关）。开了才有「多久查一次目标」 */}
+      <div className="mt-1 rounded-xl border border-border/60 px-3" data-balance-target-check={value.scope === "chain" ? "on" : "off"}>
+        <SettingRow title="附加：检查出口到目标" hint={BALANCE_SCOPE_LABELS[value.scope].hint}>
+          <Switch aria-label="附加：检查出口到目标" checked={value.scope === "chain"} onCheckedChange={(on) => patch({ scope: on ? "chain" : "tunnel" })} />
+        </SettingRow>
+        {value.scope === "chain" ? (
+          <SettingRow title="多久查一次目标" hint="出口机连一下规则目标就断；有真实流量时直接读内核的往返时间，不另外连。高防目标别低于 30 秒" stacked>
+            <SecondsPicker
+              label="多久查一次目标"
+              value={value.targetProbeSeconds}
+              choices={BALANCE_TARGET_PROBE_CHOICES}
+              {...limits.targetProbeSeconds}
+              onChange={(targetProbeSeconds) => patch({ targetProbeSeconds })}
+            />
+          </SettingRow>
+        ) : null}
+      </div>
       <p className="mt-2 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-meta leading-5 text-foreground/80">
         实际效果：{describeBalanceEffect({ strategy, detect: value, weights, memberNames })}
       </p>

@@ -91,6 +91,8 @@ export function ExitBalanceDialog({
 
   const strategy = normalizeExitGroupStrategy(tunnel.loadBalanceStrategy);
   const detect = normalizeBalanceDetect(tunnel.balanceDetect);
+  // 出口组是主角（2.3.557）：到目标是附加检查，开了才在弹窗里出现
+  const targetCheck = detect.scope === "chain";
   const nginxNote = nginxBalanceBasicSupportNote(tunnel.mode);
   const mode = String(tunnel.mode || "").toLowerCase();
   // GOST 链路的 fxpIssues 只有一种：入口机 Agent 太旧、负载均衡没生效（server/tunnelBalanceAgent.ts）
@@ -118,6 +120,7 @@ export function ExitBalanceDialog({
       slowStart: detect.slowStart,
       events,
       ruleNames: summary?.ruleNames,
+      targetCheck,
     }),
   }));
   const inUse = rows.filter((row) => row.view.state === "active" || row.view.state === "pinned" || row.view.state === "warming").length;
@@ -145,7 +148,7 @@ export function ExitBalanceDialog({
       ? { tone: "info", text: nginxNote.replace(/^基础支持：/, "") }
       : pinActive
         ? { tone: pinOnline && !pinBypass ? "info" : "warn", text: !pinOnline ? `指定的 ${nameOf(pinHostId)} 离线，暂按${BALANCE_STRATEGY_LABELS[strategy].label}分` : pinBypass ? `已指定 ${nameOf(pinHostId)}（${pinBypass}，暂走别的）` : `已指定走 ${nameOf(pinHostId)}，其余备用` }
-        : targetDown + targetUnstable > 0
+        : targetCheck && targetDown + targetUnstable > 0
           ? { tone: "warn", text: `${targetDown > 0 ? `${targetDown} 条规则的目标从每台出口都连不上` : `${targetUnstable} 条规则的目标从每台出口都不稳`}：问题在目标那边，换出口没用` }
           : null;
 
@@ -161,6 +164,11 @@ export function ExitBalanceDialog({
             {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {exits.length} 台出口 · {inUseText}
           </DialogDescription>
           {!pinActive && !upgradeIssue ? <p className="text-meta leading-5 text-muted-foreground">{balanceStrategyHint(strategy, false, nginxNote ? null : detect)}</p> : null}
+          {!nginxNote ? (
+            <p className="text-meta leading-5 text-muted-foreground" data-balance-scope={detect.scope}>
+              {targetCheck ? "按入口到各台出口挑 · 附加检查出口到目标" : "按入口到各台出口挑，不碰目标"}
+            </p>
+          ) : null}
         </DialogHeader>
         {notice ? (
           <div className={cn("fx-lb-pin-banner", notice.tone === "warn" && "is-warn")} data-balance-notice={nginxNote ? "basic" : upgradeIssue ? "upgrade" : pinActive ? "pin" : "target"}>

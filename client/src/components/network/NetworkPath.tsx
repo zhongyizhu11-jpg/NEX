@@ -45,7 +45,36 @@ export type NetworkNodeSpec = {
   activateLabel?: string;
   /** 跟在名字后面、不会被省略号吃掉的一小段（「负载均衡 ×3」的「×3」：名字可以缩，台数要一直看得见） */
   nameSuffix?: string;
+  /**
+   * 名字底下一排小标签（负载均衡出口：每台出口一个「● 名字 7 ms」，2.3.557）。放得下就一行，放不下自动折行，
+   * 不再像以前那样把一串名字挤在一行里截断。
+   */
+  chips?: NetworkNodeChip[];
 };
+
+export type NetworkNodeChip = {
+  key: string;
+  label: string;
+  /** 跟在名字后面的数（「7 ms」「离线」）；不传就只写名字 */
+  value?: string;
+  health: NetworkHealth;
+  /** 悬停时的完整一句（这台现在怎样、为什么） */
+  title?: string;
+};
+
+function NodeChips({ chips }: { chips: NetworkNodeChip[] }) {
+  return (
+    <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5" data-node-chips="">
+      {chips.map((chip) => (
+        <span key={chip.key} className="inline-flex min-w-0 items-center gap-1 text-meta" title={chip.title} data-chip-health={chip.health}>
+          <StatusDot health={chip.health} />
+          <span className="truncate text-muted-foreground">{chip.label}</span>
+          {chip.value ? <span className={cn("shrink-0 tabular-nums", chip.health === "down" ? "text-destructive" : "text-foreground")}>{chip.value}</span> : null}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export type NetworkEdgeSpec = {
   /** 这一段经过谁：NEX、GOST、中继名。写在线的旁边 */
@@ -93,9 +122,10 @@ function NetworkNode({
             {node.nameSuffix ? <span className="shrink-0 text-primary-type font-medium text-foreground">{node.nameSuffix}</span> : null}
             {node.badge}
           </span>
-          {node.sublabel ? (
+          {node.sublabel && !(node.chips && node.chips.length > 0) ? (
             <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
           ) : null}
+          {node.chips && node.chips.length > 0 ? <NodeChips chips={node.chips} /> : null}
         </button>
       ) : (
         <span className="flex min-w-0 flex-col">
@@ -103,9 +133,10 @@ function NetworkNode({
             <span className="truncate text-primary-type font-medium text-foreground">{node.name}</span>
             {node.badge}
           </span>
-          {node.sublabel ? (
+          {node.sublabel && !(node.chips && node.chips.length > 0) ? (
             <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
           ) : null}
+          {node.chips && node.chips.length > 0 ? <NodeChips chips={node.chips} /> : null}
         </span>
       )}
     </div>

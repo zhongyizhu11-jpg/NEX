@@ -18,7 +18,8 @@ const base = {
   listenPort: 41001,
   protocol: "both",
   strategy: "round_robin",
-  detect: DEFAULT_BALANCE_DETECT,
+  // 下面几条测的是「附加：检查出口到目标」打开时带的提示（2.3.557 起默认关）
+  detect: { ...DEFAULT_BALANCE_DETECT, scope: "chain" as const },
   tunnelId: 7,
   exits,
   weights: null,
@@ -236,7 +237,7 @@ test("出口到目标的延迟：别的出口知道、这台不知道时带 extr
   assert.deepEqual(spec.targets.map((target) => [target.extraLatencyMs, target.extraLatencyUnknown]), [[12, undefined], [undefined, true], [undefined, true]]);
 
   const rule = { id: 501, tunnelId: 9, protocol: "both", isEnabled: 1, pendingDelete: 0 };
-  const states = (list: Array<{ hostId: number; down?: boolean; medianMs?: number | null }>) => ({ ...planningDeps(true).deps, exitTargetStates: () => list });
+  const states = (list: Array<{ hostId: number; down?: boolean; medianMs?: number | null }>) => ({ ...planningDeps(true).deps, exitTargetStates: () => list, detectFor: () => ({ ...DEFAULT_BALANCE_DETECT, scope: "chain" as const }) });
   // 主出口报了 9 ms，额外出口没报（或报的不通）：额外出口不知道
   for (const list of [[{ hostId: 2, medianMs: 9 }], [{ hostId: 2, medianMs: 9 }, { hostId: 3, down: true, medianMs: 4 }]]) {
     const plan = (await planGostBalanceRules([rule], states(list))).get(501)!;
@@ -271,7 +272,7 @@ test("负载均衡「只看隧道」：规格不带任何出口到目标的结�
     assert.equal(target.extraLatencyMs, undefined, "到目标的延迟不带");
     assert.equal(target.extraLatencyUnknown, undefined);
   }
-  // 整链（默认）照旧
+  // 打开了附加检查：照旧带
   const chain = buildGostBalanceProxySpec({ ...base, downHostIds: new Set([23]), extraLatencyMs: new Map([[21, 12]]) });
   assert.equal("tunnelOnly" in chain, false);
   assert.equal(chain.targets[2].down, true);
