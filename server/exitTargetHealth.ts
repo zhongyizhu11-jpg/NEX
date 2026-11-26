@@ -1335,6 +1335,16 @@ function ruleChainFields(
 }
 
 /**
+ * 规则自己那条定时探测记录（延迟记录、超时判断、订阅自动隐藏都读它）该记哪台出口的探测（2.3.555）：此刻实际在用的那台
+ * （入口实时上报里扛流量最多的；没有实时上报时按快速探测估），都不知道时是主出口。
+ * 以前固定只记主出口的：主出口被目标的高防拦了，记录里就全是超时，可流量在别的出口上照走（用户面板 2026-11-26，hkt/2、hkt/3）。
+ */
+export function ruleRecordingExitHostId(ruleId: number, tunnelId: number, primaryHostId: number, nowMs = Date.now()): number {
+  const hostId = Number(ruleActiveExit(Number(ruleId), Number(tunnelId), nowMs)?.hostIds?.[0] || 0);
+  return hostId > 0 ? hostId : Number(primaryHostId) || 0;
+}
+
+/**
  * 负载均衡的规则此刻有没有一台出口连得上目标（2.3.555）：入口实时上报里有在用的、而且快速探测没说它连不上；没有实时上报时
  * 看快速探测里有没有一台通的。订阅「自动隐藏不通的节点」用：规则的定时端到端探测是从主出口测的，主出口被目标的高防拦了
  * 就连着超时，可流量照样在别的出口上走 —— 以前节点会被从订阅里藏掉（用户：「有时订阅又不通」）。

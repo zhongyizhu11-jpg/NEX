@@ -1,4 +1,4 @@
-import { recordRuleTargetLeg, recordTunnelExitLeg } from "./ruleLatencyView";
+import { recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { reconcileRuleLimits, recordRuleQuotaTraffic, ruleLimitRootId } from "./ruleLimits";
@@ -44,7 +44,7 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopFastReports, ingestRouteHopProbeReports } from "./routeGroups";
-import { ingestExitTargetReports, noteLiveBaselines, tunnelBalancesExits } from "./exitTargetHealth";
+import { ingestExitTargetReports, noteLiveBaselines, ruleRecordingExitHostId, tunnelBalancesExits } from "./exitTargetHealth";
 import { ingestBalanceLiveReport } from "./balanceLive";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { recordRuleProbeFailure } from "./ruleProbeFailure";
@@ -2082,10 +2082,20 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         primaryHostId: tunnelContext.tunnel.exitHostId,
         ms: report.isTimeout ? null : baseLatency,
       });
-      // 规则自己那条记录（延迟记录、超时判断）照旧只记主出口的；别的出口只给卡片 / 诊断 / 弹窗那一段
-      if (Number(host.id) !== Number(tunnelContext.tunnel.exitHostId || 0)) return null;
+      /*
+        规则自己那条记录（延迟记录、超时判断、订阅自动隐藏）记此刻实际在用的那台出口（2.3.555，ruleRecordingExitHostId）；
+        别的出口只给卡片 / 诊断 / 弹窗那一段。以前固定记主出口：它被目标拦了，记录里全是超时，流量却在别的出口上照走。
+        隧道那一段也换成入口到这台出口的（面板的链路探测，每台出口一条分支）；没测到时退回链路最近一次。
+      */
+      const primaryExitHostId = Number(tunnelContext.tunnel.exitHostId || 0);
+      if (Number(host.id) !== ruleRecordingExitHostId(ruleId, tunnelId, primaryExitHostId)) return null;
       collectCounter("rule", ruleId, report);
-      const latestTunnelLatency = report.isTimeout ? null : await getLatestTunnelLatency(tunnelId);
+      const inUseLeg = !report.isTimeout && Number(host.id) !== primaryExitHostId ? tunnelExitLatency(tunnelId, host.id) : null;
+      const latestTunnelLatency = report.isTimeout
+        ? null
+        : inUseLeg
+          ? { latencyMs: inUseLeg.ms, isTimeout: false, recordedAt: new Date(inUseLeg.at) }
+          : await getLatestTunnelLatency(tunnelId);
       const combined = combineTunnelRuleLatencySample({
         targetLatencyMs: baseLatency,
         targetIsTimeout: !!report.isTimeout,

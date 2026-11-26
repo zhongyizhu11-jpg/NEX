@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { setBalanceLiveReportForTest, resetBalanceLiveForTest, type LiveExit } from "./balanceLive";
-import { resetExitTargetStates, ruleHasReachableExit, setExitTargetStateForTest, withRuleExitTargets, type ExitTargetState } from "./exitTargetHealth";
+import { resetExitTargetStates, ruleHasReachableExit, ruleRecordingExitHostId, setExitTargetStateForTest, withRuleExitTargets, type ExitTargetState } from "./exitTargetHealth";
 import { recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
 
 /*
@@ -75,4 +75,18 @@ test("订阅自动隐藏：负载均衡的规则还有一台出口连得上就�
   resetBalanceLiveForTest();
   resetExitTargetStates();
   assert.equal(ruleHasReachableExit(999, now), null);
+});
+
+test("规则自己的定时探测记录记此刻在用的那台出口：主出口被拦时不再记一串超时", () => {
+  // 入口报着走 hep ix：记 hep ix 的探测
+  setup([[7, "jinx(39.9y)", "down"], [12, "hep ix", "active"], [2, "Jinx(29.9y)", "down"]], { 7: true, 2: true });
+  assert.equal(ruleRecordingExitHostId(RULE, TUNNEL, 7, now), 12);
+  // 主出口在用：记主出口的
+  setup([[7, "jinx(39.9y)", "active"], [12, "hep ix", "standby"], [2, "Jinx(29.9y)", "standby"]], {});
+  assert.equal(ruleRecordingExitHostId(RULE, TUNNEL, 7, now), 7);
+  // 别的链路的上报不算；什么都不知道时是主出口
+  assert.equal(ruleRecordingExitHostId(RULE, 99, 7, now), 7);
+  resetBalanceLiveForTest();
+  resetExitTargetStates();
+  assert.equal(ruleRecordingExitHostId(RULE, TUNNEL, 7, now), 7);
 });
