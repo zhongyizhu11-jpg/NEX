@@ -1417,6 +1417,42 @@ async function ensureSqliteProxyNodeSourceUniqueIndex(sqlite: Database.Database)
   });
 }
 
+/*
+  2.3.557 整改：负载均衡「附加：检查出口到目标」默认关，现有的链路 / 转发组也一起关（用户选的「全部默认关」）。
+  2.3.556 存进去的 scope 多半是表单默认带上的 "chain"，不是用户特意选的，所以只在升级这一次把存着的 scope 去掉、
+  回到默认（只看出口组）；之后用户再打开的照旧保留。
+*/
+const BALANCE_SCOPE_RESET_MARKER = "balance-scope-default-tunnel-v1";
+
+/** 去掉存着的 scope；没有 scope 或者不是 JSON 返回 null（不用改）。 */
+export function balanceDetectWithoutScope(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.includes("scope")) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !("scope" in parsed)) return null;
+    const rest = { ...(parsed as Record<string, unknown>) };
+    delete rest.scope;
+    return JSON.stringify(rest);
+  } catch {
+    return null;
+  }
+}
+
+async function resetBalanceScopeOnce(kind: DatabaseKind, query: SchemaQuery) {
+  const q = (id: string) => quoteIdentifierFor(kind, id);
+  const settings = q("system_settings");
+  const marked = await query(`SELECT ${q("key")} AS ${q("key")} FROM ${settings} WHERE ${q("key")} = ?`, [BALANCE_SCOPE_RESET_MARKER]);
+  if (marked.length > 0) return;
+  for (const table of ["tunnels", "forward_groups"]) {
+    const rows = await query(`SELECT ${q("id")} AS ${q("id")}, ${q("balanceDetect")} AS ${q("balanceDetect")} FROM ${q(table)} WHERE ${q("balanceDetect")} LIKE ?`, ["%scope%"]);
+    for (const row of rows) {
+      const next = balanceDetectWithoutScope(row.balanceDetect);
+      if (next !== null) await query(`UPDATE ${q(table)} SET ${q("balanceDetect")} = ? WHERE ${q("id")} = ?`, [next, row.id]);
+    }
+  }
+  await query(`INSERT INTO ${settings} (${q("key")}, ${q("value")}, ${q("updatedAt")}) VALUES (?, '1', ?)`, [BALANCE_SCOPE_RESET_MARKER, Math.floor(Date.now() / 1000)]);
+}
+
 function mysqlKey(table: string, prefix: string, cols: string[]) {
   const name = quoteIdentifierFor("mysql", `${prefix}_${table}_${cols.join("_")}`.slice(0, 60));
   const expr = cols.map((col) => {
@@ -1465,6 +1501,10 @@ async function ensureMysqlSchema(pool: Pool) {
   }
   await backfillMysqlLastAutoTrafficReset(pool);
   await backfillMysqlTunnelSecrets(pool);
+  await resetBalanceScopeOnce("mysql", async (sqlText, params = []) => {
+    const [rows] = await pool.query(sqlText, params);
+    return Array.isArray(rows) ? rows as Array<Record<string, unknown>> : [];
+  });
 }
 
 async function ensurePostgresqlSchema(pool: pg.Pool) {
@@ -1498,6 +1538,11 @@ async function ensurePostgresqlSchema(pool: pg.Pool) {
   }
   await backfillPostgresqlLastAutoTrafficReset(pool);
   await backfillPostgresqlTunnelSecrets(pool);
+  await resetBalanceScopeOnce("postgresql", async (sqlText, params = []) => {
+    let index = 0;
+    const result = await pool.query(sqlText.replace(/\?/g, () => `$${++index}`), params);
+    return result.rows as Array<Record<string, unknown>>;
+  });
 }
 
 async function ensureSqliteSchema(sqlite: Database.Database) {
@@ -1527,6 +1572,12 @@ async function ensureSqliteSchema(sqlite: Database.Database) {
   }
   backfillSqliteLastAutoTrafficReset(sqlite);
   backfillSqliteTunnelSecrets(sqlite);
+  await resetBalanceScopeOnce("sqlite", async (sqlText, params = []) => {
+    const statement = sqlite.prepare(sqlText);
+    if (statement.reader) return statement.all(...params) as Array<Record<string, unknown>>;
+    statement.run(...params);
+    return [];
+  });
 }
 
 export async function ensureDatabaseSchema(target?: Pool | pg.Pool | Database.Database) {

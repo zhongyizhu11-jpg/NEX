@@ -21,8 +21,8 @@ export type TunnelExitChip = {
   /** 入口到这台出口（毫秒）；没测到 null */
   ms: number | null;
   state: TunnelExitChipState;
-  /** down 的原因：exit = 入口连不上这台出口机 / 出口机离线；target = 附加检查判它连不上目标 */
-  reason: "exit" | "target" | null;
+  /** down 的原因：offline = 出口机离线；exit = 入口连不上这台出口机；target = 附加检查判它连不上目标 */
+  reason: "offline" | "exit" | "target" | null;
   /** 新连接分给它的比例（0–1，各条规则平均；入口实时上报、这段时间有新连接时才有） */
   share: number | null;
 };
@@ -41,7 +41,7 @@ export function tunnelExitChips(input: {
   return ids.map((hostId) => {
     const leg = tunnelExitLatency(input.tunnelId, hostId, nowMs);
     const ms = leg ? Math.round(leg.ms) : null;
-    if (input.offlineHostIds?.has(hostId)) return { hostId, ms: null, state: "down", reason: "exit", share: null };
+    if (input.offlineHostIds?.has(hostId)) return { hostId, ms: null, state: "down", reason: "offline", share: null };
     const reported = lives.flatMap((report) => report.exits.filter((exit) => Number(exit.hostId) === hostId));
     if (reported.length === 0) {
       // 没有实时上报：探测通就算能用（分不分给它不知道），没测到就是不知道

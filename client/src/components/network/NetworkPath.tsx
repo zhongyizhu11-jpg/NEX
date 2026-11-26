@@ -90,11 +90,15 @@ export type NetworkEdgeSpec = {
 function NetworkNode({
   node,
   className,
+  hideChips = false,
 }: {
   node: NetworkNodeSpec;
   orientation: "horizontal" | "vertical";
   className?: string;
+  /** 横排时小标签不放在节点里（会把别的节点挤没），由 NetworkPath 在整条路径底下另起一行 */
+  hideChips?: boolean;
 }) {
+  const chips = !hideChips && node.chips && node.chips.length > 0 ? node.chips : null;
   const health = node.health || "unknown";
   /*
     横竖两种排法里点都在名字那一行的左边（名字 22px 行高，圆心在 11px，点 8px，所以 pt 7px）。
@@ -125,7 +129,7 @@ function NetworkNode({
           {node.sublabel && !(node.chips && node.chips.length > 0) ? (
             <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
           ) : null}
-          {node.chips && node.chips.length > 0 ? <NodeChips chips={node.chips} /> : null}
+          {chips ? <NodeChips chips={chips} /> : null}
         </button>
       ) : (
         <span className="flex min-w-0 flex-col">
@@ -136,7 +140,7 @@ function NetworkNode({
           {node.sublabel && !(node.chips && node.chips.length > 0) ? (
             <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
           ) : null}
-          {node.chips && node.chips.length > 0 ? <NodeChips chips={node.chips} /> : null}
+          {chips ? <NodeChips chips={chips} /> : null}
         </span>
       )}
     </div>
@@ -269,17 +273,26 @@ export function NetworkPath({
       能点的节点（「负载均衡 ×2」）不缩 —— 缩成「负.」就看不出是什么、也不像能点了，让主机名先缩。
     */
     const tight = nodes.length >= 3;
-    return (
-      <div className={cn("flex min-w-0 flex-row items-start", tight ? "gap-2" : "gap-3", className)}>
+    // 负载均衡每台出口的小标签：整条路径底下另起一行，占满宽度、放不下就折行（放在节点里会把入口挤没）
+    const chips = nodes.flatMap((node) => node.chips || []);
+    const row = (
+      <div className={cn("flex min-w-0 flex-row items-start", tight ? "gap-2" : "gap-3", chips.length === 0 && className)}>
         {nodes.map((node, index) => {
           const edge = index < nodes.length - 1 ? (edges[index] || {}) : null;
           return (
             <Fragment key={node.id}>
-              <NetworkNode node={node} orientation="horizontal" className={node.onActivate ? "shrink-0" : "min-w-0 shrink"} />
+              <NetworkNode node={node} orientation="horizontal" hideChips className={node.onActivate ? "shrink-0" : "min-w-0 shrink"} />
               {edge ? <NetworkEdge edge={edge} orientation="horizontal" className={cn("mt-[10px]", tight && "min-w-8")} /> : null}
             </Fragment>
           );
         })}
+      </div>
+    );
+    if (chips.length === 0) return row;
+    return (
+      <div className={cn("flex min-w-0 flex-col gap-1", className)}>
+        {row}
+        <div className="flex justify-end pl-4"><NodeChips chips={chips} /></div>
       </div>
     );
   }

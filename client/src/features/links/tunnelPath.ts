@@ -81,7 +81,7 @@ export type TunnelExitChipInput = {
   hostId: number;
   ms: number | null;
   state: "active" | "ok" | "standby" | "down" | "unknown" | string;
-  reason?: "exit" | "target" | string | null;
+  reason?: "offline" | "exit" | "target" | string | null;
   share?: number | null;
 };
 
@@ -97,10 +97,12 @@ export function tunnelExitChipsView(tunnel: any, chips: ReadonlyArray<TunnelExit
     let value = ms || undefined;
     let title: string;
     if (chip.state === "down") {
-      value = chip.reason === "target" ? "连不上目标" : "连不上";
+      value = chip.reason === "target" ? "连不上目标" : chip.reason === "offline" ? "离线" : "连不上";
       title = chip.reason === "target"
         ? `${name}：附加检查判它连不上目标，入口先不分给它`
-        : `${name}：入口连不上这台出口，先不分给它`;
+        : chip.reason === "offline"
+          ? `${name}：出口机离线（面板收不到它的 Agent）`
+          : `${name}：入口连不上这台出口，先不分给它`;
     } else if (chip.state === "active") {
       title = `${name}：入口在分给它${share}${ms ? `；到出口 ${ms}` : ""}`;
     } else if (chip.state === "standby") {

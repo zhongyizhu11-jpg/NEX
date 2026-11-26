@@ -24,14 +24,14 @@ function report(ruleId: number, exits: LiveExit[]) {
   }, 9);
 }
 
-test("没有实时上报：测到的算通（不说分不分给它），没测到写不知道，离线的写连不上", () => {
+test("没有实时上报：测到的算通（不说分不分给它），没测到写不知道，离线的写离线", () => {
   resetBalanceLiveForTest();
   resetRuleLatencyViewForTest();
   recordTunnelExitLeg(TUNNEL, 7, 7.4, now);
   recordTunnelExitLeg(TUNNEL, 12, 5, now);
   const chips = tunnelExitChips({ tunnelId: TUNNEL, exitHostIds: [7, 12, 2, 15], offlineHostIds: new Set([15]), nowMs: now });
   assert.deepEqual(chips.map((chip) => [chip.hostId, chip.state, chip.ms]), [[7, "ok", 7], [12, "ok", 5], [2, "unknown", null], [15, "down", null]]);
-  assert.equal(chips[3].reason, "exit");
+  assert.equal(chips[3].reason, "offline");
 });
 
 test("实时上报：几条规则里有一条在用就算在用；都备用是备用；都判坏才是坏，写明是哪一段", () => {

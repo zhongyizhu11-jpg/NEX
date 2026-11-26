@@ -185,6 +185,32 @@ function SettingRow({ title, hint, children, stacked = false }: { title: string;
   );
 }
 
+/**
+ * 附加：检查出口到目标（2.3.557 起默认关）。负载均衡管的是出口组，这一项是附加的，所以单独一块、不藏在「高级」里；
+ * 开了才有「多久查一次目标」。
+ */
+function TargetCheckAddon({ value, onChange }: { value: BalanceDetect; onChange: (value: BalanceDetect) => void }) {
+  const patch = (next: Partial<BalanceDetect>) => onChange({ ...value, ...next });
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/60 px-3" data-balance-target-check={value.scope === "chain" ? "on" : "off"}>
+      <SettingRow title="附加：检查出口到目标" hint={BALANCE_SCOPE_LABELS[value.scope].hint}>
+        <Switch aria-label="附加：检查出口到目标" checked={value.scope === "chain"} onCheckedChange={(on) => patch({ scope: on ? "chain" : "tunnel" })} />
+      </SettingRow>
+      {value.scope === "chain" ? (
+        <SettingRow title="多久查一次目标" hint="出口机连一下规则目标就断；有真实流量时直接读内核的往返时间，不另外连。高防目标别低于 30 秒" stacked>
+          <SecondsPicker
+            label="多久查一次目标"
+            value={value.targetProbeSeconds}
+            choices={BALANCE_TARGET_PROBE_CHOICES}
+            {...BALANCE_DETECT_LIMITS.targetProbeSeconds}
+            onChange={(targetProbeSeconds) => patch({ targetProbeSeconds })}
+          />
+        </SettingRow>
+      ) : null}
+    </div>
+  );
+}
+
 /** 「高级」：逐项的检测参数。改过任何一项，上面的三档就显示成「自定义」。 */
 export function BalanceAdvanced({ value, onChange, strategy, weights, memberNames }: {
   value: BalanceDetect;
@@ -207,7 +233,7 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
           <RotateCcw className="h-3 w-3" />恢复默认
         </button>
       </div>
-      {/* 出口组是主角（2.3.557）：上面这几项都只关于入口到各台出口；「出口到目标」放在最后，是附加的开关 */}
+      {/* 出口组是主角（2.3.557）：这里几项都只关于入口到各台出口；「出口到目标」是附加的开关，在外面单独一块 */}
       <SettingRow title="多久探一次出口机" hint="探自己的出口机，越短切得越快；每次只是连一下" stacked>
         <SecondsPicker
           label="多久探一次出口机"
@@ -251,23 +277,6 @@ export function BalanceAdvanced({ value, onChange, strategy, weights, memberName
       <SettingRow title="刚恢复的慢慢加量" hint="1 分钟内从一小份加到满份">
         <Switch aria-label="刚恢复的慢慢加量" checked={value.slowStart} onCheckedChange={(slowStart) => patch({ slowStart })} />
       </SettingRow>
-      {/* 附加：检查出口到目标（2.3.557 起默认关）。开了才有「多久查一次目标」 */}
-      <div className="mt-1 rounded-xl border border-border/60 px-3" data-balance-target-check={value.scope === "chain" ? "on" : "off"}>
-        <SettingRow title="附加：检查出口到目标" hint={BALANCE_SCOPE_LABELS[value.scope].hint}>
-          <Switch aria-label="附加：检查出口到目标" checked={value.scope === "chain"} onCheckedChange={(on) => patch({ scope: on ? "chain" : "tunnel" })} />
-        </SettingRow>
-        {value.scope === "chain" ? (
-          <SettingRow title="多久查一次目标" hint="出口机连一下规则目标就断；有真实流量时直接读内核的往返时间，不另外连。高防目标别低于 30 秒" stacked>
-            <SecondsPicker
-              label="多久查一次目标"
-              value={value.targetProbeSeconds}
-              choices={BALANCE_TARGET_PROBE_CHOICES}
-              {...limits.targetProbeSeconds}
-              onChange={(targetProbeSeconds) => patch({ targetProbeSeconds })}
-            />
-          </SettingRow>
-        ) : null}
-      </div>
       <p className="mt-2 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-meta leading-5 text-foreground/80">
         实际效果：{describeBalanceEffect({ strategy, detect: value, weights, memberNames })}
       </p>
@@ -330,6 +339,7 @@ export function LoadBalanceFields({
           <p className="text-meta leading-5 text-muted-foreground" data-testid="balance-fastest-only">延迟优先：只走最快的一台</p>
         ) : null}
       </div>
+      <TargetCheckAddon value={detect} onChange={onDetectChange} />
       <div className="border-t border-border/50">
         <button
           type="button"
