@@ -537,3 +537,29 @@ test("an older passing result derives the tunnel segment from the total when the
   assert.doesNotMatch(html, /7 ms/);
   assert.doesNotMatch(html, /未诊断|诊断中/);
 });
+
+// 用户面板（2026-11-26）：Po0(300M) 三台出口都测了（11 / 6 / 7 ms），诊断弹窗只画了主出口那一条
+test("多出口负载均衡的隧道：每台出口一条分支，各写各的延迟，下面是最大延迟", () => {
+  const message = JSON.stringify({
+    kind: "tunnel-load-balance-summary",
+    tunnelId: 6,
+    message: "多出口负载探测成功，最大延迟 11ms（3 跳）",
+    details: [
+      { success: true, latencyMs: 11, hopLabel: "出口 1/3 6->7", routeLabel: "po0(300M) -> jinx(39.9y)", groupKey: "tunnel-6-load-balance", groupLabel: "多出口负载" },
+      { success: true, latencyMs: 6, hopLabel: "出口 2/3 6->12", routeLabel: "po0(300M) -> hep ix", groupKey: "tunnel-6-load-balance", groupLabel: "多出口负载" },
+      { success: true, latencyMs: 7, hopLabel: "出口 3/3 6->2", routeLabel: "po0(300M) -> Jinx(29.9y)", groupKey: "tunnel-6-load-balance", groupLabel: "多出口负载" },
+    ],
+    totalLatencyMs: 11,
+  });
+  const exits: Array<[number, string]> = [[7, "jinx(39.9y)"], [12, "hep ix"], [2, "Jinx(29.9y)"]];
+  const branches = exits.map(([hostId, name]) => ({
+    from: "po0(300M)", to: name, fromHostId: 6, toHostId: hostId, hopIndex: 0, hopCount: 1,
+    groupKey: "tunnel-6-load-balance", groupLabel: "多出口负载均衡",
+  }));
+  const html = renderToStaticMarkup(
+    <LinkTestProbeView parsed={parseLinkTestMessage(message)} isSuccess isTesting={false} plannedSegments={branches} />,
+  );
+  for (const [, name] of exits) assert.match(html, new RegExp(name.replace(/[()]/g, "\\$&")));
+  for (const ms of ["11 ms", "6 ms", "7 ms"]) assert.ok(html.includes(ms), `应当显示 ${ms}`);
+  assert.match(html, /最大延迟/);
+});

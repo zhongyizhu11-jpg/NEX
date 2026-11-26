@@ -394,7 +394,12 @@ export default function TunnelSelfTestDialog({
           groupLabel: "多出口负载均衡",
         });
       }
-      plannedSegments = branchSegments.slice(0, 1).filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);
+      /*
+        多出口负载均衡：每台出口一条分支（入口 → 出口 N），各写各的延迟，下面是「最大延迟」（LinkTestLatencySummary 的分支视图）。
+        服务端的隧道测试本来就逐台测（tunnel-load-balance-summary，每台一条 detail）；以前这里只留主出口那一条，
+        别的出口测了也不显示（用户 2026-11-26：「隧道负载均衡多出口时，诊断是不是应该显示到每个出口的延迟」）。
+      */
+      plannedSegments = branchSegments.filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);
     }
     return {
       nodeMeta: meta,
