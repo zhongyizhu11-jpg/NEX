@@ -236,6 +236,9 @@ func (p *failoverProxy) readmitForLocked(i int, now time.Time, reason string) {
 	p.statsLocked(i).dialFailures = 0
 	logf("failover target recovered rule=%d source=%d index=%d target=%s:%d reason=%s", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort, reason)
 	p.recordTargetEventLocked(i, "recovered", reason)
+	if p.healthyLocked(i) {
+		p.noteExitRecoveredLocked(i, now)
+	}
 }
 
 // probeTimeoutLocked 一次直接探测的超时：规格给了 ProbeTimeoutMs 就用它。调用方持有 p.mu（读锁就行）。
@@ -264,6 +267,9 @@ UDP 会话（onTargetDownLocked）。四个地方判坏都走这里：探测（c
 */
 func (p *failoverProxy) markUnhealthyLocked(index int, reason string, detail string) {
 	target := p.spec.Targets[index]
+	if p.healthyLocked(index) {
+		p.noteExitOutageLocked(index, time.Now())
+	}
 	p.targetHealth[index] = false
 	p.failureSince[index] = time.Time{}
 	p.recoveredSince[index] = time.Time{}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BALANCE_STATE_TONE, BALANCE_STATE_WORDS, balanceStateHealth, dedupeSwitchEvents, exitRowView, switchEventView, type ExitRowContext, type ExitSummaryLike } from "./balanceState";
+import { BALANCE_STATE_TONE, BALANCE_STATE_WORDS, balanceStateHealth, dedupeSwitchEvents, exitRowView, pinBypassText, switchEventView, type ExitRowContext, type ExitSummaryLike } from "./balanceState";
 
 const base: ExitRowContext = { online: true, index: 1, strategy: "auto", live: true, pinHostId: 0, hostId: 3 };
 const summary = (patch: Partial<ExitSummaryLike> = {}): ExitSummaryLike => ({
@@ -58,7 +58,8 @@ test("不稳：丢包多说丢包，否则说抖动；备用和 UDP 不通都写
 
 test("指定、升级、没数据：主备只有第一台在用，其余方式都分", () => {
   assert.equal(exitRowView(summary(), { ...base, pinHostId: 3 }).state, "pinned");
-  const other = exitRowView(summary(), { ...base, pinHostId: 2 });
+  // 指定能用时入口把别的出口都报成备用（activeRules 0）
+  const other = exitRowView(summary({ activeRules: 0 }), { ...base, pinHostId: 2 });
   assert.equal(other.state, "standby");
   assert.equal(other.reason, "已指定走别的出口");
   assert.equal(exitRowView(summary(), { ...base, upgradeNeeded: true }).state, "upgrade");
@@ -116,4 +117,40 @@ test("弹窗每台出口：面板两段写成整链；入口报的那段标「Ag
     exitRowView(summary({ exitMs: null, targetMs: 4, exitMsSource: null, targetMsSource: "panel", jitterMs: 0 }), base).detail,
     "到目标 4 ms（到出口那段还没测到）",
   );
+});
+
+test("指定的那台对某条规则连不上：那条照常走别的出口，弹窗要写出来，别写「其余备用」（用户面板 2026-11-26）", () => {
+  const ruleNames = { 11: "广港hkt/2", 12: "广港Sg/2" };
+  // 指定 jinx(39.9y)（hostId 3）：Sg/2 照走它，hkt/2 的高防目标从它连不上
+  const pinnedSummary = summary({ rules: 2, activeRules: 1, down: 1, downRuleIds: [11], reason: "target" });
+  const pinned = exitRowView(pinnedSummary, { ...base, pinHostId: 3, ruleNames });
+  assert.equal(pinned.state, "pinned");
+  assert.equal(pinned.reason, "广港hkt/2到目标不通，暂走别的出口");
+  assert.match(pinned.hint!, /目标的网络/);
+  assert.equal(pinBypassText(pinnedSummary, ruleNames), "广港hkt/2不通");
+  // Jinx(29.9y)（hostId 4）替 hkt/2 在走：是在用，不是备用
+  const carrying = exitRowView(summary({ rules: 2, activeRules: 1 }), { ...base, hostId: 4, pinHostId: 3 });
+  assert.equal(carrying.state, "active");
+  assert.equal(carrying.reason, "代指定出口走 1 条规则");
+  // 面板估的（没有入口上报）不下这个结论
+  assert.equal(exitRowView(summary({ activeRules: 1 }), { ...base, hostId: 4, pinHostId: 3, live: false }).state, "standby");
+  // 指定的那台对所有规则都连不上：连不上，流量全按自动走
+  const allDown = exitRowView(summary({ rules: 2, activeRules: 0, down: 2, downRuleIds: [11, 12], reason: "exit" }), { ...base, pinHostId: 3, ruleNames });
+  assert.equal(allDown.state, "down");
+  assert.equal(allDown.reason, "入口连不上这台，已暂走别的出口");
+  // 都通：照旧「已指定」，没有原因
+  assert.equal(exitRowView(summary({ activeRules: 2 }), { ...base, pinHostId: 3 }).reason, null);
+  assert.equal(pinBypassText(summary(), ruleNames), null);
+  assert.equal(pinBypassText(null), null);
+});
+
+test("指定的那台来回断、刚放回在观察：入口没让它扛，不是连不上（agent failover_exit_flap.go）", () => {
+  const observing = summary({ rules: 1, activeRules: 0, down: 0 });
+  const view = exitRowView(observing, { ...base, pinHostId: 3 });
+  assert.equal(view.state, "pinned");
+  assert.equal(view.reason, "来回断，先观察几分钟再走它");
+  assert.equal(pinBypassText(observing), "刚恢复，在观察");
+  // 面板估的数据不下这个结论
+  assert.equal(pinBypassText(observing, undefined, false), null);
+  assert.equal(exitRowView(observing, { ...base, pinHostId: 3, live: false }).reason, null);
 });

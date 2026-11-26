@@ -955,6 +955,7 @@ func TestExitGroupCanaryRealConnectionReadmitsAThroughFailedExit(t *testing.T) {
 	proxy.mu.Lock()
 	proxy.gateExitThroughLocked([]bool{true, true, true}) // 这一轮直接探：三台出口机都通
 	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	warmCanaryTraffic(proxy) // 有正常流量时才拿真实连接试探
 	proxy.mu.Unlock()
 
 	_, first, reservation := proxy.pickReserved("", nil, false)
@@ -1050,6 +1051,7 @@ func TestExitGroupCanaryOverridesStalePanelDownHint(t *testing.T) {
 	proxy.gateExitThroughLocked([]bool{true, true, true})
 	proxy.applyRelayHintsLocked(hinted(1000))
 	down := proxy.relayDown[1]
+	warmCanaryTraffic(proxy)
 	proxy.mu.Unlock()
 	if !down {
 		t.Fatal("面板提示应当先把它标坏")
@@ -1082,5 +1084,76 @@ func TestExitGroupCanaryOverridesStalePanelDownHint(t *testing.T) {
 		t.Fatal("不带 DownAt 的提示分不出新旧，不该拿真实连接去试")
 	} else {
 		proxy.releaseReservation(reservation)
+	}
+}
+
+// warmCanaryTraffic 假装最近有正常流量（够拿真实连接试探）。调用方持有 p.mu。
+func warmCanaryTraffic(p *failoverProxy) {
+	p.canaryTrafficStart = time.Now()
+	p.canaryTrafficPicks = exitCanaryMinTraffic
+}
+
+/*
+试探的代价落在真实连接上（用户实测 2026-11-26：高防目标只认一台出口，规则平时没流量，客户端测速那一条总被拿去
+试黑洞的那台，时不时显示超时）：零星一条连接不试；连着没回间隔翻倍、封顶；回了东西从基础间隔重来。
+*/
+func TestExitGroupCanaryBacksOffAndNeedsTraffic(t *testing.T) {
+	spec := exitGroupSpec("round_robin", 3)
+	spec.ProbeIntervalSeconds = 0
+	proxy := routeTestProxy(spec)
+	proxy.done = make(chan struct{})
+	drainFailoverEvents()
+	proxy.mu.Lock()
+	proxy.gateExitThroughLocked([]bool{true, true, true})
+	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	proxy.mu.Unlock()
+
+	pick := func() int {
+		_, index, reservation := proxy.pickReserved("", nil, false)
+		proxy.releaseReservation(reservation)
+		return index
+	}
+	// 没流量时零星几条：都不拿去试（测速那一条不替恢复付黑洞的 3 秒）
+	for i := 0; i < exitCanaryMinTraffic; i++ {
+		if index := pick(); index == 1 {
+			t.Fatalf("最近没有正常流量，第 %d 条不该拿去试判坏的出口", i+1)
+		}
+	}
+	// 正常流量够了：下一条试它
+	if index := pick(); index != 1 {
+		t.Fatalf("有正常流量了，到点的那条应当试判坏的出口，挑到了 %d", index)
+	}
+	// 没回：下一次至少隔两倍基础间隔
+	proxy.mu.Lock()
+	misses := proxy.exitCanaryMisses[1]
+	gap := proxy.exitCanaryGapFor(1, exitCanaryGap)
+	proxy.exitCanaryAt[1] = time.Now().Add(-exitCanaryGap - time.Millisecond)
+	proxy.mu.Unlock()
+	if misses != 1 || gap != 2*exitCanaryGap {
+		t.Fatalf("试探一次没回：misses=%d gap=%s，应当是 1 和 %s", misses, gap, 2*exitCanaryGap)
+	}
+	if index := pick(); index == 1 {
+		t.Fatal("过了基础间隔、没过翻倍的间隔，不该再试")
+	}
+	// 连着很多次没回：封顶
+	proxy.mu.Lock()
+	proxy.exitCanaryMisses[1] = 50
+	capped := proxy.exitCanaryGapFor(1, exitCanaryGap)
+	proxy.exitCanaryAt[1] = time.Now().Add(-exitCanaryMaxGap)
+	warmCanaryTraffic(proxy)
+	proxy.mu.Unlock()
+	if capped != exitCanaryMaxGap {
+		t.Fatalf("间隔应当封顶在 %s，是 %s", exitCanaryMaxGap, capped)
+	}
+	if index := pick(); index != 1 {
+		t.Fatalf("过了封顶的间隔应当再试，挑到了 %d", index)
+	}
+	// 回了东西：放回，从基础间隔重来
+	proxy.markEarlyReply(1)
+	proxy.mu.RLock()
+	reset, healthy := proxy.exitCanaryMisses[1], proxy.targetHealth[1]
+	proxy.mu.RUnlock()
+	if reset != 0 || !healthy {
+		t.Fatalf("回了东西应当放回并清零：misses=%d healthy=%v", reset, healthy)
 	}
 }

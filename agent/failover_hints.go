@@ -198,6 +198,10 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 			continue
 		}
 		flipped := down != p.relayDown[i]
+		prevReason := p.relayDownReason[i]
+		// 出口组的来回断（failover_exit_flap.go）：管理上排除和演练不算
+		countsAsOutage := !failoverAdminDownReason(downReason) && downReason != failoverDrillReason
+		wasUsable := p.healthyLocked(i)
 		// 演练的提示撤掉了（或者换成了别的原因）：记下时刻，接下来切回它的那一次不算进抖动抑制。
 		if p.relayDown[i] && p.relayDownReason[i] == failoverDrillReason && (!down || downReason != failoverDrillReason) {
 			p.drillEndedAt[i] = time.Now()
@@ -217,6 +221,9 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 			}
 			logf("failover target relay down rule=%d source=%d index=%d target=%s reason=%s", p.ruleID, p.sourcePort, i, failoverTargetLabel(p.spec.Targets[i]), downReason)
 			p.recordTargetEventLocked(i, "unhealthy", text)
+			if wasUsable && countsAsOutage {
+				p.noteExitOutageLocked(i, time.Now())
+			}
 			// 面板说这条走不通了：两侧都算（A6）。
 			p.onTargetDownLocked(i, true, true)
 			if i == p.activeIndex || reason == "" {
@@ -231,6 +238,9 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 				now := time.Now()
 				p.markSlowStartLocked(i, now)
 				p.udpSide.markSlowStart(i, now)
+			}
+			if p.healthyLocked(i) && !failoverAdminDownReason(prevReason) && prevReason != failoverDrillReason {
+				p.noteExitRecoveredLocked(i, time.Now())
 			}
 			if reason == "" {
 				reason = "relay recovered"

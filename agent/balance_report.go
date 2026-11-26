@@ -70,6 +70,11 @@ type agentBalanceRule struct {
 func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits []agentBalanceExit, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.balanceSnapshotLocked()
+}
+
+// balanceSnapshotLocked：balanceSnapshot 的本体。调用方持有 p.mu。
+func (p *failoverProxy) balanceSnapshotLocked() (tunnelID int, strategy string, exits []agentBalanceExit, ok bool) {
 	report := p.spec.BalanceReport
 	if report == nil || len(report.HostIDs) != len(p.spec.Targets) || len(p.spec.Targets) < 2 {
 		return 0, "", nil, false
@@ -110,12 +115,22 @@ func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits 
 	}
 	// 在用的是谁：手动指定的那台能用时只有它；主备是正在走的那条；延迟优先只走最快的一台时是那一台；别的分法能用的都在轮转里。
 	pinned := p.pinnedIndexAt(now)
+	// 来回断、刚放回还在观察的（failover_exit_flap.go）：不吃指定，有别的能用时也不分给它 —— 报成备用
+	probation := p.exitProbationSetLocked(now)
+	inProbation := func(i int) bool { return probation != nil && probation[i] }
 	switch {
-	case pinned >= 0 && exits[pinned].State != "down":
+	case pinned >= 0 && exits[pinned].State != "down" && !inProbation(pinned):
 		exits[pinned].State = "active"
 	case p.spec.Strategy == "fallback":
-		if p.activeIndex >= 0 && p.activeIndex < len(exits) && exits[p.activeIndex].State != "down" {
-			exits[p.activeIndex].State = "active"
+		active := p.activeIndex
+		// 主备在走的那台正在观察：新连接实际走候选里的第一台（pickCandidatesLocked 先跳过观察中的）
+		if inProbation(active) {
+			if candidates := p.pickCandidatesLocked(nil, false); len(candidates) > 0 {
+				active = candidates[0]
+			}
+		}
+		if active >= 0 && active < len(exits) && exits[active].State != "down" {
+			exits[active].State = "active"
 		}
 	case p.fastestOnlyLocked():
 		// 延迟优先「只走最快的一台」：只有在用的那一台是 active，别的能用的是 standby（候补）。
@@ -127,6 +142,21 @@ func (p *failoverProxy) balanceSnapshot() (tunnelID int, strategy string, exits 
 		for i := range exits {
 			if exits[i].State != "down" {
 				exits[i].State = "active"
+			}
+		}
+	}
+	if probation != nil {
+		// 只有别的出口在用时才把观察中的报成备用：一台别的都不能用时流量照样走它（pickCandidatesLocked）
+		others := false
+		for i := range exits {
+			if exits[i].State == "active" && !inProbation(i) {
+				others = true
+				break
+			}
+		}
+		for i := range exits {
+			if others && inProbation(i) && exits[i].State == "active" {
+				exits[i].State = "standby"
 			}
 		}
 	}

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { BalanceStatePill, BalanceStateRow } from "@/components/balance/BalanceStateRow";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { dedupeSwitchEvents, exitRowView, switchEventView } from "@/lib/balanceState";
+import { dedupeSwitchEvents, exitRowView, pinBypassText, switchEventView } from "@/lib/balanceState";
 import { getTunnelHopIds, moveExitInGroup, tunnelBalanceExits, tunnelHopHostName, type ExitGroupMemberLite } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -126,6 +126,8 @@ export function ExitBalanceDialog({
   const inUseText = strategy === "latency" && detect.fastestOnly && ruleCount > 1 && inUse > 1
     ? `${ruleCount} 条规则各走自己最快的一台，用到 ${inUse} 台`
     : `${inUse} 台在用`;
+  // 指定的那台对哪几条规则不通（那几条照常按分法走别的出口，agent/failover_pick.go）
+  const pinBypass = pinOnline ? pinBypassText(byHost.get(pinHostId), summary?.ruleNames, !!summary?.live) : null;
   const targetDown = (summary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
   const targetUnstable = (summary?.targetIssues || []).length - targetDown;
 
@@ -142,7 +144,7 @@ export function ExitBalanceDialog({
     : nginxNote
       ? { tone: "info", text: nginxNote.replace(/^基础支持：/, "") }
       : pinActive
-        ? { tone: pinOnline ? "info" : "warn", text: pinOnline ? `已指定走 ${nameOf(pinHostId)}，其余备用` : `指定的 ${nameOf(pinHostId)} 离线，暂按${BALANCE_STRATEGY_LABELS[strategy].label}分` }
+        ? { tone: pinOnline && !pinBypass ? "info" : "warn", text: !pinOnline ? `指定的 ${nameOf(pinHostId)} 离线，暂按${BALANCE_STRATEGY_LABELS[strategy].label}分` : pinBypass ? `已指定 ${nameOf(pinHostId)}（${pinBypass}，暂走别的）` : `已指定走 ${nameOf(pinHostId)}，其余备用` }
         : targetDown + targetUnstable > 0
           ? { tone: "warn", text: `${targetDown > 0 ? `${targetDown} 条规则的目标从每台出口都连不上` : `${targetUnstable} 条规则的目标从每台出口都不稳`}：问题在目标那边，换出口没用` }
           : null;
@@ -175,7 +177,7 @@ export function ExitBalanceDialog({
               detail={[view.detail, weight ? `权重 ${weight}` : ""].filter(Boolean).join(" · ") || null}
               reason={view.reason}
               hint={view.hint}
-              dim={pinActive && pinOnline && hostId !== pinHostId}
+              dim={pinActive && pinOnline && hostId !== pinHostId && view.state === "standby"}
               leading={reorderable ? (
                 <span className="fx-lb-move">
                   <button type="button" aria-label={`${nameOf(hostId)} 上移`} disabled={index === 0} onClick={() => move(hostId, -1)}><ChevronUp className="h-4 w-4" /></button>
