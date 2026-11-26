@@ -384,8 +384,11 @@ func (p *failoverProxy) markEarlyClose(index int, visitor string) {
 		state.visitors[visitor] = true
 	}
 	// 出口组：不靠「两个不同访客」，经这台出口再探一次，又被关才判坏（failover_exit_group.go）。
+	// 「只看隧道」：不经出口去碰目标、也不据此判坏（这一条连接已经换路重发了）。
 	if p.exitGroupLocked() {
-		p.startExitConfirmLocked(index)
+		if !p.spec.TunnelOnly {
+			p.startExitConfirmLocked(index)
+		}
 		return
 	}
 	count, distinct := state.count, len(state.visitors)

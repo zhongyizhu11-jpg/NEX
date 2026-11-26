@@ -134,6 +134,20 @@ export type BalanceDetect = {
    * 不算检测灵敏度的一部分：三档都是关，选哪一档都不改它（balanceSensitivityOf 不看它）。
    */
   fastestOnly: boolean;
+  /**
+   * 负载均衡看哪一段（2.3.556）：chain 整链 = 入口到出口 + 出口到目标（出口连不上目标就切走，默认）；tunnel 只看隧道 =
+   * 只看入口到出口通不通、多快，不派「出口 → 目标」的探测、不因为目标连不上判出口坏、不拿真实连接去试目标。
+   * 目标是高防、会拉黑连得勤的出口 IP 时可以选；代价是某台出口被目标拦了，流量照样会分过去。
+   * 不算检测灵敏度的一部分（三档都是整链，选哪一档都不改它）。
+   */
+  scope: BalanceScope;
+};
+
+export const BALANCE_SCOPES = ["chain", "tunnel"] as const;
+export type BalanceScope = (typeof BALANCE_SCOPES)[number];
+export const BALANCE_SCOPE_LABELS: Record<BalanceScope, { label: string; hint: string }> = {
+  chain: { label: "整链", hint: "入口到出口 + 出口到目标都看：出口连不上目标就切走" },
+  tunnel: { label: "只看隧道", hint: "只看入口到出口；不探目标，某台出口被目标拦了也照样分过去" },
 };
 
 export const BALANCE_INTERVAL_CHOICES = [1, 2, 5, 10, 30] as const;
@@ -161,6 +175,7 @@ export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
   jitterAction: "reduce",
   slowStart: true,
   fastestOnly: false,
+  scope: "chain",
 };
 
 /** 「只走最快的一台」：另一台要连着快出门槛多久才换过去（lbcore.DefaultFastestHold）。不给调。 */
@@ -175,7 +190,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   sensitive: {
     label: "灵敏",
     hint: "适合游戏、实时通话",
-    detect: { intervalSeconds: 2, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false },
+    detect: { intervalSeconds: 2, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false, scope: "chain" },
   },
   balanced: {
     label: "均衡",
@@ -185,7 +200,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   stable: {
     label: "稳定",
     hint: "偶尔波动不动，适合下载、长连接",
-    detect: { intervalSeconds: 30, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false },
+    detect: { intervalSeconds: 30, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false, scope: "chain" },
   },
 };
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
@@ -226,6 +241,8 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
     slowStart: typeof input.slowStart === "boolean" ? input.slowStart : defaults.slowStart,
     // 老数据没有这一项：关（defaults 的也是关）
     fastestOnly: typeof input.fastestOnly === "boolean" ? input.fastestOnly : defaults.fastestOnly,
+    // 老数据没有这一项：整链
+    scope: (BALANCE_SCOPES as readonly string[]).includes(String(input.scope ?? "")) ? input.scope as BalanceScope : defaults.scope,
   };
   const hasTarget = input.targetProbeSeconds !== undefined && input.targetProbeSeconds !== null && input.targetProbeSeconds !== "";
   const targetProbeSeconds = hasTarget
@@ -242,7 +259,7 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
 function deriveTargetProbeSeconds(rest: Omit<BalanceDetect, "targetProbeSeconds">) {
   const preset = BALANCE_SENSITIVITIES.find((key) => {
     const detect = BALANCE_SENSITIVITY_PRESETS[key].detect;
-    return (Object.keys(rest) as (keyof typeof rest)[]).every((field) => field === "fastestOnly" || rest[field] === detect[field]);
+    return (Object.keys(rest) as (keyof typeof rest)[]).every((field) => field === "fastestOnly" || field === "scope" || rest[field] === detect[field]);
   });
   if (preset) return BALANCE_SENSITIVITY_PRESETS[preset].detect.targetProbeSeconds;
   return Math.max(5, Math.min(BALANCE_DETECT_LIMITS.targetProbeSeconds.max, rest.intervalSeconds * 5));
@@ -260,12 +277,12 @@ export function balanceDetectEquals(left: BalanceDetect, right: BalanceDetect) {
 
 /** 这组检测参数是哪一档；逐项改过（哪档都不是）返回 null。「只走最快的一台」不算灵敏度，不看它。 */
 export function balanceSensitivityOf(detect: BalanceDetect): BalanceSensitivity | null {
-  return BALANCE_SENSITIVITIES.find((key) => balanceDetectEquals(detect, { ...BALANCE_SENSITIVITY_PRESETS[key].detect, fastestOnly: detect.fastestOnly })) ?? null;
+  return BALANCE_SENSITIVITIES.find((key) => balanceDetectEquals(detect, { ...BALANCE_SENSITIVITY_PRESETS[key].detect, fastestOnly: detect.fastestOnly, scope: detect.scope })) ?? null;
 }
 
 /** 选一档灵敏度：换成那一档的检测参数，「只走最快的一台」留着原来的。 */
 export function applyBalanceSensitivity(detect: BalanceDetect, sensitivity: BalanceSensitivity): BalanceDetect {
-  return { ...BALANCE_SENSITIVITY_PRESETS[sensitivity].detect, fastestOnly: detect.fastestOnly };
+  return { ...BALANCE_SENSITIVITY_PRESETS[sensitivity].detect, fastestOnly: detect.fastestOnly, scope: detect.scope };
 }
 
 /** 坏了最多多少秒切走：最坏是刚探完就坏，等够「几次不通」轮探测。 */
@@ -296,7 +313,9 @@ export function describeBalanceEffect(input: {
   // 转发组 / 入口组靠改解析，只探入口，不探规则目标
   parts.push(input.dns
     ? `每 ${detect.intervalSeconds} 秒探一次，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内改解析`
-    : `每 ${detect.intervalSeconds} 秒探一次出口机、每 ${detect.targetProbeSeconds} 秒探一次目标，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内切走`);
+    : detect.scope === "tunnel"
+      ? `只看隧道：每 ${detect.intervalSeconds} 秒探一次出口机，出口机坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内切走；不探目标，出口被目标拦了不会切`
+      : `每 ${detect.intervalSeconds} 秒探一次出口机、每 ${detect.targetProbeSeconds} 秒探一次目标，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内切走`);
   if (strategy === "weighted") {
     const ratio = ratioText(input.weights || []);
     const names = (input.memberNames || []).filter(Boolean);

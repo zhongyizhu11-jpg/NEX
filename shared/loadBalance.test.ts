@@ -147,3 +147,17 @@ test("只走最快的一台：分配方式那一句、实际效果那一句都�
   assert.doesNotMatch(describeBalanceEffect({ strategy: "latency", detect: DEFAULT_BALANCE_DETECT }), /只走最快的一台/);
   assert.doesNotMatch(describeBalanceEffect({ strategy: "auto", detect: on }), /只走最快的一台/);
 });
+
+test("负载均衡看哪一段：默认整链；老数据没有这一项是整链；不算灵敏度，换档留着", async () => {
+  const { normalizeBalanceDetect, serializeBalanceDetect, balanceSensitivityOf, applyBalanceSensitivity, describeBalanceEffect, DEFAULT_BALANCE_DETECT: defaults } = await import("./loadBalance");
+  assert.equal(defaults.scope, "chain");
+  assert.equal(normalizeBalanceDetect('{"intervalSeconds":60}').scope, "chain");
+  assert.equal(normalizeBalanceDetect({ scope: "tunnel" }).scope, "tunnel");
+  assert.equal(normalizeBalanceDetect({ scope: "bogus" }).scope, "chain");
+  const tunnel = normalizeBalanceDetect({ ...defaults, scope: "tunnel" });
+  assert.equal(balanceSensitivityOf(tunnel), "balanced", "只看隧道不影响「均衡」这一档的判断");
+  assert.equal(applyBalanceSensitivity(tunnel, "stable").scope, "tunnel", "换档留着");
+  assert.notEqual(serializeBalanceDetect(tunnel), null, "和默认不一样，要存");
+  assert.match(describeBalanceEffect({ strategy: "latency", detect: tunnel }), /只看隧道/);
+  assert.doesNotMatch(describeBalanceEffect({ strategy: "latency", detect: tunnel }), /探一次目标/);
+});

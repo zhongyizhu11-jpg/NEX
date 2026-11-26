@@ -457,7 +457,8 @@ func (p *failoverProxy) exitCanaryTrafficLocked(now time.Time) bool {
 
 // exitCanaryIndexLocked 此刻该拿这条新连接试哪台判坏的出口；没有返回 -1。调用方持有 p.mu。
 func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
-	if !p.exitGroupLocked() || p.done == nil || p.retired() {
+	// 「只看隧道」：没有「经出口判坏」这回事，也不拿真实连接去试目标
+	if !p.exitGroupLocked() || p.spec.TunnelOnly || p.done == nil || p.retired() {
 		return -1
 	}
 	p.ensureHealthStateLocked()

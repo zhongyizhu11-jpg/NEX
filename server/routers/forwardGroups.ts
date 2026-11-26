@@ -89,6 +89,7 @@ const baseSchema = z.object({
     slowStart: z.boolean().optional(),
     // 延迟优先：只走最快的一台
     fastestOnly: z.boolean().optional(),
+    scope: z.enum(["chain", "tunnel"]).optional(),
   }).nullable().optional(),
   entryGroupId: z.number().nullable().optional(),
   groupType: z.enum(["host", "tunnel"]),

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.272"
+var Version = "2.2.273"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -648,6 +648,10 @@ type failoverSpec struct {
 	// GOST 链路的负载均衡（2.2.262 起，面板 2.3.539）：这个代理替隧道入口在几台出口之间挑，每个目标是本机一个只走
 	// 某台出口的 gost 端口。带着它就把每台出口的真实状态报给面板（balance_report.go），HostIDs 和 Targets 一一对应。
 	BalanceReport *failoverBalanceReport `json:"balanceReport,omitempty"`
+	// 负载均衡「只看隧道」（2.2.273 起，面板 2.3.556 的 detect.scope = tunnel）：只按直接探出口机的通断和延迟挑，
+	// 「连上没回就被关」时不再经出口复核（往目标发不说话的连接）、也不拿真实连接去试判坏的出口 —— 目标是高防、会拉黑
+	// 连得勤的出口 IP 时用。这一条连接照样当场换路重发（failover_early_close.go），只是不据此判出口坏。
+	TunnelOnly bool `json:"tunnelOnly,omitempty"`
 	// 探测节奏（2.2.264 起，出口组的规格带）：多久探一轮、一次探测等多久。不带（0）就是老规矩 ——
 	// 间隔 = 「异常多久切」的一半（1–5 秒）、超时 2 秒。带了以后每轮从上一轮**开始**算间隔（固定节拍），
 	// 探得慢也不会把下一轮往后推：出口组要在「几次不通 × 间隔」内把坏出口摘掉（failover_exit_group.go）。

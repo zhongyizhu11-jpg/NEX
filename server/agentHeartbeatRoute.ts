@@ -2316,7 +2316,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             const entryHostFxpVersion = (host as { fxpVersion?: string | null }).fxpVersion;
             const tunnelBalance = tunnel as { loadBalanceStrategy?: string | null; balanceDetect?: string | null };
             const entryFxpTargetAware = !entryExitsAreRelays && entryRoutes.length > 1 && fxpSupportsTargetAware(entryHostFxpVersion);
-            const entryExitTargetStatus = entryFxpTargetAware ? await exitTargetStatusForHostIds(entryExitHostIds) : null;
+            // 「只看隧道」（2.3.556）：出口不带 targetStatus —— FXP 只在有出口回报目标结果时才探目标、按目标判出口
+            // （forwardx-fxp newTargetAwareness），这样它只看入口到出口；检测参数（探出口机的节奏、只走最快的一台）照发
+            const entryScopeTunnel = balanceDetectForRuntime(tunnelBalance.balanceDetect)?.scope === "tunnel";
+            const entryExitTargetStatus = entryFxpTargetAware && !entryScopeTunnel ? await exitTargetStatusForHostIds(entryExitHostIds) : null;
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,

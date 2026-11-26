@@ -200,7 +200,10 @@ export async function buildForwardGroupProbes(ctx: BuildForwardGroupProbesContex
           .map((node) => Number(node.hostId)),
       ];
       if (exitHostIds.length < 2 || !exitHostIds.includes(Number(host.id))) continue;
-      const spec = exitTargetProbeSpec(tunnelBalanceDetect(tunnel));
+      const detect = tunnelBalanceDetect(tunnel);
+      // 负载均衡「只看隧道」（2.3.556）：不派「出口 → 目标」的快速探测
+      if (detect.scope === "tunnel") continue;
+      const spec = exitTargetProbeSpec(detect);
       const existing = probeByRule.get(Number(rule.id));
       if (existing) {
         if (!existing.routeHop) existing.routeHop = spec;
