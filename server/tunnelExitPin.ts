@@ -40,3 +40,18 @@ export async function refreshTunnelsPinnedToHost(hostId: number, reason: string)
   }
   return Array.from(pushed);
 }
+
+/*
+  NEX 隧道（FXP）入口的手动指定（2.3.556）：出口全部下发，指定的那台排第一，分法换成主备（FXP 的 fallback = lbcore.First，
+  每次挑「能用的里排最前的」）。指定的那台能用就只走它；它连不上目标 / 掉线就当场走下一台；好了马上切回。
+
+  以前下发时只留指定的那一台：FXP 手里只有一台出口，不探「出口连得上目标吗」、不报真实状态、也没有别的可换 ——
+  用户面板（2026-11-26）：指定 Jinx(29.9y)，高防时不时拦它，拦的那阵子整条规则断；面板也拿不到「在走哪台」，诊断退回去
+  测主出口 jinx(39.9y)（被拦着），写「超时」。GOST 隧道早就是「全部下发 + 指定下标」（agent exitPinPickLocked）。
+*/
+export function orderEntryRoutesForPin<T extends { hostId?: number | null }>(routes: readonly T[], pinHostId: number): { routes: T[]; pinned: boolean } {
+  const pin = Number(pinHostId) || 0;
+  const index = pin > 0 && routes.length > 1 ? routes.findIndex((route) => Number(route.hostId || 0) === pin) : -1;
+  if (index < 0) return { routes: [...routes], pinned: false };
+  return { routes: [routes[index], ...routes.filter((_, i) => i !== index)], pinned: true };
+}

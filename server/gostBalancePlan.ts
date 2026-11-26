@@ -125,6 +125,11 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
   const weights = gostBalanceTargetWeights(input.weights, exits.length);
   const timing = gostBalanceProbeTiming(input.detect);
   const pinIndex = input.pinHostId > 0 ? hostIds.indexOf(input.pinHostId) : -1;
+  /*
+    「只看隧道」（detect.scope = tunnel，2.3.556）：不带任何「出口 → 目标」的结论（连不上 / 到目标多快），Agent 只按直接探出口机
+    的通断和延迟挑；规格带 tunnelOnly，Agent 2.2.273 起也不再「经出口复核」、不拿真实连接去试目标（老 Agent 不认，照旧）。
+  */
+  const tunnelOnly = input.detect.scope === "tunnel";
   return {
     enabled: true,
     listenPort: input.listenPort,
@@ -146,13 +151,13 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
         ...(exit.viaRelay ? { viaRelay: true } : {}),
         ...(exit.probeRelay && !exit.viaRelay ? { probeRelay: true } : {}),
         ...(weights ? { weight: weights[index] } : {}),
-        ...(input.downHostIds.has(exit.hostId)
+        ...(!tunnelOnly && input.downHostIds.has(exit.hostId)
           ? { down: true, downReason: "出口连不上目标", ...(input.downAt?.get(exit.hostId) ? { downAt: Math.round(Number(input.downAt.get(exit.hostId))) } : {}) }
           : {}),
         // 不到 1 毫秒按 1 算：Agent 那边 0 就是「没有」，四舍五入成 0 的话这台就成了「到目标不知道」
-        ...(extra != null && extra > 0 ? { extraLatencyMs: Math.max(1, Math.round(extra)) } : {}),
+        ...(!tunnelOnly && extra != null && extra > 0 ? { extraLatencyMs: Math.max(1, Math.round(extra)) } : {}),
         // 运行时提示（agent/failover_hints.go）：变了不重建代理
-        ...((extra == null || !(extra > 0)) && input.extraLatencyUnknown?.has(exit.hostId) ? { extraLatencyUnknown: true } : {}),
+        ...(!tunnelOnly && (extra == null || !(extra > 0)) && input.extraLatencyUnknown?.has(exit.hostId) ? { extraLatencyUnknown: true } : {}),
       };
     }),
     failoverSeconds: timing.failoverSeconds,
@@ -173,6 +178,7 @@ export function buildGostBalanceProxySpec(input: GostBalanceSpecInput) {
     proxyProtocolSend: input.proxyHeaderForward,
     proxyProtocolVersion: input.proxyProtocolVersion,
     balanceReport: { tunnelId: input.tunnelId, hostIds },
+    ...(tunnelOnly ? { tunnelOnly: true } : {}),
   };
 }
 

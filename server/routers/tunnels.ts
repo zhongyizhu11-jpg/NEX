@@ -108,6 +108,7 @@ const balanceDetectSchema = z.object({
   slowStart: z.boolean().optional(),
   // 延迟优先：只走最快的一台
   fastestOnly: z.boolean().optional(),
+  scope: z.enum(["chain", "tunnel"]).optional(),
 }).nullable();
 const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate", "hot_standby"]);
 const MAX_TUNNEL_HOPS = 10;

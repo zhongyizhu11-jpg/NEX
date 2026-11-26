@@ -329,3 +329,12 @@ test("负载均衡「有出口连不上、已切走」的橙色是确定的结�
   assert.equal(timeout.confirmed, true);
   assert.deepEqual(preferLastKnownForwardRuleVisualStatus(timeout, { state: "error", title: "旧故障" }), timeout);
 });
+
+// 2.3.555 回归（用户面板 20:38）：hkt/2、hkt/3 在跑、8 ms，「有出口连不上、已切走」的橙色被当成没在运行，写「等待 Agent 应用」
+test("有数据的橙色不是「没在运行」：不写等待 Agent 应用", () => {
+  const confirmed = { state: "pending" as const, title: "3 台出口里 jinx(39.9y) 连不上目标，已切走", confirmed: true };
+  assert.equal(resolveForwardRuleNotRunningReason(confirmed, []), null);
+  // 真的还在等的照旧
+  assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "等待 Agent 确认托管监听（0 / 1）" }, [])?.label, "等待 Agent 确认");
+  assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "" }, [])?.label, "等待 Agent 应用");
+});

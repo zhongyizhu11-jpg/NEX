@@ -115,3 +115,48 @@ func TestExitGroupFlapIgnoresAdminDownAndNonExitGroups(t *testing.T) {
 		t.Fatal("不是出口组的代理不该记中断")
 	}
 }
+
+/*
+「只看隧道」（spec.TunnelOnly，面板 2.3.556）：目标是高防、会拉黑连得勤的出口 IP。「连上没回就被关」时不经出口复核
+（往目标发不说话的连接）、不据此判出口坏；也不拿真实连接去试判坏的出口。
+*/
+func TestExitGroupTunnelOnlyNeverProbesTheTarget(t *testing.T) {
+	spec := exitGroupSpec("round_robin", 3)
+	spec.TunnelOnly = true
+	proxy := routeTestProxy(spec)
+	proxy.done = make(chan struct{})
+	drainFailoverEvents()
+
+	proxy.markEarlyClose(1, "203.0.113.9")
+	proxy.markEarlyClose(1, "203.0.113.10")
+	proxy.mu.RLock()
+	confirming, healthy := proxy.exitConfirming[1], proxy.targetHealth[1]
+	proxy.mu.RUnlock()
+	if confirming || !healthy {
+		t.Fatalf("只看隧道：被关不经出口复核、不判坏（confirming=%v healthy=%v）", confirming, healthy)
+	}
+
+	// 就算有旧的判坏，也不拿真实连接去试
+	proxy.mu.Lock()
+	proxy.gateExitThroughLocked([]bool{true, true, true})
+	proxy.targetHealth[1], proxy.exitThroughFailed[1] = false, true
+	warmCanaryTraffic(proxy)
+	canary := proxy.exitCanaryIndexLocked(time.Now())
+	proxy.mu.Unlock()
+	if canary != -1 {
+		t.Fatalf("只看隧道不该拿真实连接去试，挑到了 %d", canary)
+	}
+
+	// 对照：整链的会去复核
+	full := routeTestProxy(exitGroupSpec("round_robin", 3))
+	full.done = make(chan struct{})
+	full.markEarlyClose(1, "203.0.113.9")
+	full.mu.RLock()
+	started := full.exitConfirming[1]
+	full.mu.RUnlock()
+	if !started {
+		t.Fatal("整链：被关以后应当经出口复核")
+	}
+	close(full.done)
+	close(proxy.done)
+}

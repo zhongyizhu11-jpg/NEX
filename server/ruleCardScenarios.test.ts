@@ -4,7 +4,7 @@ import test from "node:test";
 import { resetBalanceLiveForTest, setBalanceLiveReportForTest, type LiveExit } from "./balanceLive";
 import { resetExitTargetStates, ruleHasReachableExit, setExitTargetStateForTest, withRuleExitTargets, type ExitTargetState } from "./exitTargetHealth";
 import { recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
-import { preferLastKnownForwardRuleVisualStatus, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
+import { preferLastKnownForwardRuleVisualStatus, resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
 import { isRuleProbeUnreachable } from "../shared/linkProbePolicy";
 
 /*
@@ -94,6 +94,7 @@ test("场景 2：主出口被高防拦、已经切到 hep ix、两段测到了 �
   const { row, status, reachable } = card({ live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
   assert.equal(COLOR[status.state], "橙");
   assert.equal(status.confirmed, true, "确定的结论，不拿上一次的颜色顶");
+  assert.equal(resolveForwardRuleNotRunningReason(status, []), null, "规则在跑：不写「等待 Agent 应用」");
   assert.match(status.title, /jinx\(39\.9y\) 连不上目标，已切走/);
   assert.equal(row.latestLatencyMs, 8);
   assert.deepEqual(row.exitTargetVia, ["hep ix"]);

@@ -255,3 +255,25 @@ test("规格：延迟优先开了「只走最快的一台」带 fastestOnly，�
   assert.equal("fastestOnly" in buildGostBalanceProxySpec({ ...base, strategy: "latency" }), false);
   assert.equal("fastestOnly" in buildGostBalanceProxySpec({ ...base, strategy: "auto", detect: { ...DEFAULT_BALANCE_DETECT, fastestOnly: true } }), false);
 });
+
+test("负载均衡「只看隧道」：规格不带任何出口到目标的结论，带 tunnelOnly（Agent 不经出口碰目标）", () => {
+  const tunnelOnly = buildGostBalanceProxySpec({
+    ...base,
+    detect: { ...DEFAULT_BALANCE_DETECT, scope: "tunnel" },
+    downHostIds: new Set([23]),
+    downAt: new Map([[23, 1763600000000]]),
+    extraLatencyMs: new Map([[21, 12], [22, 80]]),
+    extraLatencyUnknown: new Set([23]),
+  });
+  assert.equal((tunnelOnly as { tunnelOnly?: boolean }).tunnelOnly, true);
+  for (const target of tunnelOnly.targets as Array<Record<string, unknown>>) {
+    assert.equal(target.down, undefined, "出口连不上目标的提示不带");
+    assert.equal(target.extraLatencyMs, undefined, "到目标的延迟不带");
+    assert.equal(target.extraLatencyUnknown, undefined);
+  }
+  // 整链（默认）照旧
+  const chain = buildGostBalanceProxySpec({ ...base, downHostIds: new Set([23]), extraLatencyMs: new Map([[21, 12]]) });
+  assert.equal("tunnelOnly" in chain, false);
+  assert.equal(chain.targets[2].down, true);
+  assert.equal(chain.targets[0].extraLatencyMs, 12);
+});

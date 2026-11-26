@@ -1,3 +1,4 @@
+import { orderEntryRoutesForPin } from "./tunnelExitPin";
 import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
 import { parseAgentLoadAverage } from "../shared/hostLoadAverage";
@@ -2240,11 +2241,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           }
           if (tunnel && isForwardXTunnel(tunnel)) {
             const allEntryRoutes = await forwardXEntryRoutes(rule, tunnel);
-            // 手动切换：只留指定的那台出口（它在这些出口里、而且在线时）
-            const entryPinHostId = await pinnedExitHostId(tunnel);
-            const entryRoutes = entryPinHostId > 0 && allEntryRoutes.length > 1 && allEntryRoutes.some((route) => Number((route as { hostId?: number }).hostId || 0) === entryPinHostId)
-              ? allEntryRoutes.filter((route) => Number((route as { hostId?: number }).hostId || 0) === entryPinHostId)
-              : allEntryRoutes;
+            // 手动切换（它在这些出口里、而且在线时）：出口全部下发、指定的排第一、分法换成主备（tunnelExitPin.ts 的
+            // orderEntryRoutesForPin）—— 指定的那台能用就只走它，连不上目标就当场走下一台，好了切回
+            const entryPin = orderEntryRoutesForPin(allEntryRoutes as Array<{ hostId?: number | null }>, await pinnedExitHostId(tunnel));
+            const entryRoutes = entryPin.routes as typeof allEntryRoutes;
             const entryRoute = entryRoutes[0] || { host: "", port: 0, key: "" };
             if (!entryRoute.host || entryRoute.port <= 0 || !entryRoute.key) {
               appendPanelLog("error", `[TunnelRoute] invalid NEX entry route tunnel=${tunnel.id} rule=${rule.id} nextHost=${entryRoute.host || "-"} nextPort=${entryRoute.port || "-"}`);
@@ -2316,7 +2316,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             const entryHostFxpVersion = (host as { fxpVersion?: string | null }).fxpVersion;
             const tunnelBalance = tunnel as { loadBalanceStrategy?: string | null; balanceDetect?: string | null };
             const entryFxpTargetAware = !entryExitsAreRelays && entryRoutes.length > 1 && fxpSupportsTargetAware(entryHostFxpVersion);
-            const entryExitTargetStatus = entryFxpTargetAware ? await exitTargetStatusForHostIds(entryExitHostIds) : null;
+            // 「只看隧道」（2.3.556）：出口不带 targetStatus —— FXP 只在有出口回报目标结果时才探目标、按目标判出口
+            // （forwardx-fxp newTargetAwareness），这样它只看入口到出口；检测参数（探出口机的节奏、只走最快的一台）照发
+            const entryScopeTunnel = balanceDetectForRuntime(tunnelBalance.balanceDetect)?.scope === "tunnel";
+            const entryExitTargetStatus = entryFxpTargetAware && !entryScopeTunnel ? await exitTargetStatusForHostIds(entryExitHostIds) : null;
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,
@@ -2328,7 +2331,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               exitHost: entryRoute.host,
               exitPort: entryRoute.port,
               ...(multipathLegs.length >= 2 ? { multipathEnabled: true, multipathLegs, ...(runtimeBool((tunnel as any).multipathReplicate) ? { multipathReplicate: true } : {}) } : {}),
-              exitStrategy: tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || [])
+              exitStrategy: tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || []) || entryPin.pinned
                 ? "fallback"
                 : forwardXExitStrategy(tunnelBalance.loadBalanceStrategy, fxpSupportsTargetAware(entryHostFxpVersion)),
               ...(entryFxpTargetAware ? { balanceDetect: balanceDetectForRuntime(tunnelBalance.balanceDetect) } : {}),
