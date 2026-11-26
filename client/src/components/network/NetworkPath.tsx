@@ -45,36 +45,7 @@ export type NetworkNodeSpec = {
   activateLabel?: string;
   /** 跟在名字后面、不会被省略号吃掉的一小段（「负载均衡 ×3」的「×3」：名字可以缩，台数要一直看得见） */
   nameSuffix?: string;
-  /**
-   * 名字底下一排小标签（负载均衡出口：每台出口一个「● 名字 7 ms」，2.3.557）。放得下就一行，放不下自动折行，
-   * 不再像以前那样把一串名字挤在一行里截断。
-   */
-  chips?: NetworkNodeChip[];
 };
-
-export type NetworkNodeChip = {
-  key: string;
-  label: string;
-  /** 跟在名字后面的数（「7 ms」「离线」）；不传就只写名字 */
-  value?: string;
-  health: NetworkHealth;
-  /** 悬停时的完整一句（这台现在怎样、为什么） */
-  title?: string;
-};
-
-function NodeChips({ chips }: { chips: NetworkNodeChip[] }) {
-  return (
-    <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5" data-node-chips="">
-      {chips.map((chip) => (
-        <span key={chip.key} className="inline-flex min-w-0 items-center gap-1 text-meta" title={chip.title} data-chip-health={chip.health}>
-          <StatusDot health={chip.health} />
-          <span className="truncate text-muted-foreground">{chip.label}</span>
-          {chip.value ? <span className={cn("shrink-0 tabular-nums", chip.health === "down" ? "text-destructive" : "text-foreground")}>{chip.value}</span> : null}
-        </span>
-      ))}
-    </span>
-  );
-}
 
 export type NetworkEdgeSpec = {
   /** 这一段经过谁：NEX、GOST、中继名。写在线的旁边 */
@@ -90,15 +61,11 @@ export type NetworkEdgeSpec = {
 function NetworkNode({
   node,
   className,
-  hideChips = false,
 }: {
   node: NetworkNodeSpec;
   orientation: "horizontal" | "vertical";
   className?: string;
-  /** 横排时小标签不放在节点里（会把别的节点挤没），由 NetworkPath 在整条路径底下另起一行 */
-  hideChips?: boolean;
 }) {
-  const chips = !hideChips && node.chips && node.chips.length > 0 ? node.chips : null;
   const health = node.health || "unknown";
   /*
     横竖两种排法里点都在名字那一行的左边（名字 22px 行高，圆心在 11px，点 8px，所以 pt 7px）。
@@ -126,10 +93,9 @@ function NetworkNode({
             {node.nameSuffix ? <span className="shrink-0 text-primary-type font-medium text-foreground">{node.nameSuffix}</span> : null}
             {node.badge}
           </span>
-          {node.sublabel && !(node.chips && node.chips.length > 0) ? (
+          {node.sublabel ? (
             <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
           ) : null}
-          {chips ? <NodeChips chips={chips} /> : null}
         </button>
       ) : (
         <span className="flex min-w-0 flex-col">
@@ -137,10 +103,9 @@ function NetworkNode({
             <span className="truncate text-primary-type font-medium text-foreground">{node.name}</span>
             {node.badge}
           </span>
-          {node.sublabel && !(node.chips && node.chips.length > 0) ? (
+          {node.sublabel ? (
             <span className="truncate text-meta text-muted-foreground">{node.sublabel}</span>
           ) : null}
-          {chips ? <NodeChips chips={chips} /> : null}
         </span>
       )}
     </div>
@@ -273,26 +238,17 @@ export function NetworkPath({
       能点的节点（「负载均衡 ×2」）不缩 —— 缩成「负.」就看不出是什么、也不像能点了，让主机名先缩。
     */
     const tight = nodes.length >= 3;
-    // 负载均衡每台出口的小标签：整条路径底下另起一行，占满宽度、放不下就折行（放在节点里会把入口挤没）
-    const chips = nodes.flatMap((node) => node.chips || []);
-    const row = (
-      <div className={cn("flex min-w-0 flex-row items-start", tight ? "gap-2" : "gap-3", chips.length === 0 && className)}>
+    return (
+      <div className={cn("flex min-w-0 flex-row items-start", tight ? "gap-2" : "gap-3", className)}>
         {nodes.map((node, index) => {
           const edge = index < nodes.length - 1 ? (edges[index] || {}) : null;
           return (
             <Fragment key={node.id}>
-              <NetworkNode node={node} orientation="horizontal" hideChips className={node.onActivate ? "shrink-0" : "min-w-0 shrink"} />
+              <NetworkNode node={node} orientation="horizontal" className={node.onActivate ? "shrink-0" : "min-w-0 shrink"} />
               {edge ? <NetworkEdge edge={edge} orientation="horizontal" className={cn("mt-[10px]", tight && "min-w-8")} /> : null}
             </Fragment>
           );
         })}
-      </div>
-    );
-    if (chips.length === 0) return row;
-    return (
-      <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-        {row}
-        <div className="flex justify-end pl-4"><NodeChips chips={chips} /></div>
       </div>
     );
   }

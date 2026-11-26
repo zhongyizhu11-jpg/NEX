@@ -1,4 +1,4 @@
-import type { NetworkEdgeSpec, NetworkNodeChip, NetworkNodeSpec } from "@/components/network/NetworkPath";
+import type { NetworkEdgeSpec, NetworkNodeSpec } from "@/components/network/NetworkPath";
 import { getTunnelHopIds, getTunnelExitNames, getTunnelLoadBalanceExitNames, tunnelHopHostName } from "@/lib/tunnelDisplay";
 import type { NetworkHealth } from "@shared/networkHealth";
 
@@ -70,52 +70,7 @@ export type TunnelPathContext = {
    * 不再在底下列一串成员名 —— 那一行在手机上挤不下，点开看更清楚（2026-11 用户要求）。
    */
   onLoadBalanceClick?: () => void;
-  /**
-   * 负载均衡每台出口现在怎样（链路列表 exitChips，server/tunnelExitChips.ts）。给了就在「负载均衡」底下每台一个小标签
-   * 「● 名字 7 ms」，线上不再标那一个数（那是到主出口的，多台出口时说明不了什么）。
-   */
-  exitChips?: ReadonlyArray<TunnelExitChipInput> | null;
 };
-
-export type TunnelExitChipInput = {
-  hostId: number;
-  ms: number | null;
-  state: "active" | "ok" | "standby" | "down" | "unknown" | string;
-  reason?: "offline" | "exit" | "target" | string | null;
-  share?: number | null;
-};
-
-const CHIP_HEALTH: Record<string, NetworkHealth> = { active: "healthy", ok: "healthy", standby: "standby", down: "down", unknown: "unknown" };
-
-/** 每台出口一个小标签：状态点 + 名字 + 到出口的 ms（离线 / 连不上写字）。 */
-export function tunnelExitChipsView(tunnel: Parameters<typeof tunnelHopHostName>[0], chips: ReadonlyArray<TunnelExitChipInput>, hosts: Parameters<typeof tunnelHopHostName>[2]): NetworkNodeChip[] {
-  return chips.map((chip) => {
-    const name = String(tunnelHopHostName(tunnel, chip.hostId, hosts) || `主机 ${chip.hostId}`).trim();
-    const ms = typeof chip.ms === "number" && Number.isFinite(chip.ms) ? `${Math.round(chip.ms)} ms` : null;
-    const health = CHIP_HEALTH[chip.state] || "unknown";
-    const share = typeof chip.share === "number" && Number.isFinite(chip.share) && chip.share > 0 ? `，新连接约 ${Math.round(chip.share * 100)}%` : "";
-    let value = ms || undefined;
-    let title: string;
-    if (chip.state === "down") {
-      value = chip.reason === "target" ? "连不上目标" : chip.reason === "offline" ? "离线" : "连不上";
-      title = chip.reason === "target"
-        ? `${name}：附加检查判它连不上目标，入口先不分给它`
-        : chip.reason === "offline"
-          ? `${name}：出口机离线（面板收不到它的 Agent）`
-          : `${name}：入口连不上这台出口，先不分给它`;
-    } else if (chip.state === "active") {
-      title = `${name}：入口在分给它${share}${ms ? `；到出口 ${ms}` : ""}`;
-    } else if (chip.state === "standby") {
-      title = `${name}：能用，入口现在不分给它（备用）${ms ? `；到出口 ${ms}` : ""}`;
-    } else if (chip.state === "ok") {
-      title = `${name}：到出口 ${ms}`;
-    } else {
-      value = "未测到";
-      title = `${name}：入口到这台出口还没测到`;
-    }
-    return { key: `exit-${chip.hostId}`, label: name, value, health, title };
-  });
-}
 
 export type TunnelPath = {
   nodes: NetworkNodeSpec[];
@@ -177,24 +132,20 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
     if (lastHopId > 0 && lastHopId === Number(tunnel?.exitHostId || 0) && nodes.length >= 2) {
       nodes.pop();
     }
-    const chips = context.exitChips && context.exitChips.length > 0 ? tunnelExitChipsView(tunnel, context.exitChips, hosts) : undefined;
     nodes.push(context.onLoadBalanceClick
       ? {
         id: "load-balance-exits",
         name: "负载均衡",
         nameSuffix: `×${allExits.length}`,
         health,
-        chips,
         onActivate: context.onLoadBalanceClick,
         activateLabel: `负载均衡出口，共 ${allExits.length} 台，点开查看`,
       }
       : {
         id: "load-balance-exits",
         name: "负载均衡出口",
-        // 深空的一行按「 / 」数台数，这一项留着
         sublabel: allExits.join(" / "),
         health,
-        chips,
       });
   }
 
@@ -202,7 +153,6 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
     边只在「中间那一段」标注 via 和延迟。每段都标一遍的话，一条三跳的路径上
     会出现三个 8ms —— 看的人会以为那是三段各自的延迟，而实际测的是端到端。
   */
-  const exitChipsShown = nodes.some((node) => node.id === "load-balance-exits" && (node.chips?.length || 0) > 0);
   const middle = nodes.length >= 2 ? Math.max(0, Math.floor((nodes.length - 1) / 2)) : 0;
   // 多级隧道逐跳测的：每一段标自己的（节点正好是一跳一个时才对得上）
   const perHop = Array.isArray(context.hopLatenciesMs)
@@ -226,8 +176,7 @@ export function buildTunnelPath(tunnel: any, context: TunnelPathContext): Tunnel
     return {
       ...base,
       via: context.via || undefined,
-      // 每台出口各标了自己的数：线上那一个（到主出口的）不再标
-      latencyMs: typeof context.latencyMs === "number" && !exitChipsShown ? context.latencyMs : undefined,
+      latencyMs: typeof context.latencyMs === "number" ? context.latencyMs : undefined,
     };
   });
 

@@ -42,7 +42,6 @@ import {
 } from "../../shared/tunnelParallelStreams";
 import { BALANCE_STRATEGIES, normalizeExitGroupStrategy, serializeBalanceDetect } from "../../shared/loadBalance";
 import { exitTargetSummaryForTunnel, tunnelBalancesExits } from "../exitTargetHealth";
-import { tunnelExitChips, type TunnelExitChip } from "../tunnelExitChips";
 import { tunnelExitPinUnsupportedReason } from "../../shared/tunnelExitPin";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import { lossTolerantBlockerMessage, lossTolerantBlockers } from "../../shared/lossTolerantGate";
@@ -829,24 +828,6 @@ const tunnelCreateProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   return next();
 });
 
-/** 负载均衡链路卡上「每台出口一个标签」（server/tunnelExitChips.ts）；只有一台出口的链路不给。 */
-type ChipHost = { id?: unknown; isOnline?: unknown } | null | undefined;
-type ChipExitNode = { hostId?: unknown; seq?: unknown; isEnabled?: unknown; host?: ChipHost };
-function listExitChips(tunnel: { id?: unknown; exitHostId?: unknown; exitHost?: ChipHost; loadBalanceExits?: unknown }): TunnelExitChip[] | undefined {
-  const extras = (Array.isArray(tunnel.loadBalanceExits) ? tunnel.loadBalanceExits : []) as ChipExitNode[];
-  if (extras.length === 0) return undefined;
-  const hosts = [tunnel.exitHost, ...extras.map((node) => node.host)];
-  const offline = new Set<number>(hosts.filter((host) => host && host.isOnline === false).map((host) => Number(host?.id)));
-  const exitHostIds = [
-    Number(tunnel.exitHostId || 0),
-    ...extras
-      .filter((node) => node.isEnabled !== false && node.isEnabled !== 0)
-      .sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0))
-      .map((node) => Number(node.hostId || 0)),
-  ];
-  return tunnelExitChips({ tunnelId: Number(tunnel.id), exitHostIds, offlineHostIds: offline });
-}
-
 export const tunnelsRouter = router({
   /**
    * 负载均衡链路每台出口到规则目标的情况（链路卡「负载均衡 ×N」弹窗用，server/exitTargetHealth.ts）。
@@ -957,7 +938,6 @@ export const tunnelsRouter = router({
         const items = visibleItems.map((tunnel: any) => ({
           ...tunnel,
           trafficSummary: trafficByTunnelId.get(Number(tunnel.id)),
-          exitChips: listExitChips(tunnel),
         }));
         const relatedGroupIds = Array.from(new Set(items.flatMap((tunnel: any) => [
           Number(tunnel.entryGroupId || 0),

@@ -18,7 +18,7 @@ import { describeNetworkHealth } from "@shared/networkHealth";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { StatusDot } from "@/components/network/StatusDot";
 import { MimicHostsStatus } from "@/components/hosts/MimicInstallPanel";
-import { type TunnelExitChipInput, buildTunnelPath, tunnelHopLatenciesFromDetails } from "@/features/links/tunnelPath";
+import { buildTunnelPath, tunnelHopLatenciesFromDetails } from "@/features/links/tunnelPath";
 import { tunnelHealthFromAvailability } from "@/features/links/tunnelHealth";
 import { TunnelFxpIssueNotice } from "@/features/links/TunnelFxpIssueNotice";
 import { TunnelLinkShapingNotice } from "@/features/links/TunnelLinkShapingNotice";
@@ -1513,8 +1513,6 @@ function TunnelsContent() {
       // 链路卡的副标题已经写了模式（「GOST TLS · 直连」），线旁边不再重复一遍，路径就是一行
       via: showVia ? getTunnelModeDisplay(tunnel?.mode, true, tunnel?.forwardxVersion) : undefined,
       onLoadBalanceClick: exitDialog ? () => setExitGroupDialogTunnel(tunnel) : undefined,
-      // 每台出口一个小标签「● 名字 7 ms」（深空那一行只数台数，用不到）
-      exitChips: (tunnel as { exitChips?: TunnelExitChipInput[] | null }).exitChips,
     });
   };
   const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true, showLatency = true, exitDialog = false) => {
