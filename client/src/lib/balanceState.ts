@@ -200,15 +200,15 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
     if (ctx.hostId === ctx.pinHostId) {
       if (!hasData || summary!.down <= 0) return view("pinned");
       const which = downRulesText(summary!, ctx.ruleNames);
-      const what = summary!.reason === "exit" ? "入口连不上这台出口机" : "到目标连不上";
-      const hint = summary!.reason === "exit" ? "检查出口机的防火墙和隧道端口" : "检查这台出口到那条规则目标的网络";
+      const exit = summary!.reason === "exit";
+      const hint = exit ? "检查出口机防火墙和隧道端口" : "检查它到目标的网络";
       return summary!.activeRules > 0
-        ? view("pinned", `${which}${what}，这几条没走指定，暂走别的出口`, hint)
-        : view("down", `指定了这台，但${summary!.rules > 1 ? `${which}都` : ""}${what}，暂按自动走别的出口`, hint);
+        ? view("pinned", `${which}${exit ? "连不上这台" : "到目标不通"}，暂走别的出口`, hint)
+        : view("down", `${exit ? "入口连不上这台" : "到目标不通"}，已暂走别的出口`, hint);
     }
     // 入口实时上报里这台还在扛规则：是替指定的那台不通的规则在走（指定能用时别的出口报的都是备用）
     if (hasData && ctx.live && summary!.activeRules > 0) {
-      return view("active", `${summary!.activeRules} 条规则在走这台：指定的那台对它们暂时不能用`);
+      return view("active", `代指定出口走 ${summary!.activeRules} 条规则`);
     }
     return view("standby", "已指定走别的出口");
   }

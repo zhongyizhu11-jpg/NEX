@@ -125,19 +125,19 @@ test("指定的那台对某条规则连不上：那条照常走别的出口，�
   const pinnedSummary = summary({ rules: 2, activeRules: 1, down: 1, downRuleIds: [11], reason: "target" });
   const pinned = exitRowView(pinnedSummary, { ...base, pinHostId: 3, ruleNames });
   assert.equal(pinned.state, "pinned");
-  assert.equal(pinned.reason, "广港hkt/2到目标连不上，这几条没走指定，暂走别的出口");
+  assert.equal(pinned.reason, "广港hkt/2到目标不通，暂走别的出口");
   assert.match(pinned.hint!, /目标的网络/);
   assert.equal(pinBypassText(pinnedSummary, ruleNames), "广港hkt/2");
   // Jinx(29.9y)（hostId 4）替 hkt/2 在走：是在用，不是备用
   const carrying = exitRowView(summary({ rules: 2, activeRules: 1 }), { ...base, hostId: 4, pinHostId: 3 });
   assert.equal(carrying.state, "active");
-  assert.equal(carrying.reason, "1 条规则在走这台：指定的那台对它们暂时不能用");
+  assert.equal(carrying.reason, "代指定出口走 1 条规则");
   // 面板估的（没有入口上报）不下这个结论
   assert.equal(exitRowView(summary({ activeRules: 1 }), { ...base, hostId: 4, pinHostId: 3, live: false }).state, "standby");
   // 指定的那台对所有规则都连不上：连不上，流量全按自动走
   const allDown = exitRowView(summary({ rules: 2, activeRules: 0, down: 2, downRuleIds: [11, 12], reason: "exit" }), { ...base, pinHostId: 3, ruleNames });
   assert.equal(allDown.state, "down");
-  assert.equal(allDown.reason, "指定了这台，但广港hkt/2、广港Sg/2都入口连不上这台出口机，暂按自动走别的出口");
+  assert.equal(allDown.reason, "入口连不上这台，已暂走别的出口");
   // 都通：照旧「已指定」，没有原因
   assert.equal(exitRowView(summary({ activeRules: 2 }), { ...base, pinHostId: 3 }).reason, null);
   assert.equal(pinBypassText(summary(), ruleNames), null);
