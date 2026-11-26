@@ -411,6 +411,50 @@ IP 限制、或者就是按 IP 区别对待），它永远「探不通」—— 
 */
 const exitCanaryGap = exitConfirmWindow
 
+/*
+试探的代价落在一条真实连接上（2.2.272 起收紧，用户实测 2026-11-26）：高防目标只认一台出口，另一台被判坏；
+那台对这个目标是黑洞时，被拿去试的连接要等约 3 秒（出口拨目标超时）、最坏等满 8 秒保护期才换走。规则平时没什么
+流量时，客户端测速那一条往往就是「隔了 4 秒以后的第一条」—— 测速时不时显示超时，转发却是通的。所以：
+  - 连着试探都没回，间隔翻倍：4 秒、8 秒、16 秒……最长 exitCanaryMaxGap；回了东西、或者这台不再判坏，从 4 秒重来；
+  - 最近 exitCanaryTrafficWindow 里正常挑路的新 TCP 连接不到 exitCanaryMinTraffic 条时不试：零星的一条连接（测速、
+    偶尔打开一下）不替恢复付这 3 秒。有正常流量时照旧几秒内放回；没流量的这段时间，不说话的恢复探测和面板提示照常跑。
+*/
+const (
+	exitCanaryMaxGap          = 5 * time.Minute
+	exitCanaryTrafficWindow   = 30 * time.Second
+	exitCanaryMinTraffic      = 3
+	exitCanaryMaxBackoffShift = 7
+)
+
+// exitCanaryGapFor 第 i 台下一次试探至少隔多久：基础间隔按连着没回的次数翻倍，封顶 exitCanaryMaxGap。调用方持有 p.mu。
+func (p *failoverProxy) exitCanaryGapFor(i int, base time.Duration) time.Duration {
+	shift := 0
+	if i < len(p.exitCanaryMisses) {
+		shift = p.exitCanaryMisses[i]
+	}
+	if shift > exitCanaryMaxBackoffShift {
+		shift = exitCanaryMaxBackoffShift
+	}
+	gap := base << uint(shift)
+	if gap > exitCanaryMaxGap {
+		gap = exitCanaryMaxGap
+	}
+	return gap
+}
+
+// noteCanaryTrafficLocked 一条新 TCP 连接正常挑了路（不是试探）：记进最近的流量。调用方持有 p.mu。
+func (p *failoverProxy) noteCanaryTrafficLocked(now time.Time) {
+	if p.canaryTrafficStart.IsZero() || now.Sub(p.canaryTrafficStart) >= exitCanaryTrafficWindow {
+		p.canaryTrafficStart, p.canaryTrafficPicks = now, 0
+	}
+	p.canaryTrafficPicks++
+}
+
+// exitCanaryTrafficLocked 最近的正常流量够不够拿真实连接去试探。调用方持有 p.mu。
+func (p *failoverProxy) exitCanaryTrafficLocked(now time.Time) bool {
+	return !p.canaryTrafficStart.IsZero() && now.Sub(p.canaryTrafficStart) < exitCanaryTrafficWindow && p.canaryTrafficPicks >= exitCanaryMinTraffic
+}
+
 // exitCanaryIndexLocked 此刻该拿这条新连接试哪台判坏的出口；没有返回 -1。调用方持有 p.mu。
 func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
 	if !p.exitGroupLocked() || p.done == nil || p.retired() {
@@ -424,14 +468,21 @@ func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
 	if interval := time.Duration(p.spec.ProbeIntervalSeconds) * time.Second; interval > gap {
 		gap = interval
 	}
+	traffic := p.exitCanaryTrafficLocked(now)
 	for i := range p.spec.Targets {
-		if !p.exitMachineUp[i] || !p.exitCanaryDueLocked(i) {
+		if !p.exitCanaryDueLocked(i) {
+			p.exitCanaryMisses[i] = 0 // 不再判坏了：下次判坏从基础间隔重来
 			continue
 		}
-		if !p.exitCanaryAt[i].IsZero() && now.Sub(p.exitCanaryAt[i]) < gap {
+		if !traffic || !p.exitMachineUp[i] {
+			continue
+		}
+		if !p.exitCanaryAt[i].IsZero() && now.Sub(p.exitCanaryAt[i]) < p.exitCanaryGapFor(i, gap) {
 			continue
 		}
 		p.exitCanaryAt[i] = now
+		// 先记一次没回：回了东西 exitCanaryRepliedLocked 会清零
+		p.exitCanaryMisses[i]++
 		return i
 	}
 	return -1
@@ -449,6 +500,9 @@ func (p *failoverProxy) exitCanaryDueLocked(i int) bool {
 func (p *failoverProxy) exitCanaryRepliedLocked(index int) {
 	if !p.exitGroupLocked() || index >= len(p.exitThroughFailed) {
 		return
+	}
+	if index < len(p.exitCanaryMisses) {
+		p.exitCanaryMisses[index] = 0
 	}
 	changed := false
 	if p.exitThroughFailed[index] && !p.targetHealth[index] {

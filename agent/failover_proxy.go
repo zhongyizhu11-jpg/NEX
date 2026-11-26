@@ -111,6 +111,11 @@ type failoverProxy struct {
 	// 上一次拿真实连接试探它的时刻。
 	exitMachineUp []bool
 	exitCanaryAt  []time.Time
+	// 连着拿真实连接试探、一次都没回的次数：下一次试探的间隔按它翻倍（exitCanaryGapFor）。回了东西、不再判坏时清零。
+	exitCanaryMisses []int
+	// 最近一段时间里新 TCP 连接正常挑路的条数（不算试探的）：太少时不拿真实连接去试（exitCanaryTrafficLocked）。
+	canaryTrafficStart time.Time
+	canaryTrafficPicks int
 	// 面板标「连不上目标」的出口被真实连接试探放回了：记下当时那份提示的 DownAt，同一份再发来不按下去（failover_hints.go）。
 	relayDownOverride []int64
 	// UDP：前面的 gost 给每个新会话先发一个只有 PROXY v2 头的包（访客地址），数据包随后才来。记着「这个来源的
@@ -596,6 +601,9 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 	}
 	if len(p.exitCanaryAt) != n {
 		p.exitCanaryAt = make([]time.Time, n)
+	}
+	if len(p.exitCanaryMisses) != n {
+		p.exitCanaryMisses = make([]int, n)
 	}
 	if len(p.relayDownOverride) != n {
 		p.relayDownOverride = make([]int64, n)

@@ -80,9 +80,12 @@ func (p *failoverProxy) pickReserved(hashKey string, exclude map[int]bool, udp b
 	// 出口组：经出口判坏过的出口到点了，这条真实 TCP 连接先试它（failover_exit_group.go 的 exitCanaryIndexLocked）。
 	// 只在新连接的第一次挑（exclude 空）；换路重拨不试。
 	if !udp && len(exclude) == 0 {
-		if canary := p.exitCanaryIndexLocked(time.Now()); canary >= 0 {
+		now := time.Now()
+		if canary := p.exitCanaryIndexLocked(now); canary >= 0 {
 			return p.spec.Targets[canary], canary, p.reserveLocked(canary)
 		}
+		// 正常挑路的新 TCP 连接：算进最近的流量（流量太少时不试探，exitCanaryTrafficLocked）
+		p.noteCanaryTrafficLocked(now)
 	}
 	target, index := p.pickLocked(hashKey, exclude, udp)
 	if index < 0 {
