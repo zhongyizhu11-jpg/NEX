@@ -212,7 +212,9 @@ export function resolveForwardRuleNotRunningReason(
   visual: ForwardRuleVisualStatus,
   portWarnings?: unknown,
 ): ForwardRuleNotRunningReason | null {
-  if (visual.state !== "pending") return null;
+  // 有数据的橙色（负载均衡「有出口连不上、已切走」）：规则在跑，不是「没在运行」—— 2.3.555 起这种橙色照实显示，
+  // 以前被这里当成「等待 Agent 应用」、画成灰点（用户面板：hkt/2、hkt/3 在跑、8 ms，卡片却写等待 Agent 应用）
+  if (visual.state !== "pending" || visual.confirmed) return null;
   const errors = (Array.isArray(portWarnings) ? portWarnings as RuleWarningLike[] : [])
     .filter((item) => item && item.level === "error" && String(item.label || "").trim());
   if (errors.length > 0) {

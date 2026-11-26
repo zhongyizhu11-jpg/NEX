@@ -843,6 +843,7 @@ function deriveRuleView({
   page,
   visualState,
   visualTitle,
+  visualConfirmed,
   failover,
   totalIn,
   totalOut,
@@ -854,11 +855,12 @@ function deriveRuleView({
   linesOpen,
 }: RuleCardProps) {
   const { ui, compact, compactLayout } = page;
-  const visual = { state: visualState, title: visualTitle };
+  const visual = { state: visualState, title: visualTitle, confirmed: visualConfirmed };
   const supported = ui.isRuleSupported(rule);
   const protocolKey = ui.getRuleProtocolKey(rule);
   const category = getRuleCategory(rule, page.forwardGroupById) as RuleGroupType;
-  const health = !supported || rule.resourceAccessAllowed === false ? "down" : ruleVisualStateToHealth(visual.state);
+  // 「有出口连不上、已切走」（confirmed 的橙色）：规则在跑，只是有出口有问题 —— 橙点，不是灰点（2.3.556）
+  const health = !supported || rule.resourceAccessAllowed === false ? "down" : visual.confirmed ? "degraded" : ruleVisualStateToHealth(visual.state);
   const healthToken = describeNetworkHealth(health).token;
   const tone: RuleCardTone = healthToken === "down"
     ? "down"

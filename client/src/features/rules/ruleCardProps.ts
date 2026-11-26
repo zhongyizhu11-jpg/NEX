@@ -99,6 +99,8 @@ export function describeRuleLatency(probe: ProbeEntry | null | undefined, ms: nu
 export type RuleCardDerivedProps = {
   visualState: ForwardRuleVisualStatus["state"];
   visualTitle: string;
+  /** 橙色是实际数据下的结论（负载均衡「有出口连不上、已切走」），不是「还在等」：橙点、不写「等待 Agent 应用」 */
+  visualConfirmed?: boolean;
   /** 线路组那枚（没有线路组是 null）。policy 只在线路行展开时给：收着的时候用不上，给了反而每轮都是新对象。 */
   failover: { text: string; title: string; tone: string; policy: FailoverLineDisplay["policy"] | null } | null;
   totalIn: number;
@@ -156,6 +158,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
   return {
     visualState: visual.state,
     visualTitle: visual.title,
+    visualConfirmed: !!visual.confirmed,
     failover: failoverDisplay ? {
       text: failoverDisplay.text,
       title: failoverDisplay.title,
