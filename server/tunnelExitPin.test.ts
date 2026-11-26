@@ -130,3 +130,17 @@ test("手动指定出口：掉线 / 回来催入口，出口没了清指定，�
     assert.equal(await pinOf(9), 0, "出口组里停用了指定的那台：链路上的指定清掉");
   `, { name: "exit-pin", timeoutMs: 180_000 });
 });
+
+test("NEX 隧道手动指定：出口全部下发、指定的排第一（入口按主备挑），不再只留一台", async () => {
+  const { orderEntryRoutesForPin } = await import("./tunnelExitPin");
+  const routes = [{ hostId: 7, host: "a" }, { hostId: 12, host: "b" }, { hostId: 2, host: "c" }];
+  const pinned = orderEntryRoutesForPin(routes, 2);
+  assert.equal(pinned.pinned, true);
+  assert.deepEqual(pinned.routes.map((route) => route.hostId), [2, 7, 12], "指定的排第一，别的照原顺序留着当后备");
+  // 指定的不在这些出口里 / 没指定 / 只有一台：原样
+  assert.deepEqual(orderEntryRoutesForPin(routes, 99), { routes, pinned: false });
+  assert.deepEqual(orderEntryRoutesForPin(routes, 0), { routes, pinned: false });
+  assert.deepEqual(orderEntryRoutesForPin([routes[0]], 7), { routes: [routes[0]], pinned: false });
+  // 指定的就是第一台：顺序不变，但照样算指定（分法换主备）
+  assert.deepEqual(orderEntryRoutesForPin(routes, 7), { routes, pinned: true });
+});
