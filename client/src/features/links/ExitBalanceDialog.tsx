@@ -127,7 +127,7 @@ export function ExitBalanceDialog({
     ? `${ruleCount} 条规则各走自己最快的一台，用到 ${inUse} 台`
     : `${inUse} 台在用`;
   // 指定的那台对哪几条规则不通（那几条照常按分法走别的出口，agent/failover_pick.go）
-  const pinBypass = pinOnline ? pinBypassText(byHost.get(pinHostId), summary?.ruleNames) : null;
+  const pinBypass = pinOnline ? pinBypassText(byHost.get(pinHostId), summary?.ruleNames, !!summary?.live) : null;
   const targetDown = (summary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
   const targetUnstable = (summary?.targetIssues || []).length - targetDown;
 
@@ -144,7 +144,7 @@ export function ExitBalanceDialog({
     : nginxNote
       ? { tone: "info", text: nginxNote.replace(/^基础支持：/, "") }
       : pinActive
-        ? { tone: pinOnline && !pinBypass ? "info" : "warn", text: !pinOnline ? `指定的 ${nameOf(pinHostId)} 离线，暂按${BALANCE_STRATEGY_LABELS[strategy].label}分` : pinBypass ? `已指定 ${nameOf(pinHostId)}（${pinBypass}不通，暂走别的）` : `已指定走 ${nameOf(pinHostId)}，其余备用` }
+        ? { tone: pinOnline && !pinBypass ? "info" : "warn", text: !pinOnline ? `指定的 ${nameOf(pinHostId)} 离线，暂按${BALANCE_STRATEGY_LABELS[strategy].label}分` : pinBypass ? `已指定 ${nameOf(pinHostId)}（${pinBypass}，暂走别的）` : `已指定走 ${nameOf(pinHostId)}，其余备用` }
         : targetDown + targetUnstable > 0
           ? { tone: "warn", text: `${targetDown > 0 ? `${targetDown} 条规则的目标从每台出口都连不上` : `${targetUnstable} 条规则的目标从每台出口都不稳`}：问题在目标那边，换出口没用` }
           : null;

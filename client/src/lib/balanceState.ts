@@ -166,10 +166,15 @@ function downRulesText(summary: ExitSummaryLike, ruleNames?: Record<number, stri
   return names.length > 0 && names.length === summary.down ? names.join("、") : `${summary.down} 条规则`;
 }
 
-/** 指定的出口对哪几条规则没生效（它对这几条连不上，这几条照常按分法走）；都生效或没指定是 null。 */
-export function pinBypassText(summary: ExitSummaryLike | null | undefined, ruleNames?: Record<number, string>): string | null {
-  if (!summary || summary.rules <= 0 || summary.down <= 0) return null;
-  return downRulesText(summary, ruleNames);
+/**
+ * 指定的出口对哪些规则没生效、为什么：连不上的写规则名 +「不通」，来回断还在观察的写「刚恢复，在观察」；
+ * 都生效或没数据是 null。live：入口实时上报的（估的数据不下「在观察」的结论）。
+ */
+export function pinBypassText(summary: ExitSummaryLike | null | undefined, ruleNames?: Record<number, string>, live = true): string | null {
+  if (!summary || summary.rules <= 0) return null;
+  if (summary.down > 0) return `${downRulesText(summary, ruleNames)}不通`;
+  const observing = live ? summary.rules - summary.activeRules - summary.down : 0;
+  return observing > 0 ? "刚恢复，在观察" : null;
 }
 
 /** 一台出口此刻的状态、原因、该做什么。 */
@@ -198,6 +203,9 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
       弹窗却写「1 台在用、其余备用」，规则卡上又写「经 Jinx(29.9y)」，两边对不上。
     */
     if (ctx.hostId === ctx.pinHostId) {
+      // 没断、入口却没让它扛的规则：来回断、刚放回还在观察（agent/failover_exit_flap.go）
+      const observing = hasData && ctx.live ? summary!.rules - summary!.activeRules - summary!.down : 0;
+      if (hasData && summary!.down <= 0 && observing > 0) return view("pinned", "来回断，先观察几分钟再走它");
       if (!hasData || summary!.down <= 0) return view("pinned");
       const which = downRulesText(summary!, ctx.ruleNames);
       const exit = summary!.reason === "exit";

@@ -1,6 +1,10 @@
 package main
 
-import "github.com/zhongyizhu11-jpg/NEX/lbcore"
+import (
+	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/lbcore"
+)
 
 // 选路第 1 段：候选（见 failover_pick.go）。
 
@@ -13,11 +17,25 @@ pickCandidatesLocked：先只要能用的；一条都没有时退回「不健康
 全都被排除时返回空：TCP 连接直接关，UDP 包丢掉。
 */
 func (p *failoverProxy) pickCandidatesLocked(exclude map[int]bool, udp bool) []int {
+	// 出口组里来回断、刚放回还在观察的出口：还有别的能用的就先不分给它；都不能用了才算上它（failover_exit_flap.go）
+	if probation := p.exitProbationSetLocked(time.Now()); probation != nil {
+		if candidates := p.pickCandidatesSkippingLocked(exclude, udp, probation); candidates != nil {
+			return candidates
+		}
+	}
+	return p.pickCandidatesSkippingLocked(exclude, udp, nil)
+}
+
+// pickCandidatesSkippingLocked：skip 里的当作不能用。skip 非空、而且这样一条能用的都没有时返回 nil（调用方再不带 skip 算一次）。
+func (p *failoverProxy) pickCandidatesSkippingLocked(exclude map[int]bool, udp bool, skip []bool) []int {
 	health := make([]lbcore.Health, len(p.spec.Targets))
 	for i := range p.spec.Targets {
-		health[i] = lbcore.Health{Excluded: p.adminExcludedLocked(i), Dead: !p.usableLocked(i, udp)}
+		health[i] = lbcore.Health{Excluded: p.adminExcludedLocked(i), Dead: !p.usableLocked(i, udp) || (skip != nil && skip[i])}
 	}
 	candidates, level := lbcore.Candidates(nil, health, exclude, lbcore.EjectPolicy{})
+	if skip != nil && level != lbcore.LevelNormal {
+		return nil
+	}
 	if level == lbcore.LevelNormal {
 		return p.bestTierLocked(candidates)
 	}

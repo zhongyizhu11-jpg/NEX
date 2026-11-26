@@ -127,7 +127,7 @@ test("指定的那台对某条规则连不上：那条照常走别的出口，�
   assert.equal(pinned.state, "pinned");
   assert.equal(pinned.reason, "广港hkt/2到目标不通，暂走别的出口");
   assert.match(pinned.hint!, /目标的网络/);
-  assert.equal(pinBypassText(pinnedSummary, ruleNames), "广港hkt/2");
+  assert.equal(pinBypassText(pinnedSummary, ruleNames), "广港hkt/2不通");
   // Jinx(29.9y)（hostId 4）替 hkt/2 在走：是在用，不是备用
   const carrying = exitRowView(summary({ rules: 2, activeRules: 1 }), { ...base, hostId: 4, pinHostId: 3 });
   assert.equal(carrying.state, "active");
@@ -142,4 +142,15 @@ test("指定的那台对某条规则连不上：那条照常走别的出口，�
   assert.equal(exitRowView(summary({ activeRules: 2 }), { ...base, pinHostId: 3 }).reason, null);
   assert.equal(pinBypassText(summary(), ruleNames), null);
   assert.equal(pinBypassText(null), null);
+});
+
+test("指定的那台来回断、刚放回在观察：入口没让它扛，不是连不上（agent failover_exit_flap.go）", () => {
+  const observing = summary({ rules: 1, activeRules: 0, down: 0 });
+  const view = exitRowView(observing, { ...base, pinHostId: 3 });
+  assert.equal(view.state, "pinned");
+  assert.equal(view.reason, "来回断，先观察几分钟再走它");
+  assert.equal(pinBypassText(observing), "刚恢复，在观察");
+  // 面板估的数据不下这个结论
+  assert.equal(pinBypassText(observing, undefined, false), null);
+  assert.equal(exitRowView(observing, { ...base, pinHostId: 3, live: false }).reason, null);
 });

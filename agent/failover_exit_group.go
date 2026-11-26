@@ -461,7 +461,7 @@ func (p *failoverProxy) exitCanaryIndexLocked(now time.Time) int {
 		return -1
 	}
 	p.ensureHealthStateLocked()
-	if pinned := p.pinnedIndexAt(now); pinned >= 0 && p.usableLocked(pinned, false) {
+	if pinned := p.pinnedIndexAt(now); pinned >= 0 && p.usableLocked(pinned, false) && !p.exitProbationLocked(pinned, now) {
 		return -1
 	}
 	gap := exitCanaryGap
@@ -518,6 +518,9 @@ func (p *failoverProxy) exitCanaryRepliedLocked(index int) {
 		logf("failover target relay recovered rule=%d source=%d index=%d target=%s reason=a real connection got a reply through the exit (panel hint overridden)", p.ruleID, p.sourcePort, index, failoverTargetLabel(p.spec.Targets[index]))
 		p.recordTargetEventLocked(index, "recovered", "a real connection got a reply through the exit")
 		changed = true
+		if p.healthyLocked(index) {
+			p.noteExitRecoveredLocked(index, time.Now())
+		}
 	}
 	if changed {
 		p.updateFallbackActiveLocked("canary reply")
@@ -652,8 +655,10 @@ func (p *failoverProxy) exitPinPickLocked(candidates []int, udp bool) int {
 	if !p.exitGroupLocked() {
 		return -1
 	}
-	pinned := p.pinnedIndexAt(time.Now())
-	if pinned < 0 || !p.usableLocked(pinned, udp) {
+	now := time.Now()
+	pinned := p.pinnedIndexAt(now)
+	// 来回断、刚放回还在观察的不吃指定（failover_exit_flap.go）：照常按分法走别的
+	if pinned < 0 || !p.usableLocked(pinned, udp) || p.exitProbationLocked(pinned, now) {
 		return -1
 	}
 	for _, candidate := range candidates {

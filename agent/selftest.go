@@ -182,7 +182,13 @@ func handleSelfTest(cfg Config, t selfTest) {
 	minimumAttempts := selfTestTCPAttempts(t)
 	readinessWindow := selfTestTCPReadinessWindow(t)
 	startedAt := time.Now()
-	for attempt := 0; ; attempt++ {
+	if readinessWindow <= 0 && minimumAttempts > 1 && t.WireGuardPeerID == "" {
+		// 不依赖本机运行时的（出口直接探目标）：几次尝试错开并行，谁先通算谁（selfTestHedgedProbe）
+		latency, reachable, resolvedTarget = selfTestHedgedProbe(minimumAttempts, selfTestHedgeStagger, func() (int, bool, string) {
+			return tcpLatencyResolved(t.TargetIP, t.TargetPort, selfTestTCPAttemptTimeout)
+		})
+	}
+	for attempt := 0; !reachable && (readinessWindow > 0 || minimumAttempts <= 1 || t.WireGuardPeerID != ""); attempt++ {
 		if attempt > 0 {
 			delay := selfTestRetryDelay(attempt)
 			if readinessWindow > 0 {
@@ -255,12 +261,19 @@ func selfTestTCPAttempts(t selfTest) int {
 	}
 }
 
+/*
+selfTestDependsOnRuntime：这次探测要不要等本机运行时就绪（等的时候在窗口里反复试）。
+
+forward-via-tunnel 是出口机直接连目标（server/agentSelfTestRoutes.ts 里那一段「出口 -> 目标」），不经过本机的隧道
+运行时，2.2.272 起不再等：以前目标不通时要在 5–20 秒的窗口里反复试满才报，诊断一直显示「诊断中」（用户 2026-11-26：
+高防目标对一台出口时通时断）。现在 4 次尝试错开 250 毫秒并行，通了马上报，都不通约 2.3 秒报。走 WireGuard 的还是要等。
+*/
 func selfTestDependsOnRuntime(t selfTest) bool {
 	if strings.TrimSpace(t.WireGuardPeerID) != "" {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(t.Kind)) {
-	case "tunnel", "tunnel-hop", "forward-via-tunnel", "forward-via-tunnel-entry", "forward-chain":
+	case "tunnel", "tunnel-hop", "forward-via-tunnel-entry", "forward-chain":
 		return true
 	default:
 		return false
@@ -275,6 +288,53 @@ func selfTestTCPReadinessWindow(t selfTest) time.Duration {
 		return selfTestRuntimeReadinessWindow
 	}
 	return 0
+}
+
+// 并行尝试之间错开多久：一次丢包的 SYN 不至于让整次诊断失败，又不用排队等前一次超时。
+const selfTestHedgeStagger = 250 * time.Millisecond
+
+/*
+selfTestHedgedProbe 把 attempts 次尝试错开 stagger 并行发出，第一个通的就是结果（延迟按它自己的算）；都不通时等最后
+一个结束（约 (attempts-1)×stagger + 单次超时）。通了以后还在路上的尝试照常跑完、结果扔掉。
+*/
+func selfTestHedgedProbe(attempts int, stagger time.Duration, probe func() (int, bool, string)) (int, bool, string) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	type result struct {
+		latency  int
+		ok       bool
+		resolved string
+	}
+	results := make(chan result, attempts)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for i := 0; i < attempts; i++ {
+			if i > 0 {
+				select {
+				case <-time.After(stagger):
+				case <-stop:
+					return
+				}
+			}
+			go func() {
+				latency, ok, resolved := probe()
+				results <- result{latency, ok, resolved}
+			}()
+		}
+	}()
+	last := result{}
+	for i := 0; i < attempts; i++ {
+		r := <-results
+		if r.ok {
+			return r.latency, true, r.resolved
+		}
+		if r.resolved != "" {
+			last.resolved = r.resolved
+		}
+	}
+	return 0, false, last.resolved
 }
 
 func selfTestRetryDelay(attempt int) time.Duration {
