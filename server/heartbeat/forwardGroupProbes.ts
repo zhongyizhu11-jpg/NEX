@@ -5,7 +5,7 @@ import { normalizeForwardGroupHealthCheckMethod } from "../../shared/forwardGrou
 import type { TunnelEgressHelper } from "../agentHeartbeatContext";
 import { runtimeBool } from "../agentHeartbeatRuntime";
 import * as db from "../db";
-import { exitTargetProbeSpec, tunnelBalanceDetect, tunnelBalancesExits } from "../exitTargetHealth";
+import { exitTargetProbeSpec, ruleRecordingExitHostId, tunnelBalanceDetect, tunnelBalancesExits } from "../exitTargetHealth";
 import { isRuleProtocolEnabled, isTunnelProtocolEnabled } from "../forwardProtocolSettings";
 import { forwardGroupProbeTopologyKey } from "../probeTopology";
 import { buildRouteHopFastProbes, type RouteHopProbeSpec } from "../routeGroups";
@@ -119,14 +119,20 @@ export async function buildForwardGroupProbes(ctx: BuildForwardGroupProbesContex
     .map((rule: any) => {
       // 接了 Shadowsocks 出口：出口机拨的是本机的 SS 客户端，测它没有意义 —— 测出口机到 SS 落地这一段。
       const egressHelper = tunnelEgressHelpers.get(Number(rule.id));
-      // 负载均衡链路：每台出口都探（2.3.544，规则卡 / 诊断 / 弹窗要的是在用那台「出口到目标」的 TCPing）
+      // 负载均衡链路：每台出口都探（2.3.544，规则卡 / 诊断 / 弹窗要的是在用那台「出口到目标」的 TCPing）——
+      // 只在打开了「附加：检查出口到目标」时（2.3.557）。关着（默认）只由此刻在用的那台出口探，一分钟一次，
+      // 和以前主出口那一条一样多，不再每台出口都去碰目标（高防会拉黑连得勤的出口 IP）。
       const probeTunnel = tunnelById.get(Number(rule.tunnelId || 0));
+      const allProbeExits = tunnelRuleProbeExitHostIds(probeTunnel, tunnelExitNodesByTunnelId.get(Number(rule.tunnelId || 0)) || []);
+      const probeExits = allProbeExits.length > 1 && tunnelBalanceDetect(probeTunnel).scope !== "chain"
+        ? [ruleRecordingExitHostId(Number(rule.id), Number(probeTunnel?.id || 0), Number(probeTunnel?.exitHostId || 0))].filter((id) => allProbeExits.includes(id))
+        : allProbeExits;
       const probe = buildTunnelRuleLatencyProbe({
         hostId: host.id,
         rule: egressHelper ? { ...rule, targetPort: egressHelper.runtime.port } : rule,
         tunnel: probeTunnel,
         targetIp: egressHelper ? egressHelper.runtime.server : processTarget(rule),
-        exitHostIds: tunnelRuleProbeExitHostIds(probeTunnel, tunnelExitNodesByTunnelId.get(Number(rule.tunnelId || 0)) || []),
+        exitHostIds: probeExits.length > 0 ? probeExits : allProbeExits.slice(0, 1),
       });
       return probe ? {
         ...probe,

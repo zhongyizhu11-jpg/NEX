@@ -43,6 +43,8 @@ export function startBackgroundServices() {
   if (isDevPanelMode()) {
     backgroundServicesStarted = true;
     console.info("[DevPanel] Background scheduler and Telegram bot are disabled in local development panel mode");
+    // 没有真 Agent：给负载均衡链路编每台出口的延迟和入口上报，链路卡、出口弹窗才看得出样子
+    void import("./devPanelLiveBalance").then((m) => m.startDevPanelLiveBalance());
     return true;
   }
   backgroundServicesStarted = true;

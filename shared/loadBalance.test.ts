@@ -90,7 +90,10 @@ test("默认参数：每 10 秒探一次、2 次不通算坏，约 25 秒内切�
 
 test("实际效果那句话跟着设置变", () => {
   const text = describeBalanceEffect({ strategy: "weighted", detect: DEFAULT_BALANCE_DETECT, weights: [5, 3, 2], memberNames: ["A", "B", "C"] });
-  assert.match(text, /每 10 秒探一次出口机、每 10 秒探一次目标，坏了约 25 秒内切走/);
+  // 2.3.557 起默认只看出口组：不碰目标
+  assert.match(text, /每 10 秒探一次出口机，出口机连不上约 25 秒内切走；不碰目标/);
+  const withTarget = describeBalanceEffect({ strategy: "weighted", detect: { ...DEFAULT_BALANCE_DETECT, scope: "chain" } });
+  assert.match(withTarget, /附加：每 10 秒查一次出口到目标，连不上目标的出口先不分/);
   assert.match(describeBalanceEffect({ strategy: "auto", detect: DEFAULT_BALANCE_DETECT, dns: true }), /^每 10 秒探一次，坏了约 25 秒内改解析/);
   assert.match(text, /新连接按 5 : 3 : 2 分给 A、B、C/);
   assert.match(text, /抖动超过 30ms 持续 30 秒，就把它降到 4 分之 1/);
@@ -148,16 +151,19 @@ test("只走最快的一台：分配方式那一句、实际效果那一句都�
   assert.doesNotMatch(describeBalanceEffect({ strategy: "auto", detect: on }), /只走最快的一台/);
 });
 
-test("负载均衡看哪一段：默认整链；老数据没有这一项是整链；不算灵敏度，换档留着", async () => {
-  const { normalizeBalanceDetect, serializeBalanceDetect, balanceSensitivityOf, applyBalanceSensitivity, describeBalanceEffect, DEFAULT_BALANCE_DETECT: defaults } = await import("./loadBalance");
-  assert.equal(defaults.scope, "chain");
-  assert.equal(normalizeBalanceDetect('{"intervalSeconds":60}').scope, "chain");
-  assert.equal(normalizeBalanceDetect({ scope: "tunnel" }).scope, "tunnel");
-  assert.equal(normalizeBalanceDetect({ scope: "bogus" }).scope, "chain");
-  const tunnel = normalizeBalanceDetect({ ...defaults, scope: "tunnel" });
-  assert.equal(balanceSensitivityOf(tunnel), "balanced", "只看隧道不影响「均衡」这一档的判断");
-  assert.equal(applyBalanceSensitivity(tunnel, "stable").scope, "tunnel", "换档留着");
-  assert.notEqual(serializeBalanceDetect(tunnel), null, "和默认不一样，要存");
-  assert.match(describeBalanceEffect({ strategy: "latency", detect: tunnel }), /只看隧道/);
-  assert.doesNotMatch(describeBalanceEffect({ strategy: "latency", detect: tunnel }), /探一次目标/);
+test("负载均衡看哪一段：2.3.557 起默认只看出口组（新建、老数据都是）；附加检查要自己打开；不算灵敏度，换档留着", async () => {
+  const { normalizeBalanceDetect, serializeBalanceDetect, balanceSensitivityOf, applyBalanceSensitivity, describeBalanceEffect, DEFAULT_BALANCE_DETECT: defaults, BALANCE_SENSITIVITY_PRESETS: presets } = await import("./loadBalance");
+  assert.equal(defaults.scope, "tunnel");
+  for (const preset of Object.values(presets)) assert.equal(preset.detect.scope, "tunnel", "三档都是只看出口组");
+  assert.equal(normalizeBalanceDetect('{"intervalSeconds":60}').scope, "tunnel", "老数据没有这一项：关");
+  assert.equal(normalizeBalanceDetect(null).scope, "tunnel");
+  assert.equal(normalizeBalanceDetect({ scope: "chain" }).scope, "chain");
+  assert.equal(normalizeBalanceDetect({ scope: "bogus" }).scope, "tunnel");
+  const chain = normalizeBalanceDetect({ ...defaults, scope: "chain" });
+  assert.equal(balanceSensitivityOf(chain), "balanced", "附加检查不影响「均衡」这一档的判断");
+  assert.equal(applyBalanceSensitivity(chain, "stable").scope, "chain", "换档留着");
+  assert.notEqual(serializeBalanceDetect(chain), null, "打开了附加检查：要存");
+  assert.equal(serializeBalanceDetect(defaults), null);
+  assert.match(describeBalanceEffect({ strategy: "latency", detect: defaults }), /不碰目标/);
+  assert.match(describeBalanceEffect({ strategy: "latency", detect: chain }), /出口到目标/);
 });

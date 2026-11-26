@@ -146,8 +146,8 @@ export type BalanceDetect = {
 export const BALANCE_SCOPES = ["chain", "tunnel"] as const;
 export type BalanceScope = (typeof BALANCE_SCOPES)[number];
 export const BALANCE_SCOPE_LABELS: Record<BalanceScope, { label: string; hint: string }> = {
-  chain: { label: "整链", hint: "入口到出口 + 出口到目标都看：出口连不上目标就切走" },
-  tunnel: { label: "只看隧道", hint: "只看入口到出口；不探目标，某台出口被目标拦了也照样分过去" },
+  chain: { label: "附加检查出口到目标", hint: "出口连不上目标时先不分给它；会让出口去连目标，高防目标可能拉黑连得勤的出口 IP" },
+  tunnel: { label: "只看出口组", hint: "只按入口到各台出口通不通、多快来分；不碰目标" },
 };
 
 export const BALANCE_INTERVAL_CHOICES = [1, 2, 5, 10, 30] as const;
@@ -175,7 +175,8 @@ export const DEFAULT_BALANCE_DETECT: BalanceDetect = {
   jitterAction: "reduce",
   slowStart: true,
   fastestOnly: false,
-  scope: "chain",
+  // 2.3.557 起默认只看出口组（入口到出口）；「出口到目标」是附加检查，要自己打开。老数据没有这一项也是关
+  scope: "tunnel",
 };
 
 /** 「只走最快的一台」：另一台要连着快出门槛多久才换过去（lbcore.DefaultFastestHold）。不给调。 */
@@ -190,7 +191,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   sensitive: {
     label: "灵敏",
     hint: "适合游戏、实时通话",
-    detect: { intervalSeconds: 2, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false, scope: "chain" },
+    detect: { intervalSeconds: 2, targetProbeSeconds: 5, failThreshold: 2, recoverThreshold: 3, latencyMarginMs: 30, jitterMs: 20, jitterHoldSeconds: 15, jitterAction: "reduce", slowStart: true, fastestOnly: false, scope: "tunnel" },
   },
   balanced: {
     label: "均衡",
@@ -200,7 +201,7 @@ export const BALANCE_SENSITIVITY_PRESETS: Record<BalanceSensitivity, { label: st
   stable: {
     label: "稳定",
     hint: "偶尔波动不动，适合下载、长连接",
-    detect: { intervalSeconds: 30, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false, scope: "chain" },
+    detect: { intervalSeconds: 30, targetProbeSeconds: 30, failThreshold: 3, recoverThreshold: 5, latencyMarginMs: 80, jitterMs: 50, jitterHoldSeconds: 60, jitterAction: "reduce", slowStart: true, fastestOnly: false, scope: "tunnel" },
   },
 };
 export const BALANCE_SENSITIVITIES: readonly BalanceSensitivity[] = ["sensitive", "balanced", "stable"];
@@ -241,7 +242,7 @@ export function normalizeBalanceDetect(value: unknown, defaults: BalanceDetect =
     slowStart: typeof input.slowStart === "boolean" ? input.slowStart : defaults.slowStart,
     // 老数据没有这一项：关（defaults 的也是关）
     fastestOnly: typeof input.fastestOnly === "boolean" ? input.fastestOnly : defaults.fastestOnly,
-    // 老数据没有这一项：整链
+    // 老数据没有这一项：用默认（2.3.557 起是只看出口组）
     scope: (BALANCE_SCOPES as readonly string[]).includes(String(input.scope ?? "")) ? input.scope as BalanceScope : defaults.scope,
   };
   const hasTarget = input.targetProbeSeconds !== undefined && input.targetProbeSeconds !== null && input.targetProbeSeconds !== "";
@@ -314,8 +315,8 @@ export function describeBalanceEffect(input: {
   parts.push(input.dns
     ? `每 ${detect.intervalSeconds} 秒探一次，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内改解析`
     : detect.scope === "tunnel"
-      ? `只看隧道：每 ${detect.intervalSeconds} 秒探一次出口机，出口机坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内切走；不探目标，出口被目标拦了不会切`
-      : `每 ${detect.intervalSeconds} 秒探一次出口机、每 ${detect.targetProbeSeconds} 秒探一次目标，坏了约 ${balanceSwitchWithinSeconds(detect)} 秒内切走`);
+      ? `每 ${detect.intervalSeconds} 秒探一次出口机，出口机连不上约 ${balanceSwitchWithinSeconds(detect)} 秒内切走；不碰目标`
+      : `每 ${detect.intervalSeconds} 秒探一次出口机，连不上约 ${balanceSwitchWithinSeconds(detect)} 秒内切走；附加：每 ${detect.targetProbeSeconds} 秒查一次出口到目标，连不上目标的出口先不分`);
   if (strategy === "weighted") {
     const ratio = ratioText(input.weights || []);
     const names = (input.memberNames || []).filter(Boolean);

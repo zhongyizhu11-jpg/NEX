@@ -20,6 +20,13 @@ const exitLegByTunnel = new Map<number, Map<number, Leg>>();
 /** 规则 → 出口机 → 这台出口机到目标的最新探测；primaryHostId 是上报时这条链路的主出口 */
 const targetLegByRule = new Map<number, { tunnelId: number; primaryHostId: number; byHost: Map<number, Leg> }>();
 
+/**
+ * 规则 → 规则自己那条定时探测（数据库里那一条，延迟记录 / 卡片 / 订阅都读它）最新一次是哪台出口测的、通没通（2.3.557）。
+ * 2.3.555 起这一条从此刻在用的那台出口发：卡片要分清「超时是在用的这台自己测的」（流量真的过不去）和「是切换前那台测的」
+ * （刚切走，新的这台还没测到）。
+ */
+const recordedProbeByRule = new Map<number, { hostId: number; isTimeout: boolean; at: number }>();
+
 const MAX_TUNNELS = 20_000;
 const MAX_RULES = 50_000;
 
@@ -83,6 +90,24 @@ export function recordRuleTargetLeg(input: {
   const previous = entry.byHost.get(hostId);
   if (previous && previous.at > at) return;
   entry.byHost.set(hostId, { ms: value, at });
+}
+
+/** 规则自己那条定时探测记了一条（agentReportRoutes，只有在用的那台出口的才记）。 */
+export function noteRuleProbeRecorded(input: { ruleId: unknown; hostId: unknown; isTimeout: boolean; at?: number }) {
+  const ruleId = positive(input.ruleId);
+  const hostId = positive(input.hostId);
+  if (!ruleId || !hostId) return;
+  const at = input.at ?? Date.now();
+  const previous = recordedProbeByRule.get(ruleId);
+  if (previous && previous.at > at) return;
+  if (!previous && recordedProbeByRule.size >= MAX_RULES) recordedProbeByRule.delete(recordedProbeByRule.keys().next().value as number);
+  recordedProbeByRule.set(ruleId, { hostId, isTimeout: !!input.isTimeout, at });
+}
+
+/** 规则自己那条定时探测最新一次（新鲜的）：哪台出口测的、超没超时。 */
+export function ruleRecordedProbe(ruleId: unknown, nowMs = Date.now()): { hostId: number; isTimeout: boolean; at: number } | null {
+  const probe = recordedProbeByRule.get(positive(ruleId));
+  return probe && isLinkProbeFresh(probe.at, nowMs) ? probe : null;
 }
 
 /** 入口到这台出口机（链路定时探测，新鲜的）。 */
@@ -193,7 +218,10 @@ export function forgetTunnelLatencyView(tunnelId: unknown, ruleIds: readonly unk
   if (tid) exitLegByTunnel.delete(tid);
   for (const ruleId of ruleIds) {
     const rid = positive(ruleId);
-    if (rid) targetLegByRule.delete(rid);
+    if (rid) {
+      targetLegByRule.delete(rid);
+      recordedProbeByRule.delete(rid);
+    }
   }
   if (tid) {
     for (const [rid, entry] of targetLegByRule) if (entry.tunnelId === tid) targetLegByRule.delete(rid);
@@ -204,4 +232,5 @@ export function forgetTunnelLatencyView(tunnelId: unknown, ruleIds: readonly unk
 export function resetRuleLatencyViewForTest() {
   exitLegByTunnel.clear();
   targetLegByRule.clear();
+  recordedProbeByRule.clear();
 }

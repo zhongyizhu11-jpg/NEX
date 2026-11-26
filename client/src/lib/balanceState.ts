@@ -97,6 +97,11 @@ export type ExitRowContext = {
   nowMs?: number;
   /** downRuleIds 对应的规则名 */
   ruleNames?: Record<number, string>;
+  /**
+   * 打开了「附加：检查出口到目标」（detect.scope = chain）。关着（2.3.557 起默认）这一行只写到出口、不写到目标，
+   * 「连不上」只可能是入口连不上这台出口机。不传按打开算（老调用方）。
+   */
+  targetCheck?: boolean;
 };
 
 export type ExitRowView = {
@@ -118,7 +123,19 @@ function recoveredAt(events: readonly SwitchEventLike[] | undefined, hostId: num
   return (last.from === "down" || last.from === "unstable") && (last.to === "active" || last.to === "standby") ? last.at : null;
 }
 
-function latencyText(summary: ExitSummaryLike, live = false) {
+/*
+  只看出口组（2.3.557 起默认）：这一行只写入口到这台出口。面板探的优先（链路定时探测的这台出口分支，和隧道诊断一个数）；
+  没有就用入口自己报的（FXP 报的是建隧道握手的时间，标「Agent 自测」）。
+*/
+function exitOnlyLatencyText(summary: ExitSummaryLike) {
+  if (summary.exitMs != null) return summary.exitMsSource === "agent" ? `到出口 ${ms(summary.exitMs)}（Agent 自测）` : `到出口 ${ms(summary.exitMs)}`;
+  // 不查目标时入口报的整链就是到出口那一段
+  if (summary.medianMs != null) return `到出口 ${ms(summary.medianMs)}（Agent 自测）`;
+  return null;
+}
+
+function latencyText(summary: ExitSummaryLike, live = false, targetCheck = true) {
+  if (!targetCheck) return exitOnlyLatencyText(summary);
   const low = summary.minMs ?? null;
   const high = summary.maxMs ?? null;
   /*
@@ -182,7 +199,7 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
   const hasData = !!summary && summary.rules > 0;
   const parts: string[] = [];
   if (hasData) {
-    const latency = latencyText(summary!, ctx.live);
+    const latency = latencyText(summary!, ctx.live, ctx.targetCheck !== false);
     if (latency) parts.push(latency);
     if (summary!.jitterMs != null && summary!.jitterMs >= 1) parts.push(`抖动 ${ms(summary!.jitterMs)}`);
     if (summary!.share != null && summary!.activeRules > 0) parts.push(`分到 ${Math.round(summary!.share * 100)}%`);
