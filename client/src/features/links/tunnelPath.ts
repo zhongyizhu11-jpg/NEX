@@ -88,7 +88,7 @@ export type TunnelExitChipInput = {
 const CHIP_HEALTH: Record<string, NetworkHealth> = { active: "healthy", ok: "healthy", standby: "standby", down: "down", unknown: "unknown" };
 
 /** 每台出口一个小标签：状态点 + 名字 + 到出口的 ms（离线 / 连不上写字）。 */
-export function tunnelExitChipsView(tunnel: any, chips: ReadonlyArray<TunnelExitChipInput>, hosts: any[] | undefined): NetworkNodeChip[] {
+export function tunnelExitChipsView(tunnel: Parameters<typeof tunnelHopHostName>[0], chips: ReadonlyArray<TunnelExitChipInput>, hosts: Parameters<typeof tunnelHopHostName>[2]): NetworkNodeChip[] {
   return chips.map((chip) => {
     const name = String(tunnelHopHostName(tunnel, chip.hostId, hosts) || `主机 ${chip.hostId}`).trim();
     const ms = typeof chip.ms === "number" && Number.isFinite(chip.ms) ? `${Math.round(chip.ms)} ms` : null;
