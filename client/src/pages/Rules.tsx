@@ -3661,7 +3661,8 @@ function RulesContent() {
       // A pending result is commonly the short interval between page mount
       // and the next Agent report. Keep a confirmed previous state until a
       // concrete result arrives; first-time pending rules are still cached.
-      if (current.state === "pending" && lastKnown) return;
+      // 负载均衡「有出口连不上、已切走」的橙色是实际数据下的结论（confirmed），照常写进缓存，不然上一次的红色会一直留着
+      if (current.state === "pending" && !current.confirmed && lastKnown) return;
       if (lastKnown && lastKnown.state === current.state && lastKnown.title === current.title) return;
       snapshots.set(ruleId, { state: current.state, title: current.title });
     });

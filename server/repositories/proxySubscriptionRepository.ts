@@ -1376,9 +1376,17 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
 
   const { activeSuffix } = await getRuleEntryDomainRuntimeSettings();
   const boundRuleIds = rules.filter((rule: any) => Number(rule.proxyNodeId || 0) > 0).map((rule: any) => Number(rule.id));
-  const unreachableRuleIds = await getProxySubHideUnreachable(userId)
+  let unreachableRuleIds = await getProxySubHideUnreachable(userId)
     ? await getUnreachableRuleIds(boundRuleIds)
     : undefined;
+  /*
+    负载均衡的规则：定时端到端探测只从主出口测，主出口被目标拦了就连着超时，可流量在别的出口上照走。还有一台出口连得上就
+    不算不通、不从订阅里藏（2.3.555，exitTargetHealth.ruleHasReachableExit）。动态 import：exitTargetHealth 引了一圈仓库。
+  */
+  if (unreachableRuleIds && unreachableRuleIds.size > 0) {
+    const { ruleHasReachableExit } = await import("../exitTargetHealth");
+    unreachableRuleIds = new Set(Array.from(unreachableRuleIds).filter((ruleId) => ruleHasReachableExit(ruleId) !== true));
+  }
   /**
    * 「按延迟排序」要每条转发最近一次探测的延迟。只在令牌真选了这个排序时查 ——
    * 它走的是流量汇总那条查询，比订阅本身的几条都重。
@@ -1386,7 +1394,10 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
   let latencyByRuleId: Map<number, number | null> | undefined;
   if (options.withLatency && boundRuleIds.length > 0) {
     latencyByRuleId = new Map();
-    const summary = await getTrafficSummaryByRule({ userId, ruleIds: boundRuleIds, includeLatency: true }).catch(() => []);
+    const rawSummary = await getTrafficSummaryByRule({ userId, ruleIds: boundRuleIds, includeLatency: true }).catch(() => []);
+    // 负载均衡的规则换成在用出口的整链（和规则卡同一个数）：主出口被拦时定时探测是超时，排序会把好好的节点排到最后
+    const { withRuleExitTargets } = await import("../exitTargetHealth");
+    const summary = withRuleExitTargets(rawSummary as any[]);
     for (const row of summary as any[]) {
       const ruleId = Number(row.ruleId);
       const latency = row.latestLatencyIsTimeout || row.latestLatencyMs === null || row.latestLatencyMs === undefined ? null : Number(row.latestLatencyMs);

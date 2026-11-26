@@ -286,7 +286,7 @@ test("负载均衡链路：主出口连不上目标、别的出口能通时标�
   const now = Date.now();
   const base = { ruleEnabled: true, ruleRunning: true, groupEnabled: true, groupConfigStatus: "available" as const, latestLatencyMs: null, latestLatencyAt: now - 10_000 };
   const switched = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 2, exitTargetNote: "3 台出口里 jinx(39.9y) 连不上目标，已切走" }, now);
-  assert.deepEqual(switched, { state: "pending", title: "3 台出口里 jinx(39.9y) 连不上目标，已切走" });
+  assert.deepEqual(switched, { state: "pending", title: "3 台出口里 jinx(39.9y) 连不上目标，已切走", confirmed: true });
   // 一台都通不了：照旧红
   assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 0, exitTargetNote: "3 台出口都连不好目标" }, now).state, "error");
   // 主出口通、别的出口抖：橙色写出来
@@ -295,4 +295,37 @@ test("负载均衡链路：主出口连不上目标、别的出口能通时标�
   assert.match(jittery.title, /抖动 63ms/);
   // 不是负载均衡链路：和以前一样
   assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40 }, now).state, "running");
+});
+
+/*
+  用户面板（2026-11-26）：hkt/3 走 hep ix 是通的（诊断 8 ms），另外两台出口被高防拦着 —— 这是「有出口连不上、已切走」的橙色，
+  是实际数据下的结论。以前它被当成「等新的上报」，拿浏览器里存着的上一次红色顶着，刷新也一直红。
+*/
+test("负载均衡「有出口连不上、已切走」的橙色是确定的结论：不拿上一次的红色顶", () => {
+  const now = Date.now();
+  const current = resolveForwardRuleVisualStatus({
+    ruleEnabled: true,
+    ruleRunning: true,
+    groupEnabled: true,
+    groupConfigStatus: "available",
+    latestLatencyMs: 9,
+    latestLatencyIsTimeout: false,
+    latestLatencyAt: now - 2_000,
+    exitTargetOk: 1,
+    exitTargetNote: "3 台出口里 jinx(39.9y) 连不上目标，已切走；Jinx(29.9y) 连不上目标，已切走",
+  }, now);
+  assert.equal(current.state, "pending");
+  assert.equal(current.confirmed, true);
+  const shown = preferLastKnownForwardRuleVisualStatus(current, { state: "error", title: "最近一次端到端探测超时" });
+  assert.deepEqual(shown, current, "显示的是现在的橙色，不是上一次的红色");
+
+  // 主出口的探测超时、别的出口还连得上：同样是确定的橙色
+  const timeout = resolveForwardRuleVisualStatus({
+    ruleEnabled: true, ruleRunning: true, groupEnabled: true, groupConfigStatus: "available",
+    latestLatencyMs: null, latestLatencyIsTimeout: true, latestLatencyAt: now - 2_000,
+    exitTargetOk: 2, exitTargetNote: null,
+  }, now);
+  assert.equal(timeout.state, "pending");
+  assert.equal(timeout.confirmed, true);
+  assert.deepEqual(preferLastKnownForwardRuleVisualStatus(timeout, { state: "error", title: "旧故障" }), timeout);
 });
