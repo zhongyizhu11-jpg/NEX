@@ -38,7 +38,8 @@ applyRememberedMotion();
   不会先画成经典再跳过去。和 bootstrap 里页面包的预取、手机 App 读登录态同时进行，一般不多等。
   网太慢时最多等 BOOT_THEME_WAIT_MS：宁可主题晚一点补上，也不让整页一直停在启动底色上。
 */
-const BOOT_THEME_WAIT_MS = 5_000;
+// 刷新时主题样式和词典一般都在浏览器缓存里，几十毫秒就到；网慢也只等这么久，先画页面，晚到的原地换上（2.3.559 起，原来 5 秒）
+const BOOT_THEME_WAIT_MS = 800;
 // App 里页面不在面板的域名下：主题包的样式要到登录时填的面板地址去取
 setUiThemeAssetBase(mobileAuth.isNative ? mobileAuth.panelOrigin() : "");
 const bootUiThemeStyles = typeof document === "undefined"

@@ -216,3 +216,21 @@ test("saves are throttled to once per 30 s, and hiding the page saves right away
     (globalThis as any).document = previousDocument;
   }
 });
+
+test("刷新先画上一次的配置，延迟 / 测试结果不存（不拿旧状态顶着）", () => {
+  const client = new QueryClient();
+  const at = new Date("2026-11-27T00:00:00Z");
+  client.setQueryData(trpcKey("tunnels.listPage"), {
+    items: [{ id: 9, name: "广港", exitHostId: 2, latestLatencyMs: 7, latestLatencyAt: at, lastTestStatus: "success", lastTestMessage: "{}", lastTestAt: at, createdAt: at }],
+    total: 1,
+  });
+  const storage = memoryStorage();
+  storage.setItem(queryCacheStorageKey(), serializeQueryCache(client));
+  const restored = new QueryClient();
+  restorePersistedQueryCache(restored, { storage });
+  const page = restored.getQueryData(trpcKey("tunnels.listPage")) as { items: Array<Record<string, unknown>> };
+  assert.deepEqual(Object.keys(page.items[0]).sort(), ["createdAt", "exitHostId", "id", "name"]);
+  assert.ok(page.items[0].createdAt instanceof Date, "日期照旧还原成 Date");
+  // 内存里这一份不受影响
+  assert.equal((client.getQueryData(trpcKey("tunnels.listPage")) as { items: Array<{ latestLatencyMs: number }> }).items[0].latestLatencyMs, 7);
+});

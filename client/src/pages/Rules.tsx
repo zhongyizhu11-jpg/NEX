@@ -841,6 +841,7 @@ function deriveRuleView({
   visualPinBypassed,
   failover,
   totalIn,
+  totalPending,
   totalOut,
   dailyIn,
   dailyOut,
@@ -885,7 +886,7 @@ function deriveRuleView({
   ].filter(Boolean);
   const subtitle = subtitleParts.join(" · ");
 
-  const big = splitBytes(totalIn + totalOut);
+  const big = totalPending ? { value: "—", unit: "" } : splitBytes(totalIn + totalOut);
   const dailyBytes = dailyIn + dailyOut;
 
   // 地址行右端那枚小标签：切了线 / 出错 / 停用比延迟要紧，有就换掉延迟。
@@ -4052,6 +4053,7 @@ function RulesContent() {
     hostById,
     routeBoardByRule,
     totalTrafficByRule,
+    totalLoaded: totalTrafficSummary !== undefined || stableTotalTrafficSummaryRows.length > 0,
     dailyTrafficByRule,
     sparkByRule,
     probeByRule,

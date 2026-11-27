@@ -27,12 +27,3 @@ export const configQuery = {
   refetchOnWindowFocus: false,
 } as const;
 
-/**
- * 变化慢的列表（管理员视角的全站表格、分页列表）。
- * 半分钟新鲜期；翻页 / 换筛选时留着上一页的数据，不闪「加载中」。
- */
-export const slowListQuery = {
-  staleTime: 30_000,
-  refetchOnWindowFocus: false,
-  placeholderData: <T>(previous: T | undefined) => previous,
-} as const;

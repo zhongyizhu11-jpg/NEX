@@ -43,10 +43,6 @@ const REFRESH_MIN_INTERVAL_MS = 1_000;
 let defaultStore: SqlAttemptCounterStore | null = null;
 
 /** 测试用：换掉所有计数器共用的库存取（传 null 恢复）。 */
-export function setSharedCounterStoreForTests(store: SqlAttemptCounterStore | null) {
-  defaultStore = store;
-}
-
 function sharedCounterStore() {
   if (!defaultStore) defaultStore = new SqlAttemptCounterStore();
   return defaultStore;

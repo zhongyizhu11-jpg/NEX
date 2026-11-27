@@ -66,9 +66,16 @@ export function ExitBalanceDialog({
     utils.forwardGroups.options.invalidate(),
     utils.forwardGroups.listPage.invalidate(),
   ]);
+  /*
+    点「切到这台 / 交回自动」马上就变（2.3.559，用户：「操作界面反应极速」）：先按点的画，接口回来、链路重新取到之后交还给服务端的；
+    失败退回原样并提示。
+  */
+  const [pinOverride, setPinOverride] = useState<number | null>(null);
   const pinMutation = trpc.tunnels.setExitPin.useMutation({
-    onSuccess: (result) => { toast.success(result.hostId ? "已指定" : "已交回自动"); void refresh(); },
+    onMutate: (input) => { setPinOverride(Number(input.hostId || 0)); },
+    onSuccess: async (result) => { toast.success(result.hostId ? "已指定" : "已交回自动"); await refresh(); },
     onError: (error) => toast.error(error.message),
+    onSettled: () => { setPinOverride(null); },
   });
   // ↑↓ 点了马上换位置（排序要重铺链路，接口要等一会儿）；连点几下时等最后一次回来再交给服务端的顺序
   const [order, setOrder] = useState<number[] | null>(null);
@@ -97,7 +104,7 @@ export function ExitBalanceDialog({
   const mode = String(tunnel.mode || "").toLowerCase();
   // GOST 链路的 fxpIssues 只有一种：入口机 Agent 太旧、负载均衡没生效（server/tunnelBalanceAgent.ts）
   const upgradeIssue = mode !== "forwardx" && !nginxNote ? (tunnel.fxpIssues || [])[0]?.message || null : null;
-  const pinHostId = Number(tunnel.balancePinHostId || 0);
+  const pinHostId = pinOverride ?? Number(tunnel.balancePinHostId || 0);
   const pinActive = pinHostId > 0 && exits.some((exit) => exit.hostId === pinHostId);
   const pinOnline = pinActive && online(pinHostId);
   const pinUnsupported = tunnelExitPinUnsupportedReason(tunnel, getTunnelHopIds(tunnel).length);

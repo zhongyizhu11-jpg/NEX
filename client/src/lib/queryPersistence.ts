@@ -72,6 +72,60 @@ const LIVE_PATHS = new Set([
   "forwardGroups.bandwidthAggregation",
   "setup.migrationStatus",
 ]);
+/*
+  列表里的「状态」字段不存（2.3.559，用户：「网页面板刷新是不能出现空白页和刷新缓存」）：刷新时先画上一次的配置
+  （名字、地址、出口……，不空白），延迟、测试结果这些「现在怎么样」等接口回来再画，不拿几分钟、几天前的顶着。
+  规则卡的状态本来就在 rules.trafficSummary 里（不存，见上面 LIVE_PATHS）；链路卡的延迟和测试结果在列表里，这里去掉。
+*/
+const VOLATILE_STATUS_ROUTERS = new Set(["tunnels", "rules", "forwardGroups"]);
+const VOLATILE_STATUS_FIELDS = new Set([
+  "latestLatencyMs",
+  "latestLatencyIsTimeout",
+  "latestLatencyAt",
+  "latestLatencySeries",
+  "latestLatencySource",
+  "latestProbeFailure",
+  "latestLatencyChain",
+  "exitTargetOk",
+  "exitTargetNote",
+  "liveRate",
+  "lastLatencyMs",
+  "lastTestStatus",
+  "lastTestMessage",
+  "lastTestAt",
+]);
+
+function stripVolatileStatus(path: string, data: unknown): unknown {
+  if (!VOLATILE_STATUS_ROUTERS.has(path.split(".")[0])) return data;
+  // 只拆普通对象和数组；Date / Set / Map 原样留着。没东西要去掉的那一支返回原来的引用（共享引用照旧共享）。
+  const seen = new Map<object, unknown>();
+  const strip = (value: unknown, depth: number): unknown => {
+    if (!value || typeof value !== "object" || depth > 8) return value;
+    if (seen.has(value)) return seen.get(value);
+    let result: unknown = value;
+    if (Array.isArray(value)) {
+      const items = value.map((item) => strip(item, depth + 1));
+      if (items.some((item, index) => item !== value[index])) result = items;
+    } else {
+      const proto = Object.getPrototypeOf(value);
+      if (proto === Object.prototype || proto === null) {
+        let changed = false;
+        const out: Record<string, unknown> = {};
+        for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
+          if (VOLATILE_STATUS_FIELDS.has(key)) { changed = true; continue; }
+          const next = strip(field, depth + 1);
+          if (next !== field) changed = true;
+          out[key] = next;
+        }
+        if (changed) result = out;
+      }
+    }
+    seen.set(value, result);
+    return result;
+  };
+  return strip(data, 0);
+}
+
 // 日志类：不管挂在哪个路由下都不存。
 const LOG_PATH = /(^|\.)(logs?|\w+Logs?)(\.|$)/;
 const SENSITIVE_FIELD = /token|secret|password|passwd|private.?key|api.?key|credential/i;
@@ -234,7 +288,11 @@ export function serializeQueryCache(queryClient: QueryClient, now = Date.now()) 
   const referentialEqualities: Record<string, unknown> = {};
   // 新的优先：超出总量时丢最久没更新的。
   for (const query of [...state.queries].sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt)) {
-    const serialized = superjson.serialize(query) as { json: unknown; meta?: SuperJsonMeta };
+    const path = queryPathOf(query.queryKey as unknown[]);
+    const stored = VOLATILE_STATUS_ROUTERS.has(path.split(".")[0])
+      ? { ...query, state: { ...query.state, data: stripVolatileStatus(path, query.state.data) } }
+      : query;
+    const serialized = superjson.serialize(stored) as { json: unknown; meta?: SuperJsonMeta };
     const meta = serialized.meta;
     // 根上带注解（数组形式）的情况查询对象不会出现；万一出现就不存这一条，不去猜格式。
     if (meta && (Array.isArray(meta.values) || Array.isArray(meta.referentialEqualities))) continue;

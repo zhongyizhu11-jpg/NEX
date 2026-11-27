@@ -48,6 +48,7 @@ function sourcesFor(poll: Poll): RuleCardDerivedSources {
     hostById: new Map([[11, { id: 11 }], [12, { id: 12 }], [13, { id: 13 }], [14, { id: 14 }]]),
     routeBoardByRule: new Map(),
     totalTrafficByRule: total,
+    totalLoaded: true,
     dailyTrafficByRule: daily,
     sparkByRule: spark,
     probeByRule: probes,

@@ -27,7 +27,7 @@ import path from "node:path";
   在 CI 之外被抓到。脚本里的 runtime.getDatabaseKind() 能看出当前跑在哪种库上。
 */
 
-export function testDatabaseKind(): "sqlite" | "postgresql" {
+function testDatabaseKind(): "sqlite" | "postgresql" {
   return String(process.env.FORWARDX_TEST_DB_KIND || "").toLowerCase() === "postgresql" && process.env.FORWARDX_TEST_POSTGRES_URL
     ? "postgresql"
     : "sqlite";
