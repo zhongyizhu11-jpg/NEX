@@ -7,6 +7,11 @@ import { normalizeRuleLimitReason } from "@shared/ruleLimits";
 import { useCallback, useMemo } from "react";
 
 export type UseRuleVisualStatusesContext = {
+  /**
+   * 这一页规则的实时状态（rules.trafficSummary，转发组的还要等转发组）回来了没有。没回来时卡片照样画出来（刷新不卡在骨架上），
+   * 状态点先一律灰着写「正在获取最新状态」—— 不拿列表里上一次的运行状态猜颜色，回来了再按实际的画（2.3.559）。
+   */
+  statusReady: boolean;
   probeByRule: Map<number, any>;
   trafficByRule: any;
   forwardGroupById: Map<number, any>;
@@ -19,14 +24,17 @@ export type UseRuleVisualStatusesContext = {
   filteredRules: Array<any>;
 };
 
+const STATUS_LOADING: ReturnType<typeof resolveForwardRuleVisualStatus> = { state: "pending", title: "正在获取最新状态", loading: true };
+
 export type UseRuleVisualStatusesResult = {
   ruleVisualStatuses: Map<number, ReturnType<typeof resolveForwardRuleVisualStatus>>;
   resolveRuleVisualStatus: (rule: any) => ReturnType<typeof resolveForwardRuleVisualStatus>;
 };
 
 export function useRuleVisualStatuses(ctx: UseRuleVisualStatusesContext): UseRuleVisualStatusesResult {
-  const { probeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules } = ctx;
+  const { statusReady, probeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules } = ctx;
   const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
+    if (!statusReady && rule?.isEnabled) return STATUS_LOADING;
     const latest = probeByRule.get(Number(rule.id));
     // 负载均衡链路：各台出口到目标的情况
     const exitTargets = trafficByRule.get(Number(rule.id));
@@ -76,7 +84,7 @@ export function useRuleVisualStatuses(ctx: UseRuleVisualStatusesContext): UseRul
       ...exitTargetFields,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, probeByRule, trafficByRule, hosts, tunnels]);
+  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, probeByRule, statusReady, trafficByRule, hosts, tunnels]);
   const ruleVisualStatuses = useMemo(() => {
     const statuses = new Map<number, ReturnType<typeof resolveForwardRuleVisualStatus>>();
     for (const rule of filteredRules) {

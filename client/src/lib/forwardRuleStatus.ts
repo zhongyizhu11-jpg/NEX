@@ -21,6 +21,8 @@ export type ForwardRuleVisualStatus = {
    * 悬停照常写延迟），只把卡片的走势线变琥珀，提醒指定没生效。用户：「卡片不用写『指定的出口 X 连不上目标，已切到 Y』」。
    */
   pinBypassed?: boolean;
+  /** 刷新后这一页的实时状态还没回来（2.3.559）：灰点，不写「等待 Agent 应用」之类的原因 —— 不是没在运行，是还不知道 */
+  loading?: boolean;
 };
 
 export function resolveForwardRuleVisualStatus(input: {
@@ -201,7 +203,7 @@ export function resolveForwardRuleNotRunningReason(
 ): ForwardRuleNotRunningReason | null {
   // 有数据的橙色（负载均衡「有出口连不上、已切走」）：规则在跑，不是「没在运行」—— 2.3.555 起这种橙色照实显示，
   // 以前被这里当成「等待 Agent 应用」、画成灰点（用户面板：hkt/2、hkt/3 在跑、8 ms，卡片却写等待 Agent 应用）
-  if (visual.state !== "pending" || visual.confirmed) return null;
+  if (visual.state !== "pending" || visual.confirmed || visual.loading) return null;
   const errors = (Array.isArray(portWarnings) ? portWarnings as RuleWarningLike[] : [])
     .filter((item) => item && item.level === "error" && String(item.label || "").trim());
   if (errors.length > 0) {

@@ -3642,7 +3642,7 @@ function RulesContent() {
     }
     return names;
   };
-  const useRuleVisualStatusesResult = useRuleVisualStatuses({ probeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules });
+  const useRuleVisualStatusesResult = useRuleVisualStatuses({ statusReady: ruleStatusReady, probeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules });
   const { ruleVisualStatuses, resolveRuleVisualStatus } = useRuleVisualStatusesResult;
   const getForwardGroupStatusText = (group: any) => {
     const status = getForwardGroupConfigStatus(group);
@@ -4392,7 +4392,7 @@ function RulesContent() {
       )}
 
       <SectionTransition transitionKey={ruleContentTransitionKey}>
-      {isLoading || !ruleStatusReady || (filteredRules.length === 0 && !scopedRulesReady) ? (
+      {isLoading || (filteredRules.length === 0 && !scopedRulesReady) ? (
         // 列表还没就绪（刚换进来、换页、换筛选）时不能画「没有匹配的规则」：那一帧是空的，不是真没有（用户 2026-11-03 录屏）
         <DataSectionLoading label={isLoading || !scopedRulesReady ? "正在加载转发规则" : "正在加载规则状态"} />
       ) : filteredRules.length > 0 ? (

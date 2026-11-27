@@ -304,3 +304,8 @@ test("有数据的橙色不是「没在运行」：不写等待 Agent 应用", (
   assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "等待 Agent 确认托管监听（0 / 1）" }, [])?.label, "等待 Agent 确认");
   assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "" }, [])?.label, "等待 Agent 应用");
 });
+
+test("刷新后实时状态还没回来：灰着，不写「等待 Agent 应用」（不是没在运行，是还不知道）", () => {
+  assert.equal(resolveForwardRuleNotRunningReason({ state: "pending", title: "正在获取最新状态", loading: true }, []), null);
+  assert.notEqual(resolveForwardRuleNotRunningReason({ state: "pending", title: "等待 Agent 上报运行状态" }, []), null);
+});
