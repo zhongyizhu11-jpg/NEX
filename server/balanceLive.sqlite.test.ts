@@ -67,7 +67,13 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     assert.deepEqual(measured.latestLatencyChain, { exitHostId: 3, exitName: "hep ix", exitMs: 6, targetMs: 3, share: 0.6 });
     assert.equal(row.exitTargetTotal, 3);
     assert.equal(row.exitTargetOk, 2);
-    assert.match(String(row.exitTargetNote), /jinx\(39\.9y\) 连不上目标，已切走/);
+    // 2.3.558：自动分配时某台连不上、流量在别的出口上照走，卡片不写；指定的那台连不上才写、并说切到了哪台
+    assert.equal(row.exitTargetNote, null, "自动分配：卡片不写哪台坏了");
+    const pinState = await import("./tunnelPinState");
+    pinState.noteTunnelEffectivePin(1, 2);
+    const [pinnedRow] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+    assert.match(String(pinnedRow.exitTargetNote), /指定的出口 jinx\(39\.9y\) 连不上目标，已切到 hep ix/);
+    pinState.resetTunnelPinStateForTest();
 
     const via = health.ruleActiveExit(501, 1);
     assert.deepEqual(via?.hostIds, [3, 4], "诊断从在用的出口测");
@@ -91,10 +97,14 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     assert.equal(plain.latestLatencyChain, null, "主出口的两段面板还没测到：留着规则自己的定时探测");
     assert.equal(health.ruleActiveExit(501, 1)?.hostIds[0], 2, "诊断从主出口测（rules.selfTest 不当成 viaActiveExit）");
 
-    // 出口机本身连不上（不是到目标）：规则卡那句照实说
+    // 出口机本身连不上（不是到目标）：自动分配时不写；指定的就是它时照实说「连不上指定的出口」
     await live.ingestBalanceLiveReport({ hostId: 1, source: "fxp", rules: [{ ...rule, exits: rule.exits.map((exit, index) => (index === 0 ? { ...exit, reason: "exit" } : exit)) }] });
     const [unreachable] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
-    assert.match(String(unreachable.exitTargetNote), /连不上 jinx\(39\.9y\) 这台出口机，已切走/);
+    assert.equal(unreachable.exitTargetNote, null);
+    pinState.noteTunnelEffectivePin(1, 2);
+    const [pinnedUnreachable] = health.withRuleExitTargets([{ ruleId: 501, latestLatencyMs: null, latestLatencyIsTimeout: true }]);
+    assert.match(String(pinnedUnreachable.exitTargetNote), /^连不上指定的出口 jinx\(39\.9y\)/);
+    pinState.resetTunnelPinStateForTest();
 
     /*
       GOST 入口（Agent）分开报两段：两条规则同一个目标，卡上都是「扛流量最多那台的整链」（问题 B，用户截图里
