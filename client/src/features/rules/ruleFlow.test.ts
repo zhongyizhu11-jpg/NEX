@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildRuleFlow,
   decideRuleFlowLayout,
+  ruleVisualHealth,
   ruleVisualStateToHealth,
 } from "./ruleFlow";
 
@@ -123,4 +124,17 @@ test("认不出来的状态回 unknown，不回 healthy", () => {
   assert.equal(ruleVisualStateToHealth(""), "unknown");
   assert.equal(ruleVisualStateToHealth(null), "unknown");
   assert.equal(ruleVisualStateToHealth("nonsense"), "unknown");
+});
+
+/*
+  「有出口连不上、已切走」（confirmed 的橙色，2.3.555 起）：规则在跑，只是有台出口有问题 —— 琥珀点，不是灰点。
+  用户面板 2026-11-27：hkt/2、hkt/3 经 Jinx(29.9y) 9 ms、诊断通，卡片的走势线是琥珀色、状态点却是灰的 ——
+  2.3.556 只改了卡片色调那一处，画点的三处还各自按 state 算。现在卡片、深空行、表格都用 ruleVisualHealth。
+*/
+test("ruleVisualHealth：确定的橙色是琥珀点；还在等的照旧灰点", () => {
+  assert.equal(ruleVisualHealth({ state: "pending", confirmed: true }), "degraded");
+  assert.equal(ruleVisualHealth({ state: "pending" }), "unknown");
+  assert.equal(ruleVisualHealth({ state: "pending", confirmed: false }), "unknown");
+  assert.equal(ruleVisualHealth({ state: "running" }), "healthy");
+  assert.equal(ruleVisualHealth({ state: "error", confirmed: true }), "down", "红的不因为 confirmed 变琥珀");
 });

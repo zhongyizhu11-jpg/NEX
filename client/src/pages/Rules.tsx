@@ -154,7 +154,7 @@ import { Sparkline } from "@/components/charts/Sparkline";
 import { HeaderSpark, HeaderStatusChips } from "@/components/HeaderStatusChips";
 import {
   decideRuleFlowLayout,
-  ruleVisualStateToHealth,
+  ruleVisualHealth,
 } from "@/features/rules/ruleFlow";
 import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, resolveForwardRuleStopReason } from "@/lib/forwardRuleStatus";
 import { buildLinkAvailabilityIndex } from "@shared/linkAvailability";
@@ -859,8 +859,8 @@ function deriveRuleView({
   const supported = ui.isRuleSupported(rule);
   const protocolKey = ui.getRuleProtocolKey(rule);
   const category = getRuleCategory(rule, page.forwardGroupById) as RuleGroupType;
-  // 「有出口连不上、已切走」（confirmed 的橙色）：规则在跑，只是有出口有问题 —— 橙点，不是灰点（2.3.556）
-  const health = !supported || rule.resourceAccessAllowed === false ? "down" : visual.confirmed ? "degraded" : ruleVisualStateToHealth(visual.state);
+  // 「有出口连不上、已切走」（confirmed 的橙色）：琥珀点，不是灰点；画点的三处也用同一个 ruleVisualHealth（2.3.557）
+  const health = !supported || rule.resourceAccessAllowed === false ? "down" : ruleVisualHealth(visual);
   const healthToken = describeNetworkHealth(health).token;
   const tone: RuleCardTone = healthToken === "down"
     ? "down"
@@ -1005,7 +1005,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
               <span className="fx-rule-dot">
                 {supported ? (
                   <span title={visual.title} className="inline-flex">
-                    <StatusDot health={ruleVisualStateToHealth(visual.state)} size="large" label={visual.title} />
+                    <StatusDot health={ruleVisualHealth(visual)} size="large" label={visual.title} />
                   </span>
                 ) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
               </span>
@@ -1209,7 +1209,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
         <span className="fx-ds-rule-dot">
           {supported ? (
             <span title={visual.title} className="inline-flex">
-              <StatusDot health={ruleVisualStateToHealth(visual.state)} label={visual.title} />
+              <StatusDot health={ruleVisualHealth(visual)} label={visual.title} />
             </span>
           ) : <StatusDot health="down" label={unsupportedProtocolTitle} />}
         </span>
@@ -3827,7 +3827,7 @@ function RulesContent() {
   */
   const renderResolvedStatusDot = (visual: ReturnType<typeof resolveForwardRuleVisualStatus>) => (
     <span title={visual.title} className="inline-flex">
-      <StatusDot health={ruleVisualStateToHealth(visual.state)} size="large" label={visual.title} />
+      <StatusDot health={ruleVisualHealth(visual)} size="large" label={visual.title} />
     </span>
   );
 

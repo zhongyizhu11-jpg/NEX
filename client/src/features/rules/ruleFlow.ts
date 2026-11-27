@@ -129,6 +129,16 @@ export function buildRuleFlow(input: RuleFlowInput): RuleFlow {
  * **pending 是 unknown，不是 degraded。** 「等待 Agent 确认」说的是还没有
  * 结论，不是「有结论，结论是不太好」。画成琥珀会让人去查一个并不存在的问题。
  */
+/**
+ * 规则状态点用的颜色：卡片、深空主题的行、表格三处画点，和卡片的色调都用这一个（2.3.557）。
+ * 「有出口连不上、已切走」（resolveForwardRuleVisualStatus 的 confirmed 橙色）规则在跑、只是有台出口有问题：琥珀，不是灰。
+ * 以前四处各按 state 算，2.3.556 只改了色调那一处，点还是灰的（用户面板 2026-11-27：hkt/2 走势线琥珀、点灰）。
+ */
+export function ruleVisualHealth(visual: { state?: string | null; confirmed?: boolean } | null | undefined): NetworkHealth {
+  const health = ruleVisualStateToHealth(visual?.state);
+  return visual?.confirmed && health === "unknown" ? "degraded" : health;
+}
+
 export function ruleVisualStateToHealth(state: string | null | undefined): NetworkHealth {
   switch (String(state || "").toLowerCase()) {
     case "running":
