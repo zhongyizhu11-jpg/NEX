@@ -75,6 +75,8 @@ export type ExitSummaryLike = {
   targetMsSource?: "panel" | "agent" | null;
   /** 几条规则里这台到目标的延迟不知道 */
   targetLatencyUnknown?: number;
+  /** 此刻在用这台的规则和它们经这台的整链延迟（服务端 2.3.559 起给，入口实时上报时才有） */
+  usedBy?: Array<{ ruleId: number; ms: number | null }>;
 };
 
 export type SwitchEventLike = { at: number; hostId: number; from: string; to: string; reason?: "target" | "exit" | null };
@@ -134,42 +136,6 @@ function exitOnlyLatencyText(summary: ExitSummaryLike) {
   return null;
 }
 
-function latencyText(summary: ExitSummaryLike, live = false, targetCheck = true) {
-  if (!targetCheck) return exitOnlyLatencyText(summary);
-  const low = summary.minMs ?? null;
-  const high = summary.maxMs ?? null;
-  /*
-    两段：面板探的优先（链路定时探测的这台出口分支 + 出口机探目标，和规则卡、诊断一个口径）；面板没测到的那段是入口
-    自己报的，标「Agent 自测」（FXP 报的到出口是建隧道握手的时间，比 TCPing 大一截）。
-  */
-  // 整句写全（界面翻译按整句的模板套，不拼半句）
-  if (summary.exitMs != null) {
-    const a = ms(summary.exitMs);
-    const exitAgent = summary.exitMsSource === "agent";
-    if (summary.targetMs == null) return exitAgent ? `到出口 ${a}（Agent 自测） · 到目标延迟未知` : `到出口 ${a} · 到目标延迟未知`;
-    // 几条规则的目标远近不同（入口报的整链各条规则不一样）：写成范围，不取平均。面板的两段已经是中位数了，不再写范围
-    if (summary.exitMsSource !== "panel" && low != null && high != null && high - low >= 5) return `整链 ${Math.round(low)}–${ms(high)}（到出口 ${a}）`;
-    const b = ms(summary.targetMs);
-    const total = ms(summary.exitMs + summary.targetMs);
-    const targetAgent = summary.targetMsSource === "agent";
-    const unknown = (summary.targetLatencyUnknown || 0) > 0 && summary.targetMsSource !== "panel" ? "（有规则到目标延迟未知）" : "";
-    if (exitAgent && targetAgent) return `整链 ${total}（到出口 ${a} + 到目标 ${b}；两段都是 Agent 自测）${unknown}`;
-    if (exitAgent) return `整链 ${total}（到出口 ${a} + 到目标 ${b}；到出口是 Agent 自测）${unknown}`;
-    if (targetAgent) return `整链 ${total}（到出口 ${a} + 到目标 ${b}；到目标是 Agent 自测）${unknown}`;
-    return `整链 ${total}（到出口 ${a} + 到目标 ${b}）${unknown}`;
-  }
-  // 面板测到了到目标、入口到这台出口那段还没测到
-  if (summary.targetMs != null && summary.targetMsSource === "panel") return `到目标 ${ms(summary.targetMs)}（到出口那段还没测到）`;
-  // 入口实时上报、两段都没有：出口机的 FXP 太旧（2.2.148 及更早），只报了出口到目标的中位数
-  const legacy = live && summary.exitMsSource === null && summary.targetMsSource === null;
-  // 几条规则的目标远近不同：写成范围，不取平均
-  if (low != null && high != null && high - low >= 5) {
-    return legacy ? `到目标 ${Math.round(low)}–${ms(high)}（出口机 FXP 太旧，没报到出口那段）` : `到目标 ${Math.round(low)}–${ms(high)}`;
-  }
-  if (summary.medianMs == null) return null;
-  return legacy ? `到目标 ${ms(summary.medianMs)}（出口机 FXP 太旧，没报到出口那段）` : `到目标 ${ms(summary.medianMs)}`;
-}
-
 function udpNote(summary: ExitSummaryLike): { reason: string; hint: string | null } | null {
   if ((summary.udpDown || 0) > 0) return { reason: "UDP 探活没回，UDP 新会话先不给它（TCP 照常）", hint: null };
   if (summary.peerOutdated) return { reason: "出口机的 FXP 版本旧，不回 UDP 探活，UDP 只能跟着 TCP 判断", hint: "升级这台出口机的 Agent" };
@@ -195,17 +161,22 @@ export function pinBypassText(summary: ExitSummaryLike | null | undefined, ruleN
 }
 
 /** 一台出口此刻的状态、原因、该做什么。 */
+function ruleLabel(ruleId: number, names?: Record<number, string> | null) {
+  return names?.[ruleId] || `规则 #${ruleId}`;
+}
+
 export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: ExitRowContext): ExitRowView {
   const hasData = !!summary && summary.rules > 0;
-  const parts: string[] = [];
-  if (hasData) {
-    const latency = latencyText(summary!, ctx.live, ctx.targetCheck !== false);
-    if (latency) parts.push(latency);
-    if (summary!.jitterMs != null && summary!.jitterMs >= 1) parts.push(`抖动 ${ms(summary!.jitterMs)}`);
-    if (summary!.share != null && summary!.activeRules > 0) parts.push(`分到 ${Math.round(summary!.share * 100)}%`);
-    if (summary!.slowerMs != null) parts.push(`比平时慢 ${ms(summary!.slowerMs)}`);
-  }
-  const detail = parts.length > 0 ? parts.join(" · ") : null;
+  /*
+    一行写清（2.3.559，用户：「用到两台也不知道哪两台，写上转发规则的名称吧，名称后边显示延迟」「不要太复杂」）：
+    有规则在用这台时写「规则名 延迟 · 规则名 延迟」；没有（备用 / 还没上报）只写「到出口 X ms」。
+    整链两段、分到几成、比平时慢、抖动不再堆在这一行；不稳、连不上时下面那行原因照写。
+  */
+  const used = hasData && ctx.live ? summary!.usedBy || [] : [];
+  const detail = used.length > 0
+    // 延迟没测到（只看出口组时只有记录探测的那台测到目标）：只写规则名，不写「—」
+    ? used.map((item) => item.ms != null ? `${ruleLabel(item.ruleId, ctx.ruleNames)} ${ms(item.ms)}` : ruleLabel(item.ruleId, ctx.ruleNames)).join(" · ")
+    : hasData || summary?.exitMs != null ? exitOnlyLatencyText(summary!) : null;
   const view = (state: BalanceStateKey, reason: string | null = null, hint: string | null = null): ExitRowView => ({ state, detail, reason, hint });
 
   if (!ctx.online) return view("down", "出口机离线（面板收不到它的 Agent）", "检查这台机器和它的 Agent");

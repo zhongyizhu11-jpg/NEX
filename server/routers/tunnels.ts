@@ -852,8 +852,8 @@ export const tunnelsRouter = router({
       const pinHostId = Number(tunnel.balancePinHostId || 0);
       const pinOnline = pinHostId > 0 && hostRows.some((row) => Number(row.id) === pinHostId && (row.isOnline === true || row.isOnline === 1));
       const summary = exitTargetSummaryForTunnel(tunnel, exitHostIds, { hostNames, pinOnline });
-      // 某台出口只对某几条规则连不上（别的规则还在走它）：弹窗按名字写清是哪几条
-      const downRuleIds = Array.from(new Set(summary.exits.flatMap((exit) => exit.downRuleIds || [])));
+      // 弹窗按名字写：某台出口对哪几条规则连不上，每台出口在走哪几条规则（usedBy，2.3.559）
+      const downRuleIds = Array.from(new Set(summary.exits.flatMap((exit) => [...(exit.downRuleIds || []), ...(exit.usedBy || []).map((item) => item.ruleId)])));
       if (downRuleIds.length > 0) {
         const rows = await db.getForwardRulesByIds(downRuleIds).catch(() => []) as Array<{ id: number; name?: string | null }>;
         summary.ruleNames = Object.fromEntries(rows.map((row) => [Number(row.id), String(row.name || `规则 #${row.id}`)]));

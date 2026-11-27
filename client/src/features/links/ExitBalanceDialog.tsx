@@ -9,7 +9,7 @@ import { dedupeSwitchEvents, exitRowView, pinBypassText, switchEventView } from 
 import { getTunnelHopIds, moveExitInGroup, tunnelBalanceExits, tunnelHopHostName, type ExitGroupMemberLite } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { balanceStrategyHint, BALANCE_STRATEGY_LABELS, nginxBalanceBasicSupportNote, normalizeBalanceDetect, normalizeExitGroupStrategy } from "@shared/loadBalance";
+import { BALANCE_STRATEGY_LABELS, nginxBalanceBasicSupportNote, normalizeBalanceDetect, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { tunnelExitPinUnsupportedReason } from "@shared/tunnelExitPin";
 
 /*
@@ -124,11 +124,6 @@ export function ExitBalanceDialog({
     }),
   }));
   const inUse = rows.filter((row) => row.view.state === "active" || row.view.state === "pinned" || row.view.state === "warming").length;
-  // 「只走最快的一台」是每条规则各挑自己目标最快的：几条规则目标不同时会有两台都「在用」——写清楚，不然像没生效
-  const ruleCount = Math.max(0, ...(summary?.exits || []).map((item) => Number(item.rules) || 0));
-  const inUseText = strategy === "latency" && detect.fastestOnly && ruleCount > 1 && inUse > 1
-    ? `${ruleCount} 条规则各走自己最快的一台，用到 ${inUse} 台`
-    : `${inUse} 台在用`;
   // 指定的那台对哪几条规则不通（那几条照常按分法走别的出口，agent/failover_pick.go）
   const pinBypass = pinOnline ? pinBypassText(byHost.get(pinHostId), summary?.ruleNames, !!summary?.live) : null;
   const targetDown = (summary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
@@ -160,15 +155,13 @@ export function ExitBalanceDialog({
             <span className="min-w-0 truncate">{tunnel.name}</span>
             {nginxNote ? <BalanceStatePill state="basic" /> : upgradeIssue ? <BalanceStatePill state="upgrade" /> : null}
           </DialogTitle>
-          <DialogDescription>
-            {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {exits.length} 台出口 · {inUseText}
+          {/*
+            一行（2.3.559，用户：「上边的小字说明也整改一下，看着好多，一点都不简洁」）：分配方式 · 几台在用 · 有没有附加检查目标。
+            哪几条规则走哪台写在每台出口下面，不再在这里解释「各走自己最快的一台」；分配方式怎么分在「编辑出口组」里看。
+          */}
+          <DialogDescription data-balance-scope={detect.scope}>
+            {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {inUse} / {exits.length} 台在用{targetCheck && !nginxNote ? " · 检查到目标" : ""}
           </DialogDescription>
-          {!pinActive && !upgradeIssue ? <p className="text-meta leading-5 text-muted-foreground">{balanceStrategyHint(strategy, false, nginxNote ? null : detect)}</p> : null}
-          {!nginxNote ? (
-            <p className="text-meta leading-5 text-muted-foreground" data-balance-scope={detect.scope}>
-              {targetCheck ? "按入口到各台出口挑 · 附加检查出口到目标" : "按入口到各台出口挑，不碰目标"}
-            </p>
-          ) : null}
         </DialogHeader>
         {notice ? (
           <div className={cn("fx-lb-pin-banner", notice.tone === "warn" && "is-warn")} data-balance-notice={nginxNote ? "basic" : upgradeIssue ? "upgrade" : pinActive ? "pin" : "target"}>

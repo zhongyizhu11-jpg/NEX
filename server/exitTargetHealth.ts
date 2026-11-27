@@ -602,6 +602,12 @@ type ExitTargetExitSummary = {
   targetMsSource?: "panel" | "agent" | null;
   /** 几条规则里这台到目标的延迟不知道（入口调度器按最慢的那台算它）：弹窗写「到目标延迟未知」 */
   targetLatencyUnknown?: number;
+  /**
+   * 此刻在用这台出口的规则（入口实时上报里这台是 active 的）和它们经这台的整链延迟（2.3.559，用户：「用到两台也不知道
+   * 哪两台，写上转发规则的名称吧，名称后边显示延迟」）。延迟先用面板测的两段（ruleChainLatency，和规则卡、诊断一个口径），
+   * 没测全时用入口自己报的整链；都没有是 null。规则名路由层补进 ruleNames。
+   */
+  usedBy?: Array<{ ruleId: number; ms: number | null }>;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -913,6 +919,7 @@ function exitTargetSummaryFromLive(
     baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
     reason: null as "target" | "exit" | null, shares: [] as number[],
     exitMs: [] as number[], targetMs: [] as number[], targetUnknown: 0, panelTargetMs: [] as number[],
+    usedBy: [] as Array<{ ruleId: number; ms: number | null }>,
   }]));
   const tunnelId = Number(lives[0]?.tunnelId || 0);
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
@@ -932,7 +939,13 @@ function exitTargetSummaryFromLive(
         entry.down += 1;
         entry.downRules.push(live.ruleId);
       } else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
-      if (exit.state === "active") entry.activeRules += 1;
+      if (exit.state === "active") {
+        entry.activeRules += 1;
+        const chain = ruleChainLatency({ ruleId: live.ruleId, tunnelId: live.tunnelId, exitHostId: exit.hostId });
+        const agentChain = exit.medianMs != null && !exit.targetLatencyUnknown ? exit.medianMs : null;
+        const chainMs = chain?.totalMs ?? agentChain;
+        entry.usedBy.push({ ruleId: Number(live.ruleId), ms: chainMs == null ? null : Math.round(chainMs) });
+      }
       if (exit.state === "active" && exit.share != null) entry.shares.push(exit.share);
       // 出口机本身连不上比到目标不行更要紧：有一条规则报 exit 就写 exit
       if ((exit.state === "down" || exit.state === "unstable") && exit.reason && entry.reason !== "exit") entry.reason = exit.reason;
@@ -1027,6 +1040,7 @@ function exitTargetSummaryFromLive(
         */
         ...panelOrAgentLegs(tunnelId, hostId, entry),
         targetLatencyUnknown: entry.targetUnknown,
+        usedBy: entry.usedBy,
       };
     }),
     targetIssues,
