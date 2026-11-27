@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_BALANCE_DETECT } from "../shared/loadBalance";
+import { noteTunnelEffectivePin, resetTunnelPinStateForTest } from "./tunnelPinState";
 import {
   EXIT_TARGET_LEGACY_MAX_INTERVAL_MS,
   EXIT_TARGET_PROBE_SLACK_MS,
@@ -147,28 +148,31 @@ test("过期（90 秒没报）的状态当不知道", () => {
   assert.equal(exitTargetExcludedHostIds(7, [1, 2]).size, 0);
 });
 
-test("规则卡那一句：写清楚哪台连不上 / 抖 / 丢包；全都不行时说是目标的问题", () => {
+/*
+  规则卡那一句（2.3.558，用户：「指定了出口连不上切到了别的出口才显示别的颜色，如果是自动通的就正常显示绿色」）：
+  只在指定的出口对这条规则连不上时写；自动分配时某台连不上 / 抖 / 丢包、流量在别的出口上照走，不写（卡片照常）。
+*/
+test("规则卡那一句：自动分配时别的出口坏了不写；指定的出口连不上才写、并说切到了哪台", () => {
   resetExitTargetStates();
+  resetTunnelPinStateForTest();
   setExitTargetStateForTest(state({ hostId: 1, hostName: "jinx(39.9y)", jitterMs: 63, unstable: true }));
   setExitTargetStateForTest(state({ hostId: 2, hostName: "Legend SG", down: true }));
   setExitTargetStateForTest(state({ hostId: 3, hostName: "jinx(29.9y)" }));
-  const [row] = withRuleExitTargets([{ ruleId: 7 }]);
-  assert.equal(row.exitTargetTotal, 3);
-  assert.equal(row.exitTargetOk, 2);
-  assert.equal(row.exitTargetNote, "3 台出口里 jinx(39.9y) 到目标抖动 63ms，已少分；Legend SG 连不上目标，已切走");
-  resetExitTargetStates();
-  setExitTargetStateForTest(state({ hostId: 1, down: true }));
-  setExitTargetStateForTest(state({ hostId: 2, down: true }));
-  assert.match(String(withRuleExitTargets([{ ruleId: 7 }])[0].exitTargetNote), /多半是目标本身的问题/);
+  const [auto] = withRuleExitTargets([{ ruleId: 7 }]);
+  assert.equal(auto.exitTargetTotal, 3);
+  assert.equal(auto.exitTargetOk, 2);
+  assert.equal(auto.exitTargetNote, null, "自动分配：不写");
+
+  noteTunnelEffectivePin(3, 2);
+  assert.match(String(withRuleExitTargets([{ ruleId: 7 }])[0].exitTargetNote), /^指定的出口 Legend SG 连不上目标/);
+  noteTunnelEffectivePin(3, 3);
+  assert.equal(withRuleExitTargets([{ ruleId: 7 }])[0].exitTargetNote, null, "指定的那台通：不写");
+  noteTunnelEffectivePin(3, 0);
+  assert.equal(withRuleExitTargets([{ ruleId: 7 }])[0].exitTargetNote, null, "取消指定：不写");
+
   const [plain] = withRuleExitTargets([{ ruleId: 99 }]);
   assert.equal(plain.exitTargetTotal, null);
-});
-
-test("GOST 隧道上的抖动只写出来，不说「已少分」", () => {
-  resetExitTargetStates();
-  setExitTargetStateForTest(state({ hostId: 1, hostName: "A", lossPct: 12, unstable: true, gost: true }));
-  setExitTargetStateForTest(state({ hostId: 2, hostName: "B", gost: true }));
-  assert.equal(withRuleExitTargets([{ ruleId: 7 }])[0].exitTargetNote, "2 台出口里 A 到目标丢包 12%");
+  resetTunnelPinStateForTest();
 });
 
 test("链路弹窗：延迟取各条规则的中位数，每台都连不上的规则算目标的问题", () => {

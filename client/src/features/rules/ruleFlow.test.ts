@@ -127,14 +127,13 @@ test("认不出来的状态回 unknown，不回 healthy", () => {
 });
 
 /*
-  「有出口连不上、已切走」（confirmed 的橙色，2.3.555 起）：规则在跑，只是有台出口有问题 —— 琥珀点，不是灰点。
-  用户面板 2026-11-27：hkt/2、hkt/3 经 Jinx(29.9y) 9 ms、诊断通，卡片的走势线是琥珀色、状态点却是灰的 ——
-  2.3.556 只改了卡片色调那一处，画点的三处还各自按 state 算。现在卡片、深空行、表格都用 ruleVisualHealth。
+  用户（2026-11-27）：「只要是通的状态点都是绿色，指定的出口不通只是走势线颜色不一样就行」。confirmed 的橙色（指定的出口
+  连不上、已切到别的出口）流量是通的：绿点。以前卡片、深空行、表格三处画点各按 state 算，点是灰的；现在都用 ruleVisualHealth。
 */
-test("ruleVisualHealth：确定的橙色是琥珀点；还在等的照旧灰点", () => {
-  assert.equal(ruleVisualHealth({ state: "pending", confirmed: true }), "degraded");
+test("ruleVisualHealth：通的就是绿点（含指定出口不通、已切走）；还在等的灰点；不通红点", () => {
+  assert.equal(ruleVisualHealth({ state: "pending", confirmed: true }), "healthy");
   assert.equal(ruleVisualHealth({ state: "pending" }), "unknown");
   assert.equal(ruleVisualHealth({ state: "pending", confirmed: false }), "unknown");
   assert.equal(ruleVisualHealth({ state: "running" }), "healthy");
-  assert.equal(ruleVisualHealth({ state: "error", confirmed: true }), "down", "红的不因为 confirmed 变琥珀");
+  assert.equal(ruleVisualHealth({ state: "error", confirmed: true }), "down", "红的不因为 confirmed 变绿");
 });

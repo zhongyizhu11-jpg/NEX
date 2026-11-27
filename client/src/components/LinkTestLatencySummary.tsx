@@ -968,6 +968,35 @@ export function LinkTestProbeView({
     );
   };
 
+  /*
+    多出口负载均衡、每条分支都从同一个入口出发（2.3.558，用户面板 2026-11-27）：入口只画一次，下面一根竖线分叉出各台出口，
+    每台一行写自己的延迟。以前每条分支都画「入口 → 出口」，入口重复好几遍；也不能直接把重复的入口去掉竖着排，
+    那样「入口 → 8 ms → jinx → 6 ms → hep ix」读起来像一路串着走。
+  */
+  const branchSharedEntry = isBranchView && branchSegments.every((segment) => segment.from === branchSegments[0]?.from)
+    ? branchSegments[0]
+    : null;
+  const renderBranchFanOut = (entry: ProbeSegment, mobile = false) => (
+    <div className="mx-auto w-full max-w-[22rem] py-2" data-branch-fanout="">
+      <div className="mb-2 text-center text-xs font-medium text-muted-foreground">{branchLabel}</div>
+      {renderMobileNode(entry.from, entry.fromMeta)}
+      <div className="ml-5 mt-1 border-l border-border">
+        {branchSegments.map((segment, index) => {
+          const { testing, ok, label, lineClass, badgeClass } = getSegmentState(segment);
+          return (
+            <div key={`${mobile ? "mobile" : "desktop"}-fan-${segment.to}-${index}`} className="relative flex items-center gap-2 py-1.5 pl-5">
+              <span aria-hidden="true" className={cn("absolute left-0 top-1/2 h-px w-4", lineClass, testing ? "animate-pulse" : "")} />
+              <span className={cn("w-16 shrink-0 rounded-full border bg-background px-2 py-0.5 text-center text-xs font-semibold tabular-nums shadow-sm", badgeClass)}>
+                {label || (ok ? "--" : "失败")}
+              </span>
+              <div className="min-w-0 flex-1">{renderMobileNode(segment.to, segment.toMeta)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   const renderDesktopConnector = (segment: ProbeSegment, key: string, widthClass = "min-w-[88px] flex-1", showLabel = true) => {
     const { testing, label, lineClass, badgeClass } = getSegmentState(segment);
     return (
@@ -1125,6 +1154,8 @@ export function LinkTestProbeView({
       {mobileStacked ? (
         isConvergedEntryView ? (
           renderConvergedEntryView(true)
+        ) : branchSharedEntry ? (
+          <div className="sm:hidden">{renderBranchFanOut(branchSharedEntry, true)}</div>
         ) : isBranchView ? (
           <div className="space-y-3 py-2 sm:hidden">
             <div className="text-center text-xs font-medium text-muted-foreground">{branchLabel}</div>
@@ -1165,6 +1196,8 @@ export function LinkTestProbeView({
 
       {isConvergedEntryView ? (
         renderConvergedEntryView(false)
+      ) : branchSharedEntry ? (
+        <div className={cn("min-w-0 max-w-full pb-1", mobileStacked ? "hidden sm:block" : "")}>{renderBranchFanOut(branchSharedEntry)}</div>
       ) : isBranchView ? (
         <div className={cn("min-w-0 max-w-full overflow-x-auto overscroll-x-contain pb-1", mobileStacked ? "hidden sm:block" : "")}>
           <div className="mx-auto w-full max-w-[36rem] py-3">

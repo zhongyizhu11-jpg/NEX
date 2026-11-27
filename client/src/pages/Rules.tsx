@@ -859,14 +859,18 @@ function deriveRuleView({
   const supported = ui.isRuleSupported(rule);
   const protocolKey = ui.getRuleProtocolKey(rule);
   const category = getRuleCategory(rule, page.forwardGroupById) as RuleGroupType;
-  // 「有出口连不上、已切走」（confirmed 的橙色）：琥珀点，不是灰点；画点的三处也用同一个 ruleVisualHealth（2.3.557）
+  // 状态点：通的就是绿（画点的三处也用同一个 ruleVisualHealth）
   const health = !supported || rule.resourceAccessAllowed === false ? "down" : ruleVisualHealth(visual);
   const healthToken = describeNetworkHealth(health).token;
+  /*
+    色调（走势线、左上角那抹光、地址行的箭头）：指定的出口连不上、已切到别的出口（confirmed 的橙色）是琥珀 —— 点照样绿，
+    只用走势线提醒「指定没生效」（用户 2026-11-27）。线路组切了线同理。
+  */
   const tone: RuleCardTone = healthToken === "down"
     ? "down"
     : healthToken === "standby"
       ? "off"
-      : healthToken === "warn" || (failover && failover.tone === "warn")
+      : healthToken === "warn" || visual.confirmed || (failover && failover.tone === "warn")
         ? "warn"
         : "ok";
   const toneColor = RULE_TONE_COLOR[tone];

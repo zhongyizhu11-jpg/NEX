@@ -2,6 +2,7 @@
   从 server/agentHeartbeatRoute.ts 第 1513-1604 行抽出（scripts/extract-block.mjs），行为不变。
 */
 import { runtimeBool } from "../agentHeartbeatRuntime";
+import { noteTunnelEffectivePin } from "../tunnelPinState";
 import * as db from "../db";
 import { hostEgressAddress, type HostEgressSource } from "../hostObservedAddress";
 import { ignoreErrorWith } from "../ignoredError";
@@ -79,13 +80,19 @@ export function buildExitSelectionHelpers(ctx: BuildExitSelectionHelpersContext)
   */
   const pinOnlineCache = new Map<number, boolean>();
   const pinnedExitHostId = async (tunnel: unknown): Promise<number> => {
-    const hostId = Number((tunnel as { balancePinHostId?: number | null } | null)?.balancePinHostId || 0);
-    if (hostId <= 0) return 0;
-    if (!pinOnlineCache.has(hostId)) {
-      const rows = await db.getHostsByIds([hostId]).catch(ignoreErrorWith("AgentHeartbeat exit pin", [])) as Array<{ id: number; isOnline?: unknown }>;
-      pinOnlineCache.set(hostId, rows.some((row) => Number(row.id) === hostId && runtimeBool(row.isOnline)));
+    const row = tunnel as { id?: number | null; balancePinHostId?: number | null } | null;
+    const hostId = Number(row?.balancePinHostId || 0);
+    let effective = 0;
+    if (hostId > 0) {
+      if (!pinOnlineCache.has(hostId)) {
+        const rows = await db.getHostsByIds([hostId]).catch(ignoreErrorWith("AgentHeartbeat exit pin", [])) as Array<{ id: number; isOnline?: unknown }>;
+        pinOnlineCache.set(hostId, rows.some((item) => Number(item.id) === hostId && runtimeBool(item.isOnline)));
+      }
+      effective = pinOnlineCache.get(hostId) ? hostId : 0;
     }
-    return pinOnlineCache.get(hostId) ? hostId : 0;
+    // 规则卡要知道入口手里的「指定」是哪台（server/tunnelPinState.ts）
+    noteTunnelEffectivePin(row?.id, effective);
+    return effective;
   };
   const exitTargetStatusCache = new Map<number, boolean>();
   const exitTargetStatusForHostIds = async (hostIds: number[]): Promise<boolean[] | null> => {

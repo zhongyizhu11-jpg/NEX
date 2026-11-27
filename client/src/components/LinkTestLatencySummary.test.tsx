@@ -563,3 +563,32 @@ test("多出口负载均衡的隧道：每台出口一条分支，各写各的�
   for (const ms of ["11 ms", "6 ms", "7 ms"]) assert.ok(html.includes(ms), `应当显示 ${ms}`);
   assert.match(html, /最大延迟/);
 });
+
+// 用户面板（2026-11-27）：每条分支都画「po0(300M) → 出口」，入口重复三遍。入口只画一次，下面分叉出三台出口，各写各的延迟
+test("多出口负载均衡的诊断：入口只画一次，下面分叉，每台出口一行带自己的延迟", () => {
+  const exits: Array<[number, string, number]> = [[7, "jinx(39.9y)", 8], [12, "hep ix", 6], [2, "Jinx(29.9y)", 7]];
+  const branches = exits.map(([hostId, name, latencyMs]) => ({
+    from: "po0(300M)", to: name, fromHostId: 6, toHostId: hostId, hopIndex: 0, hopCount: 1,
+    groupKey: "tunnel-6-load-balance", groupLabel: "多出口负载均衡", success: true, latencyMs,
+  }));
+  const parsed = parseLinkTestMessage(JSON.stringify({
+    kind: "tunnel-load-balance-summary",
+    tunnelId: 6,
+    message: "多出口负载探测成功，最大延迟 8ms（3 跳）",
+    details: exits.map(([hostId, name, latencyMs], index) => ({
+      success: true, latencyMs, hopLabel: `出口 ${index + 1}/3 6->${hostId}`, routeLabel: `po0(300M) -> ${name}`,
+      groupKey: "tunnel-6-load-balance", groupLabel: "多出口负载",
+    })),
+    totalLatencyMs: 8,
+  }));
+  for (const mobileStacked of [true, false]) {
+    const html = renderToStaticMarkup(
+      <LinkTestProbeView parsed={parsed} isSuccess isTesting={false} mobileStacked={mobileStacked} plannedSegments={branches} />,
+    );
+    const views = html.match(/data-branch-fanout=""/g)?.length || 0;
+    assert.ok(views >= 1, "多出口画成分叉");
+    assert.equal(html.match(/>po0\(300M\)</g)?.length, views, "入口每个视图只画一次");
+    for (const [, name] of exits) assert.equal(html.match(new RegExp(`>${name.replace(/[()]/g, "\\$&")}<`, "g"))?.length, views, `${name} 每个视图一次`);
+    for (const ms of ["8 ms", "6 ms", "7 ms"]) assert.ok(html.includes(ms), `应当显示 ${ms}`);
+  }
+});

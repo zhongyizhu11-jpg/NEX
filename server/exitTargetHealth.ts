@@ -1,3 +1,4 @@
+import { tunnelEffectivePin } from "./tunnelPinState";
 import { ruleChainLatency, ruleRecordedProbe, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
 import { appendPanelLog } from "./_core/panelLogger";
 import { dbBool } from "./repositories/repositoryUtils";
@@ -1224,13 +1225,6 @@ export function exitTargetExcludedHostIds(ruleId: number, exitHostIds: readonly 
   return remainingKnownGood ? new Set(down.map(Number)) : new Set();
 }
 
-type RuleExitTargetSummary = {
-  total: number;
-  reporting: number;
-  bad: Array<{ hostId: number; hostName: string; reason: "down" | "unstable"; medianMs: number | null; jitterMs: number | null; lossPct: number | null; exitUnreachable?: boolean }>;
-  allBad: boolean;
-};
-
 /**
  * 给规则的流量 / 延迟汇总行补上「各台出口到目标」：exitTargetTotal（报上来的出口数，≥2 才有）、
  * exitTargetOk（其中连得上的）、exitTargetNote（规则卡上那一句，没问题时 null）。只用内存里的状态，不查库。
@@ -1254,26 +1248,15 @@ function ruleExitTargetFieldsFromLive(live: LiveRuleReport, nowMs = Date.now()):
   const freshDownHostIds = new Set(exitTargetStatesForRule(live.ruleId, nowMs)
     .filter((state) => state.down && !exitTargetDownStale(state, nowMs))
     .map((state) => state.hostId));
-  const bad = live.exits
-    .filter((exit) => exit.state === "down" || exit.state === "unstable")
-    .map((exit) => ({
-      hostId: exit.hostId,
-      hostName: exit.hostName,
-      reason: (exit.state === "down" ? "down" : "unstable") as "down" | "unstable",
-      medianMs: exit.medianMs,
-      jitterMs: exit.jitterMs,
-      lossPct: exit.lossPct,
-      exitUnreachable: exit.reason === "exit",
-    }));
-  const total = live.exits.length;
-  // 出口机本身连不上（不是到目标的问题）也算坏；全坏了才说「目标的问题」—— 要都是到目标不行才这么说
-  const allTargetBad = bad.length >= total && live.exits.every((exit) => exit.reason !== "exit");
-  const summary: RuleExitTargetSummary = { total, reporting: total, bad, allBad: allTargetBad };
+  // 指定的那台（入口手里的配置）对这条规则不能用：卡片写一句、走势线琥珀（2.3.558）；自动分配时别的出口坏了不写
+  const pinHostId = tunnelEffectivePin(live.tunnelId);
+  const pinned = pinHostId > 0 ? live.exits.find((exit) => exit.hostId === pinHostId) : undefined;
+  const pinnedDown = !!pinned && (pinned.state === "down" || freshDownHostIds.has(pinned.hostId));
   return {
-    exitTargetTotal: total,
+    exitTargetTotal: live.exits.length,
     // 入口还没切走、快速探测已经说连不上的，不算「连得上」
     exitTargetOk: live.exits.filter((exit) => exit.state !== "down" && !freshDownHostIds.has(exit.hostId)).length,
-    exitTargetNote: describeRuleExitTargetSummary(summary, live.source === "agent"),
+    exitTargetNote: pinned && pinnedDown ? pinnedExitNote(pinned.hostName, pinned.reason === "exit", via?.names[0]) : null,
     exitTargetVia: via ? via.names : null,
     exitTargetViaHostIds: via ? via.hostIds : null,
   };
@@ -1429,36 +1412,24 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
     } : null, nowMs));
     // 只有一台出口报了：没法说「几台里几台有问题」，只给在用的出口
     if (fresh.length < 2) return { ...row, ...viaFields, exitTargetTotal: null, exitTargetOk: null, exitTargetNote: null } as T & RuleExitTargetFields;
-    const bad = fresh.filter((state) => state.down || state.unstable).map((state) => ({
-      hostId: state.hostId,
-      hostName: state.hostName,
-      reason: (state.down ? "down" : "unstable") as "down" | "unstable",
-      medianMs: state.medianMs ?? state.latencyMs,
-      jitterMs: state.jitterMs,
-      lossPct: state.lossPct,
-    }));
-    const summary: RuleExitTargetSummary = { total: fresh.length, reporting: fresh.length, bad, allBad: bad.length > 0 && bad.length >= fresh.length };
+    // 指定的那台对这条规则连不上：卡片写一句、走势线琥珀（2.3.558）；自动分配时别的出口坏了不写
+    const pinHostId = tunnelEffectivePin(fresh[0].tunnelId);
+    const pinnedState = pinHostId > 0 ? fresh.find((state) => state.hostId === pinHostId && state.down) : undefined;
     return {
       ...row,
       ...viaFields,
       exitTargetTotal: fresh.length,
       exitTargetOk: fresh.filter((state) => !state.down).length,
-      exitTargetNote: describeRuleExitTargetSummary(summary, fresh.some((state) => state.gost)),
+      exitTargetNote: pinnedState ? pinnedExitNote(pinnedState.hostName, false, via?.names[0]) : null,
     } as T & RuleExitTargetFields;
   });
 }
 
 /**
- * 规则卡上那一句话。没有问题返回 null。
- * gost：GOST 隧道只能把连不上的出口摘掉，抖动、丢包没法少分，只写出来。
+ * 规则卡上那一句（2.3.558）：只在「指定的出口对这条规则不能用」时写。自动分配时某台出口坏了、流量在别的出口上照走，
+ * 是正常情况，卡片照常绿着；每台出口怎样在负载均衡弹窗里看。
  */
-function describeRuleExitTargetSummary(summary: RuleExitTargetSummary | null, gost = false): string | null {
-  if (!summary || summary.bad.length === 0) return null;
-  if (summary.allBad) return `${summary.total} 台出口都连不好目标：多半是目标本身的问题，换出口没用`;
-  const parts = summary.bad.map((item) => {
-    if (item.reason === "down") return item.exitUnreachable ? `连不上 ${item.hostName} 这台出口机，已切走` : `${item.hostName} 连不上目标，已切走`;
-    const detail = item.lossPct && item.lossPct >= UNSTABLE_LOSS_PCT ? `丢包 ${Math.round(item.lossPct)}%` : `抖动 ${Math.round(item.jitterMs ?? 0)}ms`;
-    return gost ? `${item.hostName} 到目标${detail}` : `${item.hostName} 到目标${detail}，已少分`;
-  });
-  return `${summary.total} 台出口里 ${parts.join("；")}`;
+function pinnedExitNote(pinName: string, exitUnreachable: boolean, viaName: string | null | undefined): string {
+  const what = exitUnreachable ? `连不上指定的出口 ${pinName}` : `指定的出口 ${pinName} 连不上目标`;
+  return viaName && viaName !== pinName ? `${what}，已切到 ${viaName}` : what;
 }

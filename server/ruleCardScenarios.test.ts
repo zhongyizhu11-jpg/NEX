@@ -6,6 +6,8 @@ import { resetExitTargetStates, ruleHasReachableExit, setExitTargetStateForTest,
 import { noteRuleProbeRecorded, recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
 import { preferLastKnownForwardRuleVisualStatus, resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
 import { isRuleProbeUnreachable } from "../shared/linkProbePolicy";
+import { ruleVisualHealth } from "../client/src/features/rules/ruleFlow";
+import { noteTunnelEffectivePin, resetTunnelPinStateForTest } from "./tunnelPinState";
 
 /*
   规则卡红 / 橙 / 绿的场景矩阵（docs/dev/rule-card-status.md）：从服务端拼卡片数据（withRuleExitTargets）一直走到
@@ -30,6 +32,8 @@ type Scenario = {
   probe: { ms: number | null; timeout: boolean };
   /** 数据库最新那一条是哪台出口测的（2.3.555 起记此刻在用的那台）；不写 = 不知道 */
   recordedFrom?: number;
+  /** 链路手动指定的出口（入口手里的配置）；不写 = 自动分配 */
+  pin?: number;
 };
 
 function liveExit(hostId: number, state: LiveExit["state"]): LiveExit {
@@ -53,6 +57,8 @@ function card(scenario: Scenario) {
   resetBalanceLiveForTest();
   resetExitTargetStates();
   resetRuleLatencyViewForTest();
+  resetTunnelPinStateForTest();
+  if (scenario.pin) noteTunnelEffectivePin(TUNNEL, scenario.pin);
   for (const [hostId, down] of Object.entries(scenario.fastDown || {})) setExitTargetStateForTest(exitState(Number(hostId), !!down));
   if (scenario.live) {
     setBalanceLiveReportForTest({
@@ -84,59 +90,73 @@ function card(scenario: Scenario) {
   return { row, status, reachable: ruleHasReachableExit(RULE, now) };
 }
 
-const COLOR: Record<ForwardRuleVisualStatus["state"], string> = { running: "绿", pending: "橙", error: "红", disabled: "灰" };
+/*
+  卡片上看到的样子（2.3.558，用户：「只要是通的状态点都是绿色，指定的出口不通只是走势线颜色不一样就行」）：
+  状态点按 ruleVisualHealth（和界面同一个），走势线在 confirmed（指定的出口连不上、已切走；或在用的出口刚坏、正在切）时琥珀。
+*/
+function look(status: ForwardRuleVisualStatus) {
+  const dot = { healthy: "绿点", down: "红点", standby: "灰点", unknown: "灰点", degraded: "琥珀点", switching: "灰点" }[ruleVisualHealth(status)];
+  return status.confirmed && dot === "绿点" ? "绿点+琥珀线" : dot;
+}
 
-test("场景 1：主出口在用、通 —— 绿，延迟是它的整链", () => {
+test("场景 1：主出口在用、通 —— 绿点，延迟是它的整链", () => {
   const { row, status } = card({ live: { 7: "active", 12: "standby", 2: "standby" }, fastDown: { 7: false, 12: false, 2: false }, legs: { 7: [7, 3] }, probe: { ms: 10, timeout: false } });
-  assert.equal(COLOR[status.state], "绿");
+  assert.equal(look(status), "绿点");
   assert.equal(row.latestLatencyMs, 10);
   assert.deepEqual(row.exitTargetVia, ["jinx(39.9y)"]);
 });
 
-test("场景 2：主出口被高防拦、已经切到 hep ix、两段测到了 —— 橙（写明哪台连不上），延迟是 hep ix 的整链", () => {
+test("场景 2：自动分配，jinx(39.9y) 被高防拦、已经切到 hep ix、两段测到了 —— 绿点（自动切走是正常情况），延迟是 hep ix 的整链", () => {
   const { row, status, reachable } = card({ live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
-  assert.equal(COLOR[status.state], "橙");
-  assert.equal(status.confirmed, true, "确定的结论，不拿上一次的颜色顶");
-  assert.equal(resolveForwardRuleNotRunningReason(status, []), null, "规则在跑：不写「等待 Agent 应用」");
-  assert.match(status.title, /jinx\(39\.9y\) 连不上目标，已切走/);
+  assert.equal(look(status), "绿点", status.title);
+  assert.equal(row.exitTargetNote, null, "自动分配：卡片不写哪台坏了（弹窗里看）");
   assert.equal(row.latestLatencyMs, 8);
   assert.deepEqual(row.exitTargetVia, ["hep ix"]);
   assert.equal(reachable, true, "订阅不藏");
 });
 
-test("场景 3：同上，但 hep ix 的两段面板还没测到 —— 橙，不写主出口那条的超时", () => {
+test("场景 2b：指定了 jinx(39.9y)，它被拦、已经切到 hep ix —— 绿点 + 琥珀走势线，写明指定的连不上、切到了哪台", () => {
+  const { row, status, reachable } = card({ pin: 7, live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
+  assert.equal(look(status), "绿点+琥珀线", status.title);
+  assert.equal(resolveForwardRuleNotRunningReason(status, []), null, "规则在跑：不写「等待 Agent 应用」");
+  assert.match(status.title, /指定的出口 jinx\(39\.9y\) 连不上目标，已切到 hep ix/);
+  assert.equal(row.latestLatencyMs, 8);
+  assert.equal(reachable, true);
+});
+
+test("场景 3：自动分配，已切到 hep ix、它的两段面板还没测到 —— 绿点，不写切换前那台的超时", () => {
   const { row, status, reachable } = card({ live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, probe: { ms: null, timeout: true } });
-  assert.equal(COLOR[status.state], "橙");
+  assert.equal(look(status), "绿点", status.title);
   assert.equal(row.latestLatencyIsTimeout, false);
   assert.equal(row.latestLatencySource, "live", "前端缓存以这一次为准（ruleProbeCache）");
   assert.equal(reachable, true);
 });
 
-test("场景 4：入口还报着 jinx(39.9y) 在用，快速探测已经说它连不上，hep ix 通 —— 橙，不拿它一分钟前的成功数写绿", () => {
+test("场景 4：入口还报着 jinx(39.9y) 在用，快速探测已经说它连不上，hep ix 通 —— 正在切：绿点 + 琥珀走势线，不拿它一分钟前的成功数", () => {
   const { row, status, reachable } = card({ live: { 7: "active", 12: "standby", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 7: [7, 7] }, probe: { ms: 14, timeout: false } });
-  assert.equal(COLOR[status.state], "橙");
+  assert.equal(look(status), "绿点+琥珀线", status.title);
   assert.equal(row.latestLatencyIsTimeout, true);
   assert.equal(row.exitTargetOk, 1, "扣掉快速探测说连不上的那台");
   assert.equal(reachable, false, "此刻入口还在往连不上的那台送：算不通（几秒后入口切走就恢复）");
 });
 
-test("场景 5：三台都连不上目标 —— 红", () => {
+test("场景 5：三台都连不上目标 —— 红点", () => {
   const { status, reachable } = card({ live: { 7: "down", 12: "down", 2: "down" }, fastDown: { 7: true, 12: true, 2: true }, probe: { ms: null, timeout: true } });
-  assert.equal(COLOR[status.state], "红");
+  assert.equal(look(status), "红点");
   assert.equal(reachable, false);
 });
 
-test("场景 6：没有入口实时上报（入口刚重启），快速探测里 hep ix 通、主出口的定时探测超时 —— 橙，不红", () => {
+test("场景 6：没有入口实时上报（入口刚重启），快速探测里 hep ix 通、主出口的定时探测超时 —— 不红（绿点 + 琥珀走势线）", () => {
   const { status, reachable } = card({ live: null, fastDown: { 7: true, 12: false, 2: true }, probe: { ms: null, timeout: true } });
-  assert.equal(COLOR[status.state], "橙");
+  assert.equal(look(status), "绿点+琥珀线", status.title);
   assert.equal(reachable, true);
 });
 
 test("场景 7：不是负载均衡的规则 —— 只看自己的定时探测", () => {
   const ok = card({ live: null, probe: { ms: 9, timeout: false } });
-  assert.equal(COLOR[ok.status.state], "绿");
+  assert.equal(look(ok.status), "绿点");
   const bad = card({ live: null, probe: { ms: null, timeout: true } });
-  assert.equal(COLOR[bad.status.state], "红");
+  assert.equal(look(bad.status), "红点");
   assert.equal(bad.reachable, null, "订阅照旧按探测判断");
 });
 
@@ -144,9 +164,9 @@ test("场景 7：不是负载均衡的规则 —— 只看自己的定时探测"
   用户面板 2026-11-27 00:58：华南-香港指定 jinx(39.9y)、出口组设成「只看隧道」，高防拦着 jinx。没有快速探测（只看隧道不派），
   入口一直把 hkt/2 的流量送给 jinx；规则每分钟那次探测就是从 jinx 发的，超时。客户端超时、诊断不通，卡片却是绿的。
 */
-test("场景 8：在用的出口自己的探测超时、没有快速探测（只看出口组）—— 红，订阅里算不通", () => {
-  const { row, status, reachable } = card({ live: { 7: "active", 12: "standby", 2: "standby" }, recordedFrom: 7, probe: { ms: null, timeout: true } });
-  assert.equal(COLOR[status.state], "红", status.title);
+test("场景 8：在用的出口自己的探测超时、没有快速探测（只看出口组）—— 红点，订阅里算不通", () => {
+  const { row, status, reachable } = card({ pin: 7, live: { 7: "active", 12: "standby", 2: "standby" }, recordedFrom: 7, probe: { ms: null, timeout: true } });
+  assert.equal(look(status), "红点", status.title);
   assert.equal(row.latestLatencyIsTimeout, true, "不拿「还没测到」盖掉在用出口自己的超时");
   assert.equal(reachable, false, "入口只往超时的那台送：订阅里算不通");
 });
@@ -154,13 +174,13 @@ test("场景 8：在用的出口自己的探测超时、没有快速探测（只
 test("场景 9：刚切到 hep ix，数据库最新那条还是 jinx 测的超时 —— 不写超时，等 hep ix 测到", () => {
   const { row, status } = card({ live: { 7: "down", 12: "active", 2: "standby" }, recordedFrom: 7, probe: { ms: null, timeout: true } });
   assert.equal(row.latestLatencyIsTimeout, false);
-  assert.notEqual(COLOR[status.state], "红", status.title);
+  assert.notEqual(look(status), "红点", status.title);
 });
 
-test("上次状态：只在「还在等上报」时顶一下；有数据的橙色照实显示", () => {
+test("上次状态：只在「还在等上报」时顶一下；有数据的结论照实显示", () => {
   const waiting: ForwardRuleVisualStatus = { state: "pending", title: "等待 Agent 确认托管监听（0 / 1）" };
   assert.equal(preferLastKnownForwardRuleVisualStatus(waiting, { state: "running", title: "最近一次端到端探测可达（9ms）" }).state, "running");
-  const { status } = card({ live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
+  const { status } = card({ pin: 7, live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
   assert.deepEqual(preferLastKnownForwardRuleVisualStatus(status, { state: "error", title: "最近一次端到端探测超时" }), status);
 });
 
