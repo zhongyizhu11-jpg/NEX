@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildRuleFlow,
   decideRuleFlowLayout,
+  ruleVisualHealth,
   ruleVisualStateToHealth,
 } from "./ruleFlow";
 
@@ -123,4 +124,16 @@ test("认不出来的状态回 unknown，不回 healthy", () => {
   assert.equal(ruleVisualStateToHealth(""), "unknown");
   assert.equal(ruleVisualStateToHealth(null), "unknown");
   assert.equal(ruleVisualStateToHealth("nonsense"), "unknown");
+});
+
+/*
+  用户（2026-11-27）：「只要是通的状态点都是绿色，指定的出口不通只是走势线颜色不一样就行」。confirmed 的橙色（指定的出口
+  连不上、已切到别的出口）流量是通的：绿点。以前卡片、深空行、表格三处画点各按 state 算，点是灰的；现在都用 ruleVisualHealth。
+*/
+test("ruleVisualHealth：通的就是绿点（含指定出口不通、已切走）；还在等的灰点；不通红点", () => {
+  assert.equal(ruleVisualHealth({ state: "pending", confirmed: true }), "healthy");
+  assert.equal(ruleVisualHealth({ state: "pending" }), "unknown");
+  assert.equal(ruleVisualHealth({ state: "pending", confirmed: false }), "unknown");
+  assert.equal(ruleVisualHealth({ state: "running" }), "healthy");
+  assert.equal(ruleVisualHealth({ state: "error", confirmed: true }), "down", "红的不因为 confirmed 变绿");
 });

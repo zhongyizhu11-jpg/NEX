@@ -968,6 +968,46 @@ export function LinkTestProbeView({
     );
   };
 
+  /*
+    多出口负载均衡、每条分支都从同一个入口出发（2.3.558，用户面板 2026-11-27）：和多入口是一套（用户：「像这样一套系统」）——
+    入口一张卡片，中间一根线，各台出口合成一张卡片、一行一台、延迟写在右边。以前每条分支都画「入口 → 出口」，入口重复好几遍。
+  */
+  const branchSharedEntry = isBranchView && branchSegments.every((segment) => segment.from === branchSegments[0]?.from)
+    ? branchSegments[0]
+    : null;
+  const renderBranchFanOut = (entry: ProbeSegment, mobile = false) => {
+    const states = branchSegments.map((segment) => getSegmentState(segment));
+    // 中间那根线：有一台通就是通的颜色，全都在测是测试中，全都不通是红的
+    const trunk: ProbeSegment = {
+      ...entry,
+      success: states.some((state) => state.ok),
+      latencyMs: null,
+      message: null,
+      method: null,
+      pending: states.some((state) => state.testing),
+      idle: states.every((state) => state.idle),
+      groupKey: null,
+      groupLabel: null,
+      latencyLabel: null,
+    };
+    if (mobile) {
+      return (
+        <div className="space-y-0 py-2" data-branch-fanout="">
+          {renderMobileNode(entry.from, entry.fromMeta)}
+          {renderMobileConnector(trunk, "mobile-exit-group-line", false)}
+          {renderHostGroupNode(branchSegments, "to", true)}
+        </div>
+      );
+    }
+    return (
+      <div className="mx-auto flex min-w-full w-max items-start justify-center px-2 py-7" data-branch-fanout="">
+        {renderNode(entry.from, entry.fromMeta, { wide: true })}
+        {renderDesktopConnector(trunk, "exit-group-line", "w-[96px] shrink-0 flex-none", false)}
+        {renderHostGroupNode(branchSegments, "to")}
+      </div>
+    );
+  };
+
   const renderDesktopConnector = (segment: ProbeSegment, key: string, widthClass = "min-w-[88px] flex-1", showLabel = true) => {
     const { testing, label, lineClass, badgeClass } = getSegmentState(segment);
     return (
@@ -1034,29 +1074,34 @@ export function LinkTestProbeView({
     </div>
   );
 
-  const renderEntryGroupNode = (entrySegments: ProbeSegment[], mobile = false) => (
+  /*
+    一组机器画成一张卡片，一行一台：国旗、名字在左，这一段的延迟在右。多入口（side = from，各台入口汇到同一个出口）和
+    多出口负载均衡（side = to，同一个入口分到各台出口，2.3.558）共用这一张，两种画法是一套。
+  */
+  const renderEntryGroupNode = (entrySegments: ProbeSegment[], mobile = false) => renderHostGroupNode(entrySegments, "from", mobile);
+  const renderHostGroupNode = (entrySegments: ProbeSegment[], side: "from" | "to", mobile = false) => (
     <div
       className={cn(
         "relative z-10 rounded-md border border-border/70 bg-background text-sm font-medium shadow-sm",
-        mobile ? "mx-auto w-full max-w-[18rem] px-3 py-2" : "mt-[9px] h-[72px] min-w-[188px] max-w-[248px] px-3 py-2",
+        mobile ? "mx-auto w-full max-w-[18rem] px-3 py-2" : "mt-[9px] min-h-[72px] min-w-[188px] max-w-[248px] px-3 py-2",
       )}
-      title={entrySegments.map((segment) => segment.from).join(" / ")}
+      title={entrySegments.map((segment) => segment[side]).join(" / ")}
     >
       <div className="max-h-[9.5rem] space-y-1 overflow-y-auto pr-1">
         {entrySegments.map((segment, index) => {
           const { ok, label, textClass } = getSegmentState(segment);
-          const entryLabel = shortNodeLabel(segment.from, mobile ? 18 : 18);
+          const entryLabel = shortNodeLabel(segment[side], 18);
           return (
             <div
-              key={`entry-group-${segment.from}-${segment.to}-${index}`}
+              key={`${side}-group-${segment.from}-${segment.to}-${index}`}
               className={cn(
                 "flex min-w-0 items-center justify-between gap-2 rounded-sm px-1 py-0.5 leading-tight",
                 textClass,
               )}
-              title={segment.message || segment.from}
+              title={segment.message || segment[side]}
             >
               <span className="flex min-w-0 items-center gap-1.5">
-                <span className="flex h-3.5 w-5 shrink-0 items-center justify-center">{renderFlag(segment.fromMeta)}</span>
+                <span className="flex h-3.5 w-5 shrink-0 items-center justify-center">{renderFlag(side === "from" ? segment.fromMeta : segment.toMeta)}</span>
                 <span className="min-w-0 truncate">{entryLabel}</span>
               </span>
               <span className="shrink-0 text-xs font-semibold tabular-nums">{label || (ok ? "--" : "失败")}</span>
@@ -1125,6 +1170,8 @@ export function LinkTestProbeView({
       {mobileStacked ? (
         isConvergedEntryView ? (
           renderConvergedEntryView(true)
+        ) : branchSharedEntry ? (
+          <div className="sm:hidden">{renderBranchFanOut(branchSharedEntry, true)}</div>
         ) : isBranchView ? (
           <div className="space-y-3 py-2 sm:hidden">
             <div className="text-center text-xs font-medium text-muted-foreground">{branchLabel}</div>
@@ -1165,6 +1212,8 @@ export function LinkTestProbeView({
 
       {isConvergedEntryView ? (
         renderConvergedEntryView(false)
+      ) : branchSharedEntry ? (
+        <div className={cn("min-w-0 max-w-full overflow-x-auto overscroll-x-contain pb-1", mobileStacked ? "hidden sm:block" : "")}>{renderBranchFanOut(branchSharedEntry)}</div>
       ) : isBranchView ? (
         <div className={cn("min-w-0 max-w-full overflow-x-auto overscroll-x-contain pb-1", mobileStacked ? "hidden sm:block" : "")}>
           <div className="mx-auto w-full max-w-[36rem] py-3">
