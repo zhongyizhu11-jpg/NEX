@@ -1348,6 +1348,12 @@ export function ruleRecordingExitHostId(ruleId: number, tunnelId: number, primar
   换了就把新旧两台交给调用方去作废快路径、叫它们马上重新心跳（server/agentReportRoutes.ts）。
 */
 const recordingExitByRule = new Map<number, number>();
+let recordingExitSwitches = 0;
+
+/** /metrics 用：面板启动以来入口把规则换到别的出口多少次 */
+export function recordingExitSwitchCount() {
+  return recordingExitSwitches;
+}
 
 export function recordingExitChanges(reports: readonly LiveRuleReport[]): number[] {
   const hosts = new Set<number>();
@@ -1362,6 +1368,7 @@ export function recordingExitChanges(reports: readonly LiveRuleReport[]): number
     }
     recordingExitByRule.set(ruleId, next);
     if (previous > 0) {
+      recordingExitSwitches += 1;
       hosts.add(previous);
       hosts.add(next);
     }
@@ -1371,6 +1378,7 @@ export function recordingExitChanges(reports: readonly LiveRuleReport[]): number
 
 export function resetRecordingExitsForTest() {
   recordingExitByRule.clear();
+  recordingExitSwitches = 0;
 }
 
 /**

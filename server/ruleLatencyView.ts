@@ -261,3 +261,12 @@ export function withRuleLiveSamples<T extends { ruleId: number | string; latestL
     };
   });
 }
+
+/** /metrics 用：内存里新鲜的实时样本有几条、最旧的那条多少秒前（数据源头是不是真在一分钟一更） */
+export function liveSampleStats(nowMs = Date.now()) {
+  const fresh = <V extends { at: number }>(map: Map<number, V>) => Array.from(map.values()).filter((sample) => isLinkProbeFresh(sample.at, nowMs));
+  const rules = fresh(ruleSampleByRule);
+  const tunnels = fresh(tunnelSampleByTunnel);
+  const oldest = (samples: Array<{ at: number }>) => samples.length > 0 ? Math.max(0, (nowMs - Math.min(...samples.map((sample) => sample.at))) / 1000) : null;
+  return { rules: rules.length, tunnels: tunnels.length, oldestRuleAgeSeconds: oldest(rules), oldestTunnelAgeSeconds: oldest(tunnels) };
+}

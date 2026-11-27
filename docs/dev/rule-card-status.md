@@ -8,6 +8,8 @@
 当时的背景：高防目标 `hkboil.ddos.top` 一直拦着 jinx(39.9y)、Jinx(29.9y) 两台出口，只有 hep ix 能通。
 这份记录把整条链路理一遍：数据从哪来、在哪几处缓存、最后怎么定颜色，以及这次修掉了哪几处。
 
+端到端：`server/liveEndToEnd.sqlite.test.ts`（上报 → 推送 → 卡片重取到新数），浏览器那段 `node scripts/live-browser-check.mjs`（要先 `npm run dev:panel`）。
+
 场景矩阵测试见 `server/ruleCardScenarios.test.ts`，每个场景都是面板上真实出现过的情况（场景 8、9 是 2.3.557 补的：在用出口自己超时 / 刚切换）。
 
 ## 一、数据从哪来

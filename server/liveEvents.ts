@@ -29,11 +29,14 @@ bus.setMaxListeners(0);
 let pending = new Set<LiveTopic>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 
+const sentByTopic = new Map<string, number>();
+
 function flush() {
   timer = null;
   if (pending.size === 0) return;
   const topics = Array.from(pending);
   pending = new Set();
+  for (const topic of topics) sentByTopic.set(topic, (sentByTopic.get(topic) || 0) + 1);
   bus.emit("live", topics);
 }
 
@@ -57,6 +60,11 @@ export function flushLiveForTest() {
 
 let openStreams = 0;
 const streamsByUser = new Map<number, number>();
+
+/** /metrics 用（server/ops/metricsCollect.ts）：此刻连着几个页面、各类通知发了多少次（面板启动以来，合并后的次数） */
+export function liveStreamStats() {
+  return { openStreams, sentByTopic: Object.fromEntries(sentByTopic) as Record<string, number> };
+}
 
 export function registerLiveRoute(app: Express, authenticate: (req: Request, res: Response) => Promise<{ id: number } | null>) {
   app.get("/api/live", async (req: Request, res: Response) => {

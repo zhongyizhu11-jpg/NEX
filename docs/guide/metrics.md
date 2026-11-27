@@ -142,6 +142,18 @@ NEX 隧道的入口 / 中转 / 出口进程每分钟把数据面的几类事件�
 
 告警建议：`udp_queue_drop` / `udp_expired_drop` 持续非零说明出口或目标处理不过来；`udp_session_rejected` 非零说明撞上限额（可能是运营商 NAT 后面的真实用户）；`pool_miss` 占比高说明连接风暴或预热池太小；`half_close_reaped` / `linger_expired` 多说明有客户端或目标不正常关闭。
 
+### 实时链路
+
+面板内存里的「现在」（2.3.559 起，规则卡、链路卡、推送都靠它）。数据库不可用时照样导出。
+
+| 指标 | 类型 | 含义 |
+| --- | --- | --- |
+| `nex_live_samples` | gauge | 内存里新鲜（6 分钟内）的实时样本条数，`kind`：`rule` 规则端到端、`tunnel` 链路总延迟 |
+| `nex_live_sample_oldest_age_seconds` | gauge | 新鲜样本里最旧那条距今多少秒。Agent 2.2.274 起每分钟上报，正常在 60–120 之间；一直贴着 360 说明有机器的上报断了。没有样本时不导出 |
+| `nex_live_streams` | gauge | 此刻连着实时通知（`/api/live`）的页面数 |
+| `nex_live_events_total` | counter | 推给页面的通知次数（200 毫秒合并后），`topic`：`rules.live` `tunnels.live` `balance` `hosts.live` `mutation:<模块>` |
+| `nex_balance_exit_switches_total` | counter | 负载均衡入口把规则换到另一台出口的次数（面板启动以来） |
+
 ### 累计值要注意的
 
 - `_total` 结尾的是 counter，画图用 `rate()` / `increase()`，不要直接画原值。

@@ -78,22 +78,8 @@ const LIVE_PATHS = new Set([
   规则卡的状态本来就在 rules.trafficSummary 里（不存，见上面 LIVE_PATHS）；链路卡的延迟和测试结果在列表里，这里去掉。
 */
 const VOLATILE_STATUS_ROUTERS = new Set(["tunnels", "rules", "forwardGroups"]);
-const VOLATILE_STATUS_FIELDS = new Set([
-  "latestLatencyMs",
-  "latestLatencyIsTimeout",
-  "latestLatencyAt",
-  "latestLatencySeries",
-  "latestLatencySource",
-  "latestProbeFailure",
-  "latestLatencyChain",
-  "exitTargetOk",
-  "exitTargetNote",
-  "liveRate",
-  "lastLatencyMs",
-  "lastTestStatus",
-  "lastTestMessage",
-  "lastTestAt",
-]);
+// 「现在怎么样」的字段：延迟 / 测试结果 / 探测失败、负载均衡在用出口（exitTarget*）、实时速率。按前缀认，服务端以后再加同类字段也不会漏
+const VOLATILE_STATUS_FIELD = /^(latestLatency|lastLatency|lastTest|latestProbe|exitTarget|liveRate)/;
 
 function stripVolatileStatus(path: string, data: unknown): unknown {
   if (!VOLATILE_STATUS_ROUTERS.has(path.split(".")[0])) return data;
@@ -112,7 +98,7 @@ function stripVolatileStatus(path: string, data: unknown): unknown {
         let changed = false;
         const out: Record<string, unknown> = {};
         for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
-          if (VOLATILE_STATUS_FIELDS.has(key)) { changed = true; continue; }
+          if (VOLATILE_STATUS_FIELD.test(key)) { changed = true; continue; }
           const next = strip(field, depth + 1);
           if (next !== field) changed = true;
           out[key] = next;
