@@ -38,8 +38,9 @@ func TestTCPingCounterPreservesSuppressedSuccessesAndHealth(t *testing.T) {
 			t.Fatal("failure/recovery must be immediate")
 		}
 	}
-	if sent >= 10 {
-		t.Fatalf("steady report throttling lost: %d reports", sent)
+	// 1000 次每秒一探：状态没变时只按 tcpingSteadyReportEvery 报快照，外加失败、恢复、强制那几次
+	if limit := int(1000*time.Second/tcpingSteadyReportEvery) + 4; sent > limit {
+		t.Fatalf("steady report throttling lost: %d reports (limit %d)", sent, limit)
 	}
 	if tcpingReportInt(last, "probeTotalCount") != 3000 || tcpingReportInt(last, "probeTotalSuccesses") != 2997 {
 		t.Fatalf("suppressed probes lost or counted twice: %+v", last)
@@ -164,7 +165,7 @@ func TestTCPingReportGateSuppressesStableAutoProbesButKeepsServices(t *testing.T
 	gate.commit(first)
 
 	results[0]["latencyMs"] = 99
-	stable := gate.plan(results, tunnels, groups, services, false, now.Add(time.Minute))
+	stable := gate.plan(results, tunnels, groups, services, false, now.Add(30*time.Second))
 	if len(stable.results) != 0 || len(stable.tunnels) != 0 || len(stable.forwardGroups) != 0 {
 		t.Fatalf("stable automatic probes were not suppressed: %+v", stable)
 	}
@@ -211,7 +212,7 @@ func TestTCPingReportGateSendsAgentHealthDecisionWithUnchangedRawTimeout(t *test
 	}
 }
 
-func TestTCPingReportGateRetriesFailedPostsAndSendsFiveMinuteSnapshots(t *testing.T) {
+func TestTCPingReportGateRetriesFailedPostsAndSendsSteadySnapshots(t *testing.T) {
 	gate := newTCPingReportGate()
 	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
 	results := []map[string]any{tcpingGateResult(1, false, 10)}
@@ -226,13 +227,13 @@ func TestTCPingReportGateRetriesFailedPostsAndSendsFiveMinuteSnapshots(t *testin
 	}
 	gate.commit(retry)
 
-	beforeSnapshot := gate.plan(results, nil, nil, nil, false, now.Add(4*time.Minute+59*time.Second))
+	beforeSnapshot := gate.plan(results, nil, nil, nil, false, now.Add(tcpingSteadyReportEvery-time.Second))
 	if len(beforeSnapshot.results) != 0 {
 		t.Fatal("stable state should remain quiet before the snapshot deadline")
 	}
-	snapshot := gate.plan(results, nil, nil, nil, false, now.Add(5*time.Minute+time.Second))
+	snapshot := gate.plan(results, nil, nil, nil, false, now.Add(time.Minute))
 	if len(snapshot.results) != 1 {
-		t.Fatal("stable state should emit a five minute snapshot")
+		t.Fatal("stable state should still be reported every one-minute probe round")
 	}
 }
 
@@ -264,7 +265,7 @@ func TestTCPingReportGateForceAndTunnelRulesBypassSuppression(t *testing.T) {
 	results := []map[string]any{direct, tunnelRule}
 	gate.commit(gate.plan(results, nil, nil, nil, false, now))
 
-	stable := gate.plan(results, nil, nil, nil, false, now.Add(time.Minute))
+	stable := gate.plan(results, nil, nil, nil, false, now.Add(30*time.Second))
 	if len(stable.results) != 1 || stable.results[0]["ruleId"] != 2 {
 		t.Fatalf("tunnel rules must continue to reach server-side composed health evaluation: %+v", stable.results)
 	}

@@ -1,3 +1,4 @@
+import { tunnelSample } from "../ruleLatencyView";
 import { tunnelBalanceAgentIssues, tunnelRelayRuntimeIssues } from "../tunnelBalanceAgent";
 import { sameNetworkAddress } from "@shared/ipAddress";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
@@ -685,7 +686,14 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
       [tunnel.entryHostId],
       hostMap,
     ));
-    const latestLatency = latestLatencyByTunnel.get(Number(tunnel.id));
+    // 链路总延迟：内存里更新的实时样本（每次上报 / 诊断都写，server/ruleLatencyView.ts）比数据库最新一条新就用它，
+    // 数据库那条按闸门 5 分钟才写一次（2.3.559）
+    const dbLatency = latestLatencyByTunnel.get(Number(tunnel.id));
+    const liveSample = tunnelSample(Number(tunnel.id));
+    const dbLatencyAt = dbLatency?.recordedAt ? new Date(dbLatency.recordedAt).getTime() : 0;
+    const latestLatency = liveSample && liveSample.at > dbLatencyAt
+      ? { latencyMs: liveSample.ms, isTimeout: liveSample.isTimeout, recordedAt: new Date(liveSample.at) }
+      : dbLatency;
     const latestLatencySeries = latestLatencySeriesByTunnel.get(Number(tunnel.id)) || [];
     const fallbackLatency = typeof (tunnel as any).lastLatencyMs === "number" && Number.isFinite((tunnel as any).lastLatencyMs)
       ? Number((tunnel as any).lastLatencyMs)

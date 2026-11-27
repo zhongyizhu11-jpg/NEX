@@ -50,7 +50,7 @@ function sourcesFor(poll: Poll): RuleCardDerivedSources {
     totalTrafficByRule: total,
     dailyTrafficByRule: daily,
     sparkByRule: spark,
-    stableProbeByRule: probes,
+    probeByRule: probes,
     expandedEntryRuleIds: new Set(),
     expandedLineRuleIds: new Set(),
     isProbeFresh: (at) => NOW - new Date(at as Date).getTime() < 10 * 60_000,

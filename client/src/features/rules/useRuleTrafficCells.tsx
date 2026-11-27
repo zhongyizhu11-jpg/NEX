@@ -13,7 +13,7 @@ import { ArrowDownToLine, ArrowRightLeft, ArrowUpFromLine } from "lucide-react";
 export type UseRuleTrafficCellsContext = {
   dailyTrafficByRule: Map<number, { bytesIn: number; bytesOut: number; }>;
   totalTrafficByRule: Map<number, { bytesIn: number; bytesOut: number; connections: number; }>;
-  stableProbeByRule: any /* 原类型 Map<number, RuleProbeSummary>… 引用了拿不到的 RuleProbeSummary，手动收拾 */;
+  probeByRule: any /* 原类型 Map<number, RuleProbeSummary>… 引用了拿不到的 RuleProbeSummary，手动收拾 */;
 };
 
 export type UseRuleTrafficCellsResult = {
@@ -23,7 +23,7 @@ export type UseRuleTrafficCellsResult = {
 };
 
 export function useRuleTrafficCells(ctx: UseRuleTrafficCellsContext): UseRuleTrafficCellsResult {
-  const { dailyTrafficByRule, totalTrafficByRule, stableProbeByRule } = ctx;
+  const { dailyTrafficByRule, totalTrafficByRule, probeByRule } = ctx;
   const renderTrafficBytesValue = (t: { bytesIn?: number | null; bytesOut?: number | null } | undefined, direction: "in" | "out") => {
     const value = direction === "in" ? Number(t?.bytesIn || 0) : Number(t?.bytesOut || 0);
     if (!t || value <= 0) {
@@ -77,7 +77,7 @@ export function useRuleTrafficCells(ctx: UseRuleTrafficCellsContext): UseRuleTra
   );
 
   const renderLatestLatency = (rule: any) => {
-    const t = stableProbeByRule.get(Number(rule.id));
+    const t = probeByRule.get(Number(rule.id));
     if (!t?.latestLatencyAt) return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
     // 过了新鲜期的探测只能说明「当时」：数字灰掉、写明多久以前，不再冒充现在的延迟。
     if (!isLinkProbeFresh(t.latestLatencyAt)) {

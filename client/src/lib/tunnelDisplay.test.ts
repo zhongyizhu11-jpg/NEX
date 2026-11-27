@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { moveExitInGroup, tunnelBalanceExits, getTunnelExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "./tunnelDisplay";
+import { freshLatestTunnelLatency, moveExitInGroup, tunnelBalanceExits, getTunnelExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "./tunnelDisplay";
 
 const hosts = [
   { id: 1, name: "广州 01" },
@@ -107,4 +107,14 @@ test("moving an exit swaps it with its neighbour and keeps disabled / non-host m
   assert.deepEqual(moveExitInGroup(all, [2, 3, 4], 3, -1), { hostIds: [3, 2, 4], memberIds: [12, 20, 11, 13] });
   assert.equal(moveExitInGroup(all, [2, 3, 4], 2, -1), null);
   assert.equal(moveExitInGroup(all, [2, 3, 4], 4, 1), null);
+});
+
+test("链路卡「现在」的总延迟：新鲜、而且不比最近一次诊断旧的实时样本优先（以前有过诊断就一直显示诊断那个数）", () => {
+  const now = Date.now();
+  const at = (ago: number) => new Date(now - ago).toISOString();
+  assert.deepEqual(freshLatestTunnelLatency({ latestLatencyMs: 14, latestLatencyAt: at(30_000), lastTestAt: Math.floor((now - 3_600_000) / 1000) }), { ms: 14, timeout: false });
+  assert.deepEqual(freshLatestTunnelLatency({ latestLatencyMs: null, latestLatencyIsTimeout: true, latestLatencyAt: at(30_000) }), { ms: null, timeout: true });
+  // 诊断比实时样本新：交给诊断那一套；样本过期：也交回去
+  assert.equal(freshLatestTunnelLatency({ latestLatencyMs: 14, latestLatencyAt: at(60_000), lastTestAt: Math.floor((now - 1_000) / 1000) }), null);
+  assert.equal(freshLatestTunnelLatency({ latestLatencyMs: 14, latestLatencyAt: at(7 * 60_000) }), null);
 });

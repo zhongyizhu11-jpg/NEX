@@ -4,7 +4,7 @@
 import { type ReactElement } from "react";
 import { type RuleCardRule } from "../../pages/Rules";
 import { Badge } from "@/components/ui/badge";
-import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus } from "@/lib/forwardRuleStatus";
+import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "@/lib/forwardRuleStatus";
 import { cn } from "@/lib/utils";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule } from "@shared/ruleLimits";
 import { RULE_EGRESS_STATE_LABELS, normalizeRuleEgressType, ruleEgressStateTone, ruleEgressSummaryText, type RuleEgressState } from "@shared/ssEgress";
@@ -12,7 +12,7 @@ import { TLS_INBOUND_RULE_STATE_LABELS, formatSniRuleEntry, parseSniNameJson, sn
 import { Lock } from "lucide-react";
 
 export type UseRuleStateBadgesContext = {
-  ruleVisualStatuses: any /* 原类型 Map<number, { current: ReturnType<typeof resolveForwardRuleVisualStatus>; displa… 引用了拿不到的 RuleVisualStatusSnapshot，手动收拾 */;
+  ruleVisualStatuses: Map<number, ForwardRuleVisualStatus>;
   resolveRuleVisualStatus: (rule: any) => ReturnType<typeof resolveForwardRuleVisualStatus>;
   user: any;
   tlsInboundById: Map<number, any>;
@@ -28,7 +28,7 @@ export type UseRuleStateBadgesResult = {
 export function useRuleStateBadges(ctx: UseRuleStateBadgesContext): UseRuleStateBadgesResult {
   const { ruleVisualStatuses, resolveRuleVisualStatus, user, tlsInboundById } = ctx;
   const renderNotRunningReason = (rule: { id?: unknown; portWarnings?: unknown }) => {
-    const visual = ruleVisualStatuses.get(Number(rule.id))?.display || resolveRuleVisualStatus(rule);
+    const visual = ruleVisualStatuses.get(Number(rule.id)) || resolveRuleVisualStatus(rule);
     const reason = resolveForwardRuleNotRunningReason(visual, rule?.portWarnings);
     if (!reason) return null;
     return (

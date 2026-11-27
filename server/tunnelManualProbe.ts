@@ -13,6 +13,7 @@ import {
 } from "./repositories/forwardTestRepository";
 import { SELF_TEST_MAX_LIFETIME_SECONDS, selfTestSweepActivity, selfTestTimeoutSeconds } from "./selfTestTiming";
 import { appendPanelLog } from "./_core/panelLogger";
+import { noteTunnelSample } from "./ruleLatencyView";
 
 /*
   隧道手动测试（逐跳 / 多入口 / 多出口）的持久化批次，和 forwardChainManualProbe 同一套做法：
@@ -72,6 +73,8 @@ async function applyTunnelHopAggregate(tunnelId: number, aggregate: Pick<HopTest
     message: aggregateMessage,
   });
   const recordedAt = new Date();
+  // 诊断测到的总延迟也是「现在」：链路卡马上就是这个数（server/ruleLatencyView.ts，和定时探测同一份实时样本）
+  noteTunnelSample({ tunnelId, ms: aggregate.success ? aggregate.latencyMs : null, isTimeout: !aggregate.success, at: recordedAt.getTime(), source: "diagnosis" });
   if (latencyMode === "max") {
     let branchIndex = 0;
     for (const detail of aggregate.details || []) {

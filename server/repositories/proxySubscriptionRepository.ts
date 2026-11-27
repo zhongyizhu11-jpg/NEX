@@ -1395,9 +1395,9 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
   if (options.withLatency && boundRuleIds.length > 0) {
     latencyByRuleId = new Map();
     const rawSummary = await getTrafficSummaryByRule({ userId, ruleIds: boundRuleIds, includeLatency: true }).catch(() => []);
-    // 负载均衡的规则换成在用出口的整链（和规则卡同一个数）：主出口被拦时定时探测是超时，排序会把好好的节点排到最后
-    const { withRuleExitTargets } = await import("../exitTargetHealth");
-    const summary = withRuleExitTargets(rawSummary as Array<{ ruleId: number | string; latestLatencyMs?: unknown; latestLatencyIsTimeout?: unknown }>);
+    // 和规则卡同一份「现在」（server/ruleLiveStatus.ts）：负载均衡的规则是在用出口的整链，主出口被拦时不会把好好的节点排到最后
+    const { withLiveRuleStatus } = await import("../ruleLiveStatus");
+    const summary = withLiveRuleStatus(rawSummary as Array<{ ruleId: number | string; latestLatencyMs?: unknown; latestLatencyIsTimeout?: unknown }>);
     for (const row of summary as any[]) {
       const ruleId = Number(row.ruleId);
       const latency = row.latestLatencyIsTimeout || row.latestLatencyMs === null || row.latestLatencyMs === undefined ? null : Number(row.latestLatencyMs);

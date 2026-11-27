@@ -1,4 +1,4 @@
-import { recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
+import { noteRuleSample, noteTunnelSample, recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, parseSelfTestMeta } from "./agentRouteUtils";
@@ -239,6 +239,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       }
     }
     if (meta?.kind === "tunnel" && typeof meta.tunnelId === "number") {
+      noteTunnelSample({ tunnelId: meta.tunnelId, ms: success ? cleanLatency : null, isTimeout: !success || cleanLatency === null, source: "diagnosis" });
       if (success) await db.updateTunnelRunningStatus(meta.tunnelId, true);
       await db.updateTunnelTestResult(meta.tunnelId, {
         status: success ? "success" : "failed",
@@ -280,11 +281,20 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         sample: refreshedTunnelLatency,
         tunnel,
       });
+      /*
+        入口到出口那一段：负载均衡指定出口时是诊断现测的；否则看这次诊断有没有等到链路刷新，没等到就用内存里新鲜的那一段
+        （每次链路上报都写，2.3.559）。以前没等到就空着，诊断通了卡片却还停在几分钟前（用户：「诊断延迟返回后，规则还显示 7ms 8 分钟前」）。
+      */
+      const memoryLeg = !viaExit && !tunnelLatencyRefreshed && !tunnelProbeReused
+        ? tunnelExitLatency(meta.tunnelId, Number(meta.exitHostId || 0) || Number(tunnel?.exitHostId || 0))
+        : null;
       const tunnelLatency = viaExit
         ? (viaSegment ? { latencyMs: viaSegment.latencyMs, isTimeout: viaSegment.isTimeout, recordedAt: new Date(viaSegment.recordedAt) } : null)
         : tunnelLatencyRefreshed || tunnelProbeReused
           ? refreshedTunnelLatency
-          : null;
+          : memoryLeg
+            ? { latencyMs: memoryLeg.ms, isTimeout: false, recordedAt: new Date(memoryLeg.at) }
+            : null;
       const viaNames = viaExit
         ? await Promise.all([Number(meta.entryHostId || 0), Number(meta.exitHostId || 0)].map(async (id) => (
           String(((id > 0 ? await db.getHostById(id).catch(() => null) : null) as { name?: unknown } | null | undefined)?.name || (id > 0 ? `主机 #${id}` : "入口"))
@@ -419,6 +429,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         return;
       }
       if (combinedLatency) {
+        noteRuleSample({ ruleId: t.ruleId, hostId: host.id, ms: combinedLatency.latencyMs, isTimeout: combinedLatency.isTimeout, source: "diagnosis" });
         await db.insertTcpingStat({
           ruleId: Number(t.ruleId),
           hostId: Number(host.id),
@@ -483,6 +494,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       );
     }
     if (!meta || meta.kind === "forward-group") {
+      noteRuleSample({ ruleId: t.ruleId, hostId: host.id, ms: success ? cleanLatency : null, isTimeout: !success || cleanLatency === null, source: "diagnosis" });
       await db.insertTcpingStat({
         ruleId: Number(t.ruleId),
         hostId: Number(host.id),

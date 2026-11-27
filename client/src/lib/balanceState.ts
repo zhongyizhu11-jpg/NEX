@@ -116,7 +116,12 @@ export type ExitRowView = {
   reason: string | null;
   /** 能做点什么时的一句 */
   hint: string | null;
+  /** 按权重 / 按负载时这台此刻分到几成新连接（「分到 40%」）；别的分法、不是在用、没有入口实时上报时 null */
+  share: string | null;
 };
+
+/** 用户：「「分到 %」按权重和负载要显示的吧」—— 这两种分法分到多少就是它们的意思；主备、按延迟、轮询之类不写 */
+const SHARE_STRATEGIES: ReadonlySet<BalanceStrategy> = new Set<BalanceStrategy>(["weighted", "least_load"]);
 
 /** 慢启动：lbcore 的 DefaultSlowStart，刚恢复 60 秒内从一成加到满份（按访客固定、主备不加）。 */
 const SLOW_START_MS = 60_000;
@@ -178,7 +183,12 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
   // 一条规则一行：名字长了只截名字，延迟一直看得见；没测到（只看出口组时只有记录探测的那台测到目标）只写名字
   const rules = used.map((item) => ({ label: ruleLabel(item.ruleId, ctx.ruleNames), value: item.ms != null ? ms(item.ms) : null }));
   const detail = rules.length > 0 ? null : hasData || summary?.exitMs != null ? exitOnlyLatencyText(summary!) : null;
-  const view = (state: BalanceStateKey, reason: string | null = null, hint: string | null = null): ExitRowView => ({ state, detail, rules, reason, hint });
+  const shareValue = hasData && ctx.live && SHARE_STRATEGIES.has(ctx.strategy) ? summary!.share : null;
+  const shareText = typeof shareValue === "number" && Number.isFinite(shareValue) && shareValue > 0 ? `分到 ${Math.round(shareValue * 100)}%` : null;
+  const view = (state: BalanceStateKey, reason: string | null = null, hint: string | null = null): ExitRowView => ({
+    state, detail, rules, reason, hint,
+    share: state === "active" || state === "warming" || state === "unstable" ? shareText : null,
+  });
 
   if (!ctx.online) return view("down", "出口机离线（面板收不到它的 Agent）", "检查这台机器和它的 Agent");
   if (ctx.upgradeNeeded) {

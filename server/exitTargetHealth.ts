@@ -1,5 +1,5 @@
 import { tunnelEffectivePin } from "./tunnelPinState";
-import { ruleChainLatency, ruleRecordedProbe, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
+import { ruleChainLatency, ruleSample, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
 import { appendPanelLog } from "./_core/panelLogger";
 import { dbBool } from "./repositories/repositoryUtils";
 import { ExitTargetPushDebouncer } from "./exitTargetPush";
@@ -1352,7 +1352,7 @@ export function ruleHasReachableExit(ruleId: number, nowMs = Date.now()): boolea
   const downHosts = new Set(states.filter((state) => state.down && !exitTargetDownStale(state, nowMs)).map((state) => state.hostId));
   const live = liveBalanceForRule(Number(ruleId), nowMs);
   // 规则自己那条定时探测从在用的那台发、超时了（2.3.557）：它也不算连得上
-  const recorded = ruleRecordedProbe(Number(ruleId), nowMs);
+  const recorded = ruleSample(Number(ruleId), nowMs);
   if (recorded?.isTimeout) downHosts.add(recorded.hostId);
   if (live) return live.exits.some((exit) => exit.state === "active" && exit.hostId > 0 && !downHosts.has(exit.hostId));
   if (states.length === 0) return null;
@@ -1371,7 +1371,7 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
         用户面板 2026-11-27：指定 jinx(39.9y)、只看出口组，高防拦着 jinx，客户端超时、诊断不通，卡片却是绿的 ——
         下面那条「空着等测到」以前不看是哪台测的，把在用这台自己的超时也盖掉了。
       */
-      const recorded = ruleRecordedProbe(row.ruleId, nowMs);
+      const recorded = ruleSample(row.ruleId, nowMs);
       const carryingTimedOut = !!carrying && probeTimeout && recorded?.isTimeout === true && recorded.hostId === carrying.hostId;
       /*
         两段没测全、规则自己的定时探测超时、可那条是切换前别的出口测的（入口已经把流量换到这台，它还没测到）：别写「超时」

@@ -1,4 +1,4 @@
-import { noteRuleProbeRecorded, recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
+import { noteRuleSample, noteTunnelSample, recordRuleTargetLeg, recordTunnelExitLeg, tunnelExitLatency } from "./ruleLatencyView";
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { reconcileRuleLimits, recordRuleQuotaTraffic, ruleLimitRootId } from "./ruleLimits";
@@ -89,6 +89,21 @@ async function refreshUserRuleAgents(userId: number, reason: string) {
   for (const hostId of hostIds) {
     if (hostId > 0) pushAgentRefresh(hostId, reason);
   }
+}
+
+/*
+  链路延迟的数据库历史多久写一次（2.3.559）：界面读内存里的实时样本，数据库只是历史。闸门收了这一轮（状态变了、
+  或者这台机器这条链路到了 5 分钟快照）就写；汇总可能在闸门没收的那一条上凑齐，所以这条线离上次写库满 5 分钟也写，
+  历史不会因此断档。
+*/
+const TUNNEL_HISTORY_EVERY_MS = 5 * 60 * 1000;
+const tunnelHistoryWrittenAt = new Map<string, number>();
+function shouldPersistTunnelSeries(tunnelId: number, seriesKey: string, accepted: boolean, nowMs = Date.now()) {
+  const key = `${tunnelId}:${seriesKey}`;
+  const last = tunnelHistoryWrittenAt.get(key) || 0;
+  if (!accepted && nowMs - last < TUNNEL_HISTORY_EVERY_MS) return false;
+  setBoundedMapValue(tunnelHistoryWrittenAt, key, nowMs, 20_000);
+  return true;
 }
 
 function cleanTunnelSeriesKey(value: unknown) {
@@ -1641,16 +1656,22 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const relayFailover = isTunnelRelayFailover(tunnel, hops);
       const relayCandidateCount = relayFailover ? tunnelRelayCandidates(hops).length : 0;
       const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>();
-      // 链路卡「到出口」、规则卡整链的第一段（server/ruleLatencyView.ts）：只有一台出口时总数就是入口到它
-      const noteSingleExitLeg = (latencyMs: number | null, isTimeout: boolean) => {
+      // 链路总延迟的实时样本；只有一台出口时总数也就是入口到它（链路卡「到出口」、规则卡整链的第一段，server/ruleLatencyView.ts）
+      const noteTotal = (latencyMs: number | null, isTimeout: boolean) => {
+        noteTunnelSample({ tunnelId, ms: latencyMs, isTimeout });
         if (tunnelBalancesExits(tunnel)) return;
         recordTunnelExitLeg(tunnelId, tunnel.exitHostId, isTimeout ? null : latencyMs);
       };
+      /*
+        每次上报都进内存（汇总器、入口 → 每台出口、链路总延迟），界面读的是这里；数据库那条历史按闸门写：
+        闸门收了这一条，或者这条线离上次写库已经 5 分钟（汇总可能刚好在闸门没收的那一条上凑齐）才写。
+      */
+      const accepted = reports.some((report) => acceptedTunnelReports.has(report));
+      const persist = (seriesKey: string) => shouldPersistTunnelSeries(tunnelId, seriesKey, accepted);
       for (const report of reports) {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
         collectCounter("tunnel", tunnelId, report);
-        if (!acceptedTunnelReports.has(report)) continue;
-        lossSamples.push({ tunnelId, count: Number(report.probeCount) || 0, ok: Number(report.probeSuccesses) || 0 });
+        if (acceptedTunnelReports.has(report)) lossSamples.push({ tunnelId, count: Number(report.probeCount) || 0, ok: Number(report.probeSuccesses) || 0 });
         const latencyValue = typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null;
         const isTimeout = !!report.isTimeout || latencyValue === null;
         const seriesKey = cleanTunnelSeriesKey(report.seriesKey);
@@ -1675,7 +1696,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           });
           if (!aggregate) continue;
           const recordedAt = new Date();
-          await mapWithConcurrency(aggregate.details, 4, async (detail) => {
+          if (persist(`entries${seriesKey ? `-${seriesKey}` : ""}`)) await mapWithConcurrency(aggregate.details, 4, async (detail) => {
             const detailSeriesKey = cleanTunnelSeriesKey(`entry-${detail.hostId}${seriesKey ? `-${seriesKey}` : ""}`);
             const branchLabel = seriesKey ? cleanTunnelSeriesLabel(report.seriesLabel, seriesKey) : "";
             await db.insertTunnelLatencyStat({
@@ -1704,7 +1725,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             });
             continue;
           }
-          await db.insertTunnelLatencyStat({
+          if (persist("total")) await db.insertTunnelLatencyStat({
             tunnelId,
             latencyMs: aggregate.success ? aggregate.latencyMs : null,
             isTimeout: !aggregate.success,
@@ -1714,7 +1735,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             seriesLabel: aggregate.partial ? "可用入口最大延迟" : "多入口最大延迟",
             recordedAt,
           }, { preserveMessage: true });
-          noteSingleExitLeg(aggregate.success ? aggregate.latencyMs : null, !aggregate.success);
+          noteTotal(aggregate.success ? aggregate.latencyMs : null, !aggregate.success);
           if (aggregate.success && !tunnel.isRunning) {
             await db.updateTunnelRunningStatus(tunnelId, true);
             tunnel.isRunning = true;
@@ -1777,7 +1798,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             toHostId: tunnelProbeTargetHostId(tunnel, hops, exitNodes, report, seriesKey),
           });
           if (!aggregate) continue;
-          await db.insertTunnelLatencyStat({
+          if (persist("total")) await db.insertTunnelLatencyStat({
             tunnelId,
             latencyMs: aggregate.success ? aggregate.latencyMs : null,
             isTimeout: !aggregate.success,
@@ -1786,14 +1807,14 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
             seriesKey: "total",
             seriesLabel: "总延迟",
           }, { preserveMessage: true });
-          noteSingleExitLeg(aggregate.success ? aggregate.latencyMs : null, !aggregate.success);
+          noteTotal(aggregate.success ? aggregate.latencyMs : null, !aggregate.success);
           if (aggregate.success && !tunnel.isRunning) {
             await db.updateTunnelRunningStatus(tunnelId, true);
             tunnel.isRunning = true;
           }
           continue;
         }
-        await db.insertTunnelLatencyStat({
+        if (persist("total")) await db.insertTunnelLatencyStat({
           tunnelId,
           latencyMs: latencyValue,
           isTimeout,
@@ -1802,14 +1823,13 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           seriesKey: "total",
           seriesLabel: "总延迟",
         }, { preserveMessage: true });
-        noteSingleExitLeg(latencyValue, isTimeout);
+        noteTotal(latencyValue, isTimeout);
         if (!isTimeout && !tunnel.isRunning) {
           await db.updateTunnelRunningStatus(tunnelId, true);
           tunnel.isRunning = true;
         }
       }
 
-      if (!reports.some((report) => acceptedTunnelReports.has(report))) return;
       if (relayFailover) {
         const aggregates = Array.from({ length: relayCandidateCount }, (_, index) => {
           const key = `relay-${index + 1}`;
@@ -1851,6 +1871,10 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         const exitHostId = tunnelProbeTargetHostId(tunnel, hops, exitNodes, {} as AgentTunnelTcpingResult, branch.key);
         recordTunnelExitLeg(tunnelId, exitHostId, branch.isTimeout ? null : branch.latencyMs, recordedAt.getTime());
       }
+      const summary = summarizeTunnelBranches(branches);
+      noteTunnelSample({ tunnelId, ms: summary.latencyMs, isTimeout: summary.unavailable, at: recordedAt.getTime() });
+      if (!summary.unavailable && !tunnel.isRunning) await db.updateTunnelRunningStatus(tunnelId, true);
+      if (!persist("branches")) return;
       await mapWithConcurrency(branches, 4, async (branch) => {
         await db.insertTunnelLatencyStat({
           tunnelId,
@@ -1863,7 +1887,6 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           recordedAt,
         }, { preserveMessage: true, updateTunnel: false });
       });
-      const summary = summarizeTunnelBranches(branches);
       await db.insertTunnelLatencyStat({
         tunnelId,
         latencyMs: summary.latencyMs,
@@ -1874,7 +1897,6 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         seriesLabel: summary.partial ? "可用出口最大延迟" : "最大延迟",
         recordedAt,
       }, { preserveMessage: true });
-      if (!summary.unavailable && !tunnel.isRunning) await db.updateTunnelRunningStatus(tunnelId, true);
     }));
     // 资源告警：隧道丢包率（滑动 10 分钟窗口，不阻塞上报）
     observeTunnelProbeLoss(host, lossSamples);
@@ -2090,7 +2112,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const primaryExitHostId = Number(tunnelContext.tunnel.exitHostId || 0);
       if (Number(host.id) !== ruleRecordingExitHostId(ruleId, tunnelId, primaryExitHostId)) return null;
       collectCounter("rule", ruleId, report);
-      const inUseLeg = !report.isTimeout && Number(host.id) !== primaryExitHostId ? tunnelExitLatency(tunnelId, host.id) : null;
+      // 入口到这台出口那一段先看内存里新鲜的（每次链路上报都写），面板刚重启还没有时才读数据库最近一条
+      const inUseLeg = report.isTimeout ? null : tunnelExitLatency(tunnelId, host.id);
       const latestTunnelLatency = report.isTimeout
         ? null
         : inUseLeg
@@ -2104,8 +2127,6 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         tunnelRecordedAt: latestTunnelLatency?.recordedAt,
       });
       if (!combined) return null;
-      // 记下这一条是哪台出口测的：卡片据此分清「在用的这台自己超时」和「切换前那台的超时」（server/exitTargetHealth.ts）
-      noteRuleProbeRecorded({ ruleId, hostId: host.id, isTimeout: combined.isTimeout });
       const tunnelIntroducedTimeout = combined.isTimeout && !report.isTimeout;
       // 隧道那一段不通时没有种类可说（隧道探测另有一路），只在出口到目标不通时记种类。
       recordRuleProbeFailure(ruleId, combined.isTimeout ? (report.isTimeout ? report.failure || "timeout" : "unreachable") : null);
@@ -2137,6 +2158,14 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       };
     });
     const validRuleStats = ruleStats.filter((entry): entry is NonNullable<typeof entry> => !!entry);
+    /*
+      内存里的实时样本每次上报都写（卡片、链路、负载均衡弹窗、订阅读这里）；下面的闸门只管数据库那条历史多久写一次。
+      隧道规则记的是此刻在用的那台出口测的（上面 ruleRecordingExitHostId 已经筛过）：卡片据此分清「在用的这台自己超时」
+      和「切换前那台的超时」（server/exitTargetHealth.ts）。
+    */
+    for (const entry of validRuleStats) {
+      noteRuleSample({ ruleId: entry.stat.ruleId, hostId: entry.stat.hostId, ms: entry.stat.latencyMs, isTimeout: entry.stat.isTimeout });
+    }
     const ruleGatePlan = agentTcpingReportGate.plan({
       hostId: Number(host.id),
       force,

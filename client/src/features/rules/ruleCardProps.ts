@@ -129,7 +129,7 @@ export type RuleCardDerivedSources = {
   totalTrafficByRule: Map<unknown, TrafficTotals>;
   dailyTrafficByRule: Map<unknown, TrafficTotals>;
   sparkByRule: Map<number, number[]>;
-  stableProbeByRule: Map<number, ProbeEntry>;
+  probeByRule: Map<number, ProbeEntry>;
   expandedEntryRuleIds: Set<number>;
   expandedLineRuleIds: Set<number>;
   isProbeFresh: (at: unknown) => boolean;
@@ -151,7 +151,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
   // 流量表的 key 是数字 id，原来卡片直接拿 rule.id 去查，这里照旧
   const total = sources.totalTrafficByRule.get(rule.id);
   const daily = sources.dailyTrafficByRule.get(rule.id);
-  const probe = sources.stableProbeByRule.get(ruleId);
+  const probe = sources.probeByRule.get(ruleId);
   const probeAt = probe?.latestLatencyAt;
   const probeStale = !!probeAt && !sources.isProbeFresh(probeAt);
   const probeMs = typeof probe?.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? probe.latestLatencyMs : null;

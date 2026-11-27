@@ -22,6 +22,7 @@ import { telegramHostExtraRows, telegramHostsExtraRows, telegramMenuExtraRow, te
 import { HOST_PAGE_SIZE, ROUTE_PAGE_SIZE, RULE_PAGE_SIZE, UPDATE_ACTION_CONFIRM_TTL_MS, clampPage, formatAgo, formatDate, formatPercent, formatPinUntil, formatRuleButtonLabel, formatSpeed, formatUptime, normalizeKeyword, randomCode, shortText } from "./telegramText";
 import { telegramRulesCaller } from "./telegramTransport";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./telegramTransport";
+import { withLiveRuleStatus } from "../ruleLiveStatus";
 
 export type AiRuleStatusFilter = "running" | "pending" | "disabled" | "abnormal";
 
@@ -913,7 +914,9 @@ export async function aiRuleTrafficSummaryMap(user: any, ruleIds: number[], opti
     ruleIds: ids,
     includeLatency: !!options.includeLatency,
   }).catch(() => [] as any[]);
-  for (const row of rows as any[]) {
+  // 延迟 / 通不通和规则卡同一份「现在」（server/ruleLiveStatus.ts）
+  const liveRows = options.includeLatency ? withLiveRuleStatus(rows as Array<{ ruleId: number }>) : rows;
+  for (const row of liveRows as any[]) {
     const ruleId = Number(row?.ruleId || 0);
     if (!ruleId) continue;
     const prev = map.get(ruleId) || emptyAiRuleTrafficSummary();

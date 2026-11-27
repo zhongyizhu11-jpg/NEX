@@ -144,3 +144,11 @@ test("指定的那台来回断、刚放回在观察：入口没让它扛，不�
   assert.equal(pinBypassText(observing, undefined, false), null);
   assert.equal(exitRowView(observing, { ...base, pinHostId: 3, live: false }).reason, null);
 });
+
+test("按权重 / 按负载写「分到 X%」；别的分法、备用、没有实时上报不写（用户：「「分到 %」按权重和负载要显示的吧」）", () => {
+  assert.equal(exitRowView(summary({ share: 0.34 }), { ...base, strategy: "weighted" }).share, "分到 34%");
+  assert.equal(exitRowView(summary({ share: 0.5 }), { ...base, strategy: "least_load" }).share, "分到 50%");
+  assert.equal(exitRowView(summary({ share: 0.34 }), { ...base, strategy: "auto" }).share, null);
+  assert.equal(exitRowView(summary({ share: 0.34 }), { ...base, strategy: "weighted", live: false }).share, null);
+  assert.equal(exitRowView(summary({ share: 0.34, activeRules: 0 }), { ...base, strategy: "weighted" }).share, null, "备用的不写");
+});

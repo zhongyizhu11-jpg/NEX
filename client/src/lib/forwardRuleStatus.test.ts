@@ -3,7 +3,6 @@ import test from "node:test";
 import { LINK_PROBE_FRESH_MS } from "@shared/linkProbePolicy";
 import { readRulesPageSource } from "../testing/rulesPageSource";
 import {
-  preferLastKnownForwardRuleVisualStatus,
   resolveForwardRuleNotRunningReason,
   resolveForwardRuleStopReason,
   resolveForwardRuleVisualStatus,
@@ -167,35 +166,6 @@ test("a recent timeout overrides the direct rule running flag", () => {
   assert.equal(result.state, "error");
 });
 
-test("last confirmed state is used while a new status is pending", () => {
-  const result = preferLastKnownForwardRuleVisualStatus(
-    { state: "pending", title: "等待 Agent 上报运行状态" },
-    { state: "running", title: "Agent 已确认规则运行" },
-  );
-  assert.equal(result.state, "running");
-  assert.match(result.title, /上次状态/);
-});
-
-test("an explicit current result is never replaced by the cache", () => {
-  const cases = [
-    {
-      current: { state: "error" as const, title: "转发资源配置不可用" },
-      cached: { state: "running" as const, title: "旧状态" },
-    },
-    {
-      current: { state: "disabled" as const, title: "规则已停用" },
-      cached: { state: "running" as const, title: "旧状态" },
-    },
-    {
-      current: { state: "running" as const, title: "Agent 已确认规则运行" },
-      cached: { state: "error" as const, title: "旧故障" },
-    },
-  ];
-  for (const { current, cached } of cases) {
-    assert.deepEqual(preferLastKnownForwardRuleVisualStatus(current, cached), current);
-  }
-});
-
 test("rules stopped by their own limit say why and that they resume on their own", () => {
   assert.equal(resolveForwardRuleStopReason({ isEnabled: true, ruleLimitReason: "expired" })?.label, "已到期");
   const quota = resolveForwardRuleStopReason({ isEnabled: true, ruleLimitReason: "traffic_limit" });
@@ -300,7 +270,7 @@ test("负载均衡链路：在用的出口刚坏、别的出口能通时不标�
   用户面板（2026-11-26）：hkt/3 走 hep ix 是通的（诊断 8 ms），另外两台出口被高防拦着 —— 这是「有出口连不上、已切走」的橙色，
   是实际数据下的结论。以前它被当成「等新的上报」，拿浏览器里存着的上一次红色顶着，刷新也一直红。
 */
-test("负载均衡「有出口连不上、已切走」的橙色是确定的结论：不拿上一次的红色顶", () => {
+test("负载均衡「有出口连不上、已切走」是确定的结论", () => {
   const now = Date.now();
   const current = resolveForwardRuleVisualStatus({
     ruleEnabled: true,
@@ -315,8 +285,6 @@ test("负载均衡「有出口连不上、已切走」的橙色是确定的结�
   }, now);
   assert.equal(current.state, "running", "通的（2.3.558：指定的出口不能用只变走势线）");
   assert.equal(current.pinBypassed, true);
-  const shown = preferLastKnownForwardRuleVisualStatus(current, { state: "error", title: "最近一次端到端探测超时" });
-  assert.deepEqual(shown, current, "显示的是现在的，不是上一次的红色");
 
   // 在用的出口探测超时、别的出口还连得上（正在切）：确定的结论（绿点 + 琥珀走势线）
   const timeout = resolveForwardRuleVisualStatus({
@@ -326,7 +294,6 @@ test("负载均衡「有出口连不上、已切走」的橙色是确定的结�
   }, now);
   assert.equal(timeout.state, "pending");
   assert.equal(timeout.confirmed, true);
-  assert.deepEqual(preferLastKnownForwardRuleVisualStatus(timeout, { state: "error", title: "旧故障" }), timeout);
 });
 
 // 2.3.555 回归（用户面板 20:38）：hkt/2、hkt/3 在跑、8 ms，「有出口连不上、已切走」的橙色被当成没在运行，写「等待 Agent 应用」

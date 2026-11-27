@@ -175,7 +175,7 @@ export function ExitBalanceDialog({
               key={hostId}
               name={nameOf(hostId)}
               state={view.state}
-              detail={[view.detail, weight ? `权重 ${weight}` : ""].filter(Boolean).join(" · ") || null}
+              detail={[view.detail, weight ? `权重 ${weight}` : "", view.share].filter(Boolean).join(" · ") || null}
               items={view.rules}
               reason={view.reason}
               hint={view.hint}

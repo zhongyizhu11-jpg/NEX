@@ -24,6 +24,7 @@ import { resolveProxyNodeHealth, type ProxyNodeProbeSample } from "../../shared/
 import { normalizeProxyNodeResetDay } from "../../shared/proxyNodeQuota";
 import { redactSharedProxyNodeRow } from "../../shared/proxyNodeShare";
 import { pushAgentRefresh } from "../agentEvents";
+import { withLiveRuleStatus } from "../ruleLiveStatus";
 import {
   normalizeProxySubAlias,
   normalizeProxySubTokenOptions,
@@ -395,8 +396,9 @@ export const proxySubscriptionsRouter = router({
      * 「这个落地通不通」。这里只要探测，流量走 proxy_nodes.trafficUsed
      * 那个累计列（traffic_stats 只留 72 小时，累计量算不回来）。
      */
+    // 和规则卡同一份「现在」（server/ruleLiveStatus.ts）
     const summary = allRuleIds.length > 0
-      ? await db.getTrafficSummaryByRule({ userId: ctx.user.id, ruleIds: allRuleIds })
+      ? withLiveRuleStatus(await db.getTrafficSummaryByRule({ userId: ctx.user.id, ruleIds: allRuleIds }) as Array<{ ruleId: number }>)
       : [];
     const byRule = new Map<number, any[]>();
     for (const row of summary as any[]) {

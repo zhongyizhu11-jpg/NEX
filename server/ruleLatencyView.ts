@@ -1,16 +1,18 @@
 import { isLinkProbeFresh } from "../shared/linkProbePolicy";
 
 /*
-  延迟口径（2026-11 用户：「转发延迟显示都不统一」）：界面上的每一个延迟数都是面板自己探的那几段，和「诊断」同一套：
+  实时数据只有这一份（2.3.559 起，用户：「什么都是实时数据」「能统一就统一成一体」）：
 
-    入口 → 出口机    链路的定时探测（Agent 经隧道 TCPing 出口机的监听口；负载均衡时每台出口一条分支 primary / exit-N）
-    出口机 → 目标    规则的定时探测（出口机 TCPing 目标）；负载均衡的快速探测（exitTargetStatesForRule 的 medianMs）
+    内存里是「现在」，数据库是「历史」。界面上「现在多少 ms、通不通」一律读这里；数据库（tcping_stats / tunnel_latency_stats）
+    按上报闸门节流写历史，给延迟记录和 30 天色块用，面板刚重启、这里还空着时退回读最新一条。
 
-  链路卡「到出口」= 第一段；规则卡「整链」= 第一段 + 第二段（在用的那台出口）；弹窗每台出口写两段。
-  入口实时上报（FXP / Agent）里的 exitMs 是建隧道握手的时间（含加密），比 TCPing 大一截（用户面板：12.1 vs 6 ms），
-  那个数只在面板一段都没测到时、标明「Agent 自测」才用；在用哪台出口照旧按它报的。
+  写进来的：
+    规则样本     每条规则自己最新一次端到端（定时探测每次上报都写，不管数据库那边闸门收不收；诊断完成也写，来源记 diagnosis）
+    链路样本     每条链路最新一次总延迟（入口到出口，多跳 / 多出口是汇总后的那个数）
+    出口段       入口 → 每台出口机（负载均衡每台出口一条分支）、每台出口机 → 规则目标
 
-  这里只放内存里的最新值（探测上报时写进来），读的地方都不查库：规则卡的汇总、链路列表、链路弹窗共用这一份。
+  延迟口径（2026-11 用户：「转发延迟显示都不统一」）：界面上的每个延迟数都是面板自己探的这几段，和「诊断」同一套。
+  入口实时上报（FXP / Agent）里的 exitMs 是建隧道握手的时间（含加密），比 TCPing 大一截，只在面板一段都没测到时标明「Agent 自测」才用。
 */
 
 type Leg = { ms: number; at: number };
@@ -21,11 +23,14 @@ const exitLegByTunnel = new Map<number, Map<number, Leg>>();
 const targetLegByRule = new Map<number, { tunnelId: number; primaryHostId: number; byHost: Map<number, Leg> }>();
 
 /**
- * 规则 → 规则自己那条定时探测（数据库里那一条，延迟记录 / 卡片 / 订阅都读它）最新一次是哪台出口测的、通没通（2.3.557）。
- * 2.3.555 起这一条从此刻在用的那台出口发：卡片要分清「超时是在用的这台自己测的」（流量真的过不去）和「是切换前那台测的」
- * （刚切走，新的这台还没测到）。
+ * 规则 → 规则自己最新一次端到端（定时探测或诊断）：多少 ms、超没超时、哪台机器测的。隧道规则是此刻在用的那台出口测的
+ * （2.3.555）：卡片据此分清「超时是在用的这台自己测的」（流量真的过不去）和「是切换前那台测的」（刚切走，新的还没测到）。
  */
-const recordedProbeByRule = new Map<number, { hostId: number; isTimeout: boolean; at: number }>();
+export type RuleSample = { hostId: number; ms: number | null; isTimeout: boolean; at: number; source: "probe" | "diagnosis" };
+const ruleSampleByRule = new Map<number, RuleSample>();
+/** 链路 → 最新一次总延迟（入口到出口；多跳 / 多出口是汇总后的那个数） */
+export type TunnelSample = { ms: number | null; isTimeout: boolean; at: number; source: "probe" | "diagnosis" };
+const tunnelSampleByTunnel = new Map<number, TunnelSample>();
 
 const MAX_TUNNELS = 20_000;
 const MAX_RULES = 50_000;
@@ -92,22 +97,50 @@ export function recordRuleTargetLeg(input: {
   entry.byHost.set(hostId, { ms: value, at });
 }
 
-/** 规则自己那条定时探测记了一条（agentReportRoutes，只有在用的那台出口的才记）。 */
-export function noteRuleProbeRecorded(input: { ruleId: unknown; hostId: unknown; isTimeout: boolean; at?: number }) {
-  const ruleId = positive(input.ruleId);
-  const hostId = positive(input.hostId);
-  if (!ruleId || !hostId) return;
-  const at = input.at ?? Date.now();
-  const previous = recordedProbeByRule.get(ruleId);
-  if (previous && previous.at > at) return;
-  if (!previous && recordedProbeByRule.size >= MAX_RULES) recordedProbeByRule.delete(recordedProbeByRule.keys().next().value as number);
-  recordedProbeByRule.set(ruleId, { hostId, isTimeout: !!input.isTimeout, at });
+function setBounded<K, V extends { at: number }>(map: Map<K, V>, key: K, value: V, max: number) {
+  const previous = map.get(key);
+  if (previous && previous.at > value.at) return;
+  if (!previous && map.size >= max) map.delete(map.keys().next().value as K);
+  map.set(key, value);
 }
 
-/** 规则自己那条定时探测最新一次（新鲜的）：哪台出口测的、超没超时。 */
-export function ruleRecordedProbe(ruleId: unknown, nowMs = Date.now()): { hostId: number; isTimeout: boolean; at: number } | null {
-  const probe = recordedProbeByRule.get(positive(ruleId));
-  return probe && isLinkProbeFresh(probe.at, nowMs) ? probe : null;
+/** 规则最新一次端到端（定时探测每次上报、诊断完成都写；超时传 isTimeout）。 */
+export function noteRuleSample(input: { ruleId: unknown; hostId: unknown; ms?: number | null; isTimeout: boolean; at?: number; source?: RuleSample["source"] }) {
+  const ruleId = positive(input.ruleId);
+  if (!ruleId) return;
+  const ms = input.isTimeout ? null : latency(input.ms);
+  setBounded(ruleSampleByRule, ruleId, {
+    hostId: positive(input.hostId),
+    ms,
+    isTimeout: input.isTimeout || ms === null,
+    at: input.at ?? Date.now(),
+    source: input.source ?? "probe",
+  }, MAX_RULES);
+}
+
+/** 规则最新一次端到端（新鲜的）。 */
+export function ruleSample(ruleId: unknown, nowMs = Date.now()): RuleSample | null {
+  const sample = ruleSampleByRule.get(positive(ruleId));
+  return sample && isLinkProbeFresh(sample.at, nowMs) ? sample : null;
+}
+
+/** 链路最新一次总延迟（定时探测汇总后、诊断完成都写；超时传 isTimeout）。 */
+export function noteTunnelSample(input: { tunnelId: unknown; ms?: number | null; isTimeout: boolean; at?: number; source?: TunnelSample["source"] }) {
+  const tunnelId = positive(input.tunnelId);
+  if (!tunnelId) return;
+  const ms = input.isTimeout ? null : latency(input.ms);
+  setBounded(tunnelSampleByTunnel, tunnelId, {
+    ms,
+    isTimeout: input.isTimeout || ms === null,
+    at: input.at ?? Date.now(),
+    source: input.source ?? "probe",
+  }, MAX_TUNNELS);
+}
+
+/** 链路最新一次总延迟（新鲜的）。 */
+export function tunnelSample(tunnelId: unknown, nowMs = Date.now()): TunnelSample | null {
+  const sample = tunnelSampleByTunnel.get(positive(tunnelId));
+  return sample && isLinkProbeFresh(sample.at, nowMs) ? sample : null;
 }
 
 /** 入口到这台出口机（链路定时探测，新鲜的）。 */
@@ -170,44 +203,6 @@ export function ruleChainLatency(input: {
   };
 }
 
-export type TunnelExitLatencySummary = {
-  exitHostId: number;
-  exitName: string;
-  exitMs: number;
-  lowMs: number;
-  highMs: number;
-  /** 有探测数的在用出口台数 */
-  inUse: number;
-  at: number;
-};
-
-/**
- * 链路卡「到出口」：在用的几台出口（inUseHostIds，扛流量最多的排第一；空的时候是主出口）各自的探测数，
- * 一台写一个数，几台写区间。一台都没测到返回 null（链路卡退回链路探测的总数）。
- */
-export function tunnelInUseExitLatency(input: {
-  tunnelId: unknown;
-  inUseHostIds: readonly number[];
-  hostName?: (hostId: number) => string;
-  nowMs?: number;
-}): TunnelExitLatencySummary | null {
-  const nowMs = input.nowMs ?? Date.now();
-  const measured = input.inUseHostIds
-    .map((hostId) => ({ hostId: Number(hostId), leg: tunnelExitLatency(input.tunnelId, hostId, nowMs) }))
-    .filter((item): item is { hostId: number; leg: Leg } => item.hostId > 0 && !!item.leg);
-  if (measured.length === 0) return null;
-  const values = measured.map((item) => item.leg.ms);
-  const carrying = measured[0];
-  return {
-    exitHostId: carrying.hostId,
-    exitName: input.hostName?.(carrying.hostId) || `主机 ${carrying.hostId}`,
-    exitMs: Math.round(carrying.leg.ms),
-    lowMs: Math.round(Math.min(...values)),
-    highMs: Math.round(Math.max(...values)),
-    inUse: measured.length,
-    at: Math.min(...measured.map((item) => item.leg.at)),
-  };
-}
 
 /**
  * 链路换了拓扑（出口 / 入口 / 中转 / 出口组 / 负载均衡开关，server/tunnelTopologyChange.ts）：这条链路的「入口到出口」
@@ -215,16 +210,23 @@ export function tunnelInUseExitLatency(input: {
  */
 export function forgetTunnelLatencyView(tunnelId: unknown, ruleIds: readonly unknown[] = []) {
   const tid = positive(tunnelId);
-  if (tid) exitLegByTunnel.delete(tid);
+  if (tid) {
+    exitLegByTunnel.delete(tid);
+    tunnelSampleByTunnel.delete(tid);
+  }
   for (const ruleId of ruleIds) {
     const rid = positive(ruleId);
     if (rid) {
       targetLegByRule.delete(rid);
-      recordedProbeByRule.delete(rid);
+      ruleSampleByRule.delete(rid);
     }
   }
   if (tid) {
-    for (const [rid, entry] of targetLegByRule) if (entry.tunnelId === tid) targetLegByRule.delete(rid);
+    for (const [rid, entry] of targetLegByRule) {
+      if (entry.tunnelId !== tid) continue;
+      targetLegByRule.delete(rid);
+      ruleSampleByRule.delete(rid);
+    }
   }
 }
 
@@ -232,5 +234,27 @@ export function forgetTunnelLatencyView(tunnelId: unknown, ruleIds: readonly unk
 export function resetRuleLatencyViewForTest() {
   exitLegByTunnel.clear();
   targetLegByRule.clear();
-  recordedProbeByRule.clear();
+  ruleSampleByRule.clear();
+  tunnelSampleByTunnel.clear();
+}
+
+/**
+ * 卡片 / 表格 / 订阅读的那份规则汇总（数据库最新一条，缓存 5 秒）补上内存里更新的实时样本（2.3.559）：
+ * 数据库那条按闸门 5 分钟才写一次，内存里每次上报、每次诊断都写。比数据库那条新才盖；转发组父规则的延迟是拼出来的，不盖。
+ */
+export function withRuleLiveSamples<T extends { ruleId: number | string; latestLatencyAt?: unknown; latencyComposed?: unknown }>(rows: T[], nowMs = Date.now()): T[] {
+  return rows.map((row) => {
+    if (row.latencyComposed === true || !("latestLatencyMs" in row)) return row;
+    const sample = ruleSample(row.ruleId, nowMs);
+    if (!sample) return row;
+    const dbAt = row.latestLatencyAt ? new Date(row.latestLatencyAt as string | number | Date).getTime() : 0;
+    if (Number.isFinite(dbAt) && dbAt >= sample.at) return row;
+    return {
+      ...row,
+      latestLatencyMs: sample.isTimeout ? null : sample.ms,
+      latestLatencyIsTimeout: sample.isTimeout,
+      latestLatencyAt: new Date(sample.at),
+      latestLatencySource: sample.source,
+    };
+  });
 }

@@ -1,8 +1,6 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
-import { withRuleProbeFailures } from "../ruleProbeFailure";
-import { withRuleExitTargets } from "../exitTargetHealth";
-import { withRuleLiveRates } from "../ruleLiveRates";
+import { withLiveRuleStatus } from "../ruleLiveStatus";
 import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
@@ -36,9 +34,8 @@ export async function computeRuleTrafficSummary(
   // 24h 汇总带着每条规则的最新延迟，TCPing 一写入就要失效，放在延迟缓存里；
   // 累计（total）只有字节数，留在流量缓存，不被频繁的 TCPing 上报清掉。
   const summaryCache = input.range === "total" ? trafficQueryCache : latencyQueryCache;
-  // 失败种类在内存里、每分钟都可能变，不进缓存，取出来再补。
-  // 负载均衡链路的规则再补「各台出口连得上目标吗」（内存里的，几秒一变，同样不进缓存）。
-  return withRuleExitTargets(withRuleLiveRates(withRuleProbeFailures(await summaryCache.get(
+  // 数据库那份缓存 5 秒；内存里的实时部分（样本、失败种类、速率、在用出口）每次现拼，见 server/ruleLiveStatus.ts
+  return withLiveRuleStatus(await summaryCache.get(
     `summary:${user.id}:${input.range}:${hours}:${input.hostId || 0}:${ruleKey}`,
     { ttlMs: 5_000, staleMs: 0 },
     () => input.range === "total"
@@ -53,7 +50,7 @@ export async function computeRuleTrafficSummary(
         since,
         ruleIds,
       }),
-  ) as any[])));
+  ) as any[]);
 }
 
 function ruleResetLogItem(rule: any) {
