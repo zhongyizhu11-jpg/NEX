@@ -2,6 +2,7 @@ import { setBalanceLiveReportForTest, type LiveExit } from "./balanceLive";
 import { executeRaw, queryRaw } from "./dbRuntime";
 import { tunnelBalanceDetect } from "./exitTargetHealth";
 import { recordRuleTargetLeg, recordTunnelExitLeg } from "./ruleLatencyView";
+import { emitLive } from "./liveEvents";
 
 /*
   本地开发面板（npm run dev:panel）没有真的 Agent：负载均衡链路的「入口 → 每台出口」探测和入口实时上报都没有，
@@ -55,6 +56,8 @@ async function feed() {
       }, Number(tunnel.entryHostId));
     }
   }
+  // 和真的入口上报一样通知打开着的页面（server/liveEvents.ts）
+  if (tunnels.length > 0) emitLive("balance");
 }
 
 export function startDevPanelLiveBalance() {

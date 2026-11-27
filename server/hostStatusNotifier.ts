@@ -1,3 +1,4 @@
+import { emitLive } from "./liveEvents";
 import * as db from "./db";
 import { ENV } from "./env";
 import { sendTelegramMessage } from "./telegram/telegramBot";
@@ -179,6 +180,7 @@ function recordHostStatusTransition(host: any, status: HostStatus) {
 
 async function notifyHostStatusChange(host: any, status: HostStatus) {
   if (!recordHostStatusTransition(host, status)) return;
+  emitLive("hosts.live");
   // 多实例部署：上下线通知和事件只由跑后台任务的实例发（server/panelLease.ts），别的实例只记状态。
   if (!isPanelBackgroundLeaseHolder()) return;
   recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
@@ -194,6 +196,7 @@ async function notifyHostStatusChange(host: any, status: HostStatus) {
  */
 async function notifyHostStatusChanges(hosts: any[], status: HostStatus) {
   const due = hosts.filter((host) => recordHostStatusTransition(host, status));
+  if (due.length > 0) emitLive("hosts.live");
   if (due.length === 0 || !isPanelBackgroundLeaseHolder()) return;
   for (const host of due) recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
   const notify = await hostsWithStatusNotify(due);

@@ -91,6 +91,7 @@ import { Label } from "./ui/label";
 import { useQueryFailureSignal } from "@/hooks/useQueryFailureSignal";
 import { queryFailureBannerText, queryFailureDetailText } from "@/lib/queryFailureBanner";
 import { trpc } from "@/lib/trpc";
+import { useLiveEvents } from "@/hooks/useLiveEvents";
 import { toast } from "sonner";
 import { authErrorMessage } from "@/lib/authErrorMessage";
 import { renderMixedHtml } from "@/lib/htmlContent";
@@ -354,6 +355,8 @@ const AppShellContext = createContext(false);
 /** 常驻外壳。只有已登录时才画；未登录交给页面自己（公开首页 / 跳登录）。 */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  // 面板推过来的实时通知：外壳只挂一次，换页不断开（server/liveEvents.ts）
+  useLiveEvents(!!user);
   if (!user) return null;
   return (
     <AppShellContext.Provider value={true}>

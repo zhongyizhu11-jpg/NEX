@@ -1,3 +1,4 @@
+import { emitLive } from "./liveEvents";
 import { isLinkProbeFresh } from "../shared/linkProbePolicy";
 
 /*
@@ -109,6 +110,7 @@ export function noteRuleSample(input: { ruleId: unknown; hostId: unknown; ms?: n
   const ruleId = positive(input.ruleId);
   if (!ruleId) return;
   const ms = input.isTimeout ? null : latency(input.ms);
+  emitLive("rules.live");
   setBounded(ruleSampleByRule, ruleId, {
     hostId: positive(input.hostId),
     ms,
@@ -129,6 +131,7 @@ export function noteTunnelSample(input: { tunnelId: unknown; ms?: number | null;
   const tunnelId = positive(input.tunnelId);
   if (!tunnelId) return;
   const ms = input.isTimeout ? null : latency(input.ms);
+  emitLive("tunnels.live");
   setBounded(tunnelSampleByTunnel, tunnelId, {
     ms,
     isTimeout: input.isTimeout || ms === null,
