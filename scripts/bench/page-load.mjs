@@ -25,6 +25,8 @@ const BASE = (process.env.NEX_PANEL_URL || "http://127.0.0.1:3100").replace(/\/$
 const USER = process.env.NEX_USER || "dev.admin@forwardx.local";
 const PASS = process.env.NEX_PASS || "forwardx-dev";
 const ROUNDS = Number(process.env.NEX_ROUNDS || 3);
+// 浏览器语言：默认中文（英文会多下一个 230 KB 的词典包，测出来的不是中文面板的速度）
+const LOCALE = process.env.NEX_LOCALE || "zh-CN";
 const PAGES = [
   { path: "/rules", content: ".fx-ds-rule, .fx-rule-card-body" },
   { path: "/tunnels", content: ".fx-tunnel-card, .fx-ds-link-name" },
@@ -45,8 +47,11 @@ async function measure(page, cdp, url, contentSelector, reload) {
   const started = Date.now();
   if (reload) await page.reload({ waitUntil: "commit" });
   else await page.goto(url, { waitUntil: "commit" });
-  const shell = await page.waitForSelector("[data-sidebar], nav, aside", { timeout: 30_000 }).then(() => Date.now() - started).catch(() => null);
-  const content = await page.waitForSelector(contentSelector, { timeout: 30_000 }).then(() => Date.now() - started).catch(() => null);
+  // 时间取页面里自己记的（从这次导航开始算，见 addInitScript 里的 __loadMarks），不取 Playwright 发现元素的时刻 —— 那个多了它自己轮询的延迟
+  await page.waitForSelector(contentSelector, { timeout: 30_000 }).catch(() => null);
+  const marks = await page.evaluate(() => (window).__loadMarks || {}).catch(() => ({}));
+  const shell = marks.shell ?? null;
+  const content = marks.content ?? null;
   await page.waitForTimeout(300);
   page.off("request", onRequest);
   page.off("requestfinished", onFinished);
@@ -66,7 +71,7 @@ const median = (values) => {
 
 const browser = await chromium.launch();
 try {
-  const login = await browser.newContext();
+  const login = await browser.newContext({ locale: LOCALE });
   const loginPage = await login.newPage();
   await loginPage.goto(`${BASE}/login`, { waitUntil: "networkidle" });
   await loginPage.fill("#username", USER);
@@ -83,8 +88,18 @@ try {
       const warm = [];
       for (let round = 0; round < ROUNDS; round += 1) {
         // 每轮一个新的浏览器上下文：第一次打开是空的 HTTP 缓存，刷新时缓存是热的
-        const context = await browser.newContext({ storageState, viewport: { width: 1280, height: 900 } });
+        const context = await browser.newContext({ storageState, locale: LOCALE, viewport: { width: 1280, height: 900 } });
         await context.addInitScript(() => { try { localStorage.setItem("forwardx.announcement.dismissed", "all"); } catch {} });
+        await context.addInitScript((selector) => {
+          const marks = {};
+          window.__loadMarks = marks;
+          const tick = () => {
+            if (marks.shell == null && document.querySelector("[data-sidebar], nav, aside")) marks.shell = Math.round(performance.now());
+            if (marks.content == null && document.querySelector(selector)) marks.content = Math.round(performance.now());
+            if (marks.content == null) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }, target.content);
         const page = await context.newPage();
         const cdp = await context.newCDPSession(page);
         await cdp.send("Network.enable");

@@ -13,7 +13,8 @@ function render(input, args, output) {
 }
 // Crop only the empty sides of the original 2:1 canvas; never stretch the letters.
 render(source, ["-gravity", "center", "-crop", "887x887+0+0", "+repage", "-resize", "1024x1024", "-alpha", "off"], icon);
-for (const [file, size] of [["favicon.png", 192], ["logo-light.png", 512], ["logo-dark.png", 512]]) {
+// 页面上的 logo 最大画 56 px（3 倍屏 168 px），192 px 够了：512 px 的 166 KB，192 px 的 24 KB，第一次打开少下 140 多 KB
+for (const [file, size] of [["favicon.png", 192], ["logo-light.png", 192], ["logo-dark.png", 192]]) {
   render(icon, ["-resize", `${size}x${size}`], path.join(root, "client/public", file));
 }
 mkdirSync(path.join(root, "docs/public"), { recursive: true });

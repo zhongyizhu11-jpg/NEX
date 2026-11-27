@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { lazyRoute, prefetchRoute, routeChunks, shouldSkipIdlePrefetch } from "./routeChunks";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { lazyRoute, prefetchRoute, routeChunks, setRouteChunkFallback, shouldSkipIdlePrefetch } from "./routeChunks";
 
 test("省流量或 3G 及以下不做空闲批量预取，其余照常", () => {
   assert.equal(shouldSkipIdlePrefetch(undefined), false, "不支持 navigator.connection 的浏览器照常预取");
@@ -69,16 +71,32 @@ test("没登记的路径不预取", () => {
  * 挂起提交的 fallback 又会让内容被节流 300ms，第一次点进转发规则就是这样白等的。
  */
 test("lazyRoute：包到了就同步渲染出页面组件，不挂起", async () => {
-  const Page = () => null;
+  const Page = (props: { mode?: string }) => createElement("main", null, `page:${props.mode}`);
   routeChunks["/__test-loaded"] = () => Promise.resolve({ default: Page });
   try {
     const Route = lazyRoute("/__test-loaded");
     await prefetchRoute("/__test-loaded");
-    const element = (Route as (props: Record<string, unknown>) => { type: unknown; props: Record<string, unknown> })({ mode: "admin" });
-    assert.equal(element.type, Page);
-    assert.equal(element.props.mode, "admin");
+    assert.equal(renderToStaticMarkup(createElement(Route, { mode: "admin" })), "<main>page:admin</main>");
   } finally {
     delete routeChunks["/__test-loaded"];
+  }
+});
+
+test("lazyRoute：包还没到时不挂起，先画「正在加载页面」（2.3.559：挂起会吃 React 300ms 的节流）", async () => {
+  let release: (value: unknown) => void = () => undefined;
+  const Page = () => createElement("main", null, "page");
+  routeChunks["/__test-pending"] = () => new Promise((resolve) => { release = resolve; });
+  setRouteChunkFallback(() => createElement("p", null, "loading"));
+  try {
+    const Route = lazyRoute("/__test-pending");
+    // 挂起的话 renderToStaticMarkup 会抛（没有 Suspense 边界）；不挂起就是画出占位
+    assert.equal(renderToStaticMarkup(createElement(Route)), "<p>loading</p>");
+    release({ default: Page });
+    await prefetchRoute("/__test-pending");
+    assert.equal(renderToStaticMarkup(createElement(Route)), "<main>page</main>");
+  } finally {
+    setRouteChunkFallback(null);
+    delete routeChunks["/__test-pending"];
   }
 });
 
@@ -89,12 +107,12 @@ test("lazyRoute：上一次下载失败，渲染时把错误抛给 ErrorBoundary
     return Promise.reject(new Error("offline"));
   };
   try {
-    const Route = lazyRoute("/__test-failed") as (props: Record<string, unknown>) => unknown;
+    const Route = lazyRoute("/__test-failed");
     await prefetchRoute("/__test-failed");
-    assert.throws(() => Route({}), /offline/);
+    assert.throws(() => renderToStaticMarkup(createElement(Route)), /offline/);
     assert.equal(loads, 1);
-    // 错误抛过一次就清掉：下一次渲染会重新发起下载（这里只验证它重新下了，挂起本身要在 React 里才能测）
-    assert.throws(() => Route({}), (error: unknown) => !(error instanceof Error && error.message === "offline"));
+    // 错误抛过一次就清掉：下一次渲染会重新发起下载，先画占位
+    assert.equal(renderToStaticMarkup(createElement(Route)), "");
     assert.equal(loads, 2);
   } finally {
     delete routeChunks["/__test-failed"];

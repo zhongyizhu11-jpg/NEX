@@ -134,7 +134,7 @@
     "client/src/pages/Tunnels.tsx": 130,
     "client/src/pages/Users.tsx": 30,
     "client/src/pages/Wallet.tsx": 11,
-    "client/src/pages/routeChunks.ts": 3,
+    "client/src/pages/routeChunks.ts": 1,
     "drizzle/schema.ts": 16,
     "server/_core/context.ts": 4,
     "server/_core/systemRouter.ts": 20,
