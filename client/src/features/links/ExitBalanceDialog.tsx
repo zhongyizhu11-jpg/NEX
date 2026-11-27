@@ -176,6 +176,7 @@ export function ExitBalanceDialog({
               name={nameOf(hostId)}
               state={view.state}
               detail={[view.detail, weight ? `权重 ${weight}` : ""].filter(Boolean).join(" · ") || null}
+              items={view.rules}
               reason={view.reason}
               hint={view.hint}
               dim={pinActive && pinOnline && hostId !== pinHostId && view.state === "standby"}

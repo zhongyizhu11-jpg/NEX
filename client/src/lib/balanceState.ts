@@ -108,8 +108,10 @@ export type ExitRowContext = {
 
 export type ExitRowView = {
   state: BalanceStateKey;
-  /** 第二行：到目标多快、分到多少（没数据时 null） */
+  /** 第二行：没有规则在用这台时写到出口多快（没数据时 null） */
   detail: string | null;
+  /** 在用这台的规则，一条一行：名字、经这台的整链延迟（没测到是 null）。有它时 detail 是 null（2.3.559） */
+  rules: Array<{ label: string; value: string | null }>;
   /** 不是在用时为什么（人话）；在用但 UDP 不通之类的也写在这 */
   reason: string | null;
   /** 能做点什么时的一句 */
@@ -173,11 +175,10 @@ export function exitRowView(summary: ExitSummaryLike | null | undefined, ctx: Ex
     整链两段、分到几成、比平时慢、抖动不再堆在这一行；不稳、连不上时下面那行原因照写。
   */
   const used = hasData && ctx.live ? summary!.usedBy || [] : [];
-  const detail = used.length > 0
-    // 延迟没测到（只看出口组时只有记录探测的那台测到目标）：只写规则名，不写「—」
-    ? used.map((item) => item.ms != null ? `${ruleLabel(item.ruleId, ctx.ruleNames)} ${ms(item.ms)}` : ruleLabel(item.ruleId, ctx.ruleNames)).join(" · ")
-    : hasData || summary?.exitMs != null ? exitOnlyLatencyText(summary!) : null;
-  const view = (state: BalanceStateKey, reason: string | null = null, hint: string | null = null): ExitRowView => ({ state, detail, reason, hint });
+  // 一条规则一行：名字长了只截名字，延迟一直看得见；没测到（只看出口组时只有记录探测的那台测到目标）只写名字
+  const rules = used.map((item) => ({ label: ruleLabel(item.ruleId, ctx.ruleNames), value: item.ms != null ? ms(item.ms) : null }));
+  const detail = rules.length > 0 ? null : hasData || summary?.exitMs != null ? exitOnlyLatencyText(summary!) : null;
+  const view = (state: BalanceStateKey, reason: string | null = null, hint: string | null = null): ExitRowView => ({ state, detail, rules, reason, hint });
 
   if (!ctx.online) return view("down", "出口机离线（面板收不到它的 Agent）", "检查这台机器和它的 Agent");
   if (ctx.upgradeNeeded) {

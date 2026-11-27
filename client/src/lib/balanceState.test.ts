@@ -23,10 +23,11 @@ test("八个状态词各有一个颜色，和状态点的健康度对得上", ()
 test("在用：写在走这台的规则名和各自的整链延迟", () => {
   const view = exitRowView(summary({ share: 0.34, usedBy: [{ ruleId: 33, ms: 38 }, { ruleId: 8, ms: 39 }] }), { ...base, ruleNames: { 33: "广港hkt/2", 8: "广港hkt/3" } });
   assert.equal(view.state, "active");
-  assert.equal(view.detail, "广港hkt/2 38 ms · 广港hkt/3 39 ms");
+  assert.deepEqual(view.rules, [{ label: "广港hkt/2", value: "38 ms" }, { label: "广港hkt/3", value: "39 ms" }]);
+  assert.equal(view.detail, null, "有规则时不再写到出口那一句");
   assert.equal(view.reason, null);
   // 没测到延迟只写规则名；规则名还没补上时写规则号
-  assert.equal(exitRowView(summary({ usedBy: [{ ruleId: 7, ms: null }, { ruleId: 9, ms: 12 }] }), base).detail, "规则 #7 · 规则 #9 12 ms");
+  assert.deepEqual(exitRowView(summary({ usedBy: [{ ruleId: 7, ms: null }, { ruleId: 9, ms: 12 }] }), base).rules, [{ label: "规则 #7", value: null }, { label: "规则 #9", value: "12 ms" }]);
 });
 
 test("没有规则在用（备用 / 还没上报）：只写到出口；入口报的标「Agent 自测」", () => {

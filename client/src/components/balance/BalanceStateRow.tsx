@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
   负载均衡里「一台出口 / 一条线路」此刻怎么样的一行（链路的负载均衡弹窗、线路组详情共用）：
 
     [前缀]  名字  [在用]                       [动作]
-            到目标 12 ms · 抖动 3 ms · 分到 34%
+            广港hkt/2   38 ms        ← 在走它的规则，一条一行（没有时写「到出口 7 ms」）
             入口连不上这台出口机，已切走 · 检查出口机的防火墙和隧道端口
 
   状态词和颜色只从 lib/balanceState.ts 来；不是在用的那一行写原因（不截断，手机上换行）。
@@ -27,6 +27,7 @@ export function BalanceStateRow({
   name,
   state,
   detail,
+  items,
   reason,
   hint,
   leading,
@@ -36,6 +37,8 @@ export function BalanceStateRow({
   name: ReactNode;
   state: BalanceStateKey;
   detail?: string | null;
+  /** 一项一行：左边名字（长了截断），右边数值（一直看得见）。负载均衡弹窗每台出口下面「在走它的规则 + 延迟」 */
+  items?: Array<{ label: string; value: string | null }>;
   reason?: string | null;
   hint?: string | null;
   leading?: ReactNode;
@@ -64,6 +67,16 @@ export function BalanceStateRow({
           >
             {detail}
           </button>
+        ) : null}
+        {items && items.length > 0 ? (
+          <ul className="min-w-0" data-balance-items="">
+            {items.map((item, index) => (
+              <li key={`${item.label}-${index}`} className="flex min-w-0 items-baseline gap-2 text-meta leading-5 text-muted-foreground">
+                <span className="min-w-0 truncate" title={item.label}>{item.label}</span>
+                {item.value ? <span className="shrink-0 tabular-nums text-foreground">{item.value}</span> : null}
+              </li>
+            ))}
+          </ul>
         ) : null}
         {reason ? (
           <p className={cn("text-meta leading-5", tone === "gray" || tone === "ok" || tone === "acc" ? "text-muted-foreground" : LINE_TONE_TEXT[tone])}>
