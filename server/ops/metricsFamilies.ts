@@ -88,7 +88,19 @@ export type MetricsSnapshot = {
   traffic: { in: number; out: number } | null;
   /** FXP 隧道进程报的数据面指标（server/ops/fxpRuntimeMetrics.ts）；null = 没读到。 */
   fxp: MetricsFxpSample[] | null;
+  /** 实时链路（2.3.559）：内存里的实时样本、推给页面的通知、在用出口切换；都在内存里，数据库挂了也有。 */
+  live: MetricsLiveSample | null;
   collectSeconds: number;
+};
+
+export type MetricsLiveSample = {
+  ruleSamples: number;
+  tunnelSamples: number;
+  oldestRuleSampleAgeSeconds: number | null;
+  oldestTunnelSampleAgeSeconds: number | null;
+  openStreams: number;
+  sentByTopic: Record<string, number>;
+  exitSwitches: number;
 };
 
 type MetricsFxpSample = {
@@ -263,6 +275,21 @@ export function buildMetricFamilies(snapshot: MetricsSnapshot): MetricFamily[] {
         add(down, labels, flag(path.down));
       }
     }
+  }
+
+  // ── 实时链路 ──
+  if (snapshot.live) {
+    const live = snapshot.live;
+    const samples = push(family("nex_live_samples", "gauge", "面板内存里新鲜（6 分钟内）的实时样本条数：rule 规则端到端、tunnel 链路总延迟"));
+    add(samples, { kind: "rule" }, live.ruleSamples);
+    add(samples, { kind: "tunnel" }, live.tunnelSamples);
+    const age = push(family("nex_live_sample_oldest_age_seconds", "gauge", "新鲜样本里最旧那条距今的秒数；Agent 每分钟上报时应在 60–120 之间，接近 360 说明上报断了"));
+    add(age, { kind: "rule" }, live.oldestRuleSampleAgeSeconds);
+    add(age, { kind: "tunnel" }, live.oldestTunnelSampleAgeSeconds);
+    single("nex_live_streams", "gauge", "此刻连着实时通知（/api/live）的页面数", live.openStreams);
+    const sent = push(family("nex_live_events_total", "counter", "推给页面的实时通知次数（合并后），按话题"));
+    for (const [topic, count] of Object.entries(live.sentByTopic)) add(sent, { topic }, count);
+    single("nex_balance_exit_switches_total", "counter", "负载均衡入口把规则换到另一台出口的次数（面板启动以来）", live.exitSwitches);
   }
 
   // ── FXP 隧道进程 ──

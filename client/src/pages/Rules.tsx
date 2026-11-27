@@ -75,14 +75,8 @@ import { pollingInterval } from "@/lib/polling";
 import { isLinkProbeFresh } from "@shared/linkProbePolicy";
 import { timestampMillis } from "@shared/timestamp";
 import { formatAgo } from "@shared/dashboardAttention";
+import { latencyTagTone } from "@/lib/latencyLevel";
 
-import {
-  buildStableRuleProbeMap,
-  clearRuleProbeCache,
-  hasRuleProbeAfterInvalidation,
-  updateRuleProbeCache,
-} from "@/lib/ruleProbeCache";
-import { clearRuleStatusSnapshots, writeRuleStatusSnapshots } from "@/lib/ruleStatusCache";
 import { chunkBatchItems } from "@/lib/batchOperations";
 import { RULE_TRANSFER_FILE_KIND, RULE_TRANSFER_FILE_VERSION, RULE_TRANSFER_MAX_IMPORT_COUNT, normalizeFailoverStrategy, type RuleTransferFileRule } from "@/lib/ruleTransfer";
 import { getEntryAddressFamily as addressFamily, type EntryAddressFamily } from "@/lib/ruleEntryDisplay";
@@ -847,6 +841,7 @@ function deriveRuleView({
   visualPinBypassed,
   failover,
   totalIn,
+  totalPending,
   totalOut,
   dailyIn,
   dailyOut,
@@ -891,7 +886,7 @@ function deriveRuleView({
   ].filter(Boolean);
   const subtitle = subtitleParts.join(" · ");
 
-  const big = splitBytes(totalIn + totalOut);
+  const big = totalPending ? { value: "—", unit: "" } : splitBytes(totalIn + totalOut);
   const dailyBytes = dailyIn + dailyOut;
 
   // 地址行右端那枚小标签：切了线 / 出错 / 停用比延迟要紧，有就换掉延迟。
@@ -922,7 +917,7 @@ function deriveRuleView({
     const activeChain = failover ? routeBoardActiveChain(routeBoard) : null;
     if (activeChain && activeChain.totalMs !== null && !activeChain.broken) {
       const ms = Math.round(activeChain.totalMs);
-      tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={activeChain.partial ? `整链 ≥ ${ms} ms：当前路径已测各段相加（有一段还没测到）` : `整链 ${ms} ms：当前路径各段延迟相加`}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
+      tag = <span className="fx-rule-tag" data-tone={latencyTagTone(ms)} title={activeChain.partial ? `整链 ≥ ${ms} ms：当前路径已测各段相加（有一段还没测到）` : `整链 ${ms} ms：当前路径各段延迟相加`}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
     } else if (activeChain?.broken) {
       tag = <span className="fx-rule-tag" data-tone="down" title="当前路径有一段不通">不通</span>;
     } else if (probe.at && probe.stale) {
@@ -935,7 +930,7 @@ function deriveRuleView({
       } else if (probe.ms !== null) {
         const ms = probe.ms;
         // 一律是整链（入口→在用出口→目标）：悬停写明来历（入口实时两段各多少 / 定时探测 / 最近一次诊断）；只有一段时写「≥」
-        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={probe.liveTitle || `整链 ${Math.round(ms)} ms`}>{probe.atLeast ? "≥ " : ""}{ms} ms</span>;
+        tag = <span className="fx-rule-tag" data-tone={latencyTagTone(ms)} title={probe.liveTitle || `整链 ${Math.round(ms)} ms`}>{probe.atLeast ? "≥ " : ""}{ms} ms</span>;
       }
     }
     // 精简的列表行：这个位置固定是延迟（用户 2026-10-21 圈的），没测过也占着，写「未测试」
@@ -1983,19 +1978,24 @@ function RulesContent() {
   // 手机 + 精简：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const utils = trpc.useUtils();
-  const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
-  const invalidatedRuleProbeIdsRef = useRef(new Set<number>());
+  /*
+    改了规则（目标、端口、启停……）之后，改之前测的那次延迟就不算数了：记下改的时刻，比它旧的探测不显示，
+    等服务端给出改完之后测的那一次（2.3.559 起只有这一个时间戳，没有另存的探测缓存 / 上次状态）。
+  */
+  const [ruleEditedAt, setRuleEditedAt] = useState<ReadonlyMap<number, number>>(() => new Map());
   const invalidateRuleProbeStatuses = useCallback((ruleIds: Iterable<number> | undefined) => {
     if (!ruleIds) return;
     const ids = Array.from(new Set(Array.from(ruleIds)
       .map(Number)
       .filter((id) => Number.isInteger(id) && id > 0)));
     if (ids.length === 0) return;
-    ids.forEach((id) => invalidatedRuleProbeIdsRef.current.add(id));
-    clearRuleProbeCache(user?.id, ids);
-    clearRuleStatusSnapshots(user?.id, ids);
-    setRuleProbeCacheRevision((revision) => revision + 1);
-  }, [user?.id]);
+    const now = Date.now();
+    setRuleEditedAt((previous) => {
+      const next = new Map(previous);
+      ids.forEach((id) => next.set(id, now));
+      return next;
+    });
+  }, []);
   const [secondaryQueriesReady, setSecondaryQueriesReady] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setSecondaryQueriesReady(true), 300);
@@ -3491,31 +3491,22 @@ function RulesContent() {
   const dailyTrafficSummaryRows = visibleRuleIdsForMetrics.length === 0 ? [] : dailyTrafficSummary ?? stableDailyTrafficSummaryRows;
   const useTrafficByRuleResult = useTrafficByRule({ dailyTrafficSummaryRows });
   const { trafficByRule } = useTrafficByRuleResult;
-  useEffect(() => {
-    if (dailyTrafficSummary === undefined) return;
-    updateRuleProbeCache(user?.id, trafficByRule);
-    let released = false;
-    for (const ruleId of invalidatedRuleProbeIdsRef.current) {
-      if (!hasRuleProbeAfterInvalidation(user?.id, ruleId, trafficByRule.get(ruleId))) continue;
-      invalidatedRuleProbeIdsRef.current.delete(ruleId);
-      released = true;
+  const probeByRule = useMemo(() => {
+    const map = new Map<number, NonNullable<ReturnType<typeof trafficByRule.get>>>();
+    for (const ruleId of visibleRuleIdsForMetrics) {
+      const row = trafficByRule.get(ruleId);
+      if (!row) continue;
+      const editedAt = ruleEditedAt.get(ruleId) || 0;
+      if (editedAt > 0 && timestampMillis(row.latestLatencyAt) < editedAt) continue;
+      map.set(ruleId, row);
     }
-    if (released) setRuleProbeCacheRevision((revision) => revision + 1);
-  }, [dailyTrafficSummary, trafficByRule, user?.id]);
-  const stableProbeByRule = useMemo(() => (
-    buildStableRuleProbeMap(
-      user?.id,
-      visibleRuleIdsForMetrics,
-      trafficByRule,
-      Date.now(),
-      invalidatedRuleProbeIdsRef.current,
-    )
-  ), [ruleProbeCacheRevision, trafficByRule, user?.id, visibleRuleIdsForMetrics]);
+    return map;
+  }, [ruleEditedAt, trafficByRule, visibleRuleIdsForMetrics]);
   const hasForwardGroupRules = useMemo(
     () => filteredRules.some((rule: any) => Number(rule.forwardGroupId || 0) > 0),
     [filteredRules],
   );
-  const ruleStatusSnapshotReady = filteredRules.length === 0 || (
+  const ruleStatusReady = filteredRules.length === 0 || (
     dailyTrafficSummaryFetched
     && (!hasForwardGroupRules || forwardGroupsFetched || forwardGroupsError)
   );
@@ -3651,30 +3642,8 @@ function RulesContent() {
     }
     return names;
   };
-  const useRuleVisualStatusesResult = useRuleVisualStatuses({ stableProbeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules, user, invalidatedRuleProbeIdsRef, ruleProbeCacheRevision });
+  const useRuleVisualStatusesResult = useRuleVisualStatuses({ statusReady: ruleStatusReady, probeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules });
   const { ruleVisualStatuses, resolveRuleVisualStatus } = useRuleVisualStatusesResult;
-  const hasCachedRuleStatus = useMemo(
-    () => Array.from(ruleVisualStatuses.values()).some((item) => !!item.lastKnown),
-    [ruleVisualStatuses],
-  );
-  useEffect(() => {
-    if (!user?.id || ruleVisualStatuses.size === 0) return;
-    const snapshots = new Map<number, { state: ReturnType<typeof resolveForwardRuleVisualStatus>["state"]; title: string }>();
-    ruleVisualStatuses.forEach(({ current, lastKnown, invalidated }, ruleId) => {
-      // Do not repopulate a just-cleared snapshot from React Query's previous
-      // rule object. The invalidation is released only after a new probe has
-      // been observed, at which point the new concrete state can be cached.
-      if (invalidated) return;
-      // A pending result is commonly the short interval between page mount
-      // and the next Agent report. Keep a confirmed previous state until a
-      // concrete result arrives; first-time pending rules are still cached.
-      // 负载均衡「有出口连不上、已切走」的橙色是实际数据下的结论（confirmed），照常写进缓存，不然上一次的红色会一直留着
-      if (current.state === "pending" && !current.confirmed && lastKnown) return;
-      if (lastKnown && lastKnown.state === current.state && lastKnown.title === current.title) return;
-      snapshots.set(ruleId, { state: current.state, title: current.title });
-    });
-    if (snapshots.size > 0) writeRuleStatusSnapshots(user.id, snapshots);
-  }, [ruleVisualStatuses, user?.id]);
   const getForwardGroupStatusText = (group: any) => {
     const status = getForwardGroupConfigStatus(group);
     if (status === "disabled") return "已停用";
@@ -3837,7 +3806,7 @@ function RulesContent() {
   );
 
   const renderStatusDot = (rule: any) => {
-    const visual = ruleVisualStatuses.get(Number(rule.id))?.display || resolveRuleVisualStatus(rule);
+    const visual = ruleVisualStatuses.get(Number(rule.id)) || resolveRuleVisualStatus(rule);
     return renderResolvedStatusDot(visual);
   };
 
@@ -3895,7 +3864,7 @@ function RulesContent() {
   const useRuleRouteBadgeResult = useRuleRouteBadge({ tunnelById, forwardGroupById, getRuleKernelForwardWarning, renderKernelForwardWarningBadge, renderTunnelFxpIssueBadge, renderPortWarningBadge, nginxTunnelEnabled, forwardTypeDisplayLabel, renderSubscriptionBadge, renderForwardToolBadge, hosts, renderTunnelRoute });
   const { renderUnsupportedHint, renderRouteBadge } = useRuleRouteBadgeResult;
 
-  const useRuleTrafficCellsResult = useRuleTrafficCells({ dailyTrafficByRule, totalTrafficByRule, stableProbeByRule });
+  const useRuleTrafficCellsResult = useRuleTrafficCells({ dailyTrafficByRule, totalTrafficByRule, probeByRule });
   const { renderTableRuleDailyTraffic, renderTableRuleTotalTraffic, renderTableRuleLatency } = useRuleTrafficCellsResult;
 
   /*
@@ -4079,14 +4048,15 @@ function RulesContent() {
   ]);
 
   const ruleCardSources: RuleCardDerivedSources = {
-    visualDisplay: (ruleId) => ruleVisualStatuses.get(ruleId)?.display,
+    visualDisplay: (ruleId) => ruleVisualStatuses.get(ruleId),
     resolveVisual: resolveRuleVisualStatus,
     hostById,
     routeBoardByRule,
     totalTrafficByRule,
+    totalLoaded: totalTrafficSummary !== undefined || stableTotalTrafficSummaryRows.length > 0,
     dailyTrafficByRule,
     sparkByRule,
-    stableProbeByRule,
+    probeByRule,
     expandedEntryRuleIds,
     expandedLineRuleIds,
     isProbeFresh: isLinkProbeFresh,
@@ -4422,7 +4392,7 @@ function RulesContent() {
       )}
 
       <SectionTransition transitionKey={ruleContentTransitionKey}>
-      {isLoading || (!ruleStatusSnapshotReady && !hasCachedRuleStatus) || (filteredRules.length === 0 && !scopedRulesReady) ? (
+      {isLoading || (filteredRules.length === 0 && !scopedRulesReady) ? (
         // 列表还没就绪（刚换进来、换页、换筛选）时不能画「没有匹配的规则」：那一帧是空的，不是真没有（用户 2026-11-03 录屏）
         <DataSectionLoading label={isLoading || !scopedRulesReady ? "正在加载转发规则" : "正在加载规则状态"} />
       ) : filteredRules.length > 0 ? (

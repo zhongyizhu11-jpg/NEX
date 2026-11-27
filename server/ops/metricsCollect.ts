@@ -15,6 +15,10 @@
 
   整份结果由 server/ops/metricsRoute.ts 缓存 10 秒，所以这里不用再各自缓存。
 */
+import { withLiveRuleStatus } from "../ruleLiveStatus";
+import { liveSampleStats } from "../ruleLatencyView";
+import { liveStreamStats } from "../liveEvents";
+import { recordingExitSwitchCount } from "../exitTargetHealth";
 import { and, eq, inArray } from "drizzle-orm";
 import { forwardRules } from "../../drizzle/schema";
 import { APP_VERSION } from "../../shared/versions";
@@ -45,6 +49,7 @@ import {
   type MetricsRoutePathSample,
   type MetricsRouteSample,
   type MetricsRuleSample,
+  type MetricsLiveSample,
   type MetricsSnapshot,
 } from "./metricsFamilies";
 
@@ -189,7 +194,8 @@ async function loadRuleTraffic(ruleIds: readonly number[]): Promise<Map<number, 
 async function loadRuleProbes(ruleIds: readonly number[], nowMs: number): Promise<Map<number, RuleProbe>> {
   const byRule = new Map<number, RuleProbe>();
   for (const batch of chunks(ruleIds, RULE_ID_BATCH)) {
-    const rows = await getTrafficSummaryByRule({ ruleIds: batch, since: new Date(nowMs - 60_000), includeLatency: true });
+    // 和规则卡同一份「现在」（server/ruleLiveStatus.ts）：内存里更新的实时样本、负载均衡在用出口的整链都算上
+    const rows = withLiveRuleStatus(await getTrafficSummaryByRule({ ruleIds: batch, since: new Date(nowMs - 60_000), includeLatency: true }), nowMs);
     for (const row of rows) {
       const at = millis(row.latestLatencyAt);
       if (at <= 0 || nowMs - at > PROBE_STALE_MS) continue;
@@ -354,6 +360,20 @@ async function section<T>(name: string, work: () => Promise<T>): Promise<T | nul
   }
 }
 
+function collectLive(nowMs: number): MetricsLiveSample {
+  const samples = liveSampleStats(nowMs);
+  const streams = liveStreamStats();
+  return {
+    ruleSamples: samples.rules,
+    tunnelSamples: samples.tunnels,
+    oldestRuleSampleAgeSeconds: samples.oldestRuleAgeSeconds,
+    oldestTunnelSampleAgeSeconds: samples.oldestTunnelAgeSeconds,
+    openStreams: streams.openStreams,
+    sentByTopic: streams.sentByTopic,
+    exitSwitches: recordingExitSwitchCount(),
+  };
+}
+
 export async function collectMetricsSnapshot(options: MetricsCollectOptions): Promise<MetricsSnapshot> {
   const startedAt = Date.now();
   const nowMs = options.nowMs ?? startedAt;
@@ -366,6 +386,7 @@ export async function collectMetricsSnapshot(options: MetricsCollectOptions): Pr
     routes: null,
     traffic: null,
     fxp: null,
+    live: collectLive(nowMs),
     collectSeconds: 0,
   };
   const finish = () => {

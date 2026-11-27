@@ -88,7 +88,7 @@ test("tunnel rule latency is the fresh tunnel path plus exit-to-target latency",
     targetIsTimeout: false,
     tunnelLatencyMs: 6,
     tunnelIsTimeout: false,
-    tunnelRecordedAt: new Date(nowMs - 6 * 60 * 1000),
+    tunnelRecordedAt: new Date(nowMs - TUNNEL_RULE_LATENCY_FRESH_MS - 1000),
     nowMs,
   }), null);
   assert.deepEqual(combineTunnelRuleLatencySample({
@@ -111,7 +111,7 @@ test("the tunnel segment keeps its own latency when the target is unreachable", 
   const fresh = { tunnelLatencyMs: 7, tunnelIsTimeout: false, tunnelRecordedAt: new Date(nowMs - 1000), nowMs };
   assert.deepEqual(combineTunnelRuleLatencySample({ targetLatencyMs: null, targetIsTimeout: true, ...fresh }), { latencyMs: null, isTimeout: true });
   assert.deepEqual(freshTunnelSegmentLatency(fresh), { latencyMs: 7, isTimeout: false });
-  assert.equal(freshTunnelSegmentLatency({ ...fresh, tunnelRecordedAt: new Date(nowMs - 6 * 60 * 1000) }), null);
+  assert.equal(freshTunnelSegmentLatency({ ...fresh, tunnelRecordedAt: new Date(nowMs - TUNNEL_RULE_LATENCY_FRESH_MS - 1000) }), null);
   assert.deepEqual(freshTunnelSegmentLatency({ ...fresh, tunnelLatencyMs: null, tunnelIsTimeout: true }), { latencyMs: null, isTimeout: true });
 });
 

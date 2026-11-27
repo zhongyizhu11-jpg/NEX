@@ -4,7 +4,11 @@ import {
   ruleLatencyProbeMethodForRule,
 } from "@shared/latencyProbe";
 
-export const TUNNEL_RULE_LATENCY_FRESH_MS = 5 * 60 * 1000;
+import { LINK_PROBE_FRESH_MS } from "@shared/linkProbePolicy";
+
+// 隧道那一段多久以内算新鲜：和全系统同一个窗口（shared/linkProbePolicy.ts，2.3.559 统一；以前这里单独 5 分钟，
+// 链路记录 5–6 分钟之间时规则那一条被丢掉，卡片上的延迟就停在几分钟前）
+export const TUNNEL_RULE_LATENCY_FRESH_MS = LINK_PROBE_FRESH_MS;
 const TUNNEL_RULE_LATENCY_CLOCK_SKEW_MS = 60 * 1000;
 const TUNNEL_RULE_LATENCY_UPDATE_GRACE_MS = 1000;
 

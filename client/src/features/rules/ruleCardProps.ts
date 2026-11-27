@@ -108,6 +108,8 @@ export type RuleCardDerivedProps = {
   totalIn: number;
   totalOut: number;
   hasTotal: boolean;
+  /** 累计流量还在取（刷新页面那一下）：写「—」，不先闪一个 0 B */
+  totalPending: boolean;
   dailyIn: number;
   dailyOut: number;
   spark: number[];
@@ -121,15 +123,17 @@ export type RuleCardDerivedProps = {
 };
 
 export type RuleCardDerivedSources = {
-  /** ruleVisualStatuses 里那份 display（带「上次状态」兜底）；没有就现算。 */
+  /** ruleVisualStatuses 里那份；没有就现算。 */
   visualDisplay: (ruleId: number) => ForwardRuleVisualStatus | undefined;
   resolveVisual: (rule: RuleLike) => ForwardRuleVisualStatus;
   hostById: Map<number, unknown>;
   routeBoardByRule: Map<number, unknown>;
   totalTrafficByRule: Map<unknown, TrafficTotals>;
+  /** 累计流量那份汇总回来了没有（没回来时卡上写「—」，不写 0 B） */
+  totalLoaded: boolean;
   dailyTrafficByRule: Map<unknown, TrafficTotals>;
   sparkByRule: Map<number, number[]>;
-  stableProbeByRule: Map<number, ProbeEntry>;
+  probeByRule: Map<number, ProbeEntry>;
   expandedEntryRuleIds: Set<number>;
   expandedLineRuleIds: Set<number>;
   isProbeFresh: (at: unknown) => boolean;
@@ -151,7 +155,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
   // 流量表的 key 是数字 id，原来卡片直接拿 rule.id 去查，这里照旧
   const total = sources.totalTrafficByRule.get(rule.id);
   const daily = sources.dailyTrafficByRule.get(rule.id);
-  const probe = sources.stableProbeByRule.get(ruleId);
+  const probe = sources.probeByRule.get(ruleId);
   const probeAt = probe?.latestLatencyAt;
   const probeStale = !!probeAt && !sources.isProbeFresh(probeAt);
   const probeMs = typeof probe?.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? probe.latestLatencyMs : null;
@@ -171,6 +175,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
     totalIn: Number(total?.bytesIn || 0),
     totalOut: Number(total?.bytesOut || 0),
     hasTotal: !!total,
+    totalPending: !sources.totalLoaded,
     dailyIn: Number(daily?.bytesIn || 0),
     dailyOut: Number(daily?.bytesOut || 0),
     spark: sources.sparkByRule.get(ruleId) || EMPTY_SPARK,

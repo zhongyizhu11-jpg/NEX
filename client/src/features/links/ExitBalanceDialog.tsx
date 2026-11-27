@@ -9,7 +9,7 @@ import { dedupeSwitchEvents, exitRowView, pinBypassText, switchEventView } from 
 import { getTunnelHopIds, moveExitInGroup, tunnelBalanceExits, tunnelHopHostName, type ExitGroupMemberLite } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { balanceStrategyHint, BALANCE_STRATEGY_LABELS, nginxBalanceBasicSupportNote, normalizeBalanceDetect, normalizeExitGroupStrategy } from "@shared/loadBalance";
+import { BALANCE_STRATEGY_LABELS, nginxBalanceBasicSupportNote, normalizeBalanceDetect, normalizeExitGroupStrategy } from "@shared/loadBalance";
 import { tunnelExitPinUnsupportedReason } from "@shared/tunnelExitPin";
 
 /*
@@ -66,9 +66,16 @@ export function ExitBalanceDialog({
     utils.forwardGroups.options.invalidate(),
     utils.forwardGroups.listPage.invalidate(),
   ]);
+  /*
+    点「切到这台 / 交回自动」马上就变（2.3.559，用户：「操作界面反应极速」）：先按点的画，接口回来、链路重新取到之后交还给服务端的；
+    失败退回原样并提示。
+  */
+  const [pinOverride, setPinOverride] = useState<number | null>(null);
   const pinMutation = trpc.tunnels.setExitPin.useMutation({
-    onSuccess: (result) => { toast.success(result.hostId ? "已指定" : "已交回自动"); void refresh(); },
+    onMutate: (input) => { setPinOverride(Number(input.hostId || 0)); },
+    onSuccess: async (result) => { toast.success(result.hostId ? "已指定" : "已交回自动"); await refresh(); },
     onError: (error) => toast.error(error.message),
+    onSettled: () => { setPinOverride(null); },
   });
   // ↑↓ 点了马上换位置（排序要重铺链路，接口要等一会儿）；连点几下时等最后一次回来再交给服务端的顺序
   const [order, setOrder] = useState<number[] | null>(null);
@@ -97,7 +104,7 @@ export function ExitBalanceDialog({
   const mode = String(tunnel.mode || "").toLowerCase();
   // GOST 链路的 fxpIssues 只有一种：入口机 Agent 太旧、负载均衡没生效（server/tunnelBalanceAgent.ts）
   const upgradeIssue = mode !== "forwardx" && !nginxNote ? (tunnel.fxpIssues || [])[0]?.message || null : null;
-  const pinHostId = Number(tunnel.balancePinHostId || 0);
+  const pinHostId = pinOverride ?? Number(tunnel.balancePinHostId || 0);
   const pinActive = pinHostId > 0 && exits.some((exit) => exit.hostId === pinHostId);
   const pinOnline = pinActive && online(pinHostId);
   const pinUnsupported = tunnelExitPinUnsupportedReason(tunnel, getTunnelHopIds(tunnel).length);
@@ -124,11 +131,6 @@ export function ExitBalanceDialog({
     }),
   }));
   const inUse = rows.filter((row) => row.view.state === "active" || row.view.state === "pinned" || row.view.state === "warming").length;
-  // 「只走最快的一台」是每条规则各挑自己目标最快的：几条规则目标不同时会有两台都「在用」——写清楚，不然像没生效
-  const ruleCount = Math.max(0, ...(summary?.exits || []).map((item) => Number(item.rules) || 0));
-  const inUseText = strategy === "latency" && detect.fastestOnly && ruleCount > 1 && inUse > 1
-    ? `${ruleCount} 条规则各走自己最快的一台，用到 ${inUse} 台`
-    : `${inUse} 台在用`;
   // 指定的那台对哪几条规则不通（那几条照常按分法走别的出口，agent/failover_pick.go）
   const pinBypass = pinOnline ? pinBypassText(byHost.get(pinHostId), summary?.ruleNames, !!summary?.live) : null;
   const targetDown = (summary?.targetIssues || []).filter((issue) => issue.kind === "down").length;
@@ -160,15 +162,13 @@ export function ExitBalanceDialog({
             <span className="min-w-0 truncate">{tunnel.name}</span>
             {nginxNote ? <BalanceStatePill state="basic" /> : upgradeIssue ? <BalanceStatePill state="upgrade" /> : null}
           </DialogTitle>
-          <DialogDescription>
-            {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {exits.length} 台出口 · {inUseText}
+          {/*
+            一行（2.3.559，用户：「上边的小字说明也整改一下，看着好多，一点都不简洁」）：分配方式 · 几台在用 · 有没有附加检查目标。
+            哪几条规则走哪台写在每台出口下面，不再在这里解释「各走自己最快的一台」；分配方式怎么分在「编辑出口组」里看。
+          */}
+          <DialogDescription data-balance-scope={detect.scope}>
+            {pinActive && pinOnline ? "手动指定" : BALANCE_STRATEGY_LABELS[strategy].label} · {inUse} / {exits.length} 台在用{targetCheck && !nginxNote ? " · 检查到目标" : ""}
           </DialogDescription>
-          {!pinActive && !upgradeIssue ? <p className="text-meta leading-5 text-muted-foreground">{balanceStrategyHint(strategy, false, nginxNote ? null : detect)}</p> : null}
-          {!nginxNote ? (
-            <p className="text-meta leading-5 text-muted-foreground" data-balance-scope={detect.scope}>
-              {targetCheck ? "按入口到各台出口挑 · 附加检查出口到目标" : "按入口到各台出口挑，不碰目标"}
-            </p>
-          ) : null}
         </DialogHeader>
         {notice ? (
           <div className={cn("fx-lb-pin-banner", notice.tone === "warn" && "is-warn")} data-balance-notice={nginxNote ? "basic" : upgradeIssue ? "upgrade" : pinActive ? "pin" : "target"}>
@@ -182,7 +182,8 @@ export function ExitBalanceDialog({
               key={hostId}
               name={nameOf(hostId)}
               state={view.state}
-              detail={[view.detail, weight ? `权重 ${weight}` : ""].filter(Boolean).join(" · ") || null}
+              detail={[view.detail, weight ? `权重 ${weight}` : "", view.share].filter(Boolean).join(" · ") || null}
+              items={view.rules}
               reason={view.reason}
               hint={view.hint}
               dim={pinActive && pinOnline && hostId !== pinHostId && view.state === "standby"}

@@ -1,7 +1,8 @@
 import { setBalanceLiveReportForTest, type LiveExit } from "./balanceLive";
 import { executeRaw, queryRaw } from "./dbRuntime";
 import { tunnelBalanceDetect } from "./exitTargetHealth";
-import { recordTunnelExitLeg } from "./ruleLatencyView";
+import { recordRuleTargetLeg, recordTunnelExitLeg } from "./ruleLatencyView";
+import { emitLive } from "./liveEvents";
 
 /*
   本地开发面板（npm run dev:panel）没有真的 Agent：负载均衡链路的「入口 → 每台出口」探测和入口实时上报都没有，
@@ -44,6 +45,10 @@ async function feed() {
       };
     });
     for (const rule of rules) {
+      // 每台能用的出口到这条规则目标的那段（弹窗每台出口下面的「规则名 延迟」要用）
+      for (const exit of exits) {
+        if (exit.state !== "down") recordRuleTargetLeg({ ruleId: rule.id, tunnelId: tunnel.id, exitHostId: exit.hostId, primaryHostId: Number(tunnel.exitHostId), ms: 20 + ((rule.id * 13 + exit.hostId * 7) % 25), at: now });
+      }
       setBalanceLiveReportForTest({
         ruleId: rule.id, tunnelId: tunnel.id, entryHostId: Number(tunnel.entryHostId), entryHostName: "入口",
         strategy: String(tunnel.loadBalanceStrategy || "round_robin"), targetAware: chain, source: "agent",
@@ -51,6 +56,8 @@ async function feed() {
       }, Number(tunnel.entryHostId));
     }
   }
+  // 和真的入口上报一样通知打开着的页面（server/liveEvents.ts）
+  if (tunnels.length > 0) emitLive("balance");
 }
 
 export function startDevPanelLiveBalance() {

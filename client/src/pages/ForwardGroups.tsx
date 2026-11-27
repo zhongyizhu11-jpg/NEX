@@ -1846,7 +1846,7 @@ export function ForwardGroupsContent({
     ].filter(Boolean).join(" · ");
     const latency = mode === "chain" && typeof group.latestLatencyMs === "number" && Number.isFinite(group.latestLatencyMs) ? Number(group.latestLatencyMs) : null;
     const rating = latency !== null && tone !== "down" ? getLatencyRating(latency) : null;
-    const ratingTone = !rating ? null : rating.label === "优秀" ? "healthy" : rating.label === "良好" ? "ok" : rating.label === "一般" ? "warn" : "down";
+    const ratingTone = rating?.tone ?? null;
     const tagTone = ratingTone || (tone === "ok" ? "healthy" : tone === "warn" ? "warn" : tone === "down" ? "down" : "off");
     const tagText = rating && latency !== null
       ? `${Math.round(latency)} ms`

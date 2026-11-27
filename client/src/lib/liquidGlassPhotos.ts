@@ -9,9 +9,9 @@ import { BUILTIN_WALLPAPERS, type LiquidGlassPhotoSource } from "@shared/persona
   真的不要照片的选「不放照片」。
 */
 
-export const LIQUID_GLASS_RANDOM_PHOTO_PROVIDER = "https://picsum.photos";
+const LIQUID_GLASS_RANDOM_PHOTO_PROVIDER = "https://picsum.photos";
 
-export function liquidGlassRandomPhotoUrl(seed: number, index: number) {
+function liquidGlassRandomPhotoUrl(seed: number, index: number) {
   return `${LIQUID_GLASS_RANDOM_PHOTO_PROVIDER}/seed/${seed}-${index}/900/1200`;
 }
 

@@ -2732,6 +2732,8 @@ export async function getTrafficSummaryByRule(opts: {
       latestLatencyAt: latest?.recordedAt ?? null,
       // 卡上悬停写明这个数是怎么来的：probe 定时探测、diagnosis 最近一次诊断（入口实时的 withRuleExitTargets 再改成 live）
       latestLatencySource: latest ? (latest.source === "forward_test" ? "diagnosis" : "probe") as RuleLatencySource : null,
+      // 转发组的父规则：延迟是从成员规则拼出来的，内存里这条规则自己的实时样本不能拿来盖（withRuleLiveSamples）
+      latencyComposed: parentFailoverChildRows.has(item.ruleId) || chainParentRuleIds.has(item.ruleId),
     };
   });
 }

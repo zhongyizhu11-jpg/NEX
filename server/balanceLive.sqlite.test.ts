@@ -88,6 +88,8 @@ test("入口上报的真实状态：规则卡、链路弹窗、切换记录都�
     // 弹窗每台出口一行：连不上的是哪一段、在用的分到几成（入口报的 share）
     assert.deepEqual(summary.exits.map((exit) => [exit.reason, exit.share]), [["target", null], [null, 0.6], [null, 0.4]]);
     assert.equal(summary.events?.[0]?.text, "jinx(39.9y) 连不上（到目标），已切走");
+    // 每台出口在走哪几条规则、各自整链多少（2.3.559）：hep ix 用面板测的两段（6 + 3），Jinx(29.9y) 面板没测到、用入口报的整链 3.1
+    assert.deepEqual(summary.exits.map((exit) => exit.usedBy), [[], [{ ruleId: 501, ms: 9 }], [{ ruleId: 501, ms: 3 }]]);
 
     // 主出口在用、入口没报它的延迟：延迟照旧（最近一次诊断的），「经」写它
     await live.ingestBalanceLiveReport({ hostId: 1, source: "fxp", rules: [{ ...rule, exits: rule.exits.map((exit, index) => ({ ...exit, state: index === 0 ? "active" : "standby" })) }] });

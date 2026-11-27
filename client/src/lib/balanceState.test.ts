@@ -16,12 +16,25 @@ test("八个状态词各有一个颜色，和状态点的健康度对得上", ()
   assert.equal(balanceStateHealth("standby"), "standby");
 });
 
-test("在用：到目标多快、抖多少、分到几成，数字都带单位", () => {
-  const view = exitRowView(summary({ share: 0.34 }), base);
+/*
+  每台出口一行写清（2.3.559，用户：「用到两台也不知道哪两台，写上转发规则的名称吧，名称后边显示延迟」「不要太复杂」）：
+  有规则在用这台时写「规则名 延迟 · 规则名 延迟」；没有时只写「到出口 X ms」。整链两段、分到几成、抖动不再堆在这一行。
+*/
+test("在用：写在走这台的规则名和各自的整链延迟", () => {
+  const view = exitRowView(summary({ share: 0.34, usedBy: [{ ruleId: 33, ms: 38 }, { ruleId: 8, ms: 39 }] }), { ...base, ruleNames: { 33: "广港hkt/2", 8: "广港hkt/3" } });
   assert.equal(view.state, "active");
-  assert.equal(view.detail, "到目标 12 ms · 抖动 3 ms · 分到 34%");
+  assert.deepEqual(view.rules, [{ label: "广港hkt/2", value: "38 ms" }, { label: "广港hkt/3", value: "39 ms" }]);
+  assert.equal(view.detail, null, "有规则时不再写到出口那一句");
   assert.equal(view.reason, null);
-  assert.equal(exitRowView(summary({ minMs: 10, maxMs: 212 }), base).detail, "到目标 10–212 ms · 抖动 3 ms");
+  // 没测到延迟只写规则名；规则名还没补上时写规则号
+  assert.deepEqual(exitRowView(summary({ usedBy: [{ ruleId: 7, ms: null }, { ruleId: 9, ms: 12 }] }), base).rules, [{ label: "规则 #7", value: null }, { label: "规则 #9", value: "12 ms" }]);
+});
+
+test("没有规则在用（备用 / 还没上报）：只写到出口；入口报的标「Agent 自测」", () => {
+  assert.equal(exitRowView(summary({ exitMs: 7, exitMsSource: "panel", activeRules: 0, usedBy: [] }), base).detail, "到出口 7 ms");
+  assert.equal(exitRowView(summary({ exitMs: 12, exitMsSource: "agent", activeRules: 0, usedBy: [] }), base).detail, "到出口 12 ms（Agent 自测）");
+  // 不是实时上报（面板估的）：不列规则，只写到出口
+  assert.equal(exitRowView(summary({ exitMs: 6, exitMsSource: "panel", usedBy: [{ ruleId: 1, ms: 9 }] }), { ...base, live: false }).detail, "到出口 6 ms");
 });
 
 test("连不上：分清是出口机本身还是到目标，并说该查什么", () => {
@@ -93,31 +106,8 @@ test("最近切换：几点、从什么到什么、为什么；同一次变化�
 });
 
 // GOST 入口分开报了两段（问题 A / B）：写清楚哪段多少；到目标那段不知道时直说。
-test("GOST 入口报的两段：整链 = 到出口 + 到目标；到目标不知道时写「到目标延迟未知」", () => {
-  assert.equal(exitRowView(summary({ exitMs: 3, targetMs: 9, jitterMs: 0 }), base).detail, "整链 12 ms（到出口 3 ms + 到目标 9 ms）");
-  assert.equal(exitRowView(summary({ exitMs: 5, targetMs: null, targetLatencyUnknown: 2, jitterMs: 0 }), base).detail, "到出口 5 ms · 到目标延迟未知");
-  assert.equal(exitRowView(summary({ exitMs: 3, minMs: 10, maxMs: 212, targetMs: 50, jitterMs: 0 }), base).detail, "整链 10–212 ms（到出口 3 ms）");
-});
 
 // 延迟口径：两段先用面板探的；面板没测到的那段是入口自己报的，写「Agent 自测」；FXP 太旧只报了到目标的写明。
-test("弹窗每台出口：面板两段写成整链；入口报的那段标「Agent 自测」；FXP 太旧的写明没报到出口那段", () => {
-  assert.equal(
-    exitRowView(summary({ exitMs: 6, targetMs: 3, exitMsSource: "panel", targetMsSource: "panel", minMs: 10, maxMs: 30, jitterMs: 0 }), base).detail,
-    "整链 9 ms（到出口 6 ms + 到目标 3 ms）",
-  );
-  assert.equal(
-    exitRowView(summary({ exitMs: 12, targetMs: 3, exitMsSource: "agent", targetMsSource: "panel", jitterMs: 0 }), base).detail,
-    "整链 15 ms（到出口 12 ms + 到目标 3 ms；到出口是 Agent 自测）",
-  );
-  assert.equal(
-    exitRowView(summary({ exitMs: null, targetMs: null, exitMsSource: null, targetMsSource: null, jitterMs: 0 }), base).detail,
-    "到目标 12 ms（出口机 FXP 太旧，没报到出口那段）",
-  );
-  assert.equal(
-    exitRowView(summary({ exitMs: null, targetMs: 4, exitMsSource: null, targetMsSource: "panel", jitterMs: 0 }), base).detail,
-    "到目标 4 ms（到出口那段还没测到）",
-  );
-});
 
 test("指定的那台对某条规则连不上：那条照常走别的出口，弹窗要写出来，别写「其余备用」（用户面板 2026-11-26）", () => {
   const ruleNames = { 11: "广港hkt/2", 12: "广港Sg/2" };
@@ -153,4 +143,12 @@ test("指定的那台来回断、刚放回在观察：入口没让它扛，不�
   // 面板估的数据不下这个结论
   assert.equal(pinBypassText(observing, undefined, false), null);
   assert.equal(exitRowView(observing, { ...base, pinHostId: 3, live: false }).reason, null);
+});
+
+test("按权重 / 按负载写「分到 X%」；别的分法、备用、没有实时上报不写（用户：「「分到 %」按权重和负载要显示的吧」）", () => {
+  assert.equal(exitRowView(summary({ share: 0.34 }), { ...base, strategy: "weighted" }).share, "分到 34%");
+  assert.equal(exitRowView(summary({ share: 0.5 }), { ...base, strategy: "least_load" }).share, "分到 50%");
+  assert.equal(exitRowView(summary({ share: 0.34 }), { ...base, strategy: "auto" }).share, null);
+  assert.equal(exitRowView(summary({ share: 0.34 }), { ...base, strategy: "weighted", live: false }).share, null);
+  assert.equal(exitRowView(summary({ share: 0.34, activeRules: 0 }), { ...base, strategy: "weighted" }).share, null, "备用的不写");
 });

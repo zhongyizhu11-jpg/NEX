@@ -8,7 +8,12 @@ import {
   ruleChainLatency,
   ruleTunnelOf,
   tunnelExitLatency,
-  tunnelInUseExitLatency,
+  forgetTunnelLatencyView,
+  noteRuleSample,
+  noteTunnelSample,
+  ruleSample,
+  tunnelSample,
+  withRuleLiveSamples,
 } from "./ruleLatencyView";
 
 /*
@@ -46,19 +51,34 @@ test("缺一段返回 null（调用方退回规则的定时探测、再退回诊
   assert.equal(tunnelExitLatency(8, 3, NOW), null, "六分钟以前的探测不算数");
 });
 
-test("链路卡「到出口」：在用一台写一个数，几台写区间；扛流量的那台写名字", () => {
+test("实时样本：新的盖旧的、乱序回来的旧样本不盖新的；六分钟以前的不算", () => {
   resetRuleLatencyViewForTest();
-  recordTunnelExitLeg(1, 2, 7, NOW);
-  recordTunnelExitLeg(1, 3, 5, NOW);
-  recordTunnelExitLeg(1, 4, 6, NOW);
-  const names = new Map([[2, "jinx"], [3, "hep ix"], [4, "Jinx2"]]);
-  const hostName = (id: number) => names.get(id) || "";
-  assert.deepEqual(tunnelInUseExitLatency({ tunnelId: 1, inUseHostIds: [3], hostName, nowMs: NOW }), {
-    exitHostId: 3, exitName: "hep ix", exitMs: 5, lowMs: 5, highMs: 5, inUse: 1, at: NOW,
-  });
-  const several = tunnelInUseExitLatency({ tunnelId: 1, inUseHostIds: [4, 3, 2], hostName, nowMs: NOW });
-  assert.deepEqual([several?.exitName, several?.exitMs, several?.lowMs, several?.highMs, several?.inUse], ["Jinx2", 6, 5, 7, 3]);
-  // 在用的那台没测到：只算测到的；一台都没有返回 null（链路卡退回链路探测的总数）
-  assert.equal(tunnelInUseExitLatency({ tunnelId: 1, inUseHostIds: [9, 3], hostName, nowMs: NOW })?.inUse, 1);
-  assert.equal(tunnelInUseExitLatency({ tunnelId: 1, inUseHostIds: [9], hostName, nowMs: NOW }), null);
+  noteRuleSample({ ruleId: 5, hostId: 3, ms: 9, isTimeout: false, at: NOW });
+  noteRuleSample({ ruleId: 5, hostId: 2, ms: null, isTimeout: true, at: NOW - 1000 });
+  assert.deepEqual(ruleSample(5, NOW), { hostId: 3, ms: 9, isTimeout: false, at: NOW, source: "probe" });
+  noteRuleSample({ ruleId: 5, hostId: 3, ms: 7, isTimeout: false, at: NOW + 1000, source: "diagnosis" });
+  assert.equal(ruleSample(5, NOW + 1000)?.source, "diagnosis");
+  assert.equal(ruleSample(5, NOW + 7 * 60_000), null);
+  noteTunnelSample({ tunnelId: 1, ms: 12, isTimeout: false, at: NOW });
+  assert.equal(tunnelSample(1, NOW)?.ms, 12);
+  noteTunnelSample({ tunnelId: 1, isTimeout: true, at: NOW + 1 });
+  assert.deepEqual(tunnelSample(1, NOW + 1), { ms: null, isTimeout: true, at: NOW + 1, source: "probe" });
+  forgetTunnelLatencyView(1, [5]);
+  assert.equal(tunnelSample(1, NOW + 1), null);
+  assert.equal(ruleSample(5, NOW + 1000), null);
+});
+
+test("规则汇总补实时样本：诊断刚测完，卡片就是这次的数（用户：「诊断延迟返回后，规则还显示 7ms 8 分钟前」）", () => {
+  resetRuleLatencyViewForTest();
+  const dbRow = { ruleId: 9, latestLatencyMs: 7, latestLatencyIsTimeout: false, latestLatencyAt: new Date(NOW - 8 * 60_000), latestLatencySource: "probe" };
+  noteRuleSample({ ruleId: 9, hostId: 3, ms: 12, isTimeout: false, at: NOW - 2_000, source: "diagnosis" });
+  const [live] = withRuleLiveSamples([dbRow], NOW);
+  assert.deepEqual([live.latestLatencyMs, live.latestLatencySource, (live.latestLatencyAt as Date).getTime()], [12, "diagnosis", NOW - 2_000]);
+  // 数据库那条更新（刚写进去的）就用数据库的；转发组父规则的延迟是拼出来的，不盖；没有延迟字段的（累计流量）不加
+  assert.equal(withRuleLiveSamples([{ ...dbRow, latestLatencyAt: new Date(NOW - 1_000) }], NOW)[0].latestLatencyMs, 7);
+  assert.equal(withRuleLiveSamples([{ ...dbRow, latencyComposed: true }], NOW)[0].latestLatencyMs, 7);
+  assert.equal("latestLatencyMs" in withRuleLiveSamples([{ ruleId: 9 }], NOW)[0], false);
+  // 超时也照实盖上去
+  noteRuleSample({ ruleId: 9, hostId: 3, isTimeout: true, at: NOW - 1_000 });
+  assert.deepEqual([withRuleLiveSamples([dbRow], NOW)[0].latestLatencyIsTimeout, withRuleLiveSamples([dbRow], NOW)[0].latestLatencyMs], [true, null]);
 });

@@ -121,6 +121,9 @@ func TestExitGroupFlapIgnoresAdminDownAndNonExitGroups(t *testing.T) {
 （往目标发不说话的连接）、不据此判出口坏；也不拿真实连接去试判坏的出口。
 */
 func TestExitGroupTunnelOnlyNeverProbesTheTarget(t *testing.T) {
+	// 下面对照的整链会起经出口复核的协程：换成假的探测，测试结束前等它跑完（Go race 2026-11-27：协程拖到下一个测试，
+	// 和那个测试换探测函数撞上）
+	installFakeExitThrough(t)
 	spec := exitGroupSpec("round_robin", 3)
 	spec.TunnelOnly = true
 	proxy := routeTestProxy(spec)
@@ -157,6 +160,7 @@ func TestExitGroupTunnelOnlyNeverProbesTheTarget(t *testing.T) {
 	if !started {
 		t.Fatal("整链：被关以后应当经出口复核")
 	}
+	waitExitThrough(t, full, 1)
 	close(full.done)
 	close(proxy.done)
 }

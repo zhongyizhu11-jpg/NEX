@@ -6,7 +6,6 @@ import { APP_VERSION } from "@shared/versions";
 import {
   QUERY_CACHE_MAX_AGE_MS,
   clearPersistedQueryCache,
-  containsSensitiveField,
   isLivePollingPath,
   isPersistablePath,
   queryCacheStorageKey,
@@ -32,7 +31,7 @@ function memoryStorage() {
 
 const trpcKey = (path: string) => [path.split("."), { type: "query" }];
 
-test("only list and overview data is written, and never a result carrying secrets", () => {
+test("only list and overview data is written, and never a secret: rows keep everything but the secret fields", () => {
   const client = new QueryClient();
   client.setQueryData(trpcKey("rules.list"), [{ id: 1, name: "广港us", updatedAt: new Date("2026-10-10T00:00:00Z") }]);
   client.setQueryData(trpcKey("auth.me"), { id: 1, role: "admin" });
@@ -41,9 +40,14 @@ test("only list and overview data is written, and never a result carrying secret
   client.setQueryData(trpcKey("system.publicInfo"), { siteTitle: "NEX" });
   client.setQueryData(trpcKey("system.getSettings"), { aiApiKey: "sk-x" });
 
-  const saved = superjson.parse<any>(serializeQueryCache(client));
+  const raw = serializeQueryCache(client);
+  const saved = superjson.parse<any>(raw);
   const paths = saved.state.queries.map((query: any) => query.queryKey[0].join(".")).sort();
-  assert.deepEqual(paths, ["auth.me", "rules.list", "system.publicInfo"]);
+  // 主机列表照样留（刷新先画出来），只是令牌那一格去掉了；设置页那份不在白名单里，整条不存
+  assert.deepEqual(paths, ["auth.me", "hosts.list", "rules.list", "system.publicInfo"]);
+  const hosts = saved.state.queries.find((query: any) => query.queryKey[0].join(".") === "hosts.list").state.data;
+  assert.deepEqual(hosts, [{ id: 3, name: "Jinx" }]);
+  assert.doesNotMatch(raw, /abc|sk-x/);
   assert.equal(saved.version, APP_VERSION);
 });
 
@@ -97,11 +101,6 @@ test("path allowlist and secret detection", () => {
   assert.equal(isPersistablePath("auth.me"), true);
   assert.equal(isPersistablePath("auth.sessions"), false);
   assert.equal(isPersistablePath("proxySubscriptions.list"), false);
-  assert.equal(containsSensitiveField([{ nested: { apiKey: "x" } }]), true);
-  assert.equal(containsSensitiveField([{ token: null, password: "" }]), false);
-  assert.equal(containsSensitiveField({ maxProxySubTokens: 0, hasPassword: true }), false);
-  assert.equal(containsSensitiveField({ credentials: { user: "a" } }), true);
-  assert.equal(containsSensitiveField({ name: "rule", at: new Date() }), false);
 });
 
 test("live polling endpoints and logs are not persisted", () => {
@@ -215,4 +214,33 @@ test("saves are throttled to once per 30 s, and hiding the page saves right away
     stop();
     (globalThis as any).document = previousDocument;
   }
+});
+
+test("刷新先画上一次的配置，延迟 / 测试结果不存（不拿旧状态顶着）", () => {
+  const client = new QueryClient();
+  const at = new Date("2026-11-27T00:00:00Z");
+  client.setQueryData(trpcKey("tunnels.listPage"), {
+    items: [{ id: 9, name: "广港", exitHostId: 2, latestLatencyMs: 7, latestLatencyAt: at, lastTestStatus: "success", lastTestMessage: "{}", lastTestAt: at, createdAt: at }],
+    total: 1,
+  });
+  const storage = memoryStorage();
+  storage.setItem(queryCacheStorageKey(), serializeQueryCache(client));
+  const restored = new QueryClient();
+  restorePersistedQueryCache(restored, { storage });
+  const page = restored.getQueryData(trpcKey("tunnels.listPage")) as { items: Array<Record<string, unknown>> };
+  assert.deepEqual(Object.keys(page.items[0]).sort(), ["createdAt", "exitHostId", "id", "name"]);
+  assert.ok(page.items[0].createdAt instanceof Date, "日期照旧还原成 Date");
+  // 内存里这一份不受影响
+  assert.equal((client.getQueryData(trpcKey("tunnels.listPage")) as { items: Array<{ latestLatencyMs: number }> }).items[0].latestLatencyMs, 7);
+});
+
+test("密钥不管藏多深都不落本机；数字 / 布尔的同名字段（配额、有没有设密码）照留", () => {
+  const client = new QueryClient();
+  client.setQueryData(trpcKey("tunnels.listPage"), {
+    items: [{ id: 9, name: "广港", tls: { privateKey: "PEM", cert: "c" }, fxpSecret: "s3", nested: [{ apiKey: "k", credentials: { user: "a" } }], token: null, password: "", maxProxySubTokens: 2, hasPassword: true }],
+  });
+  const raw = serializeQueryCache(client);
+  assert.doesNotMatch(raw, /PEM|s3|"k"|"user"/);
+  const item = superjson.parse<any>(raw).state.queries[0].state.data.items[0];
+  assert.deepEqual(item, { id: 9, name: "广港", tls: { cert: "c" }, nested: [{}], token: null, password: "", maxProxySubTokens: 2, hasPassword: true });
 });

@@ -1,13 +1,18 @@
 /*
-  从 client/src/pages/Rules.tsx 第 5448-5524 行抽出（scripts/extract-block.mjs），行为不变。
+  规则卡的状态：只看服务端这一次给的（server/ruleLiveStatus.ts 已经把实时样本、在用出口都拼好了）。
+  2.3.559 起前端不再另存一份「上次状态」/ 探测缓存：刷新页面不会先闪一下几分钟前的颜色，也不会拿旧的盖掉新的。
 */
-import { preferLastKnownForwardRuleVisualStatus, resolveForwardRuleVisualStatus } from "@/lib/forwardRuleStatus";
-import { readRuleStatusSnapshots, type RuleVisualStatusSnapshot } from "@/lib/ruleStatusCache";
+import { resolveForwardRuleVisualStatus } from "@/lib/forwardRuleStatus";
 import { normalizeRuleLimitReason } from "@shared/ruleLimits";
 import { useCallback, useMemo } from "react";
 
 export type UseRuleVisualStatusesContext = {
-  stableProbeByRule: any /* 原类型 Map<number, RuleProbeSummary>… 引用了拿不到的 RuleProbeSummary，手动收拾 */;
+  /**
+   * 这一页规则的实时状态（rules.trafficSummary，转发组的还要等转发组）回来了没有。没回来时卡片照样画出来（刷新不卡在骨架上），
+   * 状态点先一律灰着写「正在获取最新状态」—— 不拿列表里上一次的运行状态猜颜色，回来了再按实际的画（2.3.559）。
+   */
+  statusReady: boolean;
+  probeByRule: Map<number, any>;
   trafficByRule: any;
   forwardGroupById: Map<number, any>;
   getForwardGroupConfigStatus: (group: any) => "available" | "degraded" | "pending" | "unavailable" | "disabled";
@@ -17,21 +22,21 @@ export type UseRuleVisualStatusesContext = {
   hosts: Array<any> | undefined;
   tunnels: Array<any> | undefined;
   filteredRules: Array<any>;
-  user: any;
-  invalidatedRuleProbeIdsRef: any /* 原类型 RefObject<Set<number>>… 引用了拿不到的 RefObject，手动收拾 */;
-  ruleProbeCacheRevision: number;
 };
 
+const STATUS_LOADING: ReturnType<typeof resolveForwardRuleVisualStatus> = { state: "pending", title: "正在获取最新状态", loading: true };
+
 export type UseRuleVisualStatusesResult = {
-  ruleVisualStatuses: Map<number, { current: ReturnType<typeof resolveForwardRuleVisualStatus>; display: ReturnType<typeof resolveForwardRuleVisualStatus>; lastKnown: RuleVisualStatusSnapshot | null; invalidated: boolean; }>;
+  ruleVisualStatuses: Map<number, ReturnType<typeof resolveForwardRuleVisualStatus>>;
   resolveRuleVisualStatus: (rule: any) => ReturnType<typeof resolveForwardRuleVisualStatus>;
 };
 
 export function useRuleVisualStatuses(ctx: UseRuleVisualStatusesContext): UseRuleVisualStatusesResult {
-  const { stableProbeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules, user, invalidatedRuleProbeIdsRef, ruleProbeCacheRevision } = ctx;
+  const { statusReady, probeByRule, trafficByRule, forwardGroupById, getForwardGroupConfigStatus, forwardGroupsFetched, forwardGroupsError, getRuleOfflineHostNames, hosts, tunnels, filteredRules } = ctx;
   const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
-    const latest = stableProbeByRule.get(Number(rule.id));
-    // 负载均衡链路：各台出口到目标的情况（不进探测缓存，按这一次的汇总）
+    if (!statusReady && rule?.isEnabled) return STATUS_LOADING;
+    const latest = probeByRule.get(Number(rule.id));
+    // 负载均衡链路：各台出口到目标的情况
     const exitTargets = trafficByRule.get(Number(rule.id));
     const exitTargetFields = {
       exitTargetOk: exitTargets?.exitTargetOk ?? null,
@@ -79,32 +84,14 @@ export function useRuleVisualStatuses(ctx: UseRuleVisualStatusesContext): UseRul
       ...exitTargetFields,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule, trafficByRule, hosts, tunnels]);
+  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, probeByRule, statusReady, trafficByRule, hosts, tunnels]);
   const ruleVisualStatuses = useMemo(() => {
-    const statuses = new Map<number, {
-      current: ReturnType<typeof resolveForwardRuleVisualStatus>;
-      display: ReturnType<typeof resolveForwardRuleVisualStatus>;
-      lastKnown: RuleVisualStatusSnapshot | null;
-      invalidated: boolean;
-    }>();
-    const ruleIds = filteredRules
-      .map((rule: any) => Number(rule?.id || 0))
-      .filter((ruleId: number) => Number.isInteger(ruleId) && ruleId > 0);
-    const lastKnownByRule = readRuleStatusSnapshots(user?.id, ruleIds);
+    const statuses = new Map<number, ReturnType<typeof resolveForwardRuleVisualStatus>>();
     for (const rule of filteredRules) {
       const ruleId = Number(rule?.id || 0);
-      if (!Number.isInteger(ruleId) || ruleId <= 0) continue;
-      const current = resolveRuleVisualStatus(rule);
-      const invalidated = invalidatedRuleProbeIdsRef.current.has(ruleId);
-      const lastKnown = invalidated ? null : lastKnownByRule.get(ruleId) || null;
-      statuses.set(ruleId, {
-        current,
-        lastKnown,
-        invalidated,
-        display: preferLastKnownForwardRuleVisualStatus(current, lastKnown),
-      });
+      if (Number.isInteger(ruleId) && ruleId > 0) statuses.set(ruleId, resolveRuleVisualStatus(rule));
     }
     return statuses;
-  }, [filteredRules, resolveRuleVisualStatus, ruleProbeCacheRevision, user?.id]);
+  }, [filteredRules, resolveRuleVisualStatus]);
   return { ruleVisualStatuses, resolveRuleVisualStatus };
 }

@@ -1,5 +1,5 @@
 import { tunnelEffectivePin } from "./tunnelPinState";
-import { ruleChainLatency, ruleRecordedProbe, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
+import { ruleChainLatency, ruleSample, ruleTargetLatency, ruleTunnelOf, tunnelExitLatency } from "./ruleLatencyView";
 import { appendPanelLog } from "./_core/panelLogger";
 import { dbBool } from "./repositories/repositoryUtils";
 import { ExitTargetPushDebouncer } from "./exitTargetPush";
@@ -602,6 +602,12 @@ type ExitTargetExitSummary = {
   targetMsSource?: "panel" | "agent" | null;
   /** 几条规则里这台到目标的延迟不知道（入口调度器按最慢的那台算它）：弹窗写「到目标延迟未知」 */
   targetLatencyUnknown?: number;
+  /**
+   * 此刻在用这台出口的规则（入口实时上报里这台是 active 的）和它们经这台的整链延迟（2.3.559，用户：「用到两台也不知道
+   * 哪两台，写上转发规则的名称吧，名称后边显示延迟」）。延迟先用面板测的两段（ruleChainLatency，和规则卡、诊断一个口径），
+   * 没测全时用入口自己报的整链；都没有是 null。规则名路由层补进 ruleNames。
+   */
+  usedBy?: Array<{ ruleId: number; ms: number | null }>;
 };
 
 export type ExitTargetTunnelSummary = {
@@ -913,6 +919,7 @@ function exitTargetSummaryFromLive(
     baselines: [] as number[], slower: 0, picks: 0, udpOk: 0, udpDown: 0, udpUnverified: 0, peerOutdated: false,
     reason: null as "target" | "exit" | null, shares: [] as number[],
     exitMs: [] as number[], targetMs: [] as number[], targetUnknown: 0, panelTargetMs: [] as number[],
+    usedBy: [] as Array<{ ruleId: number; ms: number | null }>,
   }]));
   const tunnelId = Number(lives[0]?.tunnelId || 0);
   const targetIssues: ExitTargetTunnelSummary["targetIssues"] = [];
@@ -932,7 +939,13 @@ function exitTargetSummaryFromLive(
         entry.down += 1;
         entry.downRules.push(live.ruleId);
       } else if (exit.state === "unstable" && !allDown && !allBad) entry.unstable += 1;
-      if (exit.state === "active") entry.activeRules += 1;
+      if (exit.state === "active") {
+        entry.activeRules += 1;
+        const chain = ruleChainLatency({ ruleId: live.ruleId, tunnelId: live.tunnelId, exitHostId: exit.hostId });
+        const agentChain = exit.medianMs != null && !exit.targetLatencyUnknown ? exit.medianMs : null;
+        const chainMs = chain?.totalMs ?? agentChain;
+        entry.usedBy.push({ ruleId: Number(live.ruleId), ms: chainMs == null ? null : Math.round(chainMs) });
+      }
       if (exit.state === "active" && exit.share != null) entry.shares.push(exit.share);
       // 出口机本身连不上比到目标不行更要紧：有一条规则报 exit 就写 exit
       if ((exit.state === "down" || exit.state === "unstable") && exit.reason && entry.reason !== "exit") entry.reason = exit.reason;
@@ -1027,6 +1040,7 @@ function exitTargetSummaryFromLive(
         */
         ...panelOrAgentLegs(tunnelId, hostId, entry),
         targetLatencyUnknown: entry.targetUnknown,
+        usedBy: entry.usedBy,
       };
     }),
     targetIssues,
@@ -1327,6 +1341,46 @@ export function ruleRecordingExitHostId(ruleId: number, tunnelId: number, primar
   return hostId > 0 ? hostId : Number(primaryHostId) || 0;
 }
 
+/*
+  在用的那台换了（2.3.559）：出口机要不要探这条规则的目标，是完整心跳里按 ruleRecordingExitHostId 分派的
+  （server/heartbeat/forwardGroupProbes.ts），可出口机平时走稳定快路径、5 分钟才完整核对一次 —— 换过去的那台拿不到探测，
+  换走的那台还在探、结果又因为「不是在用的那台」被丢掉，卡片上的延迟空好几分钟。所以入口每次实时上报都比一下，
+  换了就把新旧两台交给调用方去作废快路径、叫它们马上重新心跳（server/agentReportRoutes.ts）。
+*/
+const recordingExitByRule = new Map<number, number>();
+let recordingExitSwitches = 0;
+
+/** /metrics 用：面板启动以来入口把规则换到别的出口多少次 */
+export function recordingExitSwitchCount() {
+  return recordingExitSwitches;
+}
+
+export function recordingExitChanges(reports: readonly LiveRuleReport[]): number[] {
+  const hosts = new Set<number>();
+  for (const report of reports) {
+    const next = Number(activeExitFromLive(report)?.hostIds?.[0] || 0);
+    if (next <= 0) continue;
+    const ruleId = Number(report.ruleId);
+    const previous = recordingExitByRule.get(ruleId) || 0;
+    if (previous === next) continue;
+    if (!recordingExitByRule.has(ruleId) && recordingExitByRule.size >= 50_000) {
+      recordingExitByRule.delete(recordingExitByRule.keys().next().value as number);
+    }
+    recordingExitByRule.set(ruleId, next);
+    if (previous > 0) {
+      recordingExitSwitches += 1;
+      hosts.add(previous);
+      hosts.add(next);
+    }
+  }
+  return Array.from(hosts);
+}
+
+export function resetRecordingExitsForTest() {
+  recordingExitByRule.clear();
+  recordingExitSwitches = 0;
+}
+
 /**
  * 负载均衡的规则此刻有没有一台出口连得上目标（2.3.555）：入口实时上报里有在用的、而且快速探测没说它连不上；没有实时上报时
  * 看快速探测里有没有一台通的。订阅「自动隐藏不通的节点」用：规则的定时端到端探测是从主出口测的，主出口被目标的高防拦了
@@ -1338,7 +1392,7 @@ export function ruleHasReachableExit(ruleId: number, nowMs = Date.now()): boolea
   const downHosts = new Set(states.filter((state) => state.down && !exitTargetDownStale(state, nowMs)).map((state) => state.hostId));
   const live = liveBalanceForRule(Number(ruleId), nowMs);
   // 规则自己那条定时探测从在用的那台发、超时了（2.3.557）：它也不算连得上
-  const recorded = ruleRecordedProbe(Number(ruleId), nowMs);
+  const recorded = ruleSample(Number(ruleId), nowMs);
   if (recorded?.isTimeout) downHosts.add(recorded.hostId);
   if (live) return live.exits.some((exit) => exit.state === "active" && exit.hostId > 0 && !downHosts.has(exit.hostId));
   if (states.length === 0) return null;
@@ -1357,7 +1411,7 @@ export function withRuleExitTargets<T extends { ruleId: number | string }>(rows:
         用户面板 2026-11-27：指定 jinx(39.9y)、只看出口组，高防拦着 jinx，客户端超时、诊断不通，卡片却是绿的 ——
         下面那条「空着等测到」以前不看是哪台测的，把在用这台自己的超时也盖掉了。
       */
-      const recorded = ruleRecordedProbe(row.ruleId, nowMs);
+      const recorded = ruleSample(row.ruleId, nowMs);
       const carryingTimedOut = !!carrying && probeTimeout && recorded?.isTimeout === true && recorded.hostId === carrying.hostId;
       /*
         两段没测全、规则自己的定时探测超时、可那条是切换前别的出口测的（入口已经把流量换到这台，它还没测到）：别写「超时」

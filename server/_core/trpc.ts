@@ -18,6 +18,7 @@ import { clientIp } from "../clientIp";
 import { auditMutationCall } from "../operationAudit";
 import { CROSS_SITE_MUTATION_ERR_MSG, crossSiteRequestReason, parseTrustedOrigins } from "./csrf";
 import { ENV } from "../env";
+import { emitLive, LIVE_MUTATION_MODULES, type LiveMutationModule } from "../liveEvents";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -149,6 +150,19 @@ const rejectCrossSiteMutations = t.middleware(opts => {
  * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → CSRF → 令牌权限 → 代入限制。
  * 限流在审计前（被限流的不写库），审计在 CSRF / 令牌权限 / 代入限制前（被策略拒掉的写操作记成「被拒绝」）。
  */
+/**
+ * 改了规则 / 链路 / 转发组 / 主机（包括指定出口、出口组排序、启停）：告诉所有打开着的页面（别的标签页、别的设备）
+ * 跟着刷新这一块（server/liveEvents.ts）。只在成功之后发，只说哪一块变了，不带数据。
+ */
+const announceLiveMutation = t.middleware(async opts => {
+  const result = await opts.next();
+  if (opts.type === "mutation" && result.ok) {
+    const module = String(opts.path || "").split(".")[0];
+    if (LIVE_MUTATION_MODULES.has(module)) emitLive(`mutation:${module as LiveMutationModule}`);
+  }
+  return result;
+});
+
 const baseProcedure = t.procedure
   .use(rejectWhileDatabaseUnavailable)
   .use(rejectMutationsDuringDatabaseMaintenance)
@@ -156,7 +170,8 @@ const baseProcedure = t.procedure
   .use(recordOperationAudit)
   .use(rejectCrossSiteMutations)
   .use(enforceApiTokenPolicy)
-  .use(enforceImpersonationPolicy);
+  .use(enforceImpersonationPolicy)
+  .use(announceLiveMutation);
 
 export const publicProcedure = baseProcedure;
 

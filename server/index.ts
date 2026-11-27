@@ -8,6 +8,7 @@ import net from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { registerLiveRoute } from "./liveEvents";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
 import { agentRouter } from "./agentRoutes";
@@ -265,6 +266,8 @@ async function startServer() {
   app.use(metricsRouter);
   // GET /api/openapi.json：接口文档（OpenAPI 3.1），登录用户或带 API 令牌可取（server/openApiRoute.ts）。
   app.use(openApiRouter);
+  // GET /api/live：面板 → 浏览器的实时通知（server/liveEvents.ts），登录和 tRPC 同一套
+  registerLiveRoute(app, async (req, res) => (await createContext({ req, res } as Parameters<typeof createContext>[0])).user);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

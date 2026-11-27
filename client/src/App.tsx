@@ -11,14 +11,13 @@ import { matchRoute, Redirect, Route, Switch, useLocation, useRouter } from "wou
 import ErrorBoundary from "./components/ErrorBoundary";
 import RouteFallback from "./components/RouteFallback";
 import { AppShell } from "./components/DashboardLayout";
-import { lazyRoute, prefetchRoute } from "@/pages/routeChunks";
+import { lazyRoute, prefetchRoute, setRouteChunkFallback } from "@/pages/routeChunks";
+import LoginPage from "@/pages/Login";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import PersonalizationLayer from "./components/PersonalizationLayer";
 import LayoutLayer from "./components/LayoutLayer";
 import LiquidGlassBackdrop from "./components/LiquidGlassBackdrop";
 import Live2DWidgetHost from "./components/plugins/Live2DWidgetHost";
-import HomePage from "@/pages/Home";
-import LoginPage from "@/pages/Login";
 import DatabaseHealthGate from "./components/DatabaseHealthGate";
 import { ImpersonationBoundary } from "./components/ImpersonationBoundary";
 import { useMotionEnabled } from "./hooks/useUiPreferences";
@@ -40,6 +39,12 @@ const loadMotionFeatures = () => import("@/motionFeatures").then((mod) => mod.de
   标签栏点过去时代码已经在缓存里。
 */
 const SetupPage = lazy(() => import("./pages/Setup"));
+/*
+  概览按需加载（2.3.559）：以前在入口包里，刷新任何一页都要多下、多解析一遍概览的代码。打开概览时外壳先画出来、
+  中间转一下圈，main.tsx 的 prefetchRoute 和入口包几乎同时去取它。
+  登录页留在入口包里：它没有外壳，按需加载的话没登录的人会先看到一下空白页（多一次往返）。
+*/
+const HomePage = lazyRoute("/");
 const AnnouncementsPage = lazyRoute("/announcements");
 const BillingPage = lazyRoute("/billing");
 const CustomSidebarPage = lazy(() => import("@/pages/CustomSidebarPage"));
@@ -87,6 +92,9 @@ type RoutableComponent = ComponentType<any>;
 
   放在守卫里面，挂起就只影响页面这一小块，守卫已经算完、不会被重来。
 */
+// 页面代码还没到时 lazyRoute 画的也是它（不挂起，见 pages/routeChunks.ts）
+setRouteChunkFallback(RouteFallback);
+
 function LazyBoundary({ children }: { children: ReactNode }) {
   return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 }

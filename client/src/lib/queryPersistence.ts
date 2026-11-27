@@ -74,7 +74,6 @@ const LIVE_PATHS = new Set([
 ]);
 // 日志类：不管挂在哪个路由下都不存。
 const LOG_PATH = /(^|\.)(logs?|\w+Logs?)(\.|$)/;
-const SENSITIVE_FIELD = /token|secret|password|passwd|private.?key|api.?key|credential/i;
 
 function queryPathOf(queryKey: readonly unknown[]) {
   const head = queryKey?.[0];
@@ -92,33 +91,74 @@ export function isPersistablePath(path: string) {
   return PERSISTED_ROUTERS.has(path.split(".")[0]);
 }
 
-/** 结果里有没有带值的敏感字段（字段名像令牌、密钥、密码，值是字符串或对象）。只看字段名，深度和数量都有上限，大列表不至于卡。 */
-export function containsSensitiveField(value: unknown) {
-  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+/*
+  存进本机之前过一遍（2.3.559，用户：「网页面板刷新是不能出现空白页和刷新缓存」「我要操作界面反应极速」）：
+
+  1. 密钥一律去掉：字段名像令牌、密钥、密码，值是有内容的字符串或对象的（数字、布尔如 maxProxySubTokens 这种配额不算）。
+     以前整条结果只要带一个这样的字段就整条不存 —— 链路、主机列表每一行都带着，于是刷新时这两页每次都要等接口。
+     现在只去掉那几个字段，列表照样留一份，刷新先画出来；本机照旧一个密钥都不落。
+  2. 规则 / 链路 / 转发组里「现在怎么样」的字段不存：延迟、测试结果、探测失败、负载均衡在用出口、实时速率。
+     刷新先画上一次的配置，这些等接口回来再画，不拿几分钟、几天前的顶着（规则卡的状态本来就在 rules.trafficSummary，不存）。
+     按前缀认，服务端以后再加同类字段也不会漏。
+
+  只拆普通对象和数组；Date / Set / Map 原样留着。没东西要去掉的那一支返回原来的引用（共享引用照旧共享）。
+  大得离谱的结果（超过 MAX_SANITIZE_NODES 个对象）不存，免得主线程卡在这里。
+*/
+const SENSITIVE_FIELD = /token|secret|password|passwd|private.?key|api.?key|credential/i;
+const VOLATILE_STATUS_ROUTERS = new Set(["tunnels", "rules", "forwardGroups"]);
+const VOLATILE_STATUS_FIELD = /^(latestLatency|lastLatency|lastTest|latestProbe|exitTarget|liveRate)/;
+const MAX_SANITIZE_NODES = 200_000;
+const SKIP = Symbol("skip");
+
+function isSecretValue(field: unknown) {
+  return (typeof field === "string" && field !== "") || (!!field && typeof field === "object" && !(field instanceof Date));
+}
+
+/** 存进本机的那一份：去掉密钥和「现在怎么样」的字段；太大存不了返回 SKIP。 */
+function sanitizeForStorage(path: string, data: unknown): unknown {
+  const dropStatus = VOLATILE_STATUS_ROUTERS.has(path.split(".")[0]);
+  const seen = new Map<object, unknown>();
   let visited = 0;
-  while (stack.length > 0) {
-    const { value: current, depth } = stack.pop()!;
-    if (!current || typeof current !== "object" || depth > 6) continue;
-    if (++visited > 20_000) return true;
-    if (Array.isArray(current)) {
-      for (const item of current) stack.push({ value: item, depth: depth + 1 });
-      continue;
+  const clean = (value: unknown): unknown => {
+    if (!value || typeof value !== "object") return value;
+    if (seen.has(value)) return seen.get(value);
+    if (++visited > MAX_SANITIZE_NODES) throw SKIP;
+    let result: unknown = value;
+    if (Array.isArray(value)) {
+      const items = value.map(clean);
+      if (items.some((item, index) => item !== value[index])) result = items;
+    } else {
+      const proto = Object.getPrototypeOf(value);
+      if (proto === Object.prototype || proto === null) {
+        let changed = false;
+        const out: Record<string, unknown> = {};
+        for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
+          if ((SENSITIVE_FIELD.test(key) && isSecretValue(field)) || (dropStatus && VOLATILE_STATUS_FIELD.test(key))) {
+            changed = true;
+            continue;
+          }
+          const next = clean(field);
+          if (next !== field) changed = true;
+          out[key] = next;
+        }
+        if (changed) result = out;
+      }
     }
-    if (current instanceof Date) continue;
-    for (const [key, field] of Object.entries(current as Record<string, unknown>)) {
-      // 数字、布尔（如 maxProxySubTokens 这种配额）不算；有内容的字符串或对象才算。
-      if (SENSITIVE_FIELD.test(key) && ((typeof field === "string" && field !== "") || (field && typeof field === "object" && !(field instanceof Date)))) return true;
-      if (field && typeof field === "object") stack.push({ value: field, depth: depth + 1 });
-    }
+    seen.set(value, result);
+    return result;
+  };
+  try {
+    return clean(data);
+  } catch (error) {
+    if (error === SKIP) return SKIP;
+    throw error;
   }
-  return false;
 }
 
 function shouldPersistQuery(query: Query) {
   return query.state.status === "success"
     && query.state.data !== undefined
-    && isPersistablePath(queryPathOf(query.queryKey))
-    && !containsSensitiveField(query.state.data);
+    && isPersistablePath(queryPathOf(query.queryKey));
 }
 
 type PersistedCache = { version: string; savedAt: number; state: ReturnType<typeof dehydrate> };
@@ -234,7 +274,10 @@ export function serializeQueryCache(queryClient: QueryClient, now = Date.now()) 
   const referentialEqualities: Record<string, unknown> = {};
   // 新的优先：超出总量时丢最久没更新的。
   for (const query of [...state.queries].sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt)) {
-    const serialized = superjson.serialize(query) as { json: unknown; meta?: SuperJsonMeta };
+    const data = sanitizeForStorage(queryPathOf(query.queryKey as unknown[]), query.state.data);
+    if (data === SKIP) continue;
+    const stored = data === query.state.data ? query : { ...query, state: { ...query.state, data } };
+    const serialized = superjson.serialize(stored) as { json: unknown; meta?: SuperJsonMeta };
     const meta = serialized.meta;
     // 根上带注解（数组形式）的情况查询对象不会出现；万一出现就不存这一条，不去猜格式。
     if (meta && (Array.isArray(meta.values) || Array.isArray(meta.referentialEqualities))) continue;

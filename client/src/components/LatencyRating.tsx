@@ -1,15 +1,19 @@
 import { Activity, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { latencyLevel } from "@/lib/latencyLevel";
+
+const TONE_TEXT = {
+  healthy: "text-[var(--fx-healthy-text)]",
+  ok: "text-[var(--fx-healthy-text)]",
+  warn: "text-[var(--fx-warn-text)]",
+  down: "text-[var(--fx-down-text)]",
+} as const;
 
 export function getLatencyRating(latencyMs: number | null | undefined) {
-  if (typeof latencyMs !== "number" || !Number.isFinite(latencyMs)) {
-    return { label: "", className: "text-muted-foreground" };
-  }
-  if (latencyMs < 60) return { label: "优秀", className: "text-[var(--fx-healthy-text)]" };
-  if (latencyMs < 150) return { label: "良好", className: "text-[var(--fx-warn-text)]" };
-  if (latencyMs < 220) return { label: "一般", className: "text-[var(--fx-down-text)]" };
-  if (latencyMs < 300) return { label: "较差", className: "text-[var(--fx-down-text)]" };
-  return { label: "较差", className: "text-[var(--fx-down-text)]" };
+  // 刻度只在 client/src/lib/latencyLevel.ts 一处
+  const level = latencyLevel(latencyMs);
+  if (!level) return { label: "", className: "text-muted-foreground" };
+  return { label: level.label, className: TONE_TEXT[level.tone], tone: level.tone };
 }
 
 export function LatencyRating({

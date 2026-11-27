@@ -1,3 +1,4 @@
+import { emitLive } from "./liveEvents";
 import { getHostNamesByIds, getHostsByIds } from "./repositories/hostRepository";
 import { getForwardRulesByIds } from "./repositories/forwardRuleRepository";
 import { getTunnelEntryHostIds, getTunnelsByIds, getTunnelExitNodesByTunnelIds } from "./repositories/tunnelRepository";
@@ -248,6 +249,8 @@ export async function ingestBalanceLiveReport(input: {
     saved.push(report);
     recorded += 1;
   }
+  // 弹窗、规则卡上的在用出口跟着刷新（server/liveEvents.ts）
+  if (recorded > 0) emitLive("balance");
   return { recorded, reports: saved };
 }
 

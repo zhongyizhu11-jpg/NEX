@@ -32,7 +32,6 @@ export type SharedStateSetting = "auto" | "memory" | "db";
 export type SharedStateMode = "memory" | "db";
 
 let settingCache: SharedStateSetting | null = null;
-let modeOverride: SharedStateMode | null = null;
 
 /** 环境变量里选的（只读一次：和别的启动前配置一样，改了要重启）。 */
 export function sharedStateSetting(): SharedStateSetting {
@@ -45,7 +44,6 @@ export function sharedStateSetting(): SharedStateSetting {
 
 /** 现在该用哪一套。每次调用都算（别的实例随时会起来 / 停掉），只是几次函数调用。 */
 export function sharedStateMode(): SharedStateMode {
-  if (modeOverride) return modeOverride;
   const setting = sharedStateSetting();
   if (setting !== "auto") return setting;
   const kind = getDatabaseKind();
@@ -53,11 +51,6 @@ export function sharedStateMode(): SharedStateMode {
 }
 
 /** 测试用：强制一种模式；传 null 恢复按环境变量 / 实例数判断（并重新读环境变量）。 */
-export function setSharedStateModeForTests(mode: SharedStateMode | null) {
-  modeOverride = mode;
-  settingCache = null;
-}
-
 /** 库里 key 列最长 191：太长的（邮箱账号拼 IP）换成摘要，不让 MySQL 严格模式报错。 */
 export function sharedStateKey(key: string) {
   const value = String(key);

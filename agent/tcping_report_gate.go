@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	tcpingSteadyReportEvery = 5 * time.Minute
+	// 状态没变也每轮都报（定时探测约 1 分钟一轮，留 10 秒余量防抖动错过一轮）：面板内存里的实时样本靠它保持新鲜，
+	// 数据库那边面板自己按 5 分钟节流写历史（server/agentTcpingReportGate.ts）。以前这里也是 5 分钟，
+	// 卡片上的延迟最多旧 5 分钟，规则 / 链路看着不实时（2.3.559）。
+	tcpingSteadyReportEvery = 50 * time.Second
 	tcpingHealthReportEvery = time.Minute
 	tcpingReportStateTTL    = 30 * time.Minute
 	tcpingCounterCapacity   = 32768

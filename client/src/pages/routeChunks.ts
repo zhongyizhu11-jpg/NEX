@@ -8,12 +8,14 @@
   为什么不直接在 App.tsx 里 export 那些 lazy 组件：lazy 组件只在渲染时才触发 import，
   预取要的是「现在就下」，得拿到原始的 import 函数。
 */
-import { createElement, use, type ComponentType } from "react";
+import { createElement, useEffect, useReducer, type ComponentType } from "react";
+import { whenPageSettled } from "@/lib/lazyWarm";
 
 /** 路由页面组件：各页 props 不同（Tickets 有 mode），这里不约束。 */
 type RouteComponent = ComponentType<Record<string, unknown>>;
 
 export const routeChunks: Record<string, () => Promise<unknown>> = {
+  "/": () => import("@/pages/Home"),
   "/hosts": () => import("@/pages/Hosts"),
   "/rules": () => import("@/pages/Rules"),
   "/tunnels": () => import("@/pages/Tunnels"),
@@ -77,6 +79,12 @@ export function prefetchRoute(path: string): Promise<unknown> | undefined {
   return pending;
 }
 
+/** 页面代码还没到时画什么（App.tsx 设成和 LazyBoundary 一样的「正在加载页面」） */
+let routeChunkFallback: ComponentType | null = null;
+export function setRouteChunkFallback(fallback: ComponentType | null) {
+  routeChunkFallback = fallback;
+}
+
 /**
  * 代替 React.lazy 的路由组件。
  *
@@ -85,11 +93,21 @@ export function prefetchRoute(path: string): Promise<unknown> | undefined {
  * 的节流（避免闪一下）—— 于是第一次点进转发规则，代码明明在缓存里，内容也要等 300ms 才画出来
  * （2026-11-03 用户：「换页面或者刷新时……感觉卡顿，特别是打开转发规则时」）。
  *
- * 这里把下载结果记在模块级：预取到了就同步渲染，不经过 Suspense；真没到才挂起等那一次下载。
+ * 这里把下载结果记在模块级：预取到了就同步渲染。还没到时**也不挂起**（2.3.559）：先画「正在加载页面」，
+ * 包到了自己重画一次。以前没到就 use() 挂起，同样吃那 300ms 节流 —— 登录检查提前发出去之后外壳画得比页面包到得早，
+ * 第一次打开主机页每次都白等 300ms。
  */
 export function lazyRoute(path: string): RouteComponent {
   function RouteChunk(props: Record<string, unknown>) {
+    const [, rerender] = useReducer((count: number) => count + 1, 0);
     const loaded = loadedRoutes.get(path);
+    useEffect(() => {
+      if (loadedRoutes.has(path)) return undefined;
+      let alive = true;
+      // 下载成功或失败都会 resolve（失败记在 routeErrors 里），重画一次：成功就画页面，失败就抛给 ErrorBoundary
+      void prefetchRoute(path)?.then(() => { if (alive) rerender(); });
+      return () => { alive = false; };
+    }, [loaded]);
     if (loaded) return createElement(loaded, props);
     if (!pendingChunks.has(path)) {
       const error = routeErrors.get(path);
@@ -98,14 +116,8 @@ export function lazyRoute(path: string): RouteComponent {
         throw error instanceof Error ? error : new Error(String(error));
       }
     }
-    const pending = prefetchRoute(path);
-    if (!pending) throw new Error(`没有登记的页面：${path}`);
-    use(pending);
-    const loadedNow = loadedRoutes.get(path);
-    if (loadedNow) return createElement(loadedNow, props);
-    const error = routeErrors.get(path);
-    routeErrors.delete(path);
-    throw error instanceof Error ? error : new Error(error !== undefined ? String(error) : `页面包里没有组件：${path}`);
+    if (!prefetchRoute(path)) throw new Error(`没有登记的页面：${path}`);
+    return routeChunkFallback ? createElement(routeChunkFallback) : null;
   }
   RouteChunk.displayName = `RouteChunk(${path})`;
   return RouteChunk;
@@ -131,14 +143,8 @@ export function shouldSkipIdlePrefetch(connection: NetworkInformationLike | null
 export function prefetchRoutesWhenIdle(paths: string[]) {
   if (typeof window === "undefined") return () => undefined;
   if (shouldSkipIdlePrefetch((navigator as any).connection)) return () => undefined;
-  const run = () => { for (const path of paths) void prefetchRoute(path); };
-  const idle = (window as any).requestIdleCallback as undefined | ((cb: () => void, opts?: { timeout: number }) => number);
-  if (idle) {
-    const handle = idle(run, { timeout: 4000 });
-    return () => (window as any).cancelIdleCallback?.(handle);
-  }
-  const timer = window.setTimeout(run, 1500);
-  return () => window.clearTimeout(timer);
+  // 这一页自己的代码和数据先走（lib/lazyWarm.ts 的 whenPageSettled）
+  return whenPageSettled(() => { for (const path of paths) void prefetchRoute(path); });
 }
 
 /**

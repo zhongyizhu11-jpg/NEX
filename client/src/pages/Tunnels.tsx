@@ -104,7 +104,7 @@ import { buildLinkAvailabilityIndex, type LinkAvailabilityResult } from "@shared
 import { MAX_NGINX_PEM_FILES, MAX_NGINX_PEM_UPLOAD_BYTES, parseNginxPemFiles } from "@/lib/nginxPemFiles";
 import { pollingInterval } from "@/lib/polling";
 
-import { getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
+import { getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelTestIndicatesTimeout, freshLatestTunnelLatency } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { cn } from "@/lib/utils";
@@ -481,6 +481,8 @@ function tunnelSeriesLatencyEntries(tunnel: any) {
 }
 
 export function tunnelDisplayLatencyMs(tunnel: any) {
+  const current = freshLatestTunnelLatency(tunnel);
+  if (current) return current.ms;
   const parsed = parseLinkTestMessage(tunnel?.lastTestMessage);
   const structuredMessage = hasStructuredTunnelTestMessage(parsed);
   const manualFallback = tunnelManualTestLatencyMs(tunnel);
@@ -516,6 +518,8 @@ function tunnelDisplayLatencyList(tunnel: any) {
 }
 
 export function tunnelLatencyIsTimeout(tunnel: any) {
+  const current = freshLatestTunnelLatency(tunnel);
+  if (current) return current.timeout;
   const value = tunnelDisplayLatencyMs(tunnel);
   const hasLatency = typeof value === "number" && Number.isFinite(value) && value >= 0;
   if (hasLatency) return false;
@@ -3197,7 +3201,7 @@ function TunnelsContent() {
     const hasLatency = !broken && typeof latencyMs === "number" && Number.isFinite(latencyMs);
     const timeout = !broken && !hasLatency && tunnelLatencyIsTimeout(tunnel);
     const rating = hasLatency ? getLatencyRating(latencyMs) : null;
-    const ratingTone = !rating ? "off" : rating.label === "优秀" ? "healthy" : rating.label === "良好" ? "ok" : rating.label === "一般" ? "warn" : "down";
+    const ratingTone = rating?.tone ?? "off";
     const spark = sparkByTunnel.get(Number(tunnel.id));
     // 近 24H 可用率：≥ 99% 绿、≥ 90% 琥珀、更低红
     const availPct = spark?.availabilityPct ?? null;

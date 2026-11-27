@@ -1,5 +1,6 @@
 import { resolveSiteTitle } from "@shared/brand";
 import { trpc } from "@/lib/trpc";
+import { getQueryKey } from "@trpc/react-query";
 import { ACCOUNT_DISABLED_ERR_MSG, SESSION_REPLACED_ERR_MSG, TRPC_MAX_BATCH_SIZE, UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, httpLink, splitLink, TRPCClientError } from "@trpc/client";
@@ -7,6 +8,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { mobileAuth } from "./lib/mobileAuth";
+import { panelFetch } from "./lib/panelFetch";
 import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePersistence } from "./lib/queryPersistence";
 import "./index.css";
 import { applyRememberedLayout } from "./components/LayoutLayer";
@@ -37,7 +39,8 @@ applyRememberedMotion();
   不会先画成经典再跳过去。和 bootstrap 里页面包的预取、手机 App 读登录态同时进行，一般不多等。
   网太慢时最多等 BOOT_THEME_WAIT_MS：宁可主题晚一点补上，也不让整页一直停在启动底色上。
 */
-const BOOT_THEME_WAIT_MS = 5_000;
+// 刷新时主题样式和词典一般都在浏览器缓存里，几十毫秒就到；网慢也只等这么久，先画页面，晚到的原地换上（2.3.559 起，原来 5 秒）
+const BOOT_THEME_WAIT_MS = 800;
 // App 里页面不在面板的域名下：主题包的样式要到登录时填的面板地址去取
 setUiThemeAssetBase(mobileAuth.isNative ? mobileAuth.panelOrigin() : "");
 const bootUiThemeStyles = typeof document === "undefined"
@@ -170,31 +173,20 @@ const isolatedQueryPaths = new Set([
   "rules.trafficSummary",
 ]);
 
-const trpcFetch = (input: RequestInfo | URL, init?: RequestInit) => {
-  let requestInput = input;
-  if (mobileAuth.isNative) {
-    const panelUrl = mobileAuth.getPanelUrl();
-    const rawUrl = typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url;
-    const parsed = new URL(rawUrl, window.location.href);
-    if (panelUrl && parsed.pathname.startsWith("/api/trpc")) {
-      requestInput = `${panelUrl}${parsed.pathname}${parsed.search}`;
-    }
+/*
+  外壳要的那几个接口真正发出去了没有（startBootQueries 用）：tRPC 的请求要过一两拍才调到 fetch，
+  页面包的 import() 是当场发的。等这几个 fetch 都调用了再取页面包，它们就排在连接队列的最前面。
+*/
+let bootFetchesPending = 0;
+let releaseBootFetches: (() => void) | null = null;
+const bootFetchesIssued = new Promise<void>((resolve) => { releaseBootFetches = resolve; });
+const trpcFetch: typeof panelFetch = (input, init) => {
+  const response = panelFetch(input, init);
+  if (bootFetchesPending > 0) {
+    bootFetchesPending -= 1;
+    if (bootFetchesPending === 0) releaseBootFetches?.();
   }
-  const headers = new Headers(init?.headers);
-  if (mobileAuth.isNative) {
-    headers.set("x-forwardx-mobile", "1");
-    const token = mobileAuth.getToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  }
-  return globalThis.fetch(requestInput, {
-    ...(init ?? {}),
-    headers,
-    credentials: "include",
-  });
+  return response;
 };
 
 const trpcClient = trpc.createClient({
@@ -217,15 +209,49 @@ const trpcClient = trpc.createClient({
   ],
 });
 
+/*
+  外壳一挂上就要问的那几个接口（登录了没有、装好了没有、站点信息），在取页面包之前先发出去（2.3.559）。
+  页面包会带出几十个文件，HTTP/1.1 下浏览器一个站点只开 6 条连接、先来先排：以前这几个接口排在页面包后面，
+  海外线路上第一次打开时登录检查（2 KB）要等两秒多才回来，页面的数据请求又得等它。结果直接放进外壳要读的那几格缓存。
+  代入窗口走的是另一套身份，不提前发；登录页不问 auth.me（和 App.tsx 的 useShellAuth 一样）。
+*/
+function startBootQueries() {
+  if (typeof window === "undefined" || userImpersonation.isEntry()) return;
+  const loginRoute = window.location.pathname.startsWith("/login");
+  const early = [
+    !loginRoute ? { key: getQueryKey(trpc.auth.me, undefined, "query"), run: () => trpcClient.auth.me.query() } : null,
+    { key: getQueryKey(trpc.setup.status, undefined, "query"), run: () => trpcClient.setup.status.query() },
+    { key: getQueryKey(trpc.system.publicInfo, undefined, "query"), run: () => trpcClient.system.publicInfo.query() },
+  ];
+  const queries = early.filter((query) => query !== null);
+  bootFetchesPending = queries.length;
+  for (const query of queries) void queryClient.prefetchQuery({ queryKey: query.key, queryFn: query.run, retry: false });
+}
+
+/** 先等外壳那几个接口发出去（最多 50 毫秒，等不到也不耽误），再取这一页的代码 */
+function prefetchCurrentRoute() {
+  if (typeof window === "undefined") return;
+  const path = window.location.pathname;
+  const go = () => void prefetchRoute(path);
+  if (bootFetchesPending === 0) { go(); return; }
+  let done = false;
+  const once = () => { if (!done) { done = true; go(); } };
+  void bootFetchesIssued.then(once);
+  window.setTimeout(once, 50);
+}
+
 async function bootstrap() {
+  // 网页里马上发；手机 App 要先读出登录令牌（hydrateNative）才能带上，读完再发
+  if (!mobileAuth.isNative) startBootQueries();
   /*
     这一页的代码和入口包一起下：刷新 /rules 时不等外壳渲染到路由那一层才去取 Rules 的包
     （本机缓存也要先取再求值，排在入口包的那 60ms 之后），现在和入口包的求值并行。
     不认识的地址（登录页、公开页）这里直接返回 undefined，没有副作用。
   */
-  if (typeof window !== "undefined") void prefetchRoute(window.location.pathname);
+  prefetchCurrentRoute();
   startLayoutProbeIfRequested();
   await mobileAuth.hydrateNative();
+  if (mobileAuth.isNative && mobileAuth.hasPanelUrl()) startBootQueries();
 
   if (mobileAuth.isNative) {
     document.documentElement.classList.add("capacitor-native");

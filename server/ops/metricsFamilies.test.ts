@@ -51,6 +51,7 @@ function snapshot(patch: Partial<MetricsSnapshot> = {}): MetricsSnapshot {
       { hostId: 2, hostName: "JP\\出口\n02", tunnelId: 7, ruleId: 0, role: "exit", name: "tcp_sessions", kind: "gauge", value: 0 },
       { hostId: 1, hostName: 'HK "入口" 01', tunnelId: 0, ruleId: 0, role: "process", name: "peer_gone", kind: "counter", value: 9 },
     ],
+    live: { ruleSamples: 3, tunnelSamples: 2, oldestRuleSampleAgeSeconds: 64.5, oldestTunnelSampleAgeSeconds: null, openStreams: 2, sentByTopic: { "rules.live": 40, balance: 7 }, exitSwitches: 1 },
     collectSeconds: 0.012,
     ...patch,
   };
@@ -214,7 +215,7 @@ test("上限保护：规则超过上限（快照里 rules 为空）时一条 nex
   assert.equal(find(none, "nex_metrics_detail", { scope: "route" })[0].value, 0);
 });
 
-test("数据库不可用：只剩面板自己知道的几项，nex_database_up 为 0，主机和规则的序列是没有而不是 0", () => {
+test("数据库不可用：只剩面板自己知道的几项（含内存里的实时链路），nex_database_up 为 0，主机和规则的序列是没有而不是 0", () => {
   const parsed = parse(render(snapshot({
     panel: { version: "2.3.999", databaseKind: "mysql", databaseUp: false },
     hosts: null, ruleCounts: null, rules: null, routes: null, traffic: null, fxp: null,
@@ -222,7 +223,7 @@ test("数据库不可用：只剩面板自己知道的几项，nex_database_up �
   assert.equal(find(parsed, "nex_database_up")[0].value, 0);
   assert.deepEqual(
     Array.from(new Set(parsed.samples.map((sample) => sample.name))).sort(),
-    ["nex_database_up", "nex_metrics_collect_duration_seconds", "nex_metrics_detail", "nex_panel_info"],
+    ["nex_balance_exit_switches_total", "nex_database_up", "nex_live_events_total", "nex_live_sample_oldest_age_seconds", "nex_live_samples", "nex_live_streams", "nex_metrics_collect_duration_seconds", "nex_metrics_detail", "nex_panel_info"],
   );
 });
 
@@ -278,4 +279,16 @@ test("FXP 隧道进程：counter 带 event 标签汇成一族，会话数 gauge 
   assert.equal(tcp[0].value, 0);
   const none = parse(render(snapshot({ fxp: null }))).samples;
   assert.equal(none.filter((row) => row.name.startsWith("nex_fxp_")).length, 0);
+});
+
+test("实时链路指标：样本条数和最旧的年龄、页面连接数、按话题的通知次数、出口切换次数；不知道的不导出", () => {
+  const text = render(snapshot());
+  assert.match(text, /^nex_live_samples\{kind="rule"\} 3$/m);
+  assert.match(text, /^nex_live_samples\{kind="tunnel"\} 2$/m);
+  assert.match(text, /^nex_live_sample_oldest_age_seconds\{kind="rule"\} 64\.5$/m);
+  assert.doesNotMatch(text, /nex_live_sample_oldest_age_seconds\{kind="tunnel"\}/, "没有新鲜样本时不报 0");
+  assert.match(text, /^nex_live_streams 2$/m);
+  assert.match(text, /^nex_live_events_total\{topic="rules\.live"\} 40$/m);
+  assert.match(text, /^nex_balance_exit_switches_total 1$/m);
+  assert.doesNotMatch(render(snapshot({ live: null })), /nex_live_/);
 });

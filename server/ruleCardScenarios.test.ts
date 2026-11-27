@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { resetBalanceLiveForTest, setBalanceLiveReportForTest, type LiveExit } from "./balanceLive";
-import { resetExitTargetStates, ruleHasReachableExit, setExitTargetStateForTest, withRuleExitTargets, type ExitTargetState } from "./exitTargetHealth";
-import { noteRuleProbeRecorded, recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
-import { preferLastKnownForwardRuleVisualStatus, resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
+import { resetExitTargetStates, ruleHasReachableExit, setExitTargetStateForTest, type ExitTargetState } from "./exitTargetHealth";
+import { withLiveRuleStatus } from "./ruleLiveStatus";
+import { noteRuleSample, recordRuleTargetLeg, recordTunnelExitLeg, resetRuleLatencyViewForTest } from "./ruleLatencyView";
+import { resolveForwardRuleNotRunningReason, resolveForwardRuleVisualStatus, type ForwardRuleVisualStatus } from "../client/src/lib/forwardRuleStatus";
 import { isRuleProbeUnreachable } from "../shared/linkProbePolicy";
 import { ruleVisualHealth } from "../client/src/features/rules/ruleFlow";
 import { noteTunnelEffectivePin, resetTunnelPinStateForTest } from "./tunnelPinState";
 
 /*
-  规则卡红 / 橙 / 绿的场景矩阵（docs/dev/rule-card-status.md）：从服务端拼卡片数据（withRuleExitTargets）一直走到
-  前端定颜色（resolveForwardRuleVisualStatus），再加上「上次状态」和订阅「自动隐藏不通的节点」。每个场景是用户面板上
+  规则卡红 / 橙 / 绿的场景矩阵（docs/dev/rule-card-status.md）：从服务端拼卡片数据（withLiveRuleStatus）一直走到
+  前端定颜色（resolveForwardRuleVisualStatus），再加上订阅「自动隐藏不通的节点」。每个场景是用户面板上
   真实出现过的情况（2026-11-26：高防目标一直拦着 jinx(39.9y)、Jinx(29.9y)，hep ix 通）。
 
   出口：7 = jinx(39.9y)（主出口）、12 = hep ix、2 = Jinx(29.9y)。
@@ -71,8 +72,8 @@ function card(scenario: Scenario) {
     recordTunnelExitLeg(TUNNEL, Number(hostId), exitMs, now);
     recordRuleTargetLeg({ ruleId: RULE, tunnelId: TUNNEL, exitHostId: Number(hostId), primaryHostId: 7, ms: targetMs, at: now });
   }
-  if (scenario.recordedFrom) noteRuleProbeRecorded({ ruleId: RULE, hostId: scenario.recordedFrom, isTimeout: scenario.probe.timeout, at: now - 5_000 });
-  const [row] = withRuleExitTargets([{
+  if (scenario.recordedFrom) noteRuleSample({ ruleId: RULE, hostId: scenario.recordedFrom, ms: scenario.probe.ms, isTimeout: scenario.probe.timeout, at: now - 5_000 });
+  const [row] = withLiveRuleStatus([{
     ruleId: RULE,
     latestLatencyMs: scenario.probe.ms,
     latestLatencyIsTimeout: scenario.probe.timeout,
@@ -131,7 +132,7 @@ test("场景 3：自动分配，已切到 hep ix、它的两段面板还没测�
   const { row, status, reachable } = card({ live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, probe: { ms: null, timeout: true } });
   assert.equal(look(status), "绿点", status.title);
   assert.equal(row.latestLatencyIsTimeout, false);
-  assert.equal(row.latestLatencySource, "live", "前端缓存以这一次为准（ruleProbeCache）");
+  assert.equal(row.latestLatencySource, "live", "服务端这一次给的就是现在（前端不再另存一份）");
   assert.equal(reachable, true);
 });
 
@@ -178,13 +179,6 @@ test("场景 9：刚切到 hep ix，数据库最新那条还是 jinx 测的超�
   const { row, status } = card({ live: { 7: "down", 12: "active", 2: "standby" }, recordedFrom: 7, probe: { ms: null, timeout: true } });
   assert.equal(row.latestLatencyIsTimeout, false);
   assert.notEqual(look(status), "红点", status.title);
-});
-
-test("上次状态：只在「还在等上报」时顶一下；有数据的结论照实显示", () => {
-  const waiting: ForwardRuleVisualStatus = { state: "pending", title: "等待 Agent 确认托管监听（0 / 1）" };
-  assert.equal(preferLastKnownForwardRuleVisualStatus(waiting, { state: "running", title: "最近一次端到端探测可达（9ms）" }).state, "running");
-  const { status } = card({ pin: 7, live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
-  assert.deepEqual(preferLastKnownForwardRuleVisualStatus(status, { state: "error", title: "最近一次端到端探测超时" }), status);
 });
 
 test("订阅自动隐藏：直连规则连着 3 次超时才藏；负载均衡还有一台通就不藏", () => {

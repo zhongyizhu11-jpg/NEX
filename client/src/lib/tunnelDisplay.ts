@@ -1,3 +1,6 @@
+import { isLinkProbeFresh } from "@shared/linkProbePolicy";
+import { timestampMillis } from "@shared/timestamp";
+
 function tunnelEndpointName(tunnel: any | null | undefined, role: "entry" | "exit", hosts: any[] | undefined) {
   const hostId = Number(role === "entry" ? tunnel?.entryHostId : tunnel?.exitHostId);
   const fromList = hosts?.find((host: any) => Number(host.id) === hostId);
@@ -158,4 +161,17 @@ export function moveExitInGroup(
     .forEach((slot, order) => { next[slot] = byHost.get(hostIds[order])!; });
   if (next.some((member) => !member || !(Number(member.id) > 0))) return null;
   return { hostIds, memberIds: next.map((member) => Number(member.id)) };
+}
+
+/*
+  链路「现在」的总延迟（2.3.559）：服务端已经把内存里最新的实时样本（定时探测每次上报、诊断完成都写）放进 latestLatency*。
+  它新鲜、而且不比最近一次诊断旧，就用它；以前只要有过一次诊断就一直显示诊断那个数，哪怕是昨天测的。
+*/
+export function freshLatestTunnelLatency(tunnel: { latestLatencyAt?: unknown; latestLatencyMs?: unknown; latestLatencyIsTimeout?: unknown; lastTestAt?: unknown } | null | undefined): { ms: number | null; timeout: boolean } | null {
+  if (!isLinkProbeFresh(tunnel?.latestLatencyAt)) return null;
+  if (timestampMillis(tunnel?.lastTestAt) > timestampMillis(tunnel?.latestLatencyAt)) return null;
+  if (tunnel?.latestLatencyIsTimeout === true) return { ms: null, timeout: true };
+  const value = tunnel?.latestLatencyMs;
+  const ms = typeof value === "number" && Number.isFinite(value) && value >= 0 ? Number(value) : null;
+  return ms === null ? null : { ms, timeout: false };
 }
