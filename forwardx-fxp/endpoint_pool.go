@@ -33,12 +33,25 @@ const (
 	// （fxpPoolActiveWindow）整个池子清空。对端每个上一跳 IP 给待定连接留了
 	// fxpListenerMaxPendingPerIP 条，够十几个端点各备满 64 条。
 	fxpPoolMaxSize = 64
-	// 池里的连接空闲超过这个时长就换新：对端等 hello 的时长（fxpServerHelloWait）
-	// 要比它长，中间设备的空闲超时一般也远大于它。
-	fxpPoolMaxIdleAge = 25 * time.Second
-	// 这么久没人取过，就不再维持预热连接，让池子自然清空。
+	// 池里的连接空闲超过这个时长就换新：对端等 hello 的时长（fxpServerHelloWait，45 秒）
+	// 要比它长（留 10 秒余量），中间设备的空闲超时一般也远大于它。原来 25 秒；保底预热（下面）之后
+	// 空闲时也一直有连接在换，寿命长一点换得少。
+	fxpPoolMaxIdleAge = 35 * time.Second
+	// 快到期前这么久就开始换新：新的握好手再让旧的过期（先建后拆），池子不会在到期那一下空着。
+	// 以前同时建的一批连接同时过期，过期到补回来之间（约两个往返）新连接全要现拨。
+	fxpPoolRefreshLead = 5 * time.Second
+	// 这么久没人取过，就只留保底（fxpPoolIdleFloor），不再按峰值备。
 	fxpPoolActiveWindow = 5 * time.Minute
-	fxpPoolFillRetryMax = 30 * time.Second
+	/*
+		保底预热（2.3.560，用户：「打开网页时会停顿一下才秒开」）：还有运行中的规则在用的端点（retain），
+		空闲之后也一直备着这么多条。以前 5 分钟没人取就整个清空、也不再补，隔一阵再打开网页，浏览器那一批
+		连接每条都要现拨（多一个入口到出口的往返），网页打开以后池子才补上 —— 就是「停一下才秒开」。
+		一个网页第一下通常开 4–8 条连接；6 条保底、35 秒换一轮，每个端点每秒约 0.2 次握手。
+		只留给真用过的端点（预热过或被取过，fxpPoolKeepWarmWindow 之内），从没用过的备用出口不挂空连接。
+	*/
+	fxpPoolIdleFloor      = 6
+	fxpPoolKeepWarmWindow = 24 * time.Hour
+	fxpPoolFillRetryMax   = 30 * time.Second
 	// 对端在认证过的连接上等 hello 的时长。预热连接会空闲地等在这里。
 	fxpServerHelloWait = 45 * time.Second
 
@@ -215,6 +228,9 @@ type fxpEndpointState struct {
 	probing     bool
 	confirmedAt time.Time
 	watchers    int
+	// users：有几个运行中的规则在用这个端点（retain）。和 watchers 不同：只有一台出口的规则不登记 watch（没有备选，
+	// 不用主动探），但照样要保底预热。
+	users int
 	// resolveFailed：上一次失败是「地址解析不出来」造成的（只有这种失败，解析成功才清得掉）。
 	resolveFailed bool
 	// index：这个端点在出口列表里排第几（打日志用）。
@@ -494,21 +510,76 @@ func (s *fxpEndpointState) poolTargetLocked(now time.Time) int {
 	return target
 }
 
+// activeLocked：最近 fxpPoolActiveWindow 之内有人取过（按峰值备）。
+func (s *fxpEndpointState) activeLocked(now time.Time) bool {
+	return !s.lastTake.IsZero() && now.Sub(s.lastTake) <= fxpPoolActiveWindow
+}
+
+// keepWarmLocked：还有规则在用、而且真用过（预热过或被取过），空闲时也留保底预热。
+func (s *fxpEndpointState) keepWarmLocked(now time.Time) bool {
+	return s.users > 0 && !s.lastTake.IsZero() && now.Sub(s.lastTake) <= fxpPoolKeepWarmWindow
+}
+
+/*
+fillNeedLocked：现在还要补几条。目标：活跃时按峰值（poolTargetLocked），在用的端点不少于保底（fxpPoolIdleFloor）；
+都不是就是 0（池子自然清空）。快到期的（剩不到 fxpPoolRefreshLead）不算数：先补新的，旧的照常可取、到期再关。
+*/
+func (s *fxpEndpointState) fillNeedLocked(now time.Time) int {
+	target := 0
+	if s.activeLocked(now) {
+		target = s.poolTargetLocked(now)
+	}
+	if s.keepWarmLocked(now) && target < fxpPoolIdleFloor {
+		target = fxpPoolIdleFloor
+	}
+	if target == 0 {
+		return 0
+	}
+	fresh := 0
+	for _, pooled := range s.idle {
+		if now.Sub(pooled.createdAt) <= fxpPoolMaxIdleAge-fxpPoolRefreshLead {
+			fresh++
+		}
+	}
+	return target - fresh - s.dialing
+}
+
+// retain 登记「有一个运行中的规则在用这个端点」，空闲后也保底预热。返回的函数撤销。
+func (s *fxpEndpointState) retain() func() {
+	s.mu.Lock()
+	s.users++
+	s.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if s.users > 0 {
+				s.users--
+			}
+			s.mu.Unlock()
+		})
+	}
+}
+
 func (s *fxpEndpointState) ensureFill() {
 	now := time.Now()
 	s.mu.Lock()
-	if !s.dialCfgKnown || s.tcp.down || now.Before(s.fillRetryAt) || s.lastTake.IsZero() || now.Sub(s.lastTake) > fxpPoolActiveWindow {
+	if !s.dialCfgKnown || s.tcp.down || now.Before(s.fillRetryAt) {
 		s.mu.Unlock()
 		return
 	}
-	// V3 多路复用时会话池就是连接池（v3SessionPool）：不备空闲连接，备一条认证好的会话。
+	// V3 多路复用时会话池就是连接池（v3SessionPool）：不备空闲连接，备一条认证好的会话（照旧只在活跃时）。
 	if v3MuxEnabled(s.dialCfg) {
+		if !s.activeLocked(now) {
+			s.mu.Unlock()
+			return
+		}
 		cfg := s.dialCfg
 		s.mu.Unlock()
 		v3Outbound.warm(s.id.host, s.id.port, cfg)
 		return
 	}
-	need := s.poolTargetLocked(now) - len(s.idle) - s.dialing
+	need := s.fillNeedLocked(now)
 	if need <= 0 {
 		s.mu.Unlock()
 		return
@@ -548,13 +619,24 @@ func (s *fxpEndpointState) fillOne(cfg config) {
 	s.fillRetryAt = time.Time{}
 	s.confirmedAt = now
 	s.tcp.suspect = 0
-	if s.tcp.down || len(s.idle) >= fxpPoolMaxSize {
+	if s.tcp.down {
 		s.mu.Unlock()
 		_ = conn.Close()
 		return
 	}
+	// 满了（提前换新时新旧并存）：关掉最旧的那条，新的留下（先建后拆）。take 先取最旧的，所以它在最前面。
+	var replaced net.Conn
+	if len(s.idle) >= fxpPoolMaxSize {
+		replaced = s.idle[0].conn
+		copy(s.idle, s.idle[1:])
+		s.idle[len(s.idle)-1] = pooledSecureConn{}
+		s.idle = s.idle[:len(s.idle)-1]
+	}
 	s.idle = append(s.idle, pooledSecureConn{conn: conn, sec: sec, createdAt: now})
 	s.mu.Unlock()
+	if replaced != nil {
+		_ = replaced.Close()
+	}
 }
 
 // ---- 维护循环 ----
@@ -581,10 +663,11 @@ func fxpEndpointMaintenanceLoop() {
 func (s *fxpEndpointState) maintain(now time.Time) {
 	var expired []pooledSecureConn
 	s.mu.Lock()
-	active := !s.lastTake.IsZero() && now.Sub(s.lastTake) <= fxpPoolActiveWindow
+	// 活跃，或者还有规则在用（保底预热）：池里的连接只按寿命换新；都不是才整个清空。
+	keep := s.activeLocked(now) || s.keepWarmLocked(now)
 	kept := s.idle[:0]
 	for _, pooled := range s.idle {
-		if !active || now.Sub(pooled.createdAt) > fxpPoolMaxIdleAge {
+		if !keep || now.Sub(pooled.createdAt) > fxpPoolMaxIdleAge {
 			expired = append(expired, pooled)
 			continue
 		}
@@ -638,7 +721,7 @@ func (s *fxpEndpointState) maintain(now time.Time) {
 	for _, pooled := range expired {
 		_ = pooled.conn.Close()
 	}
-	if active {
+	if keep {
 		s.ensureFill()
 	}
 	if probe {
