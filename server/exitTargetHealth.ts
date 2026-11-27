@@ -1341,6 +1341,38 @@ export function ruleRecordingExitHostId(ruleId: number, tunnelId: number, primar
   return hostId > 0 ? hostId : Number(primaryHostId) || 0;
 }
 
+/*
+  在用的那台换了（2.3.559）：出口机要不要探这条规则的目标，是完整心跳里按 ruleRecordingExitHostId 分派的
+  （server/heartbeat/forwardGroupProbes.ts），可出口机平时走稳定快路径、5 分钟才完整核对一次 —— 换过去的那台拿不到探测，
+  换走的那台还在探、结果又因为「不是在用的那台」被丢掉，卡片上的延迟空好几分钟。所以入口每次实时上报都比一下，
+  换了就把新旧两台交给调用方去作废快路径、叫它们马上重新心跳（server/agentReportRoutes.ts）。
+*/
+const recordingExitByRule = new Map<number, number>();
+
+export function recordingExitChanges(reports: readonly LiveRuleReport[]): number[] {
+  const hosts = new Set<number>();
+  for (const report of reports) {
+    const next = Number(activeExitFromLive(report)?.hostIds?.[0] || 0);
+    if (next <= 0) continue;
+    const ruleId = Number(report.ruleId);
+    const previous = recordingExitByRule.get(ruleId) || 0;
+    if (previous === next) continue;
+    if (!recordingExitByRule.has(ruleId) && recordingExitByRule.size >= 50_000) {
+      recordingExitByRule.delete(recordingExitByRule.keys().next().value as number);
+    }
+    recordingExitByRule.set(ruleId, next);
+    if (previous > 0) {
+      hosts.add(previous);
+      hosts.add(next);
+    }
+  }
+  return Array.from(hosts);
+}
+
+export function resetRecordingExitsForTest() {
+  recordingExitByRule.clear();
+}
+
 /**
  * 负载均衡的规则此刻有没有一台出口连得上目标（2.3.555）：入口实时上报里有在用的、而且快速探测没说它连不上；没有实时上报时
  * 看快速探测里有没有一台通的。订阅「自动隐藏不通的节点」用：规则的定时端到端探测是从主出口测的，主出口被目标的高防拦了

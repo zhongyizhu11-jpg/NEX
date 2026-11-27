@@ -44,7 +44,7 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopFastReports, ingestRouteHopProbeReports } from "./routeGroups";
-import { ingestExitTargetReports, noteLiveBaselines, ruleRecordingExitHostId, tunnelBalancesExits } from "./exitTargetHealth";
+import { ingestExitTargetReports, noteLiveBaselines, recordingExitChanges, ruleRecordingExitHostId, tunnelBalancesExits } from "./exitTargetHealth";
 import { ingestBalanceLiveReport } from "./balanceLive";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { recordRuleProbeFailure } from "./ruleProbeFailure";
@@ -927,6 +927,8 @@ agentRouter.post("/api/agent/fxp-balance", async (req: Request, res: Response) =
     });
     // 「平时延迟」照旧攒（链路弹窗写「比平时慢多少」用），数据换成入口真实测的
     await noteLiveBaselines(outcome.reports).catch(() => undefined);
+    // 在用的出口换了：新旧两台出口机马上重算「谁探这条规则的目标」，不等 5 分钟一次的完整核对
+    for (const exitHostId of recordingExitChanges(outcome.reports)) pushAgentRefresh(exitHostId, "in-use-exit-changed");
     res.json({ ok: true, recorded: outcome.recorded });
   } catch (error) {
     appendPanelLog("error", `[BalanceLive] report failed: ${error instanceof Error ? error.message : String(error)}`);
