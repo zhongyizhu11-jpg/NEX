@@ -282,19 +282,18 @@ test("灰点的规则说出原因：先用 Agent 报的失败原因，没有就�
   }
 });
 
-test("负载均衡链路：主出口连不上目标、别的出口能通时标橙不标红，写清楚是哪台", () => {
+test("负载均衡链路：在用的出口刚坏、别的出口能通时不标红；指定的出口不能用时照常绿、只给走势线一个标记", () => {
   const now = Date.now();
   const base = { ruleEnabled: true, ruleRunning: true, groupEnabled: true, groupConfigStatus: "available" as const, latestLatencyMs: null, latestLatencyAt: now - 10_000 };
-  const switched = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 2, exitTargetNote: "3 台出口里 jinx(39.9y) 连不上目标，已切走" }, now);
-  assert.deepEqual(switched, { state: "pending", title: "3 台出口里 jinx(39.9y) 连不上目标，已切走", confirmed: true });
+  const switching = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 2, exitTargetNote: null }, now);
+  assert.deepEqual(switching, { state: "pending", title: "在用的出口连不上目标，另外 2 台出口正常，正在切走", confirmed: true });
   // 一台都通不了：照旧红
-  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 0, exitTargetNote: "3 台出口都连不好目标" }, now).state, "error");
-  // 主出口通、别的出口抖：橙色写出来
-  const jittery = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40, exitTargetOk: 3, exitTargetNote: "3 台出口里 jinx(39.9y) 到目标抖动 63ms，已少分" }, now);
-  assert.equal(jittery.state, "pending");
-  assert.match(jittery.title, /抖动 63ms/);
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: true, exitTargetOk: 0, exitTargetNote: null }, now).state, "error");
+  // 指定的出口不能用、已切到别的出口（2.3.558）：通的 —— 绿、悬停照常写延迟，卡上不写那句，只多一个走势线的标记
+  const bypassed = resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40, exitTargetOk: 2, exitTargetNote: "指定的出口 jinx(39.9y) 连不上目标，已切到 hep ix" }, now);
+  assert.deepEqual(bypassed, { state: "running", title: "最近一次端到端探测可达（40ms）", pinBypassed: true });
   // 不是负载均衡链路：和以前一样
-  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40 }, now).state, "running");
+  assert.deepEqual(resolveForwardRuleVisualStatus({ ...base, latestLatencyIsTimeout: false, latestLatencyMs: 40 }, now), { state: "running", title: "最近一次端到端探测可达（40ms）" });
 });
 
 /*
@@ -312,14 +311,14 @@ test("负载均衡「有出口连不上、已切走」的橙色是确定的结�
     latestLatencyIsTimeout: false,
     latestLatencyAt: now - 2_000,
     exitTargetOk: 1,
-    exitTargetNote: "3 台出口里 jinx(39.9y) 连不上目标，已切走；Jinx(29.9y) 连不上目标，已切走",
+    exitTargetNote: "指定的出口 jinx(39.9y) 连不上目标，已切到 hep ix",
   }, now);
-  assert.equal(current.state, "pending");
-  assert.equal(current.confirmed, true);
+  assert.equal(current.state, "running", "通的（2.3.558：指定的出口不能用只变走势线）");
+  assert.equal(current.pinBypassed, true);
   const shown = preferLastKnownForwardRuleVisualStatus(current, { state: "error", title: "最近一次端到端探测超时" });
-  assert.deepEqual(shown, current, "显示的是现在的橙色，不是上一次的红色");
+  assert.deepEqual(shown, current, "显示的是现在的，不是上一次的红色");
 
-  // 主出口的探测超时、别的出口还连得上：同样是确定的橙色
+  // 在用的出口探测超时、别的出口还连得上（正在切）：确定的结论（绿点 + 琥珀走势线）
   const timeout = resolveForwardRuleVisualStatus({
     ruleEnabled: true, ruleRunning: true, groupEnabled: true, groupConfigStatus: "available",
     latestLatencyMs: null, latestLatencyIsTimeout: true, latestLatencyAt: now - 2_000,

@@ -844,6 +844,7 @@ function deriveRuleView({
   visualState,
   visualTitle,
   visualConfirmed,
+  visualPinBypassed,
   failover,
   totalIn,
   totalOut,
@@ -855,7 +856,7 @@ function deriveRuleView({
   linesOpen,
 }: RuleCardProps) {
   const { ui, compact, compactLayout } = page;
-  const visual = { state: visualState, title: visualTitle, confirmed: visualConfirmed };
+  const visual = { state: visualState, title: visualTitle, confirmed: visualConfirmed, pinBypassed: visualPinBypassed };
   const supported = ui.isRuleSupported(rule);
   const protocolKey = ui.getRuleProtocolKey(rule);
   const category = getRuleCategory(rule, page.forwardGroupById) as RuleGroupType;
@@ -863,14 +864,14 @@ function deriveRuleView({
   const health = !supported || rule.resourceAccessAllowed === false ? "down" : ruleVisualHealth(visual);
   const healthToken = describeNetworkHealth(health).token;
   /*
-    色调（走势线、左上角那抹光、地址行的箭头）：指定的出口连不上、已切到别的出口（confirmed 的橙色）是琥珀 —— 点照样绿，
-    只用走势线提醒「指定没生效」（用户 2026-11-27）。线路组切了线同理。
+    色调（走势线、左上角那抹光、地址行的箭头）：指定的出口连不上、已切到别的出口（pinBypassed），或者在用的出口刚坏、
+    正在切（confirmed 的橙色），是琥珀 —— 点照样绿，卡上也不写原因，只用走势线提醒（用户 2026-11-27）。线路组切了线同理。
   */
   const tone: RuleCardTone = healthToken === "down"
     ? "down"
     : healthToken === "standby"
       ? "off"
-      : healthToken === "warn" || visual.confirmed || (failover && failover.tone === "warn")
+      : healthToken === "warn" || visual.confirmed || visual.pinBypassed || (failover && failover.tone === "warn")
         ? "warn"
         : "ok";
   const toneColor = RULE_TONE_COLOR[tone];

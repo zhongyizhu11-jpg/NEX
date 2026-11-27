@@ -92,11 +92,12 @@ function card(scenario: Scenario) {
 
 /*
   卡片上看到的样子（2.3.558，用户：「只要是通的状态点都是绿色，指定的出口不通只是走势线颜色不一样就行」）：
-  状态点按 ruleVisualHealth（和界面同一个），走势线在 confirmed（指定的出口连不上、已切走；或在用的出口刚坏、正在切）时琥珀。
+  状态点按 ruleVisualHealth（和界面同一个），走势线在 pinBypassed（指定的出口连不上、已切走）或 confirmed（在用的出口刚坏、
+  正在切）时琥珀。卡上不写「指定的出口连不上」那句（用户：「卡片不用写」）。
 */
 function look(status: ForwardRuleVisualStatus) {
   const dot = { healthy: "绿点", down: "红点", standby: "灰点", unknown: "灰点", degraded: "琥珀点", switching: "灰点" }[ruleVisualHealth(status)];
-  return status.confirmed && dot === "绿点" ? "绿点+琥珀线" : dot;
+  return (status.confirmed || status.pinBypassed) && dot === "绿点" ? "绿点+琥珀线" : dot;
 }
 
 test("场景 1：主出口在用、通 —— 绿点，延迟是它的整链", () => {
@@ -115,11 +116,13 @@ test("场景 2：自动分配，jinx(39.9y) 被高防拦、已经切到 hep ix�
   assert.equal(reachable, true, "订阅不藏");
 });
 
-test("场景 2b：指定了 jinx(39.9y)，它被拦、已经切到 hep ix —— 绿点 + 琥珀走势线，写明指定的连不上、切到了哪台", () => {
+test("场景 2b：指定了 jinx(39.9y)，它被拦、已经切到 hep ix —— 绿点 + 琥珀走势线，卡上不写原因", () => {
   const { row, status, reachable } = card({ pin: 7, live: { 7: "down", 12: "active", 2: "down" }, fastDown: { 7: true, 12: false, 2: true }, legs: { 12: [5, 3] }, probe: { ms: null, timeout: true } });
   assert.equal(look(status), "绿点+琥珀线", status.title);
+  assert.equal(status.state, "running");
   assert.equal(resolveForwardRuleNotRunningReason(status, []), null, "规则在跑：不写「等待 Agent 应用」");
-  assert.match(status.title, /指定的出口 jinx\(39\.9y\) 连不上目标，已切到 hep ix/);
+  assert.equal(status.title, "最近一次端到端探测可达（8ms）", "悬停照常写延迟，不写「指定的出口连不上」");
+  assert.match(String(row.exitTargetNote), /指定的出口 jinx\(39\.9y\) 连不上目标/, "服务端照样给（只当走势线的开关）");
   assert.equal(row.latestLatencyMs, 8);
   assert.equal(reachable, true);
 });

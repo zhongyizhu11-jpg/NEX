@@ -16,6 +16,11 @@ export type ForwardRuleVisualStatus = {
    * 「最近一次端到端探测超时（上次状态，等待新的上报）」，刷新也不变，诊断却是通的。
    */
   confirmed?: boolean;
+  /**
+   * 指定的出口对这条规则不能用、流量已切到别的出口（2.3.558，服务端 exitTargetNote 有值）：规则是通的，状态照常（绿点、
+   * 悬停照常写延迟），只把卡片的走势线变琥珀，提醒指定没生效。用户：「卡片不用写『指定的出口 X 连不上目标，已切到 Y』」。
+   */
+  pinBypassed?: boolean;
 };
 
 /**
@@ -84,14 +89,15 @@ export function resolveForwardRuleVisualStatus(input: {
   const exitTargetNote = String(input.exitTargetNote || "").trim();
   if (probeIsRecent && input.latestLatencyIsTimeout) {
     if (Number(input.exitTargetOk || 0) > 0) {
-      return { state: "pending", title: exitTargetNote || `主出口连不上目标，另外 ${Number(input.exitTargetOk)} 台出口正常，已自动切走`, confirmed: true };
+      return { state: "pending", title: `在用的出口连不上目标，另外 ${Number(input.exitTargetOk)} 台出口正常，正在切走`, confirmed: true };
     }
     const kind = normalizeProbeFailure(input.latestProbeFailure);
     return { state: "error", title: kind && kind !== "timeout" ? `最近一次端到端探测失败：${PROBE_FAILURE_LABELS[kind]}` : "最近一次端到端探测超时" };
   }
   if (exitTargetNote && input.exitTargetOk != null) {
-    // 主出口通，但别的出口有问题（连不上 / 抖 / 丢包）：橙色，写清楚是哪台
-    return { state: "pending", title: exitTargetNote, confirmed: true };
+    // 指定的出口不能用、已切到别的出口：通的，下面照常定（绿点、延迟），只多一个走势线的标记，卡上不写这句
+    const status = resolveForwardRuleVisualStatus({ ...input, exitTargetNote: null }, now);
+    return status.state === "running" ? { ...status, pinBypassed: true } : status;
   }
   if (input.groupConfigStatus === "error" || input.groupConfigStatus === "unavailable") {
     return { state: "error", title: "转发资源配置不可用" };

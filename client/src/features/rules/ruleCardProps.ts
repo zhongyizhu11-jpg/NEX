@@ -101,6 +101,8 @@ export type RuleCardDerivedProps = {
   visualTitle: string;
   /** 橙色是实际数据下的结论（负载均衡「有出口连不上、已切走」），不是「还在等」：橙点、不写「等待 Agent 应用」 */
   visualConfirmed?: boolean;
+  /** 指定的出口不能用、已切到别的出口：通的，只让走势线变琥珀（forwardRuleStatus 的 pinBypassed） */
+  visualPinBypassed?: boolean;
   /** 线路组那枚（没有线路组是 null）。policy 只在线路行展开时给：收着的时候用不上，给了反而每轮都是新对象。 */
   failover: { text: string; title: string; tone: string; policy: FailoverLineDisplay["policy"] | null } | null;
   totalIn: number;
@@ -159,6 +161,7 @@ export function buildRuleCardDerivedProps(rule: RuleLike, sources: RuleCardDeriv
     visualState: visual.state,
     visualTitle: visual.title,
     visualConfirmed: !!visual.confirmed,
+    visualPinBypassed: !!visual.pinBypassed,
     failover: failoverDisplay ? {
       text: failoverDisplay.text,
       title: failoverDisplay.title,
