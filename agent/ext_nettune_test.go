@@ -30,10 +30,15 @@ func netTuneFakeProc(t *testing.T, values map[string]string) string {
 	netTuneMemInfoPath = filepath.Join(root, "proc", "meminfo")
 	netTuneRouteStatePath = filepath.Join(root, "etc", "forwardx-nettune", "initcwnd.json")
 	t.Cleanup(func() { netTuneMemInfoPath, netTuneRouteStatePath = oldMem, oldRouteState })
-	oldArchives, oldSwapMarker := netTuneArchiveDir, netTuneSwapMarker
+	// 会写文件的路径全部换到临时目录：测试不能碰真机的 /etc（CI 不是 root 会失败，本机是 root 会真写进去）
+	oldArchives, oldSwapMarker, oldBBR, oldSwapConf := netTuneArchiveDir, netTuneSwapMarker, netTuneBBRModuleConf, netTuneSwapConf
 	netTuneArchiveDir = filepath.Join(root, "etc", "forwardx-nettune", "archives")
 	netTuneSwapMarker = filepath.Join(root, "etc", "forwardx-nettune", "swapfile.json")
-	t.Cleanup(func() { netTuneArchiveDir, netTuneSwapMarker = oldArchives, oldSwapMarker })
+	netTuneBBRModuleConf = filepath.Join(root, "etc", "modules-load.d", "forwardx-bbr.conf")
+	netTuneSwapConf = filepath.Join(root, "etc", "sysctl.d", "99-forwardx-swap.conf")
+	t.Cleanup(func() {
+		netTuneArchiveDir, netTuneSwapMarker, netTuneBBRModuleConf, netTuneSwapConf = oldArchives, oldSwapMarker, oldBBR, oldSwapConf
+	})
 	netTuneFakeMem(t, 8<<30)
 	netTuneFakeIP(t, "default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100")
 	for key, value := range values {
