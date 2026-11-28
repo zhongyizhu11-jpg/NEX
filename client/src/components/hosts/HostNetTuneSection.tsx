@@ -36,8 +36,8 @@ import { StatusChip } from "./HostNetProfileSection";
 
 const MODE_TEXT: Record<string, string> = { apply: "调优", set: "设置", restore: "还原", check: "检查" };
 
-const STATUS_TONE: Record<NetTuneItemStatus, "good" | "warn" | "muted"> = { ok: "good", low: "warn", custom: "muted", missing: "muted" };
-const STATUS_TEXT: Record<NetTuneItemStatus, string> = { ok: "达标", low: "偏低", custom: "自选", missing: "没有" };
+const STATUS_TONE: Record<NetTuneItemStatus, "good" | "warn" | "muted"> = { ok: "good", low: "warn", high: "warn", custom: "muted", missing: "muted" };
+const STATUS_TEXT: Record<NetTuneItemStatus, string> = { ok: "达标", low: "偏低", high: "偏高", custom: "自选", missing: "没有" };
 const GROUP_ORDER: NetTuneGroup[] = ["congestion", "forwarding", "buffers", "conntrack", "queues", "tcp"];
 
 function checkedAgo(sec: number | undefined) {
@@ -51,7 +51,7 @@ function ItemRow({ item }: { item: NetTuneItem }) {
       <span className="min-w-0 truncate text-meta text-muted-foreground">{item.label}</span>
       <span className="flex min-w-0 items-center gap-1.5 text-right text-secondary-type tabular-nums">
         <span className="min-w-0 truncate font-mono text-xs text-foreground">{item.current ?? "—"}</span>
-        {item.status === "low" ? <span className="whitespace-nowrap text-xs text-muted-foreground">→ {item.want}</span> : null}
+        {item.status === "low" || item.status === "high" ? <span className="whitespace-nowrap text-xs text-muted-foreground">→ {item.want}</span> : null}
         <StatusChip tone={STATUS_TONE[item.status]}>{STATUS_TEXT[item.status]}</StatusChip>
       </span>
     </div>
@@ -66,7 +66,10 @@ export default function HostNetTuneSection({ host }: { host: { id?: number | str
     refetchInterval: (query) => (query.state.data?.pending ? 2_000 : false),
   });
   const status = statusQuery.data;
-  const evaluation = useMemo(() => (status?.latest?.values ? evaluateNetTune(status.latest.values) : null), [status?.latest]);
+  const evaluation = useMemo(
+    () => (status?.latest?.values ? evaluateNetTune(status.latest.values, { bandwidthMbps: status.bandwidthMbps }) : null),
+    [status?.latest, status?.bandwidthMbps],
+  );
   const summary = !status
     ? undefined
     : status.pending
@@ -105,7 +108,10 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
     onSuccess: () => void utils.ops.netTune.status.invalidate({ hostId }),
     onError: (error) => toast.error(error.message),
   });
-  const evaluation = useMemo(() => (status?.latest?.values ? evaluateNetTune(status.latest.values) : null), [status?.latest]);
+  const evaluation = useMemo(
+    () => (status?.latest?.values ? evaluateNetTune(status.latest.values, { bandwidthMbps: status.bandwidthMbps }) : null),
+    [status?.latest, status?.bandwidthMbps],
+  );
 
   if (!status) return <p className="text-meta text-muted-foreground">正在读取…</p>;
 
@@ -158,14 +164,14 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
   const startApply = () => {
     void confirmDialog({
       title: "一键调优这台机器",
-      description: "按安装脚本同一套规则调整内核网络参数：只往更适合转发的方向调，已经更好的值保留，自己选的拥塞控制算法不动。会写入 /etc/sysctl.d/99-forwardx-network.conf，立即生效，重启后还在。",
+      description: `按安装脚本同一套规则调整内核网络参数：只往更适合转发的方向调，已经更好的值保留，自己选的拥塞控制算法不动；缓冲上限按${status.bandwidthMbps ? `带宽 ${status.bandwidthMbps} Mbps 和` : ""}内存算，超过内存预算的会压下来；默认路由的初始窗口抬到 32。会写入 /etc/sysctl.d/99-forwardx-network.conf，立即生效，重启后还在；改之前存一份原值，以后能「还原」。`,
       confirmText: "调优",
     }).then((confirmed) => {
       if (confirmed) run.mutate({ hostId, apply: true });
     });
   };
 
-  const lowItems = evaluation?.items.filter((item) => item.status === "low") ?? [];
+  const lowItems = evaluation?.items.filter((item) => item.status === "low" || item.status === "high") ?? [];
   const grouped = GROUP_ORDER.map((group) => ({ group, items: (evaluation?.items ?? []).filter((item) => item.group === group) }))
     .filter((entry) => entry.items.length > 0);
 
@@ -181,6 +187,12 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
               : `${(evaluation.conntrackCount ?? 0).toLocaleString(getFormatLocale())} / ${evaluation.conntrackMax.toLocaleString(getFormatLocale())}`}
           />
           <Row label="达标" value={`${evaluation.ok} / ${evaluation.total}`} />
+          {evaluation.memBytes ? (
+            <Row
+              label="缓冲按"
+              value={`${evaluation.bandwidthMbps ? `带宽 ${evaluation.bandwidthMbps} Mbps · ` : "带宽没填 · "}内存 ${(evaluation.memBytes / 1073741824).toFixed(1)} GB`}
+            />
+          ) : null}
           {evaluation.kernel ? <Row label="内核" value={evaluation.kernel} /> : null}
         </>
       ) : (

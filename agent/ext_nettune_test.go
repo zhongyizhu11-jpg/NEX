@@ -25,6 +25,13 @@ func netTuneFakeProc(t *testing.T, values map[string]string) string {
 	t.Cleanup(func() {
 		netTuneProcRoot, netTuneConfPath, netTuneHashsizePath, netTuneModprobeConf, netTuneLoadBBR, netTuneBackupPath = oldRoot, oldConf, oldHash, oldModprobe, oldLoad, oldBackup
 	})
+	// 内存和路由也换成假的：默认 8 GiB（缓冲预算 256 MiB，不影响原来的用例），一条普通的 DHCP 默认路由
+	oldMem, oldRouteState := netTuneMemInfoPath, netTuneRouteStatePath
+	netTuneMemInfoPath = filepath.Join(root, "proc", "meminfo")
+	netTuneRouteStatePath = filepath.Join(root, "etc", "forwardx-nettune", "initcwnd.json")
+	t.Cleanup(func() { netTuneMemInfoPath, netTuneRouteStatePath = oldMem, oldRouteState })
+	netTuneFakeMem(t, 8<<30)
+	netTuneFakeIP(t, "default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100")
 	for key, value := range values {
 		path := netTuneProcPath(key)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -61,6 +68,21 @@ func netTuneDistroDefaults() map[string]string {
 		"net.ipv4.tcp_slow_start_after_idle":        "1",
 		"net.ipv4.tcp_fastopen":                     "1",
 		"net.ipv4.tcp_tw_reuse":                     "2",
+		"net.ipv4.tcp_mem":                          "12288 16384 24576",
+		"net.core.netdev_budget":                    "300",
+		"net.core.optmem_max":                       "20480",
+		"net.ipv4.tcp_window_scaling":               "1",
+		"net.ipv4.tcp_moderate_rcvbuf":              "1",
+		"net.ipv4.tcp_adv_win_scale":                "1",
+		"net.ipv4.tcp_sack":                         "1",
+		"net.ipv4.tcp_dsack":                        "1",
+		"net.ipv4.tcp_timestamps":                   "1",
+		"net.ipv4.tcp_syncookies":                   "1",
+		"net.ipv4.tcp_fin_timeout":                  "60",
+		"net.ipv4.tcp_keepalive_time":               "7200",
+		"net.ipv4.ip_local_port_range":              "32768\t60999",
+		"vm.min_free_kbytes":                        "8192",
+		"fs.file-max":                               "99999",
 		"net.ipv4.tcp_congestion_control":           "cubic",
 		"net.ipv4.tcp_available_congestion_control": "reno cubic bbr",
 		"net.core.default_qdisc":                    "fq_codel",
@@ -75,20 +97,20 @@ func TestNetTuneDesiredRules(t *testing.T) {
 		want    string
 		change  bool
 	}{
-		{netTuneRule{"a", netTuneAtLeast, 100}, "50", "100", true},
-		{netTuneRule{"a", netTuneAtLeast, 100}, "200", "", false},
-		{netTuneRule{"a", netTuneAtLeast, 100}, "4096 131072 50", "4096 131072 100", true},
-		{netTuneRule{"a", netTuneAtLeast, 100}, "4096 131072 500", "", false},
-		{netTuneRule{"a", netTuneAtMost, 0}, "1", "0", true},
-		{netTuneRule{"a", netTuneAtMost, 131072}, "4294967295", "131072", true},
-		{netTuneRule{"a", netTuneAtMost, 131072}, "16384", "", false},
-		{netTuneRule{"a", netTuneBitsSet, 3}, "1", "3", true},
-		{netTuneRule{"a", netTuneBitsSet, 3}, "1027", "", false},
-		{netTuneRule{"a", netTuneBitsSet, 3}, "1024", "1027", true},
-		{netTuneRule{"a", netTuneEquals, 1}, "2", "1", true},
-		{netTuneRule{"a", netTuneEquals, 1}, "1", "", false},
-		{netTuneRule{"a", netTuneAtLeast, 100}, "abc", "", false},
-		{netTuneRule{"a", netTuneAtLeast, 100}, "", "", false},
+		{netTuneRule{key: "a", kind: netTuneAtLeast, want: 100}, "50", "100", true},
+		{netTuneRule{key: "a", kind: netTuneAtLeast, want: 100}, "200", "", false},
+		{netTuneRule{key: "a", kind: netTuneAtLeast, want: 100}, "4096 131072 50", "4096 131072 100", true},
+		{netTuneRule{key: "a", kind: netTuneAtLeast, want: 100}, "4096 131072 500", "", false},
+		{netTuneRule{key: "a", kind: netTuneAtMost, want: 0}, "1", "0", true},
+		{netTuneRule{key: "a", kind: netTuneAtMost, want: 131072}, "4294967295", "131072", true},
+		{netTuneRule{key: "a", kind: netTuneAtMost, want: 131072}, "16384", "", false},
+		{netTuneRule{key: "a", kind: netTuneBitsSet, want: 3}, "1", "3", true},
+		{netTuneRule{key: "a", kind: netTuneBitsSet, want: 3}, "1027", "", false},
+		{netTuneRule{key: "a", kind: netTuneBitsSet, want: 3}, "1024", "1027", true},
+		{netTuneRule{key: "a", kind: netTuneEquals, want: 1}, "2", "1", true},
+		{netTuneRule{key: "a", kind: netTuneEquals, want: 1}, "1", "", false},
+		{netTuneRule{key: "a", kind: netTuneAtLeast, want: 100}, "abc", "", false},
+		{netTuneRule{key: "a", kind: netTuneAtLeast, want: 100}, "", "", false},
 	}
 	for _, c := range cases {
 		got, change := netTuneDesired(c.rule, c.current)
@@ -100,7 +122,7 @@ func TestNetTuneDesiredRules(t *testing.T) {
 
 // tcp_rmem 的起点（中间值）和上限都只抬不降，抬完 最小 ≤ 起点 ≤ 上限。
 func TestNetTuneDesiredRmemTriple(t *testing.T) {
-	rule := netTuneRule{"net.ipv4.tcp_rmem", netTuneRmemAtLeast, 67108864}
+	rule := netTuneRule{key: "net.ipv4.tcp_rmem", kind: netTuneRmemAtLeast, want: 67108864}
 	cases := []struct {
 		current, want string
 		change        bool
@@ -182,10 +204,10 @@ func TestNetTuneApplyRaisesOnlyAndPersists(t *testing.T) {
 		"net.core.rmem_max":                  "67108864",
 		"net.core.wmem_max":                  "134217728",             // 原本更大，不动
 		"net.ipv4.tcp_rmem":                  "4096 1048576 67108864", // 起点也抬到 1 MiB
-		"net.ipv4.tcp_wmem":                  "4096 16384 67108864",   // 发送方向只抬上限
+		"net.ipv4.tcp_wmem":                  "4096 1048576 67108864", // 发送方向起点也抬到 1 MiB（2.2.276）
 		"net.netfilter.nf_conntrack_max":     "1048576",
 		"net.netfilter.nf_conntrack_buckets": "262144",
-		"net.core.somaxconn":                 "4096",
+		"net.core.somaxconn":                 "8192", // 2.2.276 起和 tcpfit 一样 8192
 		"net.ipv4.tcp_max_syn_backlog":       "8192",
 		"net.ipv4.tcp_notsent_lowat":         "131072",
 		"net.ipv4.tcp_slow_start_after_idle": "0",
@@ -205,7 +227,7 @@ func TestNetTuneApplyRaisesOnlyAndPersists(t *testing.T) {
 	for _, change := range result.Changed {
 		changedKeys[change.Key] = true
 	}
-	if changedKeys["net.core.wmem_max"] || changedKeys["net.core.somaxconn"] || changedKeys["net.ipv4.ip_forward"] {
+	if changedKeys["net.core.wmem_max"] || changedKeys["net.ipv4.tcp_sack"] || changedKeys["net.ipv4.ip_forward"] {
 		t.Errorf("已经达标的键不该算改动：%+v", result.Changed)
 	}
 	if !changedKeys["net.ipv4.tcp_congestion_control"] || !changedKeys["net.netfilter.nf_conntrack_buckets"] {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { adminProcedure, router } from "../../_core/trpc";
 import * as db from "../../db";
 import { isHostConsideredOnline } from "../../hostHeartbeatPolicy";
-import { netTuneStatus, requestNetTuneRun } from "../../ops/netTuneAgent";
+import { netTuneHostBandwidthMbps, netTuneStatus, requestNetTuneRun } from "../../ops/netTuneAgent";
 import { NETTUNE_CUSTOM_AGENT_VERSION, normalizeNetTuneSetting } from "../../../shared/netTune";
 import { isAgentVersionAtLeast } from "../../../shared/version";
 
@@ -21,6 +21,8 @@ export const netTuneRouter = router({
         online: isHostConsideredOnline(host),
         // 逐项设置、还原要 Agent 2.2.255 起；老 Agent 收到会当成一次检查，界面上直接不让点
         supportsCustom: isAgentVersionAtLeast((host as { agentVersion?: string | null }).agentVersion, NETTUNE_CUSTOM_AGENT_VERSION),
+        // 缓冲上限按带宽算（2.2.276）：线路带宽，没填用手动出口整形的带宽；都没有为 0（只按内存）
+        bandwidthMbps: netTuneHostBandwidthMbps(host),
         ...netTuneStatus(input.hostId),
       };
     }),
@@ -31,7 +33,7 @@ export const netTuneRouter = router({
       const host = await db.getHostById(input.hostId);
       if (!host) throw new Error("主机不存在");
       if (!isHostConsideredOnline(host)) throw new Error("主机不在线");
-      return requestNetTuneRun(input.hostId, input.apply);
+      return requestNetTuneRun(input.hostId, input.apply, Date.now(), undefined, netTuneHostBandwidthMbps(host));
     }),
 
   /** 逐项设置：{ 键: 值 }，一次最多 32 项。 */

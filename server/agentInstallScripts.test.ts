@@ -156,12 +156,20 @@ test("Agent install and upgrade both apply forwarding network tuning", () => {
   assert.match(script, /FORWARDX_NETWORK_TUNING/);
   assert.match(script, /net\.ipv4\.tcp_fastopen = \$\(\(cur \| 3\)\)/);
   assert.match(script, /net\.ipv4\.tcp_congestion_control = bbr/);
-  // 跨境长往返线路跑满千兆要 64MB 窗口上限；只抬上限（tuning_raise），不压低已有更大的值。
-  for (const key of ["net.core.rmem_max", "net.core.wmem_max", "net.ipv4.tcp_wmem"]) {
-    assert.match(script, new RegExp(`tuning_raise ${key.replace(/\./g, "\\.")} 67108864`));
+  // 缓冲上限：建议 64MB，按内存封顶（2.2.276，见下面「按内存」那个测试）
+  for (const key of ["net.core.rmem_max", "net.core.wmem_max"]) {
+    assert.match(script, new RegExp(`tuning_buffer ${key.replace(/\./g, "\\.")} "\\$TUNING_BUF_WANT" "\\$TUNING_BUF_BUDGET"`));
   }
-  // tcp_rmem 的起点（中间值）也抬到 1MB（见下一个测试）
-  assert.match(script, /tuning_raise_rmem net\.ipv4\.tcp_rmem 67108864 1048576/);
+  // tcp_rmem / tcp_wmem 的起点（中间值）也抬到 1MB（见下一个测试）
+  assert.match(script, /tuning_raise_rmem net\.ipv4\.tcp_rmem "\$TUNING_BUF_WANT" 1048576 "\$TUNING_BUF_BUDGET"/);
+  assert.match(script, /tuning_raise_rmem net\.ipv4\.tcp_wmem "\$TUNING_BUF_WANT" 1048576 "\$TUNING_BUF_BUDGET"/);
+  // tcpfit 基础调优的其余几项（2.2.276）；本机端口范围不碰
+  assert.match(script, /tuning_raise_triple net\.ipv4\.tcp_mem "\$lo" "\$pr" "\$hi"/);
+  assert.match(script, /tuning_raise net\.core\.somaxconn 8192/);
+  assert.match(script, /tuning_lower net\.ipv4\.tcp_fin_timeout 15/);
+  assert.match(script, /tuning_raise fs\.file-max 1000000/);
+  assert.match(script, /forwardx-bbr\.conf/);
+  assert.doesNotMatch(script, /ip_local_port_range/);
   assert.match(script, /tuning_raise net\.netfilter\.nf_conntrack_max 1048576/);
   // conntrack 哈希桶跟着表上限走：新内核走 sysctl，老内核这个键只读，退回 /sys 模块参数并写 modprobe.d。
   assert.match(script, /tuning_conntrack_buckets 262144/);
@@ -637,4 +645,51 @@ test("SysV 服务脚本：运行时才算的变量不在生成时展开，生成
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Agent install tuning caps buffer limits by memory and raises tcp_mem / min_free_kbytes from it", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  const tuning = shellFunction(script, "apply_network_tuning");
+  const helpers = scriptSection(tuning, "  tuning_current() {", "  # 把值压到至多");
+  const run = (memKb: string, lines: string[]) => {
+    const probe = [
+      helpers,
+      'sysctl() { [ "$1" = "-n" ] && eval "printf \'%b\\n\' \\"\\$FAKE_$(echo "$2" | tr . _ | tr - _)\\""; }',
+      'TUNING_TMP=$(mktemp); MEMINFO=$(mktemp); TUNING_MEMINFO=$MEMINFO',
+      `printf 'MemTotal: %s kB\\n' ${JSON.stringify(memKb)} > "$MEMINFO"`,
+      "tuning_buffer_limits",
+      ...lines,
+      'echo "want=$TUNING_BUF_WANT budget=$TUNING_BUF_BUDGET mem=$TUNING_MEM_KB"',
+      'cat "$TUNING_TMP"; rm -f "$TUNING_TMP" "$MEMINFO"',
+    ].join("\n");
+    const result = spawnSync("sh", ["-c", probe], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim().split("\n");
+  };
+  const buffers = [
+    'FAKE_net_core_rmem_max=67108864; tuning_buffer net.core.rmem_max "$TUNING_BUF_WANT" "$TUNING_BUF_BUDGET"',
+    'FAKE_net_core_wmem_max=212992; tuning_buffer net.core.wmem_max "$TUNING_BUF_WANT" "$TUNING_BUF_BUDGET"',
+    'FAKE_net_ipv4_tcp_rmem="4096\\t131072\\t67108864"; tuning_raise_rmem net.ipv4.tcp_rmem "$TUNING_BUF_WANT" 1048576 "$TUNING_BUF_BUDGET"',
+    'FAKE_net_ipv4_tcp_mem="12288 16384 24576"; tuning_raise_triple net.ipv4.tcp_mem 16384 32768 65536',
+    'FAKE_net_ipv4_tcp_mem="200000 16384 24576"; tuning_raise_triple net.ipv4.tcp_mem 16384 32768 65536',
+  ];
+  // 1 GiB：预算 32MB，老版本抬到的 64MB 压下来，没调过的抬到 32MB
+  assert.deepEqual(run("1048576", buffers), [
+    "want=33554432 budget=33554432 mem=1048576",
+    "net.core.rmem_max = 33554432",
+    "net.core.wmem_max = 33554432",
+    "net.ipv4.tcp_rmem = 4096 1048576 33554432",
+    "net.ipv4.tcp_mem = 16384 32768 65536",
+    "net.ipv4.tcp_mem = 200000 200000 200000",
+  ]);
+  // 8 GiB：建议 64MB、预算 256MB，128MB 不压
+  assert.deepEqual(run("8388608", ['FAKE_net_core_wmem_max=134217728; tuning_buffer net.core.wmem_max "$TUNING_BUF_WANT" "$TUNING_BUF_BUDGET"']), [
+    "want=67108864 budget=268435456 mem=8388608",
+    "net.core.wmem_max = 134217728",
+  ]);
+  // 读不到内存：只抬不压
+  assert.deepEqual(run("abc", ['FAKE_net_core_wmem_max=134217728; tuning_buffer net.core.wmem_max "$TUNING_BUF_WANT" "$TUNING_BUF_BUDGET"']), [
+    "want=67108864 budget=0 mem=",
+    "net.core.wmem_max = 134217728",
+  ]);
 });
