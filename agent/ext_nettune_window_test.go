@@ -159,7 +159,7 @@ func TestNetTuneApplyUsesPanelBandwidth(t *testing.T) {
 	values := netTuneDistroDefaults()
 	values["net.core.wmem_max"] = "67108864"
 	netTuneFakeProc(t, values)
-	applied := netTuneRunWith("apply", nil, 500)
+	applied := netTuneRunWith("apply", netTuneRunOptions{BandwidthMbps: 500})
 	if len(applied.Failed) != 0 {
 		t.Fatalf("调优失败：%+v", applied.Failed)
 	}

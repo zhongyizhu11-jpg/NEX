@@ -153,7 +153,7 @@ func netTuneLoadRouteState() (*netTuneRouteState, bool) {
 		return nil, false
 	}
 	var state netTuneRouteState
-	if json.Unmarshal(raw, &state) != nil || state.Window <= 0 {
+	if json.Unmarshal(raw, &state) != nil || state.Window < 0 {
 		return nil, false
 	}
 	if state.Original == nil {
@@ -179,6 +179,13 @@ func netTuneApplyInitWindow(result *netTuneResult, fromPanel bool) {
 			return
 		}
 		state = &netTuneRouteState{SavedAt: time.Now().Unix(), Window: netTuneInitWindow, Original: map[string]netTuneRouteWindow{}}
+	}
+	if state.Window == 0 {
+		// 恢复了一份没有初始窗口的存档：记着原值，但不再补；一键调优重新打开
+		if !fromPanel {
+			return
+		}
+		state.Window = netTuneInitWindow
 	}
 	routes, err := netTuneDefaultRoutes()
 	if err != nil {

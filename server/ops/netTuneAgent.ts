@@ -10,7 +10,7 @@
 */
 import { randomUUID } from "node:crypto";
 
-import { normalizeNetTuneResult, type NetTuneMode, type NetTuneResult } from "../../shared/netTune";
+import { normalizeNetTuneResult, type NetTuneArchiveOp, type NetTuneMode, type NetTuneResult, type NetTuneSwapOp } from "../../shared/netTune";
 import { registerAgentExtModule, wakeAgentExt, type AgentExtHost } from "./agentExt";
 
 export const NETTUNE_PENDING_TIMEOUT_MS = 3 * 60_000;
@@ -22,8 +22,13 @@ export type NetTunePending = {
   values?: Record<string, string>;
   /** 一键调优按它算缓冲上限（2.2.276）；0 = 不知道，Agent 只按内存。 */
   bandwidthMbps?: number;
+  /** 存档、加 swap 的具体操作（2.2.276）。 */
+  archive?: NetTuneArchiveOp;
+  swap?: NetTuneSwapOp;
   requestedAt: number;
 };
+
+export type NetTuneRunExtra = { bandwidthMbps?: number; archive?: NetTuneArchiveOp; swap?: NetTuneSwapOp };
 
 /** 这台机器的带宽：线路带宽（负载均衡用的那个），没填用手动出口整形的公网带宽；都没有为 0。 */
 export function netTuneHostBandwidthMbps(host: { lineBandwidthMbps?: number | null; egressShapingMode?: string | null; egressMbps?: number | null }): number {
@@ -63,18 +68,28 @@ function expirePending(state: HostState, now: number) {
  * 点「检查」「一键调优」「保存设置」「还原」。同一台主机已经有一轮在等时：
  * 只读的检查让位给会改东西的那几种（改完也会读一遍值）；已经在等一轮改动时，再点改动就返回那一轮，不叠加。
  */
-export function requestNetTuneRun(hostId: number, apply: boolean | NetTuneMode, now = Date.now(), values?: Record<string, string>, bandwidthMbps = 0): NetTunePending {
+export function requestNetTuneRun(hostId: number, apply: boolean | NetTuneMode, now = Date.now(), values?: Record<string, string>, extra: NetTuneRunExtra = {}): NetTunePending {
+  const fresh = (): NetTunePending => ({
+    id: randomUUID().replace(/-/g, ""),
+    apply: mode === "apply",
+    mode,
+    values,
+    ...(extra.bandwidthMbps && extra.bandwidthMbps > 0 ? { bandwidthMbps: extra.bandwidthMbps } : {}),
+    ...(extra.archive ? { archive: extra.archive } : {}),
+    ...(extra.swap ? { swap: extra.swap } : {}),
+    requestedAt: now,
+  });
   const mode: NetTuneMode = typeof apply === "boolean" ? (apply ? "apply" : "check") : apply;
   const changes = mode !== "check";
   const state = stateOf(hostId);
   expirePending(state, now);
   if (state.pending) {
     if (changes && state.pending.mode === "check") {
-      state.pending = { id: randomUUID().replace(/-/g, ""), apply: mode === "apply", mode, values, ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}), requestedAt: now };
+      state.pending = fresh();
     }
     return state.pending;
   }
-  state.pending = { id: randomUUID().replace(/-/g, ""), apply: mode === "apply", mode, values, ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}), requestedAt: now };
+  state.pending = fresh();
   state.timedOut = null;
   void wakeAgentExt(hostId, `nettune-${mode}`);
   return state.pending;
@@ -96,8 +111,8 @@ function directiveFor(host: AgentExtHost, now = Date.now()) {
   if (!state) return undefined;
   expirePending(state, now);
   if (!state.pending) return undefined;
-  const { id, apply, mode, values, bandwidthMbps } = state.pending;
-  return { runs: [{ id, apply, mode, ...(values ? { values } : {}), ...(bandwidthMbps ? { bandwidthMbps } : {}) }] };
+  const { id, apply, mode, values, bandwidthMbps, archive, swap } = state.pending;
+  return { runs: [{ id, apply, mode, ...(values ? { values } : {}), ...(bandwidthMbps ? { bandwidthMbps } : {}), ...(archive ? { archive } : {}), ...(swap ? { swap } : {}) }] };
 }
 
 export function ingestNetTuneReport(host: AgentExtHost, report: unknown) {

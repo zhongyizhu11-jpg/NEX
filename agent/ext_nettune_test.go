@@ -30,6 +30,10 @@ func netTuneFakeProc(t *testing.T, values map[string]string) string {
 	netTuneMemInfoPath = filepath.Join(root, "proc", "meminfo")
 	netTuneRouteStatePath = filepath.Join(root, "etc", "forwardx-nettune", "initcwnd.json")
 	t.Cleanup(func() { netTuneMemInfoPath, netTuneRouteStatePath = oldMem, oldRouteState })
+	oldArchives, oldSwapMarker := netTuneArchiveDir, netTuneSwapMarker
+	netTuneArchiveDir = filepath.Join(root, "etc", "forwardx-nettune", "archives")
+	netTuneSwapMarker = filepath.Join(root, "etc", "forwardx-nettune", "swapfile.json")
+	t.Cleanup(func() { netTuneArchiveDir, netTuneSwapMarker = oldArchives, oldSwapMarker })
 	netTuneFakeMem(t, 8<<30)
 	netTuneFakeIP(t, "default via 10.0.0.1 dev eth0 proto dhcp src 10.0.0.5 metric 100")
 	for key, value := range values {

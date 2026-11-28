@@ -2923,6 +2923,8 @@ async function seedAgentMemoryDemo(hostIds: number[]) {
         "net.ipv4.tcp_keepalive_time": "600",
         "vm.min_free_kbytes": "32768",
         "fs.file-max": "1000000",
+        "swap.total": "0",
+        "swap.owned": "0",
         "net.core.rmem_default": "1048576",
         "net.core.wmem_default": "1048576",
         "net.ipv4.udp_rmem_min": "16384",
@@ -2953,6 +2955,12 @@ async function seedAgentMemoryDemo(hostIds: number[]) {
         { key: "route.initcwnd", from: "10", to: "32" },
       ],
       file: "/etc/sysctl.d/99-forwardx-network.conf",
+      hasBackup: true,
+      archives: [
+        { seq: "0000", name: "调优前", savedAt: Math.floor(Date.now() / 1000) - 86400 * 3 },
+        { seq: "0001", name: "一键调优", savedAt: Math.floor(Date.now() / 1000) - 600, auto: true },
+        { seq: "0002", name: "晚高峰配置", savedAt: Math.floor(Date.now() / 1000) - 300 },
+      ],
     });
   }
 }

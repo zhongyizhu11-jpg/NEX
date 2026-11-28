@@ -289,7 +289,7 @@ test("一键调优带上这台机器的带宽：线路带宽优先，没填用�
   assert.equal(netTuneHostBandwidthMbps({ lineBandwidthMbps: 0, egressShapingMode: "auto", egressMbps: 500 }), 0, "自动整形的值不是填的带宽");
   assert.equal(netTuneHostBandwidthMbps({}), 0);
   resetNetTuneStateForTest();
-  const run = requestNetTuneRun(11, "apply", 1_000, undefined, 800);
+  const run = requestNetTuneRun(11, "apply", 1_000, undefined, { bandwidthMbps: 800 });
   assert.deepEqual(__test.directiveFor({ id: 11 } as any, 1_001), { runs: [{ id: run.id, apply: true, mode: "apply", bandwidthMbps: 800 }] });
   resetNetTuneStateForTest();
   const check = requestNetTuneRun(11, false, 2_000);
@@ -305,4 +305,22 @@ test("面板和 Agent 的规则表一致：同样的键、按内存算的同一�
   const memName: Record<string, string> = { buffer: "Buffer", tcpMem: "TCPMem", minFree: "MinFree" };
   const sorted = (rules: { key: string; mem: string | null }[]) => rules.map((rule) => `${rule.key}:${rule.mem ?? "-"}`).sort();
   assert.deepEqual(sorted(goRules), sorted(NETTUNE_RULES.map((rule) => ({ key: rule.key, mem: rule.mem ? memName[rule.mem] : null }))));
+});
+
+test("调优存档、加 swap：指令带上操作；结果里的存档列表收拾干净", () => {
+  resetNetTuneStateForTest();
+  const save = requestNetTuneRun(12, "archive", 1_000, undefined, { archive: { op: "save", name: "晚高峰" } });
+  assert.deepEqual(__test.directiveFor({ id: 12 } as any, 1_001), { runs: [{ id: save.id, apply: false, mode: "archive", archive: { op: "save", name: "晚高峰" } }] });
+  ingestNetTuneReport({ id: 12 } as any, { results: [{ id: save.id, status: "done", mode: "archive", archives: [
+    { seq: "0000", name: "调优前", savedAt: 100 },
+    { seq: "0001", name: "一键调优", savedAt: 200, auto: true },
+    { seq: "../x", name: "坏的", savedAt: 1 },
+  ] }] });
+  const status = netTuneStatus(12, 1_002);
+  assert.deepEqual(status.latest?.archives, [{ seq: "0000", name: "调优前", savedAt: 100 }, { seq: "0001", name: "一键调优", savedAt: 200, auto: true }]);
+  assert.equal(status.lastApply?.mode, "archive", "存档操作算「最近一次改动」");
+  resetNetTuneStateForTest();
+  const swap = requestNetTuneRun(12, "swap", 2_000, undefined, { swap: { sizeGB: 2 } });
+  assert.deepEqual(__test.directiveFor({ id: 12 } as any, 2_001), { runs: [{ id: swap.id, apply: false, mode: "swap", swap: { sizeGB: 2 } }] });
+  resetNetTuneStateForTest();
 });

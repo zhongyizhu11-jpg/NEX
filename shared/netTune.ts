@@ -157,7 +157,13 @@ type NetTuneFailure = { key: string; error: string };
     restore  还原到面板第一次改这台机器之前的值（第一次改动前 Agent 自动存一份），并删掉面板写的持久化文件。
   上游 poouo/Forwardx 的 BBR 管理插件（2.3.287）给的也是这两样：按参数改、能还原。
 */
-export type NetTuneMode = "check" | "apply" | "set" | "restore";
+export type NetTuneMode = "check" | "apply" | "set" | "restore" | "archive" | "swap";
+
+/** 调优存档（2.2.276）：0000 是调优前原样。 */
+export type NetTuneArchiveInfo = { seq: string; name: string; savedAt: number; auto?: boolean };
+export type NetTuneArchiveOp = { op: "save" | "restore" | "rename" | "delete"; seq?: string; name?: string };
+export type NetTuneSwapOp = { sizeGB?: number; remove?: boolean };
+export const NETTUNE_ARCHIVE_NAME_MAX = 32;
 export const NETTUNE_CUSTOM_AGENT_VERSION = "2.2.255";
 
 export type NetTuneResult = {
@@ -176,6 +182,7 @@ export type NetTuneResult = {
   file?: string;
   fileError?: string;
   error?: string;
+  archives?: NetTuneArchiveInfo[];
 };
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -206,7 +213,11 @@ export function normalizeNetTuneResult(raw: unknown): NetTuneResult | null {
   }
   const list = <T,>(value: unknown, map: (entry: Record<string, unknown>) => T | null): T[] =>
     (Array.isArray(value) ? value : []).slice(0, 64).map((entry) => (entry && typeof entry === "object" ? map(entry as Record<string, unknown>) : null)).filter((entry): entry is T => entry !== null);
-  const mode = typeof item.mode === "string" && ["check", "apply", "set", "restore"].includes(item.mode) ? item.mode as NetTuneMode : undefined;
+  const mode = typeof item.mode === "string" && ["check", "apply", "set", "restore", "archive", "swap"].includes(item.mode) ? item.mode as NetTuneMode : undefined;
+  const archives = list(item.archives, (entry) => {
+    const seq = text(entry.seq, 4);
+    return /^\d{4}$/.test(seq) ? { seq, name: text(entry.name, 64), savedAt: epoch(entry.savedAt), ...(entry.auto === true ? { auto: true } : {}) } : null;
+  });
   return {
     id,
     apply: item.apply === true,
@@ -222,6 +233,7 @@ export function normalizeNetTuneResult(raw: unknown): NetTuneResult | null {
     file: text(item.file, 256) || undefined,
     fileError: text(item.fileError) || undefined,
     error: text(item.error) || undefined,
+    ...(archives.length ? { archives } : {}),
   };
 }
 
@@ -479,6 +491,9 @@ export function evaluateNetTune(values: Record<string, string> | null | undefine
 export function netTuneKeyLabel(key: string): string {
   if (key === NETTUNE_KEY_CC) return "拥塞控制";
   if (key === NETTUNE_KEY_INITCWND) return "初始窗口";
+  if (key === "swap") return "swap";
+  if (key === "vm.swappiness") return "swap 倾向";
+  if (key === "archive") return "自动存档";
   if (key === NETTUNE_KEY_QDISC) return "默认队列";
   if (key === NETTUNE_KEY_BUCKETS) return "连接跟踪哈希桶";
   return NETTUNE_RULES.find((rule) => rule.key === key)?.label ?? key;

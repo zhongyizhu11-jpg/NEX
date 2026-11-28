@@ -299,6 +299,8 @@ type netTuneResult struct {
 	File      string           `json:"file,omitempty"`
 	FileError string           `json:"fileError,omitempty"`
 	Error     string           `json:"error,omitempty"`
+	// Archives：调优存档（2.2.276），0000 是调优前原样。
+	Archives []netTuneArchiveInfo `json:"archives,omitempty"`
 }
 
 type netTuneDirective struct {
@@ -308,7 +310,9 @@ type netTuneDirective struct {
 		Mode   string            `json:"mode"`
 		Values map[string]string `json:"values"`
 		// BandwidthMbps：这台机器的带宽（面板上的线路带宽 / 出口整形带宽，2.2.276），0 = 不知道。
-		BandwidthMbps int64 `json:"bandwidthMbps"`
+		BandwidthMbps int64             `json:"bandwidthMbps"`
+		Archive       *netTuneArchiveOp `json:"archive"`
+		Swap          *netTuneSwapOp    `json:"swap"`
 	} `json:"runs"`
 }
 
@@ -378,10 +382,10 @@ func (m *netTuneExtModule) Apply(cfg Config, directive json.RawMessage) {
 		apply := run.Apply
 		mode := netTuneMode(run.Mode, run.Apply)
 		values := run.Values
-		bandwidth := min(max(run.BandwidthMbps, 0), 1_000_000)
+		opts := netTuneRunOptions{Values: values, BandwidthMbps: min(max(run.BandwidthMbps, 0), 1_000_000), Archive: run.Archive, Swap: run.Swap}
 		result.Mode = mode
 		go func(id string) {
-			done := netTuneRunWith(mode, values, bandwidth)
+			done := netTuneRunWith(mode, opts)
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			done.ID = id
@@ -549,7 +553,7 @@ func netTuneHasWord(list, word string) bool {
 // netTuneMode：老面板只发 apply，没有 mode。
 func netTuneMode(mode string, apply bool) string {
 	switch mode {
-	case "check", "apply", "set", "restore":
+	case "check", "apply", "set", "restore", "archive", "swap":
 		return mode
 	}
 	if apply {
@@ -563,11 +567,21 @@ func netTuneRun(apply bool) netTuneResult {
 }
 
 func netTuneRunMode(mode string, values map[string]string) netTuneResult {
-	return netTuneRunWith(mode, values, 0)
+	return netTuneRunWith(mode, netTuneRunOptions{Values: values})
 }
 
-// netTuneRunWith：bandwidthMbps 是面板给的这台机器的带宽（0 = 不知道），一键调优按它算缓冲上限。
-func netTuneRunWith(mode string, values map[string]string, bandwidthMbps int64) netTuneResult {
+type netTuneRunOptions struct {
+	// Values：逐项设置的 键 → 值。
+	Values map[string]string
+	// BandwidthMbps：面板给的这台机器的带宽（0 = 不知道），一键调优按它算缓冲上限。
+	BandwidthMbps int64
+	// Archive / Swap：调优存档、加 swap（2.2.276，见 ext_nettune_archive.go）。
+	Archive *netTuneArchiveOp
+	Swap    *netTuneSwapOp
+}
+
+func netTuneRunWith(mode string, opts netTuneRunOptions) netTuneResult {
+	values, bandwidthMbps := opts.Values, opts.BandwidthMbps
 	result := netTuneResult{Mode: mode}
 	if runtime.GOOS != "linux" {
 		result.Error = "只有 Linux 主机能读写内核网络参数"
@@ -578,6 +592,14 @@ func netTuneRunWith(mode string, values map[string]string, bandwidthMbps int64) 
 		netTuneEnsureBackup(&result)
 		netTuneApply(&result, netTuneReadHostFacts(bandwidthMbps))
 		netTuneApplyInitWindow(&result, true)
+		// 调完自动存一份（tcpfit 一样），以后改乱了能回到这里
+		if err := netTuneArchiveSave("一键调优", true); err != nil {
+			result.Failed = netTuneAppendFailure(result.Failed, "archive", err)
+		}
+	case "archive":
+		netTuneRunArchive(&result, opts.Archive)
+	case "swap":
+		netTuneRunSwap(&result, opts.Swap)
 	case "set":
 		netTuneEnsureBackup(&result)
 		netTuneSetValues(&result, values)
@@ -604,6 +626,8 @@ func netTuneRunWith(mode string, values map[string]string, bandwidthMbps int64) 
 		result.Values[netTuneKeyMemTotal] = strconv.FormatInt(mem, 10)
 	}
 	netTuneReportInitWindow(&result)
+	netTuneReportSwap(&result)
+	result.Archives = netTuneArchiveList()
 	return result
 }
 
