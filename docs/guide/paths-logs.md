@@ -30,6 +30,10 @@ Docker 部署的数据**不在部署目录里**，在数据卷里：只备份 `/
 | 转发运行时配置 | `/etc/forwardx/runtime/`、`/etc/forwardx/nginx/` |
 | 网络调优写的内核参数 | `/etc/sysctl.d/99-forwardx-network.conf` |
 | 网络调优前的原值备份 | `/etc/forwardx-nettune/backup.json` |
+| 网络调优的初始窗口标记（记着调优前的值） | `/etc/forwardx-nettune/initcwnd.json` |
+| 开机加载 BBR 模块 | `/etc/modules-load.d/forwardx-bbr.conf` |
+| 调优存档 | `/etc/forwardx-nettune/archives/NNNN.json` |
+| 面板加的 swap | `/swapfile`（标记 `/etc/forwardx-nettune/swapfile.json`，swap 倾向 `/etc/sysctl.d/99-forwardx-swap.conf`） |
 | 服务名 | `forwardx-agent` |
 | SSH 管理命令 | `fwxm`（`fwxm logs` 看日志，`fwxm info` 看关键信息） |
 

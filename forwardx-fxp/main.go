@@ -265,7 +265,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.152"
+	fxpRuntimeVersion             = "2.2.153"
 	fxpFallbackDial               = 3 * time.Second
 	fxpShutdownDrain              = 5 * time.Second
 
@@ -547,19 +547,10 @@ func (s *exitEndpointSelector) activate(cfg config) func() {
 		}
 		s.states[index].prewarm(dialCfg)
 	}
-	// 这条规则在用这些端点：空闲之后也保底预热（endpoint_pool.go 的 fxpPoolIdleFloor），只有一台出口时也一样
-	releases := make([]func(), 0, 2*len(s.states)+2)
-	for _, state := range s.states {
-		releases = append(releases, state.retain())
-	}
-	release := func() {
-		for _, release := range releases {
-			release()
-		}
-	}
 	if len(s.endpoints) < 2 {
-		return release
+		return func() {}
 	}
+	releases := make([]func(), 0, len(s.states)+2)
 	releases = append(releases, registerTargetSelector(s, cfg))
 	// 入口把这条规则每台出口的真实状态报给面板（balance_report.go）；中转、出口不挑出口，不报。
 	if strings.EqualFold(strings.TrimSpace(cfg.Role), "entry") {
@@ -572,7 +563,11 @@ func (s *exitEndpointSelector) activate(cfg config) func() {
 		}
 		releases = append(releases, state.watch(dialCfg))
 	}
-	return release
+	return func() {
+		for _, release := range releases {
+			release()
+		}
+	}
 }
 
 /*

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { formatAgo } from "@shared/dashboardAttention";
 import {
   evaluateNetTune,
+  NETTUNE_ARCHIVE_NAME_MAX,
   NETTUNE_CUSTOM_AGENT_VERSION,
   NETTUNE_EDITABLE_KEYS,
   NETTUNE_GROUP_LABELS,
@@ -34,10 +35,16 @@ import { StatusChip } from "./HostNetProfileSection";
   Agent 2.2.255 起还能「逐项设置」（自己填每一项的值）和「还原」（回到面板第一次改这台机器之前的值）。
 */
 
-const MODE_TEXT: Record<string, string> = { apply: "调优", set: "设置", restore: "还原", check: "检查" };
+const MODE_TEXT: Record<string, string> = { apply: "调优", set: "设置", restore: "还原", check: "检查", archive: "存档操作", swap: "swap 操作" };
+const SWAP_SIZES = [1, 2, 4, 8];
 
-const STATUS_TONE: Record<NetTuneItemStatus, "good" | "warn" | "muted"> = { ok: "good", low: "warn", custom: "muted", missing: "muted" };
-const STATUS_TEXT: Record<NetTuneItemStatus, string> = { ok: "达标", low: "偏低", custom: "自选", missing: "没有" };
+function formatGB(bytes: number) {
+  const gb = bytes / 1073741824;
+  return `${gb >= 10 ? gb.toFixed(0) : gb.toFixed(1)} GB`;
+}
+
+const STATUS_TONE: Record<NetTuneItemStatus, "good" | "warn" | "muted"> = { ok: "good", low: "warn", high: "warn", custom: "muted", missing: "muted" };
+const STATUS_TEXT: Record<NetTuneItemStatus, string> = { ok: "达标", low: "偏低", high: "偏高", custom: "自选", missing: "没有" };
 const GROUP_ORDER: NetTuneGroup[] = ["congestion", "forwarding", "buffers", "conntrack", "queues", "tcp"];
 
 function checkedAgo(sec: number | undefined) {
@@ -51,7 +58,7 @@ function ItemRow({ item }: { item: NetTuneItem }) {
       <span className="min-w-0 truncate text-meta text-muted-foreground">{item.label}</span>
       <span className="flex min-w-0 items-center gap-1.5 text-right text-secondary-type tabular-nums">
         <span className="min-w-0 truncate font-mono text-xs text-foreground">{item.current ?? "—"}</span>
-        {item.status === "low" ? <span className="whitespace-nowrap text-xs text-muted-foreground">→ {item.want}</span> : null}
+        {item.status === "low" || item.status === "high" ? <span className="whitespace-nowrap text-xs text-muted-foreground">→ {item.want}</span> : null}
         <StatusChip tone={STATUS_TONE[item.status]}>{STATUS_TEXT[item.status]}</StatusChip>
       </span>
     </div>
@@ -66,7 +73,10 @@ export default function HostNetTuneSection({ host }: { host: { id?: number | str
     refetchInterval: (query) => (query.state.data?.pending ? 2_000 : false),
   });
   const status = statusQuery.data;
-  const evaluation = useMemo(() => (status?.latest?.values ? evaluateNetTune(status.latest.values) : null), [status?.latest]);
+  const evaluation = useMemo(
+    () => (status?.latest?.values ? evaluateNetTune(status.latest.values, { bandwidthMbps: status.bandwidthMbps }) : null),
+    [status?.latest, status?.bandwidthMbps],
+  );
   const summary = !status
     ? undefined
     : status.pending
@@ -105,14 +115,56 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
     onSuccess: () => void utils.ops.netTune.status.invalidate({ hostId }),
     onError: (error) => toast.error(error.message),
   });
-  const evaluation = useMemo(() => (status?.latest?.values ? evaluateNetTune(status.latest.values) : null), [status?.latest]);
+  const evaluation = useMemo(
+    () => (status?.latest?.values ? evaluateNetTune(status.latest.values, { bandwidthMbps: status.bandwidthMbps }) : null),
+    [status?.latest, status?.bandwidthMbps],
+  );
+  const archive = trpc.ops.netTune.archive.useMutation({
+    onSuccess: () => void utils.ops.netTune.status.invalidate({ hostId }),
+    onError: (error) => toast.error(error.message),
+  });
+  const swap = trpc.ops.netTune.swap.useMutation({
+    onSuccess: () => void utils.ops.netTune.status.invalidate({ hostId }),
+    onError: (error) => toast.error(error.message),
+  });
+  const [archiveName, setArchiveName] = useState("");
+  const [renaming, setRenaming] = useState<{ seq: string; name: string } | null>(null);
+  const [swapSize, setSwapSize] = useState(2);
 
   if (!status) return <p className="text-meta text-muted-foreground">正在读取…</p>;
 
   const pending = status.pending;
   const latest = status.latest;
   const lastApply = status.lastApply;
-  const busy = !!pending || run.isPending || setValues.isPending || restore.isPending;
+  const busy = !!pending || run.isPending || setValues.isPending || restore.isPending || archive.isPending || swap.isPending;
+  const supportsArchive = status.supportsArchive === true;
+  const archives = latest?.archives ?? [];
+  const swapTotal = Number(latest?.values?.["swap.total"] ?? NaN);
+  const swapOwned = latest?.values?.["swap.owned"] === "1";
+  const restoreArchive = (seq: string, name: string) => {
+    void confirmDialog({
+      title: seq === "0000" ? "回到调优前" : `恢复存档 ${seq} ${name}`,
+      description: seq === "0000"
+        ? "把内核网络参数和默认路由的初始窗口改回面板第一次改这台机器之前的样子，并删掉面板写的 sysctl.d 文件。swap 不动。"
+        : "按这份存档改内核网络参数和默认路由的初始窗口，立即生效并写进 /etc/sysctl.d；内核不接受的值会自动改回原值。",
+      confirmText: "恢复",
+      tone: seq === "0000" ? "destructive" : undefined,
+    }).then((confirmed) => {
+      if (confirmed) archive.mutate({ hostId, op: "restore", seq });
+    });
+  };
+  const startSwap = (remove: boolean) => {
+    void confirmDialog({
+      title: remove ? "删掉面板建的 swap" : `加 ${swapSize} GB swap`,
+      description: remove
+        ? "先 swapoff（内存不够把 swap 里的数据换回来时会失败，不会硬删），再从 /etc/fstab 删掉那一行、删除 /swapfile，swap 倾向回到原值。"
+        : `建 /swapfile（${swapSize} GB）并启用，写进 /etc/fstab 开机自动启用；swap 倾向调到 10，只在内存真的紧张时才换出。已经有 swap、磁盘不够、容器不让加时什么都不做。`,
+      confirmText: remove ? "删除" : "加 swap",
+      tone: remove ? "destructive" : undefined,
+    }).then((confirmed) => {
+      if (confirmed) swap.mutate(remove ? { hostId, remove: true } : { hostId, sizeGB: swapSize });
+    });
+  };
   const supportsCustom = status.supportsCustom === true;
   const rawValues = latest?.values ?? {};
   const editableKeys = NETTUNE_EDITABLE_KEYS.filter((key) => rawValues[key] !== undefined);
@@ -158,14 +210,14 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
   const startApply = () => {
     void confirmDialog({
       title: "一键调优这台机器",
-      description: "按安装脚本同一套规则调整内核网络参数：只往更适合转发的方向调，已经更好的值保留，自己选的拥塞控制算法不动。会写入 /etc/sysctl.d/99-forwardx-network.conf，立即生效，重启后还在。",
+      description: `按安装脚本同一套规则调整内核网络参数：只往更适合转发的方向调，已经更好的值保留，自己选的拥塞控制算法不动；缓冲上限按${status.bandwidthMbps ? `带宽 ${status.bandwidthMbps} Mbps 和` : ""}内存算，超过内存预算的会压下来；默认路由的初始窗口抬到 32。会写入 /etc/sysctl.d/99-forwardx-network.conf，立即生效，重启后还在；改之前存一份原值，以后能「还原」。`,
       confirmText: "调优",
     }).then((confirmed) => {
       if (confirmed) run.mutate({ hostId, apply: true });
     });
   };
 
-  const lowItems = evaluation?.items.filter((item) => item.status === "low") ?? [];
+  const lowItems = evaluation?.items.filter((item) => item.status === "low" || item.status === "high") ?? [];
   const grouped = GROUP_ORDER.map((group) => ({ group, items: (evaluation?.items ?? []).filter((item) => item.group === group) }))
     .filter((entry) => entry.items.length > 0);
 
@@ -181,6 +233,12 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
               : `${(evaluation.conntrackCount ?? 0).toLocaleString(getFormatLocale())} / ${evaluation.conntrackMax.toLocaleString(getFormatLocale())}`}
           />
           <Row label="达标" value={`${evaluation.ok} / ${evaluation.total}`} />
+          {evaluation.memBytes ? (
+            <Row
+              label="缓冲按"
+              value={`${evaluation.bandwidthMbps ? `带宽 ${evaluation.bandwidthMbps} Mbps · ` : "带宽没填 · "}内存 ${(evaluation.memBytes / 1073741824).toFixed(1)} GB`}
+            />
+          ) : null}
           {evaluation.kernel ? <Row label="内核" value={evaluation.kernel} /> : null}
         </>
       ) : (
@@ -221,6 +279,100 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
           {items.map((item) => <ItemRow key={item.key} item={item} />)}
         </div>
       )) : null}
+
+      {supportsArchive && latest && Number.isFinite(swapTotal) ? (
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <span className="text-meta text-muted-foreground">swap</span>
+          <span className="flex flex-wrap items-center gap-2 text-secondary-type">
+            <span className="tabular-nums">{swapTotal > 0 ? `${formatGB(swapTotal)}${swapOwned ? "（面板建的）" : ""}` : "没有"}</span>
+            {swapTotal <= 0 ? (
+              <>
+                <select
+                  className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                  value={swapSize}
+                  onChange={(event) => setSwapSize(Number(event.target.value))}
+                  aria-label="swap 大小"
+                >
+                  {SWAP_SIZES.map((size) => <option key={size} value={size}>{size} GB</option>)}
+                </select>
+                <Button size="sm" variant="outline" disabled={busy || !status.online} onClick={() => startSwap(false)}>
+                  {pending?.mode === "swap" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  加 swap
+                </Button>
+              </>
+            ) : swapOwned ? (
+              <Button size="sm" variant="ghost" disabled={busy || !status.online} onClick={() => startSwap(true)}>删掉</Button>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+
+      {supportsArchive && latest ? (
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="text-xs font-medium text-muted-foreground">调优存档</div>
+          {archives.length === 0 ? <p className="text-meta text-muted-foreground">还没有存档。一键调优后会自动存一份，也可以手动存当前的。</p> : null}
+          {archives.map((item) => (
+            <div key={item.seq} className="flex min-w-0 items-center justify-between gap-2 py-0.5">
+              {renaming?.seq === item.seq ? (
+                <Input
+                  className="h-8 min-w-0 flex-1 text-xs"
+                  value={renaming.name}
+                  maxLength={NETTUNE_ARCHIVE_NAME_MAX}
+                  onChange={(event) => setRenaming({ seq: item.seq, name: event.target.value })}
+                  aria-label="新名字"
+                  autoFocus
+                />
+              ) : (
+                <span className="min-w-0 truncate text-meta">
+                  <span className="font-mono text-muted-foreground">{item.seq}</span> {item.name}
+                  <span className="text-muted-foreground"> · {checkedAgo(item.savedAt)}{item.auto ? " · 自动" : ""}</span>
+                </span>
+              )}
+              <span className="flex shrink-0 gap-1">
+                {renaming?.seq === item.seq ? (
+                  <>
+                    <Button size="sm" variant="outline" disabled={busy || !status.online || !renaming.name.trim()} onClick={() => {
+                      archive.mutate({ hostId, op: "rename", seq: item.seq, name: renaming.name });
+                      setRenaming(null);
+                    }}>保存</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setRenaming(null)}>取消</Button>
+                  </>
+                ) : (
+                  <>
+                    <Button size="sm" variant="outline" disabled={busy || !status.online} onClick={() => restoreArchive(item.seq, item.name)}>恢复</Button>
+                    {item.seq !== "0000" ? (
+                      <>
+                        <Button size="sm" variant="ghost" disabled={busy || !status.online} onClick={() => setRenaming({ seq: item.seq, name: item.name })}>改名</Button>
+                        <Button size="sm" variant="ghost" disabled={busy || !status.online} onClick={() => {
+                          void confirmDialog({ title: `删除存档 ${item.seq} ${item.name}`, description: "只删这份存档，不改现在的参数。", confirmText: "删除", tone: "destructive" })
+                            .then((confirmed) => { if (confirmed) archive.mutate({ hostId, op: "delete", seq: item.seq }); });
+                        }}>删除</Button>
+                      </>
+                    ) : null}
+                  </>
+                )}
+              </span>
+            </div>
+          ))}
+          <div className="flex min-w-0 items-center gap-2 pt-1">
+            <Input
+              className="h-8 min-w-0 flex-1 text-xs"
+              placeholder="名字（可不填）"
+              value={archiveName}
+              maxLength={NETTUNE_ARCHIVE_NAME_MAX}
+              onChange={(event) => setArchiveName(event.target.value)}
+              aria-label="存档名字"
+            />
+            <Button size="sm" variant="outline" disabled={busy || !status.online} onClick={() => {
+              archive.mutate({ hostId, op: "save", name: archiveName });
+              setArchiveName("");
+            }}>
+              {pending?.mode === "archive" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              存当前
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {editing ? (
         <div className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border/60 p-2.5">

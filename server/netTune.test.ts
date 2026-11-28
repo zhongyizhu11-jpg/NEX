@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluateNetTune, normalizeNetTuneResult, NETTUNE_RULES } from "../shared/netTune";
-import { __test, ingestNetTuneReport, netTuneStatus, NETTUNE_PENDING_TIMEOUT_MS, requestNetTuneRun, resetNetTuneStateForTest } from "./ops/netTuneAgent";
+import { evaluateNetTune, netTuneBufferLimits, normalizeNetTuneResult, NETTUNE_RULES } from "../shared/netTune";
+import { __test, ingestNetTuneReport, netTuneHostBandwidthMbps, netTuneStatus, NETTUNE_PENDING_TIMEOUT_MS, requestNetTuneRun, resetNetTuneStateForTest } from "./ops/netTuneAgent";
+
+const GiB = 1073741824;
+const MiB = 1048576;
 
 const distroDefaults: Record<string, string> = {
   "net.ipv4.ip_forward": "1",
@@ -31,6 +34,24 @@ const distroDefaults: Record<string, string> = {
   "net.ipv4.tcp_available_congestion_control": "reno cubic bbr",
   "net.core.default_qdisc": "fq_codel",
   "kernel.osrelease": "6.1.0",
+  // 2.2.276 起 Agent 多报的
+  "meminfo.memtotal": String(8 * GiB),
+  "route.initcwnd": "10",
+  "route.initrwnd": "10",
+  "net.ipv4.tcp_mem": "12288 16384 24576",
+  "net.core.netdev_budget": "300",
+  "net.core.optmem_max": "20480",
+  "net.ipv4.tcp_window_scaling": "1",
+  "net.ipv4.tcp_moderate_rcvbuf": "1",
+  "net.ipv4.tcp_adv_win_scale": "1",
+  "net.ipv4.tcp_sack": "1",
+  "net.ipv4.tcp_dsack": "1",
+  "net.ipv4.tcp_timestamps": "1",
+  "net.ipv4.tcp_syncookies": "1",
+  "net.ipv4.tcp_fin_timeout": "60",
+  "net.ipv4.tcp_keepalive_time": "7200",
+  "vm.min_free_kbytes": "8192",
+  "fs.file-max": "99999",
 };
 
 // Agent 按规则调完以后的样子（和 agent/ext_nettune_test.go 里的期望一致）。
@@ -38,7 +59,7 @@ const tuned: Record<string, string> = {
   ...distroDefaults,
   "net.core.rmem_max": "67108864",
   "net.ipv4.tcp_rmem": "4096 1048576 67108864",
-  "net.ipv4.tcp_wmem": "4096 16384 67108864",
+  "net.ipv4.tcp_wmem": "4096 1048576 67108864",
   "net.netfilter.nf_conntrack_max": "1048576",
   "net.netfilter.nf_conntrack_buckets": "262144",
   "net.netfilter.nf_conntrack_tcp_be_liberal": "1",
@@ -56,18 +77,33 @@ const tuned: Record<string, string> = {
   "net.ipv4.tcp_tw_reuse": "1",
   "net.ipv4.tcp_congestion_control": "bbr",
   "net.core.default_qdisc": "fq",
+  "net.core.somaxconn": "8192",
+  "route.initcwnd": "32",
+  "route.initrwnd": "32",
+  "net.ipv4.tcp_mem": "131072 262144 524288",
+  "net.core.netdev_budget": "600",
+  "net.core.optmem_max": "65536",
+  "net.ipv4.tcp_fin_timeout": "15",
+  "net.ipv4.tcp_keepalive_time": "600",
+  "vm.min_free_kbytes": "32768",
+  "fs.file-max": "1000000",
 };
 
 test("网络调优判断：发行版默认值大多偏低，调完全部达标", () => {
   const before = evaluateNetTune(distroDefaults);
-  assert.equal(before.total, NETTUNE_RULES.length + 3, "规则 + 拥塞控制 + 队列 + 哈希桶都参与评判");
+  assert.equal(before.total, NETTUNE_RULES.length + 4, "规则 + 拥塞控制 + 队列 + 哈希桶 + 初始窗口都参与评判");
   assert.ok(before.low >= 15, `默认值偏低的应该很多，实际 ${before.low}`);
   const byKey = Object.fromEntries(before.items.map((item) => [item.key, item]));
   assert.equal(byKey["net.core.wmem_max"].status, "ok", "调得比建议还大的算达标");
   assert.equal(byKey["net.core.wmem_max"].current, "128 MB");
   assert.equal(byKey["net.ipv4.tcp_rmem"].current, "起点 128 KB · 上限 6 MB", "tcp_rmem 看起点和上限");
-  assert.equal(byKey["net.ipv4.tcp_rmem"].want, "起点 ≥ 1 MB · 上限 ≥ 64 MB");
-  assert.equal(byKey["net.ipv4.tcp_wmem"].current, "4 MB", "tcp_wmem 只看上限");
+  assert.equal(byKey["net.ipv4.tcp_rmem"].want, "起点 ≥ 1 MB · 上限 64 MB – 256 MB", "8 GB 内存、没填带宽：建议 64 MB，内存预算 256 MB");
+  assert.equal(byKey["net.ipv4.tcp_wmem"].current, "起点 16 KB · 上限 4 MB", "tcp_wmem 起点也看（2.2.276）");
+  assert.equal(byKey["net.ipv4.tcp_mem"].current, "64 MB 起缩窗 · 上限 96 MB", "tcp_mem 是页，换成字节");
+  assert.equal(byKey["net.ipv4.tcp_mem"].status, "low");
+  assert.equal(byKey["route.initcwnd"].status, "low");
+  assert.equal(byKey["route.initcwnd"].want, "≥ 32");
+  assert.equal(byKey["vm.min_free_kbytes"].current, "8 MB", "min_free_kbytes 是 KB");
   assert.equal(byKey["net.ipv4.tcp_congestion_control"].status, "low");
   assert.equal(byKey["net.ipv4.tcp_notsent_lowat"].current, "不限", "2^32-1 是内核的「不限」");
   assert.equal(byKey["net.netfilter.nf_conntrack_buckets"].status, "low");
@@ -84,6 +120,7 @@ test("网络调优判断：tcp_rmem 起点和上限都要到（老版本只抬�
   assert.equal(status("4096 1048576 67108864"), "ok");
   assert.equal(status("4096 131072 67108864"), "low", "老 Agent 调过：起点还是 128 KB");
   assert.equal(status("4096 1048576 33554432"), "low", "上限不够");
+  assert.equal(status("4096 1048576 536870912"), "high", "超过内存预算（8 GB 的 1/32 = 256 MB）");
   assert.equal(status("8192 8388608 134217728"), "ok", "自己调得更大的算达标");
   assert.equal(status("67108864"), "ok", "认不出三段时只看上限");
 });
@@ -201,4 +238,89 @@ test("逐项设置 / 还原：面板先校验，指令带 mode 和 values；检�
   assert.equal(old?.mode, undefined);
   assert.equal(old?.hasBackup, undefined);
   agent.resetNetTuneStateForTest();
+});
+
+test("缓冲上限按带宽和内存算（和 Agent 同一个公式）：小内存压下来、知道带宽按 2×BDP+2MB", () => {
+  assert.deepEqual(netTuneBufferLimits(null), { want: 64 * MiB, budget: null }, "老 Agent 不报内存：照旧 64 MB、不封顶");
+  assert.deepEqual(netTuneBufferLimits(512 * MiB), { want: 16 * MiB, budget: 16 * MiB });
+  assert.deepEqual(netTuneBufferLimits(981 * MiB), { want: 30 * MiB, budget: 30 * MiB }, "按 MiB 往下取整");
+  assert.deepEqual(netTuneBufferLimits(8 * GiB), { want: 64 * MiB, budget: 256 * MiB });
+  assert.equal(netTuneBufferLimits(8 * GiB, 500).want, 20 * MiB);
+  assert.equal(netTuneBufferLimits(8 * GiB, 1000).want, 38 * MiB);
+  assert.equal(netTuneBufferLimits(8 * GiB, 2000).want, 74 * MiB, "2G 口比固定 64 MB 大");
+  assert.equal(netTuneBufferLimits(GiB, 2000).want, 32 * MiB, "内存小：按内存封顶");
+  assert.equal(netTuneBufferLimits(8 * GiB, 30).want, 4 * MiB, "底线 4 MB");
+
+  // 1 GB 小鸡：老版本抬到的 64 MB 算偏高，一键调优会压到 32 MB
+  const small = evaluateNetTune({ ...tuned, "meminfo.memtotal": String(GiB) });
+  const byKey = Object.fromEntries(small.items.map((item) => [item.key, item]));
+  assert.equal(byKey["net.core.rmem_max"].status, "high");
+  assert.equal(byKey["net.core.rmem_max"].want, "≥ 32 MB");
+  assert.equal(byKey["net.ipv4.tcp_rmem"].status, "high");
+  assert.ok(small.low >= 4, "偏高也算「可以调」");
+  const fixed = evaluateNetTune({ ...tuned, "meminfo.memtotal": String(GiB), "net.core.rmem_max": String(32 * MiB), "net.core.wmem_max": String(32 * MiB), "net.ipv4.tcp_rmem": `4096 ${MiB} ${32 * MiB}`, "net.ipv4.tcp_wmem": `4096 ${MiB} ${32 * MiB}`, "net.ipv4.tcp_mem": "16384 32768 65536" });
+  assert.equal(fixed.low, 0, fixed.items.filter((item) => item.status !== "ok").map((item) => item.key).join(","));
+
+  // 填了 500M 带宽：20 MB 就够
+  const withBw = evaluateNetTune({ ...tuned, "net.core.rmem_max": String(20 * MiB) }, { bandwidthMbps: 500 });
+  assert.equal(withBw.items.find((item) => item.key === "net.core.rmem_max")?.status, "ok");
+  assert.equal(withBw.bandwidthMbps, 500);
+  assert.equal(withBw.memBytes, 8 * GiB);
+});
+
+test("老 Agent（2.2.276 之前）：新加的几项写「升级后能看到」，不算不达标", () => {
+  const added = ["meminfo.memtotal", "route.initcwnd", "route.initrwnd", "net.ipv4.tcp_mem", "net.core.netdev_budget", "net.core.optmem_max", "net.ipv4.tcp_window_scaling", "net.ipv4.tcp_moderate_rcvbuf", "net.ipv4.tcp_adv_win_scale", "net.ipv4.tcp_sack", "net.ipv4.tcp_dsack", "net.ipv4.tcp_timestamps", "net.ipv4.tcp_syncookies", "net.ipv4.tcp_fin_timeout", "net.ipv4.tcp_keepalive_time", "vm.min_free_kbytes", "fs.file-max"];
+  const old = Object.fromEntries(Object.entries(tuned).filter(([key]) => !added.includes(key)));
+  const evaluation = evaluateNetTune(old);
+  const initcwnd = evaluation.items.find((item) => item.key === "route.initcwnd");
+  assert.equal(initcwnd?.status, "missing");
+  assert.match(initcwnd?.hint ?? "", /Agent 2\.2\.276 起/);
+  assert.match(evaluation.items.find((item) => item.key === "net.ipv4.tcp_mem")?.hint ?? "", /升级后能看到/);
+  // 新 Agent、没有默认路由：说清楚原因
+  const noRoute = evaluateNetTune(Object.fromEntries(Object.entries(tuned).filter(([key]) => !key.startsWith("route."))));
+  assert.match(noRoute.items.find((item) => item.key === "route.initcwnd")?.hint ?? "", /没有 IPv4 默认路由/);
+  // fs.file-max 带连字符：上报时不能被当成非法键丢掉
+  assert.equal(normalizeNetTuneResult({ id: "x", status: "done", values: { "fs.file-max": "1000000" } })?.values?.["fs.file-max"], "1000000");
+});
+
+test("一键调优带上这台机器的带宽：线路带宽优先，没填用手动出口整形的带宽", () => {
+  assert.equal(netTuneHostBandwidthMbps({ lineBandwidthMbps: 1000, egressShapingMode: "manual", egressMbps: 500 }), 1000);
+  assert.equal(netTuneHostBandwidthMbps({ lineBandwidthMbps: 0, egressShapingMode: "manual", egressMbps: 500 }), 500);
+  assert.equal(netTuneHostBandwidthMbps({ lineBandwidthMbps: 0, egressShapingMode: "auto", egressMbps: 500 }), 0, "自动整形的值不是填的带宽");
+  assert.equal(netTuneHostBandwidthMbps({}), 0);
+  resetNetTuneStateForTest();
+  const run = requestNetTuneRun(11, "apply", 1_000, undefined, { bandwidthMbps: 800 });
+  assert.deepEqual(__test.directiveFor({ id: 11 } as any, 1_001), { runs: [{ id: run.id, apply: true, mode: "apply", bandwidthMbps: 800 }] });
+  resetNetTuneStateForTest();
+  const check = requestNetTuneRun(11, false, 2_000);
+  assert.deepEqual(__test.directiveFor({ id: 11 } as any, 2_001), { runs: [{ id: check.id, apply: false, mode: "check" }] }, "不知道带宽时不带这个字段");
+  resetNetTuneStateForTest();
+});
+
+test("面板和 Agent 的规则表一致：同样的键、按内存算的同一批（顺序不管）", async () => {
+  const { readFileSync } = await import("node:fs");
+  const go = readFileSync(new URL("../agent/ext_nettune.go", import.meta.url), "utf8");
+  const table = go.slice(go.indexOf("var netTuneRules = []netTuneRule{"), go.indexOf("\n}\n", go.indexOf("var netTuneRules = []netTuneRule{")));
+  const goRules = [...table.matchAll(/\{key: "([^"]+)"[^}]*\}/g)].map((match) => ({ key: match[1], mem: /mem: netTuneMem(\w+)/.exec(match[0])?.[1] ?? null }));
+  const memName: Record<string, string> = { buffer: "Buffer", tcpMem: "TCPMem", minFree: "MinFree" };
+  const sorted = (rules: { key: string; mem: string | null }[]) => rules.map((rule) => `${rule.key}:${rule.mem ?? "-"}`).sort();
+  assert.deepEqual(sorted(goRules), sorted(NETTUNE_RULES.map((rule) => ({ key: rule.key, mem: rule.mem ? memName[rule.mem] : null }))));
+});
+
+test("调优存档、加 swap：指令带上操作；结果里的存档列表收拾干净", () => {
+  resetNetTuneStateForTest();
+  const save = requestNetTuneRun(12, "archive", 1_000, undefined, { archive: { op: "save", name: "晚高峰" } });
+  assert.deepEqual(__test.directiveFor({ id: 12 } as any, 1_001), { runs: [{ id: save.id, apply: false, mode: "archive", archive: { op: "save", name: "晚高峰" } }] });
+  ingestNetTuneReport({ id: 12 } as any, { results: [{ id: save.id, status: "done", mode: "archive", archives: [
+    { seq: "0000", name: "调优前", savedAt: 100 },
+    { seq: "0001", name: "一键调优", savedAt: 200, auto: true },
+    { seq: "../x", name: "坏的", savedAt: 1 },
+  ] }] });
+  const status = netTuneStatus(12, 1_002);
+  assert.deepEqual(status.latest?.archives, [{ seq: "0000", name: "调优前", savedAt: 100 }, { seq: "0001", name: "一键调优", savedAt: 200, auto: true }]);
+  assert.equal(status.lastApply?.mode, "archive", "存档操作算「最近一次改动」");
+  resetNetTuneStateForTest();
+  const swap = requestNetTuneRun(12, "swap", 2_000, undefined, { swap: { sizeGB: 2 } });
+  assert.deepEqual(__test.directiveFor({ id: 12 } as any, 2_001), { runs: [{ id: swap.id, apply: false, mode: "swap", swap: { sizeGB: 2 } }] });
+  resetNetTuneStateForTest();
 });
