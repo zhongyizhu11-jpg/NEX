@@ -130,13 +130,10 @@ func (t *selectedTransport) connectLocked() error {
 			continue
 		}
 		if conn, sec, ok := t.selector.states[index].take(dialCfg); ok {
-			// 命中 / 没命中都记一笔：以前只有多路那条腿（dialSecureTCP）记，普通入口这条路看不出池子用上没有
-			fxpMetricAdd(dialCfg, "pool_hit", 1)
 			recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "pool", endpointLabel, 0, nil)
 			t.useLocked(conn, sec, endpoint, index, true)
 			return nil
 		}
-		fxpMetricAdd(dialCfg, "pool_miss", 1)
 		dialStarted := time.Now()
 		conn, err := dialNextHop(endpoint.Host, endpoint.Port, secureDialTimeout(dialCfg), dialCfg)
 		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, nextHopDialStage(dialCfg), endpointLabel, time.Since(dialStarted), err)
